@@ -135,6 +135,10 @@ sum is $-1/\dt$ times its boundary flux. A nonzero removed mean therefore
 represents a real flux imbalance, contributing a uniform divergence on that
 component in addition to the solve residual; the pressure correction cannot
 change the prescribed flux.
+The projection reports \code{compatible=false} when
+$\dt^2\max_{\compcells}\abs{\removedmean_{\compcells}}>\presstol$ and warns
+once per projection workspace, independently of whether the projected
+linear system converged.
 The one-velocity solve and its multigrid hierarchy now handle the component
 nullspaces individually (\issue{95}, \issue{97}). The two-velocity
 projections instead fix one anchor per component
@@ -155,9 +159,12 @@ cell. The solve stops when the strong residual satisfies
 over the cells with $\meas{\opencell{c}}>0$, with the dimensionless tolerance
 $\presstol$ (\code{tolerance}, $0<\presstol<1$, default $\sqrt{\machineeps}$) and the
 round-off floor $\roundfloor$ of the linear solver, $128\machineeps$ times the
-largest strong magnitude of the terms of $\stiffmat\pres$ at the initial
-guess and of $\rhsvec$ (at least $128\machineeps$). It is fixed before the
-iteration, so a diverging iterate cannot raise the stop level (\issue{97}).
+largest strong magnitude of the terms of $\stiffmat\pres$ and of $\rhsvec$
+(at least $128\machineeps$). The initial guess defines the initial floor.
+The current-iterate floor may increase the stop level only when the true
+residual has decreased and the new floor is less than one hundredth of the
+initial residual; an inflated floor from a diverging iterate is rejected
+(\issue{97}).
 For $\presstol<\dt^2\roundfloor$ the floor is the stop level. A solve that
 misses the rule is reported (\code{converged=false}), not thrown
 (\cref{sec:projection:defects}).
@@ -1056,9 +1063,11 @@ forms solved to $\presstol=10^{-15}$ give the same pressure forces to
 $10^{-10}$.
 
 The one-velocity increment has zero volume mean on every
-component~\cref{eq:projection:one-gauge}; after accumulation the physical
-pressure is also normalised to that gauge. The CMDGFM increment is zero at the
-anchor cells and keeps the incoming anchor values. The physical pressure of a
+component~\cref{eq:projection:one-gauge}. On a connected domain the
+physical-pressure mean is therefore preserved; on a split domain the
+accumulated physical pressure is normalised on each component. The CMDGFM
+increment is zero at the anchor cells and keeps the incoming anchor values.
+The physical pressure of a
 \apitype{FlowSimulation} starts at zero unless an initial pressure is given,
 so that the first projection builds it, and a regrid transfers it with the
 velocity. The lower-level \apifun{project!} methods of the two incremental

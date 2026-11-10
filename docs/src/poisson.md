@@ -201,16 +201,16 @@ prescribed boundary-normal fluxes.
 `solve!` fixes the volume-weighted pressure mean independently on each
 component. Its default `compatibility=:project` subtracts the volume mean of
 the strong right-hand side on each component.
-`LinearSolverStats.removed_rhs_component_means` reports the subtracted values
-in the order of `removed_rhs_component_anchors`, the smallest cell index in
-each component. `removed_rhs_mean` remains the global volume mean and may be
-zero even when the component means are not.
-`compatibility=:error` rejects a nonzero mean on any component. Projecting an
-incompatible right-hand side makes the linear system solvable but cannot
-remove its physical boundary-flux imbalance: immediately after the pressure
-correction the remaining divergence includes the corresponding uniform
-componentwise contribution, in addition to the residual. A later boundary
-reset can add further divergence.
+`LinearSolverStats.removed_rhs_component_means` reports the subtracted strong
+RHS means in the order of `removed_rhs_component_anchors`, the smallest cell
+index in each component. `removed_rhs_mean` remains the global volume mean
+and may be zero even when the component means are not.
+`compatibility=:error` rejects a component mean beyond its roundoff check.
+Projecting an incompatible right-hand side makes the linear system solvable
+but cannot remove its physical boundary-flux imbalance: immediately after the
+pressure correction the remaining divergence includes the corresponding
+uniform componentwise contribution, in addition to the residual. A later
+boundary reset can add further divergence.
 
 The multigrid bottom solve uses one volume-weighted augmentation for each of
 its connected components, generalizing
@@ -224,8 +224,9 @@ its connected components, generalizing
 
 where `v` is the coarse representation of cell volume on that component.
 Shifted diffusion operators have no nullspace and use an ordinary bottom-grid
-factorization. The roundoff floor is computed from the starting solve state
-and is not increased if subsequent Krylov iterates grow.
+factorization. The initial solve state supplies the starting roundoff floor.
+A current-iterate floor can increase the stop level only after the residual
+decreases and while that floor is less than 1% of the initial residual.
 
 For the manufactured periodic problem
 
@@ -282,16 +283,23 @@ project!(velocity, pressure, solver, dt, projection; tolerance=1e-8)
 ```
 
 The standalone algebraic `solve!` retains `rtol` and `atol` for expert use.
-The physical `project!` API takes a pressure-predicted velocity, adds its
-componentwise mean-zero correction to the supplied old physical pressure, and
-then fixes the accumulated pressure's mean separately on each component. It
-accepts one dimensionless `tolerance` and
-solves with the absolute strong-residual target `tolerance/dt^2`.
-Consequently `stats.final_linf/stats.residual_scale` equals
-`dt^2*stats.final_linf`, because `stats.residual_scale = 1/dt^2`. This is the
-fractional volume defect associated with the linear-solve residual, up to the
-roundoff-limited target. A shortened simulation step can additionally retain
-part of its inherited divergence as described in
+The physical `project!` API takes a pressure-predicted velocity and adds its
+componentwise mean-zero correction to the supplied old physical pressure.
+For one connected component this preserves the incoming pressure mean; for
+multiple components it fixes each accumulated pressure mean to zero. It accepts
+one dimensionless `tolerance` and solves with the absolute strong-residual
+target `tolerance/dt^2`. Consequently
+`stats.final_linf/stats.residual_scale` equals `dt^2*stats.final_linf`, because
+`stats.residual_scale = 1/dt^2`. This is the fractional volume defect
+associated with the linear-solve residual, up to the roundoff-limited target.
+`stats.compatible` separately compares `dt^2` times the largest absolute
+removed strong component RHS mean with the requested tolerance (not the
+roundoff-raised solve target). Thus `converged` may be true while `compatible`
+is false. For non-projection linear solves, `compatible` is true and does not
+assess physical compatibility. An incompatible one-velocity projection warns
+once per projection workspace, retained across mesh rebuilds. A shortened
+simulation step can additionally retain part of its inherited divergence, as
+described in
 [Incompressible Navier--Stokes solver](navier-stokes.md#common-step).
 
 `preconditioner` may also be a factory accepting the sparse matrix or a

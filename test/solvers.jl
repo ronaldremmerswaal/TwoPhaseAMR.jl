@@ -165,6 +165,33 @@ end
     check_coarse_solution(matrix_free_hierarchy, operator.matrix, split)
 end
 
+@testset "elliptic component cache tracks topology identity and generation" begin
+    first_mesh = BlockTreeMesh(block_size = (4, 4), periodic = (true, false))
+    second_mesh = BlockTreeMesh(block_size = (4, 4), periodic = (false, true))
+    first = PoissonOperator(first_mesh)
+    second = PoissonOperator(second_mesh)
+    components = TwoPhaseAMR.EllipticComponentWorkspace(first)
+    first_incidence = copy(components.incidence)
+    @test length(first.face_coefficient) == length(second.face_coefficient)
+
+    TwoPhaseAMR._refresh_elliptic_components!(components, second)
+    reference = TwoPhaseAMR.EllipticComponentWorkspace(second)
+    @test components.mesh_identity === second_mesh.topology_cache.identity
+    @test components.incidence == reference.incidence
+    @test components.incidence != first_incidence
+    @test components.labels == reference.labels
+
+    previous_incidence = copy(components.incidence)
+    reverse!(second_mesh.faces)
+    TwoPhaseAMR._invalidate_mesh_topology_cache!(second_mesh)
+    TwoPhaseAMR._refresh_elliptic_components!(components, second)
+    reference = TwoPhaseAMR.EllipticComponentWorkspace(second)
+    @test components.generation == second_mesh.topology_cache.generation
+    @test components.incidence == reference.incidence
+    @test components.incidence != previous_incidence
+    @test components.labels == reference.labels
+end
+
 @testset "elliptic cache retains type when nullspace changes" begin
     mesh = BlockTreeMesh(block_size = (4, 4))
     pressure = EllipticSolver(PoissonOperator(mesh); preconditioner = nothing)
@@ -239,6 +266,44 @@ function TwoPhaseAMR._run_krylov!(
         initial_solution, preconditioner, target, volumes, max_iterations, options,
     )
     fill!(workspace.x, 1.0e15)
+    return workspace
+end
+
+# A large nullspace drift can accompany a modest residual decrease.
+struct _PartiallyInflatedWorkspace
+    x::Vector{Float64}
+end
+
+Krylov.solution(workspace::_PartiallyInflatedWorkspace) = workspace.x
+Krylov.iteration_count(::_PartiallyInflatedWorkspace) = 1
+
+function TwoPhaseAMR._run_krylov!(
+        workspace::_PartiallyInflatedWorkspace, matrix, right_hand_side,
+        initial_solution, preconditioner, target, volumes, max_iterations, options,
+    )
+    workspace.x .= 1.0e15
+    workspace.x[1] += 0.5
+    return workspace
+end
+
+mutable struct _ControlledFloorWorkspace{T}
+    x::Vector{T}
+    offset::T
+    corrections::Vector{T}
+    pass::Int
+end
+
+Krylov.solution(workspace::_ControlledFloorWorkspace) = workspace.x
+Krylov.iteration_count(::_ControlledFloorWorkspace) = 1
+
+function TwoPhaseAMR._run_krylov!(
+        workspace::_ControlledFloorWorkspace, matrix, right_hand_side,
+        initial_solution, preconditioner, target, volumes, max_iterations, options,
+    )
+    workspace.pass += 1
+    correction = workspace.corrections[min(workspace.pass, length(workspace.corrections))]
+    workspace.x[1] = workspace.offset + correction
+    workspace.x[2] = workspace.offset
     return workspace
 end
 
@@ -585,6 +650,7 @@ end
             return 0.25
         end
         solver.stats.cycles = -1
+        solver.stats.compatible = false
         atol = relative_to_rhs ? 1000.0 : 0.01
         stats = TwoPhaseAMR._solve_krylov_with_stats!(
             prepare!, solver, component.matrix, volumes, 0.1, 0;
@@ -608,6 +674,7 @@ end
         @test stats.residual_scale === scale
         @test stats.target_linf === target
         @test stats.converged == (initial_linf <= target)
+        @test stats.compatible
         @test stats.removed_rhs_mean === 0.25
         @test stats.method === :cg
         @test stats.preconditioner === :none
@@ -650,6 +717,117 @@ end
         @test actual > stats.target_linf
         @test !stats.converged
     end
+    for relative_to_rhs in (false, true)
+        workspace = _PartiallyInflatedWorkspace(zeros(2))
+        solver = (;
+            action = matrix, krylov = workspace, preconditioner = nothing,
+            krylov_options = (;), solution = zeros(2),
+            right_hand_side = [1.0, -1.0], residual = zeros(2), product = zeros(2),
+            stats = TwoPhaseAMR.LinearSolverStats(Float64),
+        )
+        stats = TwoPhaseAMR._solve_krylov_with_stats!(
+            values -> nothing, () -> 0.0, solver, matrix, volumes, 0.1, 1;
+            relative_to_rhs,
+        )
+        @test stats.initial_linf == 1.0
+        @test stats.final_linf == 0.5
+        @test stats.target_linf == 0.1
+        @test !stats.converged
+    end
+end
+
+@testset "guarded iterate roundoff floor" begin
+    function controlled_solve(T, offset, corrections; relative_to_rhs, initial = zeros(T, 2))
+        matrix = sparse([1, 2, 1, 2], [1, 1, 2, 2], T[1, -1, -1, 1])
+        volumes = ones(T, 2)
+        workspace = _ControlledFloorWorkspace(zeros(T, 2), offset, corrections, 0)
+        solver = (;
+            action = matrix, krylov = workspace, preconditioner = nothing,
+            krylov_options = (;), solution = copy(initial),
+            right_hand_side = T[1, -1], residual = zeros(T, 2), product = zeros(T, 2),
+            stats = TwoPhaseAMR.LinearSolverStats(T),
+        )
+        stats = TwoPhaseAMR._solve_krylov_with_stats!(
+            values -> nothing, () -> zero(T), solver, matrix, volumes, T(1.0e-4),
+            length(corrections); relative_to_rhs,
+        )
+        floor = TwoPhaseAMR._roundoff_residual_floor!(
+            matrix, solver.solution, solver.right_hand_side, volumes, solver.product,
+        )
+        return (; stats, workspace, floor)
+    end
+
+    for T in (Float32, Float64), relative_to_rhs in (false, true)
+        precision = T === Float32 ? 23 : 52
+        small_offset = ldexp(one(T), precision - 16)
+        large_offset = ldexp(one(T), precision - 12)
+        correction = T(511) / T(512)
+
+        accepted = controlled_solve(T, small_offset, T[correction]; relative_to_rhs)
+        @test accepted.workspace.pass == accepted.stats.cycles == 1
+        @test accepted.stats.initial_linf == one(T)
+        @test accepted.stats.final_linf == T(1) / T(512)
+        @test accepted.floor < accepted.stats.initial_linf / 100
+        @test accepted.stats.final_linf > T(1.0e-4)
+        @test accepted.stats.target_linf == accepted.floor
+        @test accepted.stats.converged
+
+        rejected = controlled_solve(T, large_offset, T[correction]; relative_to_rhs)
+        @test rejected.workspace.pass == rejected.stats.cycles == 1
+        @test rejected.stats.final_linf == T(1) / T(512)
+        @test rejected.floor > rejected.stats.initial_linf / 100
+        @test rejected.stats.final_linf < rejected.floor
+        @test rejected.stats.target_linf == T(1.0e-4)
+        @test !rejected.stats.converged
+
+        # A temporary residual increase at roundoff must not prevent a later
+        # pass from satisfying the guarded floor.
+        corrections = T[509 / 512, 508 / 512, 511 / 512]
+        stagnated = controlled_solve(T, small_offset, corrections; relative_to_rhs)
+        @test stagnated.workspace.pass == stagnated.stats.cycles == 3
+        @test stagnated.stats.converged
+        @test stagnated.stats.final_linf == T(1) / T(512)
+        @test stagnated.stats.target_linf == stagnated.floor
+
+        initial = T[small_offset + correction, small_offset]
+        warm = controlled_solve(T, small_offset, T[correction]; relative_to_rhs, initial)
+        @test warm.workspace.pass == warm.stats.cycles == 0
+        @test warm.stats.converged
+        @test warm.stats.initial_linf == warm.stats.final_linf == T(1) / T(512)
+        @test warm.stats.target_linf == warm.floor
+    end
+end
+
+@testset "roundoff-limited heterogeneous Poisson solve" begin
+    mesh = BlockTreeMesh(base_mesh = (32, 32), block_size = (4, 4))
+    # A 1000:1 density contrast and one small open volume model the
+    # roundoff amplification in a tiny cut cell.
+    coefficient = [
+        face.center[1] < 0.5 ? 1.0 : 1.0e-3 for face in mesh.faces
+    ]
+    volumes = TwoPhaseAMR._cell_volumes(mesh, Float64)
+    volumes[1] *= 1.0e-3
+    operator = EllipticOperator(mesh; face_coefficient = coefficient, volumes)
+    rhs = CellField(mesh, (x, y) -> sinpi(2x) * cospi(2y))
+    initial_floor = TwoPhaseAMR._roundoff_residual_floor!(
+        operator.matrix, zeros(ncells(mesh)),
+        test_cell_values(rhs) .* operator.volumes, operator.volumes,
+        zeros(ncells(mesh)),
+    )
+    pressure = CellField(mesh)
+    solver = EllipticSolver(operator)
+    stats = solve!(pressure, solver, rhs; rtol = 1.0e-15, max_cycles = 500)
+    final_floor = TwoPhaseAMR._roundoff_residual_floor!(
+        operator.matrix, test_cell_values(pressure), solver.right_hand_side,
+        operator.volumes, zeros(ncells(mesh)),
+    )
+    @test stats.converged
+    @test stats.final_linf <= stats.target_linf
+    @test stats.final_linf > initial_floor
+    @test stats.target_linf > initial_floor
+    @test stats.target_linf ≈ final_floor rtol = 128eps()
+    @test stats.target_linf < stats.initial_linf / 100
+    @test stats.final_linf < 1.0e-8
 end
 
 @testset "Krylov trait dispatch preserves direct solver results" begin

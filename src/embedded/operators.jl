@@ -375,6 +375,7 @@ function _project_prepared!(
         max_cycles, compatibility,
     )
     stats.residual_scale = inv(T(dt)^2)
+    _projection_compatibility!(stats, workspace, dt, dimensionless_tolerance)
     _cut_cell_weighted_gradient!(
         workspace.weighted_gradient, workspace.increment,
         solver.operator, workspace.elliptic, geometry,

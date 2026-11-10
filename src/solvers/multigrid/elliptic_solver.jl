@@ -6,6 +6,8 @@ mutable struct EllipticComponentWorkspace{T}
     stack::Vector{Int}
     active::BitVector
     open_faces::BitVector
+    mesh_identity::Union{Nothing, Base.RefValue{Nothing}}
+    generation::UInt
     anchors::Vector{Int}
     volumes::Vector{T}
     sums::Vector{T}
@@ -16,7 +18,7 @@ function EllipticComponentWorkspace(operator::EllipticOperator{T}) where {T}
     mesh = operator.mesh
     components = EllipticComponentWorkspace(
         spzeros(T, length(mesh.faces), ncells(mesh)), Int[], Int[], Int[],
-        falses(0), falses(0), Int[], T[], T[], T[],
+        falses(0), falses(0), nothing, zero(UInt), Int[], T[], T[], T[],
     )
     return _rebuild_elliptic_components!(components, operator)
 end
@@ -46,11 +48,16 @@ function _rebuild_elliptic_components!(components, operator)
     for values in (components.volumes, components.sums, components.scales)
         resize!(values, length(operator.volumes))
     end
+    components.mesh_identity = mesh.topology_cache.identity
+    components.generation = mesh.topology_cache.generation
     return components
 end
 
 function _refresh_elliptic_components!(components, operator)
-    changed = length(components.active) != length(operator.volumes) ||
+    topology = operator.mesh.topology_cache
+    changed = components.mesh_identity !== topology.identity ||
+        components.generation != topology.generation ||
+        length(components.active) != length(operator.volumes) ||
         length(components.open_faces) != length(operator.face_coefficient)
     if !changed
         for index in eachindex(components.active)
@@ -383,9 +390,31 @@ function _run_krylov!(
     return workspace
 end
 
+"""Accept an iterate-dependent roundoff floor only after meaningful progress."""
+function _guarded_roundoff_target!(
+        matrix, solution, right_hand_side, volumes, temporary,
+        target, initial_linf, current_linf,
+    )
+    if !(
+            isfinite(initial_linf) && isfinite(current_linf) &&
+                target < current_linf < initial_linf
+        )
+        return target
+    end
+    floor = _roundoff_residual_floor!(
+        matrix, solution, right_hand_side, volumes, temporary,
+    )
+    # A huge nullspace iterate can make |A||x| arbitrarily large even while
+    # the residual decreases slightly. A floor must itself be small relative
+    # to the initial residual before it is permitted to certify convergence.
+    return isfinite(floor) && floor < initial_linf / 100 ?
+        max(target, floor) : target
+end
+
 function _run_krylov_reliably!(
         workspace, matrix, right_hand_side, solution, preconditioner,
-        target, volumes, max_iterations, options, residual, product,
+        target, initial_linf, volumes, max_iterations, options, residual, product,
+        components,
     )
     total_iterations = 0
     final_linf = oftype(target, Inf)
@@ -398,6 +427,8 @@ function _run_krylov_reliably!(
         iterations = Krylov.iteration_count(workspace)
         total_iterations += iterations
         copyto!(solution, Krylov.solution(workspace))
+        isnothing(components) ||
+            _remove_component_volume_means!(solution, volumes, components)
 
         # Krylov recurrences update a recursively computed residual. In a cut
         # cell the strong residual divides that integrated residual by a very
@@ -411,7 +442,11 @@ function _run_krylov_reliably!(
                 right_hand_side[index] - product[index]
         end
         _, final_linf = _integrated_residual_norms(residual, volumes)
-        final_linf <= target && break
+        effective_target = _guarded_roundoff_target!(
+            matrix, solution, right_hand_side, volumes, product,
+            target, initial_linf, final_linf,
+        )
+        final_linf <= effective_target && break
         (!isfinite(final_linf) || iszero(iterations)) && break
     end
     return total_iterations
@@ -432,8 +467,9 @@ end
 """Run the common Krylov/statistics sequence with problem-specific copies.
 
 `prepare!` gathers the initial guess and RHS and returns the removed RHS mean.
-`copy_solution!` runs after the final residual, but before stats are
-updated. The roundoff floor is fixed from the initial state, never the iterates.
+`copy_solution!` runs after the final residual, but before stats are updated.
+An iterate-dependent roundoff floor is accepted only after residual reduction
+and when that floor remains small compared with the initial residual.
 Elliptic solves use the initial residual as the relative scale; shifted
 diffusion solves use the strong right-hand-side scale instead.
 `matrix` is the solve/floor operator, while the true residual uses `solver.action`.
@@ -466,8 +502,8 @@ function _solve_krylov_with_stats!(
         iterations = _run_krylov_reliably!(
             solver.krylov, matrix,
             solver.right_hand_side, solver.solution, solver.preconditioner,
-            target, volumes, max_cycles, solver.krylov_options,
-            solver.residual, solver.product,
+            target, initial_linf, volumes, max_cycles, solver.krylov_options,
+            solver.residual, solver.product, components,
         )
     end
     isnothing(components) ||
@@ -475,11 +511,16 @@ function _solve_krylov_with_stats!(
     _true_residual!(solver)
     final_l2, final_linf =
         _integrated_residual_norms(solver.residual, volumes)
+    target = _guarded_roundoff_target!(
+        matrix, solver.solution, solver.right_hand_side, volumes, solver.product,
+        target, initial_linf, final_linf,
+    )
     copy_solution!(solver.solution)
 
     stats = solver.stats
     stats.cycles = iterations
     stats.converged = isfinite(final_linf) && isfinite(target) && final_linf <= target
+    stats.compatible = true
     stats.initial_l2 = initial_l2
     stats.initial_linf = initial_linf
     stats.final_l2 = final_l2

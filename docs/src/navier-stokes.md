@@ -277,15 +277,25 @@ staggered inertia. This gives a velocity defect. Its infinity norm is divided
 by the corresponding strong right-hand-side velocity scale, so the same
 dimensionless `tolerance` applies to both single- and variable-density solves.
 This normalization depends on the equation data, not on the initial guess.
-Both criteria are raised to a floating-point roundoff floor computed from the
-starting solve state. The floor cannot grow with a diverging iterate.
+Both criteria use a floating-point roundoff floor from the starting solve
+state. A current-iterate floor can increase the stop level only after the
+residual decreases and while that floor is less than 1% of the initial residual.
 
 `LinearSolverStats` reports the initial and final L2 and infinity norms, the
 effective infinity-norm target, the residual scale, iterations, the global
-and componentwise removed pressure-RHS means, Krylov method, and
+and componentwise removed strong pressure-RHS means, Krylov method, and
 preconditioner. `removed_rhs_component_anchors` identifies the smallest cell
-index of each component in the same order as `removed_rhs_component_means`;
-both also appear in the simulation summary.
+index of each component in the same order as `removed_rhs_component_means`.
+For one-velocity projections, `compatible` is `true` exactly when
+`dt^2 * maximum(abs, removed_rhs_component_means)` does not exceed the
+requested projection tolerance (the maximum is zero when there are no
+components). This compares the mean in the same dimensionless units as the
+projection residual, using the actual step and the RHS formed with its
+reference step. Unlike `converged`, it does not use the roundoff-raised linear
+solve target: a projected linear solve can converge even if `compatible` is
+false. The flag and component values also appear in the simulation summary.
+An incompatible projection emits a warning once per projection workspace,
+including across mesh rebuilds and subsequent calls using that workspace.
 A failed high-level solve includes the diagnostics, requested tolerance,
 achieved dimensionless residual, iteration cap, timestep, and simulation time.
 
@@ -294,15 +304,16 @@ achieved dimensionless residual, iteration cap, timestep, and simulation time.
 The default wall conditions on non-periodic sides impose no permeation,
 `u dot n = 0`. The pressure has homogeneous Neumann data, so the projection
 cannot change the prescribed boundary-normal velocity. The all-Neumann
-one-velocity increment and accumulated pressure have volume-weighted zero
-mean on each connected open component; the two-velocity systems anchor each
-connected pressure component. A component with unbalanced boundary flux keeps
-a contribution to its divergence even when the projected linear solve
-converges (a later boundary reset can change it further): inspect the
-componentwise removed RHS means or use
-`compatibility=:error` to reject such data. The accumulated CMDGFM pressure
-retains its incoming anchor gauge; the mimetic absolute solve uses its anchored
-gauge.
+one-velocity increment has volume-weighted zero mean on each connected open
+component. With one component, the accumulated physical pressure retains its
+incoming mean; with multiple components, each accumulated pressure mean is set
+to zero. A component with unbalanced boundary flux keeps a contribution to its
+divergence even when the projected linear solve converges (a later boundary
+reset can change it further): inspect `compatible` and the componentwise
+removed RHS means or use `compatibility=:error` to reject such data. The
+two-velocity systems anchor each connected pressure component. The accumulated
+CMDGFM pressure retains its incoming anchor gauge; the mimetic absolute solve
+uses its anchored gauge.
 
 The viscous closure is independent:
 

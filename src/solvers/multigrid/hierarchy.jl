@@ -144,6 +144,8 @@ end
 # volume-weighted solution mean and Q' projects an integrated RHS.  Keeping
 # both sides of a coarse correction projected preserves symmetry on the
 # compatible subspace even when coarsening merges or splits components.
+# Component-indexed sums are scatter reductions and must remain serial; after
+# normalization, each cell update owns its output and can run in parallel.
 function _multigrid_remove_component_means!(values, level::MultigridLevel)
     sums = level.component_sums
     fill!(sums, zero(eltype(sums)))
@@ -155,7 +157,7 @@ function _multigrid_remove_component_means!(values, level::MultigridLevel)
     for component in eachindex(sums)
         @inbounds sums[component] /= level.component_volumes[component]
     end
-    for cell in eachindex(values)
+    @_parallel for cell in eachindex(values)
         component = @inbounds level.component_indices[cell]
         iszero(component) && continue
         @inbounds values[cell] -= sums[component]
@@ -174,7 +176,7 @@ function _multigrid_project_component_rhs!(values, level::MultigridLevel)
     for component in eachindex(sums)
         @inbounds sums[component] /= level.component_volumes[component]
     end
-    for cell in eachindex(values)
+    @_parallel for cell in eachindex(values)
         component = @inbounds level.component_indices[cell]
         iszero(component) && continue
         @inbounds values[cell] -= level.volumes[cell] * sums[component]

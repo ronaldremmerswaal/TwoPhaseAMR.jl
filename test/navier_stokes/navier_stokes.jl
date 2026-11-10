@@ -194,17 +194,26 @@ end
                 for index in inactive
                     TwoPhaseAMR._set!(pressure, 23.0, refs[index])
                 end
-                stats = project!(
-                    velocity, pressure, solver, dt, workspace, geometry;
-                    velocity_boundary = boundary, compatibility = :project,
-                    tolerance = 1.0e-10, max_cycles = 500,
-                )
+                stats = if iszero(lower_offset)
+                    @test_logs (:warn,) project!(
+                        velocity, pressure, solver, dt, workspace, geometry;
+                        velocity_boundary = boundary, compatibility = :project,
+                        tolerance = 1.0e-10, max_cycles = 500,
+                    )
+                else
+                    @test_logs project!(
+                        velocity, pressure, solver, dt, workspace, geometry;
+                        velocity_boundary = boundary, compatibility = :project,
+                        tolerance = 1.0e-10, max_cycles = 500,
+                    )
+                end
                 values = test_cell_values(pressure)
                 push!(pressures, values)
                 final_divergence = CellField(mesh)
                 divergence!(final_divergence, velocity, geometry)
                 final_values = test_cell_values(final_divergence)
                 @test stats.converged
+                @test !stats.compatible
                 @test stats.removed_rhs_component_anchors == anchors
                 @test stats.removed_rhs_component_means ≈ expected_means atol = 1.0e-11 rtol = 0
                 @test abs(stats.removed_rhs_mean) < 1.0e-11
@@ -226,6 +235,155 @@ end
             @test pressures[1] ≈ pressures[2] atol = 1.0e-10 rtol = 0
         end
     end
+
+    # Matching inflow on both sides balances each component separately.
+    balanced_boundary = VelocityBoundaryConditions(
+        left = boundary.left, right = Inflow(boundary.left.velocity),
+        bottom = NoSlip(), top = NoSlip(),
+    )
+    solver = EllipticSolver(operator; preconditioner = nothing, coarse_size = 16)
+    workspace = ProjectionWorkspace(solver)
+    balanced = @test_logs project!(
+        copy(predictor), CellField(mesh), solver, dt, workspace, geometry;
+        velocity_boundary = balanced_boundary, tolerance = 1.0e-10, max_cycles = 500,
+    )
+    @test balanced.converged && balanced.compatible
+    @test maximum(abs, balanced.removed_rhs_component_means) < 1.0e-10
+
+    # The inherited-divergence policy halves this RHS for a reference step
+    # twice as large. The means are strong values, but the physical comparison
+    # uses dt^2, not an unscaled RHS value or the algebraic residual target.
+    scaled_mean = dt^2 * maximum(abs, expected_means)
+    @test 0 < scaled_mean < 1
+    threshold = 0.75 * scaled_mean
+    shortened = @test_logs project!(
+        copy(predictor), CellField(mesh), solver, dt, workspace, geometry;
+        velocity_boundary = boundary, tolerance = threshold, max_cycles = 500,
+        _inherited_divergence = initial_divergence, _reference_dt = 2dt,
+    )
+    @test shortened.converged && shortened.compatible
+    @test maximum(abs, shortened.removed_rhs_component_means) > threshold
+    @test dt^2 * maximum(abs, shortened.removed_rhs_component_means) < threshold
+    @test shortened.removed_rhs_component_means ≈
+        expected_means ./ 2 atol = 1.0e-11 rtol = 0
+    full = @test_logs (:warn,) project!(
+        copy(predictor), CellField(mesh), solver, dt, workspace, geometry;
+        velocity_boundary = boundary, tolerance = threshold, max_cycles = 500,
+    )
+    @test full.converged && !full.compatible
+    @test full.removed_rhs_component_means ≈ expected_means atol = 1.0e-11 rtol = 0
+
+    # The physical-step API and simulation result expose the same decision.
+    # Multiple incompatible steps and a subsequent call share one warning.
+    make_flow(bc) = FlowSimulation(
+        mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.01);
+        geometry, boundary = bc,
+        numerics = NavierStokesOptions(multigrid = MultigridOptions(coarse_size = 16)),
+    )
+    step_flow = make_flow(boundary)
+    step_stats = @test_logs (:warn,) step!(
+        step_flow.velocity, step_flow.pressure, step_flow.solver, 0.001,
+        step_flow.workspace; tolerance = 1.0e-9, max_cycles = 500,
+    )
+    @test step_stats.converged && !step_stats.compatible
+
+    flow = make_flow(boundary)
+    result = @test_logs (:warn,) simulate!(
+        flow, 0.003; dt = 0.001, tolerance = 1.0e-9, max_cycles = 500,
+    )
+    @test result.steps == 3
+    @test result.pressure.converged && !result.pressure.compatible
+    @test :compatible in TwoPhaseAMR._projection_summary_fields(result.pressure)
+    @test :removed_rhs_component_means in TwoPhaseAMR._projection_summary_fields(result.pressure)
+    resumed = @test_logs simulate!(
+        flow, 0.004; dt = 0.001, tolerance = 1.0e-9, max_cycles = 500,
+    )
+    @test resumed.steps == 1
+    @test resumed.pressure.converged && !resumed.pressure.compatible
+
+    balanced_flow = make_flow(balanced_boundary)
+    balanced_result = @test_logs simulate!(
+        balanced_flow, 0.002; dt = 0.001, tolerance = 1.0e-9, max_cycles = 500,
+    )
+    @test balanced_result.steps == 2
+    @test balanced_result.pressure.converged && balanced_result.pressure.compatible
+    @test :compatible in TwoPhaseAMR._projection_summary_fields(balanced_result.pressure)
+end
+
+@testset "connected projection preserves physical pressure mean" begin
+    for cut in (false, true)
+        mesh = BlockTreeMesh(
+            block_size = (8, 8), periodic = cut ? (false, false) : (true, true),
+        )
+        geometry = cut ? GeometryField(
+                mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.14;
+                lipschitz = 1,
+            ) : nothing
+        operator = cut ? PoissonOperator(geometry) : PoissonOperator(mesh)
+        solver = EllipticSolver(operator; coarse_size = 8)
+        workspace = ProjectionWorkspace(solver)
+        velocity = FaceVelocity(
+            mesh, (x, y, time, axis) ->
+            axis == 1 ? sinpi(2x) : cospi(2y),
+        )
+        pressure = CellField(mesh, (x, y) -> 4.25 + 0.1cospi(2x) * cospi(2y))
+        before = test_cell_values(pressure)
+        stats = if cut
+            @test_logs project!(
+                velocity, pressure, solver, 0.1, workspace, geometry;
+                tolerance = 1.0e-11, max_cycles = 500,
+            )
+        else
+            @test_logs project!(
+                velocity, pressure, solver, 0.1, workspace;
+                tolerance = 1.0e-11, max_cycles = 500,
+            )
+        end
+        @test stats.converged && stats.compatible
+        @test length(stats.removed_rhs_component_anchors) == 1
+        volumes = operator.volumes
+        after = test_cell_values(pressure)
+        # The solved increment has zero volume mean, so the old nonzero
+        # physical-pressure mean survives to roundoff in either geometry.
+        @test abs(dot(volumes, after - before) / sum(volumes)) < 1.0e-10
+        inactive = findall(iszero, volumes)
+        @test after[inactive] == before[inactive]
+    end
+end
+
+@testset "uncut projection reports incompatible component flux once" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
+    coefficient = [
+        face.axis == 1 && face.center[1] == 0.5 ? 0.0 : 1.0
+            for face in mesh.faces
+    ]
+    solver = EllipticSolver(
+        PoissonOperator(mesh; face_coefficient = coefficient); coarse_size = 8,
+    )
+    workspace = ProjectionWorkspace(solver)
+    velocity = FaceVelocity(
+        mesh, (x, y, time, axis) -> axis == 1 && x == 0.5 ? 0.2 : 0.0,
+    )
+    for first_projection in (true, false)
+        stats = if first_projection
+            @test_logs (:warn,) project!(
+                copy(velocity), CellField(mesh), solver, 0.1, workspace;
+                tolerance = 1.0e-10, max_cycles = 500,
+            )
+        else
+            @test_logs project!(
+                copy(velocity), CellField(mesh), solver, 0.1, workspace;
+                tolerance = 1.0e-10, max_cycles = 500,
+            )
+        end
+        @test stats.converged && !stats.compatible
+        @test :compatible in propertynames(stats)
+        @test 0.1^2 * maximum(abs, stats.removed_rhs_component_means) > 1.0e-10
+    end
+    # Reusing the elliptic solver outside projection must not retain the
+    # previous physical-projection decision.
+    generic = solve!(CellField(mesh), solver, CellField(mesh))
+    @test generic.converged && generic.compatible
 end
 
 @testset "increment predictor preserves open-boundary projection" begin

@@ -3,8 +3,8 @@
 **Historical audit:** the results and defect descriptions below refer to the
 audited pre-fix commit. Issues #95 and #97 subsequently changed the code and
 chapter: compatibility and pressure gauges are componentwise, and the
-roundoff floor is fixed from the initial solve state. The linked scripts now
-check the updated behavior; the measurements below are not post-fix results.
+current-iterate roundoff floor is guarded by the initial residual. The linked
+scripts now check the updated behavior; the measurements below are not post-fix results.
 
 - Source: `docs/techref/chapters/10_projection.tex:71-192` (one-system 84, one-gauge 101, one-defect 121, one-tolerance 127, one-energy 141; the boundary-value stage 884-918 is audited in `dev-projection-outflow`), commit `b1e7b5b` (branch `docs/techref-projection`, working tree `/tmp/techref-ch10`)
 - Code audited (normative): `src/navier_stokes/projection.jl` (`project!`), `src/embedded/operators.jl` (`project!`, `_cut_cell_weighted_gradient!`, `PoissonOperator(geometry)`), `src/solvers/multigrid/{elliptic_solver.jl,cycles.jl,stats.jl}` (`solve!`, `_roundoff_residual_floor!`, `_project_integrated_rhs!`, `_remove_volume_mean!`, `_dimensionless_tolerance`), `src/two_phase/forces.jl` (`PoissonOperator(field[, geometry])`)

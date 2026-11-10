@@ -112,7 +112,7 @@ final_residual(stats::LinearSolverStats) = stats.final_linf
 final_residual(stats::_TwoVelocityProjectionStats) = stats.final_residual
 
 _projection_summary_fields(::LinearSolverStats) = (
-    :method, :preconditioner,
+    :compatible, :method, :preconditioner,
     :removed_rhs_component_anchors, :removed_rhs_component_means,
 )
 _projection_summary_fields(::CMDGFMProjectionStats) = (

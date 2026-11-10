@@ -1001,6 +1001,119 @@ end
     @test all(iszero, test_cell_values(split_pressure))
 end
 
+@testset "multigrid component projections" begin
+    # Include a size above the threaded-loop grain and interleave components so
+    # their reductions and updates cannot rely on contiguous component ranges.
+    for T in (Float32, Float64),
+            number_of_cells in (19, 4 * TwoPhaseAMR._PARALLEL_GRAIN + 17)
+        indices = [
+            cell == number_of_cells ? 4 : iszero(cell % 17) ? 0 : mod1(cell, 3)
+                for cell in 1:number_of_cells
+        ]
+        volumes = T[
+            iszero(indices[cell]) ? zero(T) : T(1 + mod(5cell, 7)) / T(8)
+                for cell in eachindex(indices)
+        ]
+        groups = [findall(==(component), indices) for component in 1:4]
+        inactive = findall(iszero, indices)
+        active = findall(!=(0), indices)
+
+        # Only the level's volume and component metadata enter the projections.
+        diagonal = collect(1:number_of_cells)
+        matrix = sparse(diagonal, diagonal, ones(T, number_of_cells))
+        level = TwoPhaseAMR._multigrid_level(matrix, volumes, nothing; singular = true)
+        append!(level.component_indices, indices)
+        append!(level.component_volumes, [sum(volumes[cells]) for cells in groups])
+        resize!(level.component_sums, length(groups))
+
+        solution = T[(mod(7cell, 31) - 13) / T(8) for cell in eachindex(indices)]
+        rhs = T[(mod(11cell, 37) - 17) / T(16) for cell in eachindex(indices)]
+        expected_solution = copy(solution)
+        expected_rhs = copy(rhs)
+        for cells in groups
+            volume = sum(volumes[cells])
+            solution_mean = dot(volumes[cells], solution[cells]) / volume
+            rhs_mean = sum(rhs[cells]) / volume
+            expected_solution[cells] .-= solution_mean
+            expected_rhs[cells] .-= volumes[cells] .* rhs_mean
+        end
+
+        projected_solution = copy(solution)
+        projected_rhs = copy(rhs)
+        @test TwoPhaseAMR._multigrid_remove_component_means!(
+            projected_solution, level,
+        ) === projected_solution
+        @test TwoPhaseAMR._multigrid_project_component_rhs!(
+            projected_rhs, level,
+        ) === projected_rhs
+        @test projected_solution ≈ expected_solution rtol = 64eps(T) atol = 64eps(T)
+        @test projected_rhs ≈ expected_rhs rtol = 64eps(T) atol = 64eps(T)
+        @test isequal(projected_solution[inactive], solution[inactive])
+        @test isequal(projected_rhs[inactive], rhs[inactive])
+        for cells in groups
+            solution_scale = max(sum(abs, volumes[cells] .* solution[cells]), one(T))
+            rhs_scale = max(sum(abs, rhs[cells]), one(T))
+            @test abs(dot(volumes[cells], projected_solution[cells])) <=
+                64eps(T) * solution_scale
+            @test abs(sum(projected_rhs[cells])) <= 64eps(T) * rhs_scale
+        end
+
+        # Q and Q' must be idempotent transposes, hence Q'Q is symmetric
+        # positive semidefinite, including the unchanged inactive entries.
+        repeated_solution = copy(projected_solution)
+        repeated_rhs = copy(projected_rhs)
+        TwoPhaseAMR._multigrid_remove_component_means!(repeated_solution, level)
+        TwoPhaseAMR._multigrid_project_component_rhs!(repeated_rhs, level)
+        @test repeated_solution ≈ projected_solution rtol = 64eps(T) atol = 64eps(T)
+        @test repeated_rhs ≈ projected_rhs rtol = 64eps(T) atol = 64eps(T)
+        tolerance = 256eps(T) * max(sqrt(dot(solution, solution) * dot(rhs, rhs)), one(T))
+        @test dot(projected_solution, rhs) ≈ dot(solution, projected_rhs) rtol =
+            256eps(T) atol = tolerance
+        normal_solution = copy(projected_solution)
+        TwoPhaseAMR._multigrid_project_component_rhs!(normal_solution, level)
+        normal_rhs = copy(rhs)
+        TwoPhaseAMR._multigrid_remove_component_means!(normal_rhs, level)
+        TwoPhaseAMR._multigrid_project_component_rhs!(normal_rhs, level)
+        @test dot(solution, normal_rhs) ≈ dot(rhs, normal_solution) rtol =
+            256eps(T) atol = tolerance
+        @test dot(solution, normal_solution) ≈ dot(projected_solution, projected_solution) rtol =
+            256eps(T) atol = tolerance
+        @test dot(solution, normal_solution) > zero(T)
+
+        # Covered entries are neither read by the reductions nor overwritten.
+        for (project!, input, expected) in (
+                (TwoPhaseAMR._multigrid_remove_component_means!, solution, projected_solution),
+                (TwoPhaseAMR._multigrid_project_component_rhs!, rhs, projected_rhs),
+            )
+            sentinels = copy(input)
+            nonfinite = (T(NaN), T(Inf), -T(Inf), -zero(T))
+            for (index, cell) in pairs(inactive)
+                sentinels[cell] = nonfinite[mod1(index, length(nonfinite))]
+            end
+            result = copy(sentinels)
+            project!(result, level)
+            @test isequal(result[inactive], sentinels[inactive])
+            @test result[active] ≈ expected[active] rtol = 64eps(T) atol = 64eps(T)
+        end
+
+        # A completely inactive level has no component sums to normalize.
+        fill!(level.component_indices, 0)
+        fill!(level.volumes, zero(T))
+        empty!(level.component_volumes)
+        empty!(level.component_sums)
+        sentinels = copy(solution)
+        sentinels[1] = T(NaN)
+        for project! in (
+                TwoPhaseAMR._multigrid_remove_component_means!,
+                TwoPhaseAMR._multigrid_project_component_rhs!,
+            )
+            result = copy(sentinels)
+            @test project!(result, level) === result
+            @test isequal(result, sentinels)
+        end
+    end
+end
+
 @testset "singleton open pressure components" begin
     mesh = BlockTreeMesh(block_size = (4, 4), periodic = (false, false))
     operator = PoissonOperator(mesh; face_coefficient = 0.0)
