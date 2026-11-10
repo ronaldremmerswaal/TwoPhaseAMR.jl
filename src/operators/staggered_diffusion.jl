@@ -224,6 +224,14 @@ WallDiffusionConnection(degree, conductance, point, tangential) =
     degree, conductance, point, tangential, Int8(0), Int8(0),
 )
 
+# A signed contribution of a retained velocity DOF to the reaction on
+# eliminated embedded Dirichlet faces. It is diagnostic metadata, not a
+# second stiffness or a wall source.
+struct WallDiffusionReaction{T}
+    degree_of_freedom::Int
+    coefficient::T
+end
+
 struct StaggeredDiffusionComponent{Axis, T}
     stiffness::SparseMatrixCSC{T, Int}
     laplacian::SparseMatrixCSC{T, Int}
@@ -231,6 +239,7 @@ struct StaggeredDiffusionComponent{Axis, T}
     local_to_global::Vector{Int}
     dirichlet_faces::Vector{Int}
     wall_connections::Vector{WallDiffusionConnection{T}}
+    wall_reactions::Vector{WallDiffusionReaction{T}}
     input::Vector{T}
     output::Vector{T}
     maximum_row_sum::T
@@ -704,6 +713,7 @@ function _staggered_diffusion_component(
     )
     return StaggeredDiffusionComponent{Axis, T}(
         stiffness, laplacian, volumes, local_to_global, Int[], wall_connections,
+        WallDiffusionReaction{T}[],
         zeros(T, length(local_to_global)), zeros(T, length(local_to_global)),
         _maximum_absolute_row_sum(laplacian)
     )

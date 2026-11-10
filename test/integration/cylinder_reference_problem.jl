@@ -45,11 +45,17 @@ function embedded_force_coefficients(
         component = axis == 1 ? diffusion.x : diffusion.y
         for connection in component.wall_connections
             iszero(connection.boundary_axis) || continue
+            TwoPhaseAMR._include_wall_connection(diffusion.boundary, connection) || continue
             global_index = component.local_to_global[
                 connection.degree_of_freedom,
             ]
             viscous_force[axis] += diffusion.viscosity *
                 connection.conductance * velocity.interior[global_index]
+        end
+        for reaction in component.wall_reactions
+            global_index = component.local_to_global[reaction.degree_of_freedom]
+            viscous_force[axis] += diffusion.viscosity *
+                reaction.coefficient * velocity.interior[global_index]
         end
     end
     scale = 2 / (density * reference_speed^2 * reference_length)

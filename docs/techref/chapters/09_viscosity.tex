@@ -190,6 +190,11 @@ prescribed zero and removed from the diffusion unknowns. The aperture-weighted
 flux supplies half the wall-normal conductance to the opposite face, and the
 embedded connection supplies the other half, including for
 \apitype{FreeSlip}\code{()}.
+The retained principal stiffness block also carries flux to the eliminated
+face. Its integrated reaction, the negative column sum of the eliminated-to-
+retained stiffness block applied to the retained velocities, is stored
+separately from wall connections and included when reporting embedded viscous
+forces; it is not added to the diffusion operator a second time.
 
 Every embedded wall value is zero, also for a moving \code{NoSlip(u)}
 (since \issue{75}); with \apitype{VelocityBoundaryConditions} the cut kind is

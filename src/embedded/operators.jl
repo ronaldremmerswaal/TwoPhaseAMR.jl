@@ -1140,6 +1140,7 @@ function _cut_cell_diffusion_component(
         wall_connections, boundary, T; gradient_stencil,
     )
     dirichlet_faces = Int[]
+    wall_reactions = WallDiffusionReaction{T}[]
     if !isempty(aligned)
         active = trues(length(local_to_global))
         for (local_index, global_index) in pairs(local_to_global)
@@ -1158,8 +1159,23 @@ function _cut_cell_diffusion_component(
             # zero Dirichlet value without coupling to an evolving wall DOF.
             retained = findall(active)
             renumber = zeros(Int, length(active))
+            # Recover the force on the eliminated wall faces from the
+            # original stiffness cross-block. For a retained velocity u,
+            # the integrated reaction is -sum(S[wall, retained] * u).
+            # Coefficients can be signed for widened AMR energy stencils.
+            stiffness_rows = rowvals(stiffness)
+            stiffness_values = nonzeros(stiffness)
             for (new_index, old_index) in pairs(retained)
                 renumber[old_index] = new_index
+                coefficient = zero(T)
+                for pointer in nzrange(stiffness, old_index)
+                    row = @inbounds stiffness_rows[pointer]
+                    if !active[row]
+                        coefficient -= @inbounds stiffness_values[pointer]
+                    end
+                end
+                iszero(coefficient) ||
+                    push!(wall_reactions, WallDiffusionReaction(new_index, coefficient))
             end
             retained_walls = WallDiffusionConnection{T}[]
             for wall in wall_connections
@@ -1181,6 +1197,7 @@ function _cut_cell_diffusion_component(
     laplacian = sparse(-spdiagm(0 => inv.(volumes)) * stiffness)
     return StaggeredDiffusionComponent{Axis, T}(
         stiffness, laplacian, volumes, local_to_global, dirichlet_faces, wall_connections,
+        wall_reactions,
         zeros(T, length(local_to_global)), zeros(T, length(local_to_global)),
         _maximum_absolute_row_sum(laplacian),
     )
