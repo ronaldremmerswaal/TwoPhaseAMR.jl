@@ -213,8 +213,10 @@ function _solve_variable_diffusion!(
     dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
     max_cycles >= 0 ||
         throw(ArgumentError("max_cycles must be nonnegative"))
+    _zero_variable_diffusion_constraints!(solver.right_hand_side, operator)
     prepare! = () -> begin
         copyto!(solver.solution, destination.interior)
+        _zero_variable_diffusion_constraints!(solver.solution, operator)
         return zero(T)
     end
     # Dividing the integrated momentum residual by staggered inertia gives
@@ -223,6 +225,7 @@ function _solve_variable_diffusion!(
         prepare!, solver, solver.action, solver.inertia, dimensionless_tolerance,
         max_cycles; relative_to_rhs = true,
     ) do values
+        _zero_variable_diffusion_constraints!(values, operator)
         copyto!(destination.interior, values)
         fill!(destination.boundary, zero(T))
     end
@@ -246,7 +249,9 @@ function implicit_midpoint_diffusion!(
     matrix = spdiagm(0 => inertia) + (dt / 2) * operator.stiffness
     rhs = inertia .* source.interior -
         (dt / 2) * (operator.stiffness * old_velocity.interior)
+    _zero_variable_diffusion_constraints!(rhs, operator)
     destination.interior .= matrix \ rhs
+    _zero_variable_diffusion_constraints!(destination.interior, operator)
     fill!(destination.boundary, zero(eltype(destination)))
     return destination
 end

@@ -39,15 +39,28 @@ function _variable_staggered_diffusion(
     nx, ny = mesh.block_size
     rows = cache.strain_rows
     cols = cache.strain_columns
+    reaction_rows = cache.wall_reaction_rows
+    reaction_cols = cache.wall_reaction_columns
+    reaction_vals = cache.wall_reaction_values
     vals = cache.strain_values
     interpolation_rows = cache.interpolation_rows
     interpolation_columns = cache.interpolation_columns
     interpolation_values = cache.interpolation_values
     for values in (
-            rows, cols, vals, interpolation_rows,
-            interpolation_columns, interpolation_values,
+            rows, cols, vals, reaction_rows, reaction_cols, reaction_vals,
+            interpolation_rows, interpolation_columns, interpolation_values,
         )
         empty!(values)
+    end
+    dirichlet_faces = isnothing(geometry) ? Int[] :
+        _embedded_variable_wall_constraints(geometry)
+    reaction_column = cache.dirichlet_columns
+    if !isempty(dirichlet_faces)
+        resize!(reaction_column, length(mesh.faces))
+        fill!(reaction_column, 0)
+        for (column, face_index) in pairs(dirichlet_faces)
+            reaction_column[face_index] = column
+        end
     end
     measures = isnothing(reuse) ? T[] : reuse.stress_measures
     empty!(measures)
@@ -67,13 +80,21 @@ function _variable_staggered_diffusion(
         push!(interpolation_values, one(T))
     end
     for (i, face) in pairs(mesh.faces)
+        # An aligned solid face has zero open aperture, but the eliminated
+        # normal-strain column represents motion of the wall itself. Use its
+        # full area for the reaction; the column never enters active strain.
+        aperture = if isnothing(geometry) ||
+                (!isempty(dirichlet_faces) && !iszero(reaction_column[i]))
+            one(T)
+        else
+            geometry.aperture[i]
+        end
         for (ref, sign) in ((face.minus, 1), (face.plus, -1))
             open = isnothing(geometry) ? one(T) :
                 _get(geometry.open_fraction, ref)
             open > zero(T) || continue
             row = 2 * (_cell_index(ref, nx, ny) - 1) + face.axis
             push!(rows, row);push!(cols, i)
-            aperture = isnothing(geometry) ? one(T) : geometry.aperture[i]
             push!(
                 vals,
                 sign * aperture * face.area /
@@ -82,20 +103,30 @@ function _variable_staggered_diffusion(
         end
     end
     vertices, lattice = _stress_vertices!(cache, mesh, T)
+    wall_vertices = isnothing(geometry) ? nothing :
+        _embedded_variable_wall_stress_vertices(geometry, lattice)
     empty!(cache.vertex_keys)
     append!(cache.vertex_keys, keys(vertices))
     sort!(cache.vertex_keys)
     for key in cache.vertex_keys
         volume, cells = vertices[key]
         point = ntuple(a -> mesh.origin[a] + key[a] * mesh.extent[a] / lattice[a], 2)
-        open_volume = isnothing(geometry) ? volume : sum(
+        wall_cells = isnothing(wall_vertices) ? nothing : get(wall_vertices, key, nothing)
+        open_volume = if isnothing(geometry)
+            volume
+        else
+            sum(
                 weight * _get(geometry.open_fraction, ref)
-                for (ref, weight) in cells;
+                    for (ref, weight) in cells
+                    if isnothing(wall_cells) || !(_cell_index(ref, nx, ny) in wall_cells);
                 init = zero(T),
             )
+        end
         open_volume > zero(T) || continue
         push!(measures, open_volume);row = length(measures)
         for (ref, raw_weight) in cells
+            !isnothing(wall_cells) && _cell_index(ref, nx, ny) in wall_cells &&
+                continue
             weight = isnothing(geometry) ? raw_weight :
                 raw_weight * _get(geometry.open_fraction, ref)
             weight > zero(T) || continue
@@ -122,6 +153,7 @@ function _variable_staggered_diffusion(
         for (face_index, conductance, cell_index) in
             _embedded_variable_wall_stresses(
                 geometry; include_cut_wall = boundary isa NoSlip,
+                dirichlet_faces,
             )
             row = length(measures) + 1
             push!(measures, conductance)
@@ -133,7 +165,41 @@ function _variable_staggered_diffusion(
             push!(vals, one(T))
         end
     end
+    if !isempty(dirichlet_faces)
+        # Separate the original prescribed columns before adding algebraic
+        # rows. Keeping their stress-row indices makes the wall reaction
+        # recoverable with the current, dynamically refreshed stress weights.
+        retained = 0
+        for index in eachindex(rows)
+            column = reaction_column[cols[index]]
+            if !iszero(column)
+                push!(reaction_rows, rows[index])
+                push!(reaction_cols, column)
+                push!(reaction_vals, vals[index])
+            else
+                retained += 1
+                rows[retained] = rows[index]
+                cols[retained] = cols[index]
+                vals[retained] = vals[index]
+            end
+        end
+        resize!(rows, retained)
+        resize!(cols, retained)
+        resize!(vals, retained)
+        for face_index in dirichlet_faces
+            # An empty interpolation row gives exp(0) == 1 on every
+            # viscosity refresh, so this stress is an isolated unit row.
+            push!(measures, one(T))
+            push!(rows, length(measures))
+            push!(cols, face_index)
+            push!(vals, one(T))
+        end
+    end
     strain = sparse(rows, cols, vals, length(measures), length(mesh.faces))
+    wall_reaction_strain = sparse(
+        reaction_rows, reaction_cols, reaction_vals,
+        length(measures), length(dirichlet_faces),
+    )
     strain_transpose = copy(transpose(strain))
     interpolation = sparse(
         interpolation_rows, interpolation_columns, interpolation_values,
@@ -183,7 +249,7 @@ function _variable_staggered_diffusion(
     _release_stress_vertices!(cache)
     return VariableStaggeredDiffusionOperator(
         mesh, stiffness, volumes, boundary, strain, strain_transpose,
-        interpolation, interpolation_transpose,
+        wall_reaction_strain, dirichlet_faces, interpolation, interpolation_transpose,
         measures, weights, cell_work, stress_work,
         stiffness_pointers, stiffness_stresses, stiffness_factors,
         stiffness_refresh_offsets,
@@ -274,6 +340,14 @@ function StaggeredDiffusionOperator(
     )
     return _staggered_diffusion_operator(field; viscosity, boundary)
 end
+
+function _zero_variable_diffusion_constraints!(values, operator)
+    for index in operator.dirichlet_faces
+        @inbounds values[index] = zero(eltype(values))
+    end
+    return values
+end
+
 function diffusion!(
         destination::FaceVelocity, velocity::FaceVelocity,
         operator::VariableStaggeredDiffusionOperator; time = 0
@@ -289,6 +363,7 @@ function diffusion!(
     @_parallel for index in 1:length(result)
         @inbounds result[index] = -result[index] / volumes[index]
     end
+    _zero_variable_diffusion_constraints!(result, operator)
     fill!(destination.boundary, zero(eltype(destination)))
     return destination
 end
