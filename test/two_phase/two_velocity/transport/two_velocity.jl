@@ -51,8 +51,8 @@ _velocity_test_interface(work) = work.interface
         @test typeof(rebuilt.method_workspace[]) === typeof(state)
     end
 
-    # The projected operator is rebuilt when phase activity changes its
-    # singularity, without changing the concrete cache type.
+    # Activity and singularity changes refresh the existing projected
+    # operator and solver without rebuilding the transport workspace.
     interface = InterfaceField(mesh; init = 1)
     work = WYAdvectionWorkspace(
         interface, velocity; interface_transport = ProjectedLiquidVelocity(),
@@ -62,15 +62,27 @@ _velocity_test_interface(work) = work.interface
     fill!(interior(interface.fraction, 1), 0)
     @test all(iszero, TV._project_liquid_velocity!(work, velocity).interior)
     empty = @inferred getindex(work.method_workspace)
-    @test empty !== full
+    @test empty === full
     @test typeof(empty) === typeof(full)
     @test !empty.operator.singular
     fill!(interior(interface.fraction, 1), 1)
     @test all(iszero, TV._project_liquid_velocity!(work, velocity).interior)
     restored = @inferred getindex(work.method_workspace)
-    @test restored !== empty
+    @test restored === empty
     @test typeof(restored) === typeof(full)
     @test restored.operator.singular
+
+    # Covered cells do not anchor a fully liquid component when their
+    # intervening face apertures vanish.
+    cut_interface = InterfaceField(mesh; init = 1, geometry)
+    cut_work = WYAdvectionWorkspace(
+        cut_interface, velocity; interface_transport = ProjectedLiquidVelocity(),
+    )
+    cut_state = cut_work.method_workspace[]
+    @test any(iszero, cut_state.cell_volumes)
+    @test cut_state.operator.singular
+    @test all(iszero, TV._project_liquid_velocity!(cut_work, velocity).interior)
+    @test cut_work.method_workspace[] === cut_state
 end
 
 @testset "Float32 cut-cell CFL avoids per-face boxing" begin
@@ -1715,15 +1727,19 @@ end
                 # The old extension has a significant normal jump on the
                 # current stencils, but the new jump must still target zero.
                 old_jump = [
-                    TV._cmdgfm_normal_velocity_row(extended, stencil)
+                    dt * TV._cmdgfm_normal_velocity_row(extended, stencil) /
+                        TV._projection_face_spacing(mesh, stencil.face)
                         for stencil in work.stencils
                 ]
                 final_jump = [
-                    TV._cmdgfm_normal_velocity_row(flow.velocity, stencil)
+                    dt * TV._cmdgfm_normal_velocity_row(flow.velocity, stencil) /
+                        TV._projection_face_spacing(mesh, stencil.face)
                         for stencil in work.stencils
                 ]
                 @test !isempty(old_jump)
-                @test maximum(abs, old_jump; init = 0.0) > 1.0e-6
+                @test any(zip(old_jump, work.stencils)) do (jump, stencil)
+                    abs(jump) > 1.0e-6 * dt / TV._projection_face_spacing(mesh, stencil.face)
+                end
                 @test maximum(abs, final_jump; init = 0.0) <= tolerance + 1024eps()
                 @test stats.normal_velocity_defect <= tolerance + 1024eps()
             else

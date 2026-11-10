@@ -1,26 +1,12 @@
-"""Reusable open-face connectivity and component reductions for an elliptic solve."""
-mutable struct EllipticComponentWorkspace{T}
-    incidence::SparseMatrixCSC{T, Int}
-    counts::Vector{Int}
-    labels::Vector{Int}
-    stack::Vector{Int}
-    active::BitVector
-    open_faces::BitVector
-    mesh_identity::Union{Nothing, Base.RefValue{Nothing}}
-    generation::UInt
-    anchors::Vector{Int}
-    volumes::Vector{T}
-    sums::Vector{T}
-    scales::Vector{T}
-end
-
 function EllipticComponentWorkspace(operator::EllipticOperator{T}) where {T}
     mesh = operator.mesh
     components = EllipticComponentWorkspace(
         spzeros(T, length(mesh.faces), ncells(mesh)), Int[], Int[], Int[],
         falses(0), falses(0), nothing, zero(UInt), Int[], T[], T[], T[],
+        falses(0), 0,
     )
-    return _rebuild_elliptic_components!(components, operator)
+    _rebuild_elliptic_components!(components, operator)
+    return _refresh_elliptic_components!(components, operator)
 end
 
 function _rebuild_elliptic_components!(components, operator)
@@ -41,13 +27,10 @@ function _rebuild_elliptic_components!(components, operator)
         components.labels, components.stack, components.incidence, mesh,
         components.active, components.open_faces,
     )
-    empty!(components.anchors)
-    for index in eachindex(components.labels)
-        @inbounds components.labels[index] == index && push!(components.anchors, index)
-    end
     for values in (components.volumes, components.sums, components.scales)
         resize!(values, length(operator.volumes))
     end
+    resize!(components.ungauged, length(operator.volumes))
     components.mesh_identity = mesh.topology_cache.identity
     components.generation = mesh.topology_cache.generation
     return components
@@ -76,12 +59,51 @@ function _refresh_elliptic_components!(components, operator)
         end
     end
     changed && _rebuild_elliptic_components!(components, operator)
+    # A physical Dirichlet boundary or a nonzero connection to an imposed
+    # inactive cell anchors only the component containing that connection.
+    # Decoupled cut-cell operators normally have zero coefficients there.
     fill!(components.volumes, zero(eltype(components.volumes)))
+    fill!(components.ungauged, false)
+    components.count = 0
+    has_inactive = false
     for index in eachindex(components.labels)
         root = @inbounds components.labels[index]
-        iszero(root) && continue
+        if iszero(root)
+            has_inactive = true
+            continue
+        end
         @inbounds components.volumes[root] += operator.volumes[index]
+        if root == index
+            @inbounds components.ungauged[root] = true
+            components.count += 1
+        end
+        if !iszero(@inbounds operator.boundary_diagonal[index])
+            @inbounds components.ungauged[root] = false
+        end
     end
+    if has_inactive
+        nx, ny = operator.mesh.block_size
+        for (index, face) in pairs(operator.mesh.faces)
+            iszero(@inbounds operator.face_coefficient[index]) && continue
+            minus = _cell_index(face.minus, nx, ny)
+            plus = _cell_index(face.plus, nx, ny)
+            minus_root = @inbounds components.labels[minus]
+            plus_root = @inbounds components.labels[plus]
+            if iszero(minus_root) && !iszero(plus_root)
+                @inbounds components.ungauged[plus_root] = false
+            elseif iszero(plus_root) && !iszero(minus_root)
+                @inbounds components.ungauged[minus_root] = false
+            end
+        end
+    end
+    empty!(components.anchors)
+    for index in eachindex(components.labels)
+        if @inbounds components.labels[index] == index && components.ungauged[index]
+            push!(components.anchors, index)
+        end
+    end
+    components === operator.components &&
+        (operator.singular = !isempty(components.anchors))
     return components
 end
 
@@ -90,7 +112,7 @@ function _remove_component_volume_means!(values, volumes, components)
     fill!(components.sums, zero(eltype(components.sums)))
     for index in eachindex(values)
         root = @inbounds components.labels[index]
-        iszero(root) && continue
+        (iszero(root) || !(@inbounds components.ungauged[root])) && continue
         @inbounds components.sums[root] += volumes[index] * values[index]
     end
     for root in components.anchors
@@ -98,8 +120,11 @@ function _remove_component_volume_means!(values, volumes, components)
     end
     for index in eachindex(values)
         root = @inbounds components.labels[index]
-        @inbounds values[index] = iszero(root) ? zero(eltype(values)) :
-            values[index] - components.sums[root]
+        if iszero(root)
+            @inbounds values[index] = zero(eltype(values))
+        elseif @inbounds components.ungauged[root]
+            @inbounds values[index] -= components.sums[root]
+        end
     end
     return values
 end
@@ -113,7 +138,7 @@ function _project_component_rhs!(solver, compatibility)
     fill!(components.scales, zero(T))
     for index in eachindex(rhs)
         root = @inbounds components.labels[index]
-        iszero(root) && continue
+        (iszero(root) || !(@inbounds components.ungauged[root])) && continue
         value = @inbounds rhs[index]
         @inbounds components.sums[root] += value
         @inbounds components.scales[root] += abs(value)
@@ -138,7 +163,7 @@ function _project_component_rhs!(solver, compatibility)
     end
     for index in eachindex(rhs)
         root = @inbounds components.labels[index]
-        iszero(root) && continue
+        (iszero(root) || !(@inbounds components.ungauged[root])) && continue
         @inbounds rhs[index] -= components.sums[root] * volumes[index]
     end
     return iszero(total_volume) ? zero(T) : total_sum / total_volume
@@ -193,7 +218,7 @@ function EllipticSolver(
         krylov, preconditioner, krylov_options,
         zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
         zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
-        operator.singular ? EllipticComponentWorkspace(operator) : nothing,
+        isnothing(operator.components) ? nothing : EllipticComponentWorkspace(operator),
         LinearSolverStats(
             T; method,
             preconditioner = _preconditioner_name(preconditioner)
@@ -263,7 +288,6 @@ function _reconfigure_elliptic_solver!(
     ) where {T}
     typeof(operator) === typeof(solver.operator) || return nothing
     typeof(preconditioner) === typeof(solver.preconditioner) || return nothing
-    isnothing(solver.components) == !operator.singular || return nothing
     action = solver.action
     action isa FactorizedEllipticOperator || return nothing
     typeof(action.operator) === typeof(operator) || return nothing
@@ -293,8 +317,13 @@ function _reconfigure_elliptic_solver!(
     )
     typeof(krylov) === typeof(solver.krylov) || return nothing
     solver.operator = operator
-    isnothing(solver.components) ||
-        _rebuild_elliptic_components!(solver.components, operator)
+    if isnothing(operator.components)
+        solver.components = nothing
+    elseif isnothing(solver.components)
+        solver.components = EllipticComponentWorkspace(operator)
+    else
+        _refresh_elliptic_components!(solver.components, operator)
+    end
     solver.krylov = krylov
     solver.preconditioner = preconditioner
     solver.stats = LinearSolverStats(
@@ -540,12 +569,13 @@ end
 
 Solve the strong-form equation `L(solution) = rhs` with the external Krylov
 workspace and independent preconditioner stored in `solver`.
-For periodic or all-Neumann Poisson problems the right-hand side must have zero
-volume mean on each open-face connected component. `compatibility=:project`
-removes and reports each component mean; `:error` rejects an incompatible
-component. For these singular problems, the returned pressure has zero
-volume-weighted mean separately on each component and covered cells are
-set to zero. Covered-cell RHS values are ignored.
+For a zero-reaction Poisson operator, the right-hand side must have zero
+volume mean on each connected component without a physical or inactive
+Dirichlet anchor. `compatibility=:project` removes and reports each such
+component mean; `:error` rejects an incompatible component. The returned
+pressure has zero volume-weighted mean on each unanchored component. Anchored
+components retain their RHS and pressure level. Covered-cell RHS values are
+ignored and covered-cell pressure values are set to zero.
 """
 function solve!(
         solution::CellField{T}, solver::EllipticSolver{T},
@@ -569,8 +599,12 @@ function solve!(
             solver.operator.references,
         )
         for index in eachindex(solver.right_hand_side)
-            @inbounds solver.right_hand_side[index] = iszero(volumes[index]) ?
-                zero(T) : solver.right_hand_side[index] * volumes[index]
+            if iszero(@inbounds volumes[index])
+                @inbounds solver.right_hand_side[index] = zero(T)
+                @inbounds solver.solution[index] = zero(T)
+            else
+                @inbounds solver.right_hand_side[index] *= volumes[index]
+            end
         end
 
         empty!(solver.stats.removed_rhs_component_means)
@@ -586,7 +620,7 @@ function solve!(
 
     return _solve_krylov_with_stats!(
         prepare!, solver, solver.action, volumes, rtol, max_cycles;
-        atol, components = solver.components,
+        atol, components = singular ? solver.components : nothing,
     ) do values
         _copy_to_field!(solution, values, solver.operator.references)
     end

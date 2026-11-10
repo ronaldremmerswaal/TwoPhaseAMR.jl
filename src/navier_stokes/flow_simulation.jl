@@ -487,9 +487,10 @@ function project!(
             max_iterations = cycle_limit,
         )
     end
+    pressure_solver = _one_velocity_pressure_solver!(flow.solver, flow.workspace; refresh = true)
     if isnothing(flow.solver.geometry)
         return project!(
-            flow.velocity, correction_pressure, flow.solver.pressure_solver,
+            flow.velocity, correction_pressure, pressure_solver,
             time_step, flow.workspace.projection;
             velocity_boundary = flow.solver.boundary,
             boundary_time = flow.time,
@@ -497,7 +498,7 @@ function project!(
         )
     end
     return project!(
-        flow.velocity, correction_pressure, flow.solver.pressure_solver,
+        flow.velocity, correction_pressure, pressure_solver,
         time_step, flow.workspace.projection, flow.solver.geometry;
         velocity_boundary = flow.solver.boundary,
         boundary_time = flow.time,
