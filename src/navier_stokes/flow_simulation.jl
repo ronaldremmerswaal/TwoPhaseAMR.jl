@@ -1,3 +1,10 @@
+struct FlowAMRCache{V, P, S, A, W}
+    velocity::V
+    pressure::P
+    system::S
+    adaptivity::A
+    workspace::W
+end
 """
     FlowSimulation(mesh, physics::SinglePhase; options...)
     FlowSimulation(mesh, physics::TwoPhase;
@@ -27,7 +34,8 @@ initializer is accepted in either mode; two-velocity mode also accepts a
 liquid/gas pair.
 
 `dt` becomes the default for `simulate!` and lets the initial workspace build
-the final shifted diffusion hierarchy once. Velocity may be zero, a constant
+the final shifted diffusion hierarchy once. `force`, when supplied, is the
+default body force for `step!` and `simulate!`. Velocity may be zero, a constant
 two-component tuple, a callable `f(x,y,time,axis)`, or compatible existing
 field data. Pressure may be zero/a number, a callable `p(x,y)`, or a
 `CellField`. The fully assembled constructor wraps existing fields, system,
@@ -37,7 +45,7 @@ and optional workspace without copying.
 `flow.diffusion_operator` expose the active phase interface and viscous
 operator; the latter is `nothing` for inviscid two-phase flow.
 """
-mutable struct FlowSimulation{T, M <: BlockTreeMesh, V, S, W}
+mutable struct FlowSimulation{T, M <: BlockTreeMesh, V, S, W, F, D}
     velocity::V
     pressure::CellField{T, M}
     system::S
@@ -47,7 +55,9 @@ mutable struct FlowSimulation{T, M <: BlockTreeMesh, V, S, W}
     mesh_updates::Int
     unresolved_curvature_faces::Int
     default_dt::Union{Nothing, T}
-    diagnostics::DiagnosticCollection{T}
+    force::F
+    diagnostics::D
+    amr_cache::Union{Nothing, FlowAMRCache}
 end
 
 function Base.getproperty(flow::FlowSimulation, name::Symbol)
@@ -191,7 +201,7 @@ function FlowSimulation(
         pressure::CellField{T, M},
         solver::NavierStokesSystem{T, M};
         workspace = nothing, time = zero(T), dt = nothing, steps = 0,
-        mesh_updates = 0, diagnostics = ()
+        mesh_updates = 0, diagnostics = (), force = nothing,
     ) where {T, M <: BlockTreeMesh}
     velocity_mesh = velocity isa FaceVelocity ? velocity.mesh :
         velocity[1].mesh
@@ -229,9 +239,10 @@ function FlowSimulation(
     collection = DiagnosticCollection(T)
     flow = FlowSimulation{
         T, M, typeof(velocity), typeof(solver), typeof(built_workspace),
+        typeof(force), typeof(collection),
     }(
         velocity, pressure, solver, built_workspace, initial_time,
-        initial_steps, initial_mesh_updates, 0, default_dt, collection,
+        initial_steps, initial_mesh_updates, 0, default_dt, force, collection, nothing,
     )
     _configure_diagnostics!(
         collection, diagnostics, SimulationState(
@@ -246,7 +257,7 @@ function _flow_simulation(
         mesh::M, physics; numerics, adaptivity,
         velocity = nothing, pressure = nothing,
         time = 0, dt = nothing, T = nothing,
-        diagnostics = (), system_options...
+        diagnostics = (), force = nothing, system_options...
     ) where {M <: BlockTreeMesh}
     scalar_type = _flow_scalar_type(mesh, velocity, pressure, T)
     _check_real_type(
@@ -263,7 +274,7 @@ function _flow_simulation(
     )
     return FlowSimulation(
         initial_velocity, initial_pressure, solver;
-        time = initial_time, dt, diagnostics,
+        time = initial_time, dt, diagnostics, force,
     )
 end
 
@@ -323,7 +334,7 @@ function FlowSimulation(
         time = 0, dt = nothing, T = nothing,
         geometry = nothing, boundary = NoSlip(),
         numerics = NavierStokesOptions(), adaptivity = Adaptivity(),
-        diagnostics = (),
+        diagnostics = (), force = nothing,
     )
     numerics isa NavierStokesOptions || throw(
         ArgumentError("numerics must be NavierStokesOptions"),
@@ -333,7 +344,7 @@ function FlowSimulation(
     )
     return _flow_simulation(
         mesh, physics; numerics, adaptivity,
-        velocity, pressure, time, dt, T, geometry, boundary, diagnostics,
+        velocity, pressure, time, dt, T, geometry, boundary, diagnostics, force,
     )
 end
 
@@ -354,7 +365,7 @@ function FlowSimulation(
         time = 0, dt = nothing, T = nothing,
         geometry = physics.interface.geometry, boundary = NoSlip(),
         numerics = NavierStokesOptions(), adaptivity = Adaptivity(),
-        diagnostics = (),
+        diagnostics = (), force = nothing,
     )
     physics.interface.mesh === mesh || throw(
         ArgumentError("two-phase physics and simulation must share one mesh"),
@@ -376,8 +387,161 @@ function FlowSimulation(
         mesh, physics; numerics, adaptivity,
         interface_transport, two_velocity_projection = pressure_projection,
         velocity = initial_velocity, pressure, time, dt, T,
-        geometry, boundary, diagnostics,
+        geometry, boundary, diagnostics, force,
     )
+end
+
+function _simulation_flow(
+        velocity, pressure::CellField{T, M}, solver, workspace,
+        time, steps, diagnostics, force,
+    ) where {T, M <: BlockTreeMesh}
+    return FlowSimulation{
+        T, M, typeof(velocity), typeof(solver), typeof(workspace),
+        typeof(force), typeof(diagnostics),
+    }(
+        velocity, pressure, solver, workspace, time, steps, 0, 0, nothing,
+        force, diagnostics, nothing,
+    )
+end
+
+function _flow_amr_workspace!(flow::FlowSimulation)
+    solver = flow.system
+    isempty(solver.adaptivity.criteria) && return nothing
+    cache = flow.amr_cache
+    if isnothing(cache) || cache.velocity !== flow.velocity ||
+            cache.pressure !== flow.pressure || cache.system !== solver ||
+            cache.adaptivity !== solver.adaptivity
+        amr = _navier_stokes_amr_workspace(flow.velocity, flow.pressure, solver)
+        flow.amr_cache = FlowAMRCache(
+            flow.velocity, flow.pressure, solver, solver.adaptivity, amr,
+        )
+        return amr
+    end
+    return cache.workspace
+end
+
+function _same_simulation_step(flow::FlowSimulation)
+    selection = flow.workspace.simulation_step
+    return selection.velocity === flow.velocity &&
+        selection.pressure === flow.pressure && selection.solver === flow.system &&
+        selection.time == flow.time &&
+        selection.topology_generation == flow.system.mesh.topology_cache.generation
+end
+
+function _save_simulation_step!(flow::FlowSimulation, proposal, last_step, defect_step)
+    selection = flow.workspace.simulation_step
+    selection.topology_generation = flow.system.mesh.topology_cache.generation
+    selection.time = flow.time
+    selection.step = proposal
+    selection.last_dt = last_step
+    selection.defect_dt = defect_step
+    selection.velocity = flow.velocity
+    selection.pressure = flow.pressure
+    selection.solver = flow.system
+    return nothing
+end
+
+"""
+    step!(flow::FlowSimulation, dt; force=flow.force, observer=NoObserver(),
+          tolerance=sqrt(eps(T)), max_cycles=nothing)
+
+Advance one physical step, update the flow time and counters, adapt the mesh
+when configured, and record diagnostics before emitting a `:step` event to
+`observer`. Returns the pressure-projection statistics. A body force passed
+to this call overrides the force stored in the flow for this step.
+
+The field-level `step!(velocity, pressure, system, dt, workspace; ...)`
+performs only the physical solver stages; it does not perform this bookkeeping
+or adaptive mesh update.
+"""
+function step!(
+        flow::FlowSimulation{T}, dt;
+        force = flow.force, observer::AbstractObserver = NoObserver(),
+        tolerance = sqrt(eps(T)), max_cycles = nothing,
+        _proposal = dt, _reference_dt = nothing, _current_time = nothing,
+        _next_time = nothing, _final_time = nothing, _independent_step = nothing,
+        _step_started = time_ns(), _stats_ref = nothing,
+        _defer_selection_save = false,
+    ) where {T}
+    velocity, pressure, solver, workspace =
+        flow.velocity, flow.pressure, flow.system, flow.workspace
+    time_step = _positive_finite_step(T, dt)
+    current_time = isnothing(_current_time) ? _finite_time(T, flow.time) : _current_time
+    dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
+    cycle_limit = _navier_stokes_cycle_limit(solver, max_cycles)
+    selection = workspace.simulation_step
+    defect_step = _same_simulation_step(flow) && selection.last_dt > zero(T) ?
+        selection.defect_dt : zero(T)
+    reference_step = isnothing(_reference_dt) ?
+        max(_proposal, defect_step, time_step) : _reference_dt
+    amr_workspace = _flow_amr_workspace!(flow)
+    isnothing(amr_workspace) || _supports_dynamic_topology(observer) ||
+        throw(
+        ArgumentError(
+            "exact keyframes are not supported while dynamic mesh adaptation is enabled"
+        )
+    )
+    _prepare_independent_step!(_independent_step, solver, workspace, reference_step)
+    stats = step!(
+        velocity, pressure, solver, dt, workspace;
+        time = current_time, force, tolerance = dimensionless_tolerance,
+        max_cycles = cycle_limit, _reference_dt = reference_step,
+    )
+    isnothing(_stats_ref) || (_stats_ref[] = stats)
+    stats.converged || throw(
+        ErrorException(
+            _solver_failure_message(
+                "pressure projection", stats, dimensionless_tolerance;
+                details = "dt=$(dt), time=$(current_time), max_cycles=$(cycle_limit)",
+            )
+        )
+    )
+
+    next_time = isnothing(_next_time) ? current_time + time_step : _next_time
+    flow.time = next_time
+    flow.steps += 1
+    flow.unresolved_curvature_faces += workspace.unresolved_curvature_faces[]
+    solver.mesh.adaptation.completed_steps += 1
+    topology_changed = false
+    defect_step = time_step
+    if !isnothing(amr_workspace)
+        amr_stats = adapt!(
+            amr_workspace, solver.adaptivity.criteria;
+            step = solver.mesh.adaptation.completed_steps, time = next_time,
+        )
+        if amr_stats.changed
+            topology_changed = true
+            flow.mesh_updates += 1
+            _rebuild_topology_dependent_state!(solver, workspace; dt)
+            # The new transfer defect belongs to the unshortened proposal.
+            defect_step = T(_proposal)
+            if velocity isa TwoPhaseVelocity
+                _project_regridded_two_velocity!(
+                    velocity, solver, workspace, _proposal, next_time;
+                    tolerance = dimensionless_tolerance,
+                    max_iterations = cycle_limit,
+                )
+            end
+        end
+    end
+    if _defer_selection_save
+        # The simulation loop persists identity and proposal once at run end.
+        selection.last_dt = time_step
+        selection.defect_dt = defect_step
+    else
+        _save_simulation_step!(flow, T(Inf), time_step, defect_step)
+    end
+    state = SimulationState(velocity, pressure, solver, next_time, flow.steps, workspace)
+    _record_diagnostics!(flow.diagnostics, state; event = :step)
+    final_time = isnothing(_final_time) ? next_time : _final_time
+    _observe_safely!(
+        observer, :step, state,
+        StepInfo(;
+            dt, projection = stats, topology_changed, final_time,
+            wall_time = (time_ns() - _step_started) / 1.0e9,
+        ),
+    )
+    return stats
 end
 
 """
@@ -398,7 +562,7 @@ keyword.
 """
 function simulate!(
         flow::FlowSimulation{T}, final_time;
-        dt = flow.default_dt, options...
+        dt = flow.default_dt, force = flow.force, options...
     ) where {T}
     haskey(options, :time) && throw(
         ArgumentError(
@@ -411,17 +575,9 @@ function simulate!(
     haskey(options, :step_offset) && throw(
         ArgumentError("FlowSimulation owns its cumulative step count"),
     )
-    result = simulate!(
-        flow.velocity, flow.pressure, flow.system,
-        _finite_time(T, final_time, "final_time"),
-        flow.workspace; time = flow.time, dt,
-        diagnostics = flow.diagnostics, step_offset = flow.steps,
-        options...
+    result = _simulate!(
+        flow, _finite_time(T, final_time, "final_time"); dt, force, options...
     )
-    flow.time = result.time
-    flow.steps += result.steps
-    flow.mesh_updates += result.mesh_updates
-    flow.unresolved_curvature_faces += result.unresolved_curvature_faces
     return (;
         result..., total_steps = flow.steps,
         total_mesh_updates = flow.mesh_updates,

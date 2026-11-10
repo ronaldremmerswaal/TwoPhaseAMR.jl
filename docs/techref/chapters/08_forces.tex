@@ -274,13 +274,14 @@ curvature. If it is empty too, the face is \emph{unresolved}:
   \end{gathered}
 \end{equation}
 with the jump of \cref{sec:forces:surface-tension}: such a face gets zero
-curvature, hence no tension, and is counted. \apifun{step!} sets
-\code{workspace.unresolved_curvature_faces[]} to zero at its start and to
-$\#\facesunres$ when it evaluates the tension; \apifun{simulate!} returns
-the sum over its completed steps as \code{unresolved_curvature_faces}, a
-\apitype{FlowSimulation} accumulates \code{total_unresolved_curvature_faces}
-over its \apifun{simulate!} calls, and \apifun{print_simulation_summary}
-prints both when they are positive. Until \issue{58} (fixed by PR~\#65) the force
+curvature, hence no tension, and is counted. The field-level \apifun{step!}
+sets \code{workspace.unresolved_curvature_faces[]} to zero at its start and
+to $\#\facesunres$ when it evaluates the tension. Each full
+\apifun{step!}\code{(flow, dt)} adds this count to
+\code{flow.unresolved_curvature_faces}; \apifun{simulate!} returns the sum
+over its completed steps as \code{unresolved_curvature_faces} and the flow's
+cumulative count as \code{total_unresolved_curvature_faces}.
+\apifun{print_simulation_summary} prints both when they are positive. Until \issue{58} (fixed by PR~\#65) the force
 raised an error instead. With the keyword \code{curvature}$=\curv_0$
 (for tests) every face has $\curvface_f=\curv_0$ and none is unresolved.
 The embedded contact angle enters the tension only through the curvature of
@@ -318,9 +319,9 @@ them~\cref{eq:forces:unresolved}.
 the count in \srcsym{src/two_phase/forces.jl}{surface_tension!}
 (keyword \code{unresolved_curvature_faces}, a \code{Ref\{Int\}}), reset in
 \srcsym{src/single_phase/stepping.jl}{step!} and
-\srcsym{src/two_phase/two_velocity/stepping.jl}{step!}, summed in
-\srcsym{src/navier_stokes/simulate.jl}{simulate!} and
-\srcsym{src/navier_stokes/flow_simulation.jl}{simulate!}, printed by
+\srcsym{src/two_phase/two_velocity/stepping.jl}{step!}, accumulated in
+\srcsym{src/navier_stokes/flow_simulation.jl}{step!}, summed per call in
+\srcsym{src/navier_stokes/simulate.jl}{_simulate!}, printed by
 \srcsym{src/navier_stokes/flow_diagnostics.jl}{print_simulation_summary}.
 Tests: \testsym{test/two_phase/forces.jl}{Unresolved surface-tension curvature}
 (zero jumps and force on the unresolved faces, per-step, per-run and total
@@ -579,7 +580,9 @@ and \testsym{test/two_phase/forces.jl}{Hydrostatic liquid at a sloped solid on a
 \section{Prescribed body acceleration}\label{sec:forces:body}
 A body acceleration, the keyword \code{force} of \apifun{step!} and
 \apifun{simulate!}, is a function $(x,y,\timevar,k)\mapsto\bodyacc\cdot\unitvec{k}$
-sampled at the face centroids at the midpoint of the step,
+sampled at the face centroids at the midpoint of the step. A
+\apitype{FlowSimulation} stores the constructor's \code{force} as
+\code{flow.force}, the default for its steps and simulations:
 \begin{equation}\label{eq:forces:body}
   \velo^{\stage{1}}_f\leftarrow\velo^{\stage{1}}_f+\dt\,\bodyacc\roundpar{\pos{f},\timevar^{\timelevel{n}}+\half\dt}\cdot\unitvec{\faxis{f}},
   \qquad f\in\facesint,

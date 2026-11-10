@@ -28,11 +28,11 @@ coarsening request.
 
 Every built-in criterion is active on the inclusive physical-time interval
 `t_init <= time <= t_end`; the defaults `t_init=-Inf` and `t_end=Inf` keep it
-active throughout a run. `simulate!` passes the current physical time to AMR.
-When calling the lower-level API directly, pass the same time as
-`adapt!(amr, criteria; step, time)`. An inactive criterion makes no refinement
-or keep request, so the other active criteria retain control and the mesh may
-coarsen normally.
+active throughout a run. `step!(flow, dt)` and `simulate!` pass the current
+physical time to AMR. When calling the lower-level API directly, pass the same
+time as `adapt!(amr, criteria; step, time)`. An inactive criterion makes no
+refinement or keep request, so the other active criteria retain control and the
+mesh may coarsen normally.
 
 Error-based criteria (`InterpolationErrorIndicator`,
 `CurvatureRefinementIndicator`, and `VorticityRefinementIndicator`) have
@@ -114,7 +114,8 @@ step. After transfer it rebuilds the topology-dependent advection, diffusion,
 pressure, and Krylov workspace state. Two-velocity flows also correct the
 transferred velocity constraint as described below, without changing the
 transferred physical pressure. `simulate!` reports the number of actual
-topology changes as `result.mesh_updates`.
+topology changes as `result.mesh_updates`; full steps also update
+`flow.mesh_updates`.
 
 The lower-level interface accepts either criteria or one explicit label per
 active block:
@@ -152,11 +153,11 @@ For two-velocity flow, independent Cartesian phase-velocity transfers do not
 preserve the divergence of the aperture-weighted mixture when phase apertures
 change. Reconstructed apertures can also change a refined parent's net boundary
 flux, which cannot be fixed by adjusting only its internal fine faces. After a
-topology change, `simulate!` rebuilds the operators and applies
-the configured two-velocity projection to the transferred velocities, using a
-scratch pressure so that the transferred physical pressure is retained. This
-adds one projection per regrid, using the same tolerance and time-step-scaled
-defect as the regular physical-step projection. The defect uses the
+topology change, `step!(flow, dt)` and `simulate!` rebuild the operators and
+apply the configured two-velocity projection to the transferred velocities,
+using a scratch pressure so that the transferred physical pressure is
+retained. This adds one projection per regrid, using the same tolerance and
+time-step-scaled defect as the regular physical-step projection. The defect uses the
 untruncated proposed step, so a short final step does not weaken the
 constraint when the simulation resumes.
 Standalone `adapt!` only transfers fields; passive-transport callers must

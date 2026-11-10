@@ -1151,13 +1151,15 @@ which exceeds both only for a last step stretched to reach the end time: a
 last step shortened to reach the end time and a step whose proposal dropped
 below the previous step both keep part of the defect. The first step of a run has
 $\dtdef=0$, as has a call that does not continue the previous one with the
-same fields, solver, time and mesh topology; a standalone \apifun{step!} or
+same fields, solver, time and mesh topology; a field-level \apifun{step!} or
 \apifun{project!}\code{(flow)} ends that history. After a topology change the
 transfer leaves a new defect, and $\dtdef$ is then the proposal $\dtprop$ of
 the step before the regrid, with which the two-velocity post-regrid
 projection gauges its defect (\cref{sec:projection:regrid}), not the actual
-step. A direct \apifun{step!} has $\dtref=\dt$, and \apifun{step!} and the
-lower-level projections reject $\dtref<\dt$. With this treatment the pressure
+step. A full \apifun{step!}\code{(flow, dt)} uses
+$\dtref=\max(\dt,\dtdef)$ and retains the new defect reference; a field-level
+step defaults to $\dtref=\dt$. Both \apifun{step!} and the lower-level
+projections reject $\dtref<\dt$. With this treatment the pressure
 of a shortened step no longer contains the inherited divergence divided by
 $\dt$, the mechanism of these excursions: over five end times $8$ to $12$
 steps before the end of the run, the last step of a tenth (a half) of the
@@ -1209,7 +1211,7 @@ for the CMDGFM \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_assemble_
 (inherited weight) and \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_project_cmdgfm_assembled!}
 (increment, accumulation, target defect), the inherited flux
 \srcsym{src/two_phase/two_velocity/stepping.jl}{_capture_two_velocity_inherited_flux!};
-the reference step in \srcsym{src/navier_stokes/simulate.jl}{simulate!}
+the reference step in \srcsym{src/navier_stokes/simulate.jl}{_simulate!}
 (internal keyword \code{_reference_dt}, checked by
 \srcsym{src/navier_stokes/projection.jl}{_validate_projection_reference_dt});
 scratch pressures in \srcsym{src/navier_stokes/flow_simulation.jl}{project!}
@@ -1276,10 +1278,10 @@ $\rho_0(L/\dt)^2$ and $L/\dt^2$. The mimetic system uses a symmetric
 congruence scaling, preserving MINRES symmetry; reported raw algebraic
 residual norms remain dimensional. Floating-point roundoff can still change
 the iteration count of an unpreconditioned solve near convergence.
-\apifun{project!} and
-\apifun{step!} report a projection that misses its rules
-(\code{converged=false}); \apifun{simulate!} then throws, as does the
-post-regrid projection (\cref{sec:projection:regrid}).
+\apifun{project!} and the field-level \apifun{step!} report a projection that
+misses its rules (\code{converged=false});
+\apifun{step!}\code{(flow, dt)} and the post-regrid projection throw instead
+(\cref{sec:projection:regrid}).
 
 \begin{implnote}
 Statistics \apitype{CMDGFMProjectionStats} (\code{mixture_volume_defect},
@@ -1307,10 +1309,10 @@ Tests: \testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}
 The phase velocities are transferred to a new mesh independently
 (\cref{ch:amr-criteria-transfer}), which does not preserve the
 aperture-weighted mixture divergence (\issue{84}). Since PR~\#89,
-\apifun{simulate!} therefore applies, after every topology change, the
-selected two-velocity projection to
-the transferred velocities, with the boundary values at the current time,
-the untruncated proposed step $\dtprop$ and the tolerance of the run, as an
+\apifun{step!}\code{(flow, dt)} therefore applies, after every topology
+change, the selected two-velocity projection to the transferred velocities,
+with the boundary values at the current time, the untruncated proposed step
+$\dtprop$ (the supplied step for a direct call), and the tolerance, as an
 absolute projection (the CMDGFM after reconstructing the transferred
 interface),
 \begin{equation}\label{eq:projection:regrid}
@@ -1345,7 +1347,7 @@ correction without a time step of its own.
 
 \begin{implnote}
 \srcsym{src/two_phase/two_velocity/flow_workspace.jl}{_project_regridded_two_velocity!}~\cref{eq:projection:regrid},
-called by \srcsym{src/navier_stokes/simulate.jl}{simulate!} after
+called by \srcsym{src/navier_stokes/flow_simulation.jl}{step!} after
 \apifun{adapt!} changes the topology. Tests:
 \testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Regrid on a shortened final step},
 \testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Ordinary regrid tolerance is not tightened},

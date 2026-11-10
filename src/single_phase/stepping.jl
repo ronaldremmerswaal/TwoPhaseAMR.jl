@@ -173,9 +173,9 @@ function step!(
         workspace::NavierStokesWorkspace{T};
         time = zero(T), force = nothing,
         tolerance = sqrt(eps(T)), max_cycles = nothing,
-        _transport_geometry_prepared = false,
         _reference_dt = dt,
     ) where {T}
+    workspace.transport_geometry_prepared = false
     velocity.mesh === pressure.mesh === solver.mesh ===
         workspace.old_velocity.mesh ||
         throw(ArgumentError("Navier--Stokes arguments must share a mesh"))

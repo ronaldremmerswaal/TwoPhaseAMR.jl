@@ -383,9 +383,10 @@ function stab_margin_run(build, m; steps)
         try
             AMR._enforce_current_velocity_boundary!(flow.velocity, flow.system, flow.time)
             stable_timestep(flow; cfl = STAB_CFL)
+            flow.workspace.transport_geometry_prepared = true
             stats = step!(
                 flow.velocity, flow.pressure, flow.system, dt, flow.workspace;
-                time = flow.time, _transport_geometry_prepared = true,
+                time = flow.time,
             )
             stats.converged || (failure = "projection did not converge"; break)
         catch error

@@ -754,7 +754,7 @@ function amr_flow_loop!(flow, steps, dt; tolerance = 1.0e-10, record = true)
     for n in 1:steps
         stats = step!(
             velocity, pressure, solver, dt, workspace; time, tolerance, max_cycles = cycles,
-            _transport_geometry_prepared = false, _reference_dt = dt,
+            _reference_dt = dt,
         )
         @assert stats.converged
         time += dt

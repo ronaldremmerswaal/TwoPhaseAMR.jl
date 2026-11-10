@@ -302,8 +302,8 @@ $\strongnorm{\rhsvec}$ for the viscous solves and $1/\dt^2$ as set by the
 projections, which also overwrite \code{compatible}
 (\cref{sec:projection:one}). Failure messages quote the final residual divided
 by this scale. \apifun{solve!} and the projections report a missed tolerance;
-the viscous steps and the liquid-carrier projection throw, and
-\apifun{simulate!} throws for a projection that is not converged.
+the viscous steps and the liquid-carrier projection throw, and a full
+\apifun{step!}\code{(flow, dt)} throws for a projection that is not converged.
 
 \emph{Initial guesses.} \apifun{solve!} starts from the solution field it is
 given; the one-velocity and liquid-carrier projections start from a zero
@@ -712,8 +712,8 @@ the values of every level are rewritten on the fixed pattern (once extended by
 the diagonal if $s$ was zero), the Jacobi weights recomputed and the coarse
 factorisation refactorised; an unchanged $s$ returns at once. After a regrid
 the hierarchy is rebuilt with the reuse of \cref{sec:solvers:reuse}, which
-here also requires the same boundary type and the same $s$: \apifun{simulate!}
-builds the new operator with the step just taken, so runs with a fixed step
+here also requires the same boundary type and the same $s$:
+\apifun{step!}\code{(flow, dt)} builds the new operator with the step just taken, so runs with a fixed step
 reuse the coarse levels. Matrix preconditioners (\code{:ilu}, \dots) are built
 from the symmetric part $s\viscstiff{k}+\dualvolmat$ without the corrected
 rows.
@@ -752,7 +752,7 @@ two phases \srcsym{src/two_phase/diffusion/variable_diffusion_solver.jl}{Variabl
 \srcsym{src/two_phase/diffusion/variable_diffusion_preconditioner.jl}{TreeVariableDiffusionPreconditioner},
 \srcsym{src/two_phase/diffusion/variable_diffusion_preconditioner.jl}{_refresh_tree_variable_diffusion_preconditioner!},
 \srcsym{src/two_phase/diffusion/variable_diffusion_preconditioner.jl}{_cell_viscosity_from_log!};
-rebuild with the current step \srcsym{src/navier_stokes/simulate.jl}{simulate!}.
+rebuild with the current step \srcsym{src/navier_stokes/flow_simulation.jl}{step!}.
 Tests: \testsym{test/operators/staggered_diffusion.jl}{implicit midpoint staggered elliptic solve},
 \testsym{test/operators/staggered_diffusion.jl}{staggered base-mesh multigrid},
 \testsym{test/operators/staggered_diffusion.jl}{external BiCGSTAB and staggered preconditioners},
