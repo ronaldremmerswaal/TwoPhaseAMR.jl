@@ -392,7 +392,8 @@ single-phase ones by dispatch.
   $\velo^{\stage{1}}$.
 \item \emph{Body acceleration.}
   $\velo^{\stage{1}}\leftarrow\velo^{\stage{1}}+\dt\,\bodyacc(\timevar^{\timelevel{n}}+\half\dt)$
-  on the interior faces~\cref{eq:forces:body}; then the boundary values at
+  on the interior faces~\cref{eq:forces:body} (nothing is added without a body
+  acceleration); then, in every step, the boundary values at
   $\timevar^{\timelevel{n}}+\half\dt$, open faces extrapolating the change
   since $\velo^{\timelevel{n}}$.
 \item \emph{Viscous step.} The implicit midpoint
@@ -464,17 +465,17 @@ where their phase has no staggered volume.
   CMDGFM and $\dt<\dtref$ the mixture flux of $\velo^{\phase,\timelevel{n}}$
   on the phase apertures of the start-of-step reconstruction is saved for the
   projection (\cref{sec:projection:pressure-update}).
-\item \emph{Transport.} The step is checked against the bounds, with the
-  frozen interface fluxes unless \apifun{simulate!} has just evaluated them
-  for this state; that evaluation also reconstructs the interface and freezes
-  the phase apertures of the step start (\cref{sec:vof:frozen}). The
+\item \emph{Transport.} The step is checked against the bounds unless
+  \apifun{simulate!} has just evaluated them for this state (automatic step,
+  frozen interface fluxes); that evaluation also reconstructs the interface and
+  freezes the phase apertures of the step start (\cref{sec:vof:frozen}). The
   WY sweeps with the selected carrier~\cref{eq:vof:frozen-flux}
   or~\cref{eq:vof:projection} advance the fraction, the phase scalars, the
   staggered phase scalars and the phase velocities
   (\cref{sec:momentum:two-velocity}), in alternating order, to
   $\velo^{\phase,\stage{1}}$.
 \item \emph{Body acceleration} on both phases where they are
-  present~\cref{eq:forces:body}, then the boundary values at
+  present~\cref{eq:forces:body}; then, in every step, the boundary values at
   $\timevar^{\timelevel{n}}+\half\dt$.
 \item \emph{Viscous step.} The mass-weighted mixture velocity is advanced
   by~\cref{eq:viscosity:phase-midpoint} and its increment is added to both
@@ -539,7 +540,8 @@ call proceeds as follows.
   observers that advance copies of the state over several steps (exact
   keyframes). The diagnostics are recorded and the observer receives the
   event \code{:initial}; an exception there ends the call before the first
-  step. The observer is asked whether to stop.
+  step, without a \code{:failed} event. The observer is asked whether to stop
+  (an exception of the poll is logged and counts as no).
 \item \emph{Step size.} Without a prescribed step (\code{dt=nothing}) the
   boundary values at $\timevar^{\timelevel{n}}$ are imposed and the step is
   the proposal of~\cref{eq:stab:selection} from the flow bound at CFL number
@@ -547,9 +549,10 @@ call proceeds as follows.
   shortened to end at $\tend$, and the reference step $\dtref$ is formed
   with it.
 \item \emph{Step.} One \apifun{step!} as in
-  \cref{sec:overview:step-one,sec:overview:step-two}. A projection that has
-  not converged stops the run with an error; a step that fails a run-time
-  check is not retried (\cref{sec:stab:gaps}).
+  \cref{sec:overview:step-one,sec:overview:step-two}. A linear solve that has
+  not converged (viscous step, projection, and the projection after a
+  regrid) stops the run with an error; a step that fails a run-time check is
+  not retried (\cref{sec:stab:gaps}).
 \item \emph{Regrid.} With indicators, \apifun{adapt!} is called with the
   number of completed steps and the time at the end of the step, and acts at
   most every \code{update_interval} steps (\cref{sec:amr:marking}). If the
@@ -564,10 +567,11 @@ call proceeds as follows.
   propagates. The observer is asked whether to stop; if so, the run ends at
   this step boundary.
 \item \emph{End.} After the last step or a requested stop the diagnostics are
-  recorded and the observer receives \code{:completed}; the proposal and the
-  last step are retained for a call that continues the run
-  (\cref{sec:stab:selection}). If the run throws, the observer receives
-  \code{:failed} with the exception, which is then rethrown.
+  recorded and the observer receives \code{:completed}; the last step and,
+  after an automatic step, the proposal are retained for a call that
+  continues the run (\cref{sec:stab:selection}). If the run throws, the
+  observer receives \code{:failed} with the exception (an error of the
+  observer there is dropped), which is then rethrown.
 \end{enumerate}
 A standalone \apifun{step!} ends the retained history, and so does
 \apifun{project!}\code{(flow)}, which projects an initial velocity without
@@ -633,7 +637,7 @@ events \apifun{observe!} with \apitype{SimulationState} and
       & \code{:lhf}, \code{:lhf_ghf}, \code{:wy}
       & \cref{sec:interface:normals}\\
     Krylov method and preconditioner (\apitype{LinearSolverOptions} and \apitype{MultigridOptions})
-      & CG for symmetric positive (semi)definite systems, otherwise BiCGSTAB (\cref{tab:solvers:systems}); tree geometric multigrid (\code{:auto})
+      & pressure projection and viscous steps: CG, or BiCGSTAB after a symmetry test for the one-phase viscous step (CG on a uniform, BiCGSTAB on a composite mesh), with the tree geometric multigrid (\code{:auto}); the CMDGFM system (BiCGSTAB) and the mimetic KKT system (MINRES) have their own preconditioners, the liquid carrier (CG) none (\cref{tab:solvers:systems})
       & \cref{ch:solvers}\\
     time step (\code{dt} and \code{cfl} of \apifun{simulate!})
       & automatic with CFL number $0.45$; a prescribed step
