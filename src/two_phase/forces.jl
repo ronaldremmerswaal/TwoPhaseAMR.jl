@@ -96,30 +96,45 @@ function mixture_density(
     end
     return result
 end
+
+# The boundary half-dual volume belongs to its adjacent cell. Use the same
+# conditional mixture density as the interior half-volume interpolation.
+function _mixture_boundary_coefficient(field::InterfaceField{T}, density) where {T}
+    result = Vector{T}(undef, length(field.mesh.boundary_faces))
+    for (index, face) in pairs(field.mesh.boundary_faces)
+        fraction = _conditional_fraction(field, face.cell)
+        result[index] = inv(T(density[1]) * fraction + T(density[2]) * (one(T) - fraction))
+    end
+    return result
+end
 """Construct the pressure operator using the inverse staggered mixture density."""
 function PoissonOperator(
         field::InterfaceField; density = (1.0, 1.0), template = nothing,
         construction_cache = GradientConstructionCache(eltype(field)),
-        assemble_matrix = true,
+        velocity_boundary = nothing, assemble_matrix = true,
     )
+    isnothing(template) || (template isa EllipticOperator && template.mesh === field.mesh) ||
+        throw(ArgumentError("template must be an EllipticOperator on the interface mesh"))
     rho = mixture_density(field, density)
     coefficient = inv.(rho)
+    sides = isnothing(template) ? _pressure_boundary_sides(velocity_boundary) :
+        template.boundary_sides
+    boundary_coefficient = any(sides) ?
+        _mixture_boundary_coefficient(field, density) : nothing
     if isnothing(template)
         return PoissonOperator(
             field.mesh; face_coefficient = coefficient, construction_cache,
+            velocity_boundary, boundary_face_coefficient = boundary_coefficient,
             assemble_matrix,
             T = eltype(field)
         )
     end
-    template isa EllipticOperator && template.mesh === field.mesh ||
-        throw(
-        ArgumentError(
-            "template must be an EllipticOperator on the interface mesh"
-        )
-    )
+    # The template was validated before accessing its boundary configuration.
     iszero(template.reaction) ||
         throw(ArgumentError("a pressure template must have zero reaction"))
-    return _replace_face_coefficient(template, coefficient)
+    return _replace_face_coefficient(
+        template, coefficient; boundary_face_coefficient = boundary_coefficient,
+    )
 end
 
 """Two-phase pressure operator on a fixed embedded cut-cell geometry."""
@@ -127,17 +142,25 @@ function PoissonOperator(
         field::InterfaceField{T}, geometry::GeometryField{T};
         density = (1.0, 1.0), template = nothing,
         construction_cache = GradientConstructionCache(T),
-        assemble_matrix = true,
+        velocity_boundary = nothing, assemble_matrix = true,
     ) where {T}
     field.mesh === geometry.mesh || throw(
         ArgumentError("interface and geometry must share a mesh"),
     )
+    isnothing(template) || (template isa EllipticOperator && template.mesh === field.mesh) ||
+        throw(ArgumentError("template must be an EllipticOperator on the interface mesh"))
     rho = mixture_density(field, density, geometry)
     coefficient = geometry.aperture .^ 2 ./ rho
+    sides = isnothing(template) ? _pressure_boundary_sides(velocity_boundary) :
+        template.boundary_sides
+    boundary_coefficient = any(sides) ?
+        _mixture_boundary_coefficient(field, density) : nothing
     if isnothing(template)
         return EllipticOperator(
             field.mesh; reaction = 0, diffusion = 1,
             face_coefficient = coefficient,
+            velocity_boundary, boundary_face_coefficient = boundary_coefficient,
+            boundary_aperture = geometry.boundary_aperture,
             gradient_operator = GradientOperator(
                 geometry; construction_cache,
             ),
@@ -146,10 +169,9 @@ function PoissonOperator(
             construction_cache, assemble_matrix, T,
         )
     end
-    template isa EllipticOperator && template.mesh === field.mesh || throw(
-        ArgumentError("template must be an EllipticOperator on the interface mesh"),
+    return _replace_face_coefficient(
+        template, coefficient; boundary_face_coefficient = boundary_coefficient,
     )
-    return _replace_face_coefficient(template, coefficient)
 end
 
 function _weighted_jump_force!(

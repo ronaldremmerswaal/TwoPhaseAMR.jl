@@ -18,6 +18,7 @@ function _enforce_phase_velocity_boundary!(
             enforce_velocity_boundary!(
                 velocity[phase], solver.boundary;
                 time, geometry = solver.geometry, allow_absent = true,
+                _require_compatible_flux = true,
             )
         end
     end
@@ -333,6 +334,13 @@ the reference step, which must be at least `dt`. The legacy mimetic method
 retains its original absolute projection without this reference-step policy.
 Viscosity acts implicitly on the phase-mass weighted one-velocity state; its
 common increment is applied to both phases.
+
+The two-velocity projection keeps a Neumann pressure boundary and cannot
+correct open normal velocities. Boundary preparation extrapolates each phase;
+`Outflow()` balances its net flux, while an absolute phase flux exceeding
+`256eps(T)` with only `ZeroGradientVelocity()` open sides throws
+`ArgumentError`. This per-phase check sums outward intrinsic velocity times
+face area and geometry aperture, omitting faces whose phase velocity is absent.
 """
 function step!(
         velocity::TwoPhaseVelocity, pressure::CellField{T},

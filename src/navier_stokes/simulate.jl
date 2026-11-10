@@ -74,7 +74,9 @@ function simulate!(
     step_count = 0
     mesh_updates = 0
     unresolved_curvature_faces = 0
-    stats = solver.pressure_solver.stats
+    stats = velocity isa FaceVelocity ?
+        _one_velocity_pressure_solver!(solver, workspace).stats :
+        solver.pressure_solver.stats
     selection = workspace.simulation_step
     same_run = selection.velocity === velocity && selection.pressure === pressure &&
         selection.solver === solver && selection.time == current_time &&
@@ -122,9 +124,13 @@ function simulate!(
                 # Initializers and AMR transfer operate on intrinsic fields;
                 # impose the configured boundary values before querying the
                 # transport CFL, just as `step!` does before advection.
-                _enforce_current_velocity_boundary!(
-                    velocity, solver, current_time,
-                )
+                if velocity isa FaceVelocity
+                    _enforce_current_velocity_boundary!(
+                        velocity, solver, current_time; preserve_open = true,
+                    )
+                else
+                    _enforce_current_velocity_boundary!(velocity, solver, current_time)
+                end
                 bound = stable_timestep(
                     velocity, solver, workspace; cfl
                 )

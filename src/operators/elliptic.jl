@@ -73,6 +73,84 @@ function _face_coefficients(mesh::BlockTreeMesh, coefficient, ::Type{T}) where {
     return values
 end
 
+_pressure_boundary_sides(::Nothing) = (false, false, false, false)
+_pressure_boundary_sides(::Union{NoSlip, FreeSlip}) = (false, false, false, false)
+_pressure_boundary_sides(sides::NTuple{4, Bool}) = sides
+function _pressure_boundary_sides(boundary::VelocityBoundaryConditions)
+    return map(
+        condition -> condition isa Union{Outflow, ZeroGradientVelocity},
+        (boundary.left, boundary.right, boundary.bottom, boundary.top),
+    )
+end
+
+@inline _pressure_open_face(sides, face) =
+    sides[2 * face.axis - (face.side < 0 ? 1 : 0)]
+
+# A vector of interior coefficients has no boundary entries. Extend it from
+# the opposite normal faces, with area weights at coarse/fine interfaces.
+function _boundary_material(mesh, coefficient, sides, ::Type{T}) where {T}
+    values = zeros(T, length(mesh.boundary_faces))
+    any(sides) || return values
+    if coefficient isa AbstractVector
+        length(coefficient) == length(mesh.faces) || throw(
+            DimensionMismatch("one coefficient is required per interior face"),
+        )
+        indices = Dict{Tuple{CellRef, Int, Int}, Int}()
+        for (index, face) in pairs(mesh.boundary_faces)
+            _pressure_open_face(sides, face) || continue
+            indices[(face.cell, face.axis, face.side)] = index
+        end
+        weights = zeros(T, length(values))
+        for (index, face) in pairs(mesh.faces)
+            for (cell, side) in ((face.minus, -1), (face.plus, 1))
+                boundary_index = get(indices, (cell, face.axis, side), 0)
+                iszero(boundary_index) && continue
+                values[boundary_index] += T(face.area) * T(coefficient[index])
+                weights[boundary_index] += T(face.area)
+            end
+        end
+        for (index, face) in pairs(mesh.boundary_faces)
+            _pressure_open_face(sides, face) || continue
+            weights[index] > zero(T) || throw(
+                ArgumentError(
+                    "cannot extend an interior coefficient to an open face without an opposite interior face; supply boundary_face_coefficient",
+                ),
+            )
+            values[index] /= weights[index]
+        end
+    else
+        for (index, face) in pairs(mesh.boundary_faces)
+            _pressure_open_face(sides, face) || continue
+            values[index] = if coefficient isa Number
+                T(coefficient)
+            elseif coefficient isa FaceVelocity
+                T(coefficient.boundary[index])
+            else
+                T(coefficient(face.center[1], face.center[2], face.axis))
+            end
+        end
+    end
+    return values
+end
+
+function _elliptic_boundary_data!(
+        diagonal::Vector{T}, gradient::Vector{T}, mesh, sides,
+        material::Vector{T}, aperture::Vector{T}, constraints,
+    ) where {T}
+    fill!(diagonal, zero(T))
+    fill!(gradient, zero(T))
+    nx, ny = mesh.block_size
+    for (index, face) in pairs(mesh.boundary_faces)
+        _pressure_open_face(sides, face) || continue
+        cell = _cell_index(face.cell, nx, ny)
+        iszero(constraints[cell]) && aperture[index] > zero(T) || continue
+        factor = 2 * material[index] / T(mesh.blocks[face.cell.block].spacing[face.axis])
+        gradient[index] = factor
+        diagonal[cell] += T(face.area) * aperture[index] * factor
+    end
+    return diagonal
+end
+
 function _weighted_inverse_metric(
         metric::DiagonalInverseFaceMetric{T},
         coefficient::Vector{T}
@@ -217,8 +295,27 @@ struct StiffnessRefresh{T}
     offsets::Vector{Int}
 end
 
+"""Reusable open-face connectivity and component reductions for an elliptic operator."""
+mutable struct EllipticComponentWorkspace{T}
+    incidence::SparseMatrixCSC{T, Int}
+    counts::Vector{Int}
+    labels::Vector{Int}
+    stack::Vector{Int}
+    active::BitVector
+    open_faces::BitVector
+    mesh_identity::Union{Nothing, Base.RefValue{Nothing}}
+    generation::UInt
+    anchors::Vector{Int}
+    volumes::Vector{T}
+    sums::Vector{T}
+    scales::Vector{T}
+    ungauged::BitVector
+    count::Int
+end
+
 """
     EllipticOperator(mesh; reaction=0, diffusion=1, face_coefficient=1,
+                     velocity_boundary=nothing, boundary_face_coefficient=nothing,
                      assemble_matrix=true)
 
 Construct the positive cell-centred operator
@@ -236,14 +333,33 @@ coefficients therefore enter through the symmetric product
 `sqrt(kappa)*K*sqrt(kappa)`; this preserves gradient/divergence duality and
 reduces to ordinary face multiplication wherever `K` is diagonal.
 
+`velocity_boundary` selects homogeneous Dirichlet data on `Outflow()` and
+`ZeroGradientVelocity()` sides; all other physical sides are homogeneous
+Neumann. A boundary coefficient may be supplied per physical face with
+`boundary_face_coefficient`; otherwise scalars and functions are evaluated at
+the boundary, and interior coefficient vectors are area-weighted from the
+opposite normal faces. Supply `boundary_face_coefficient` if an open face has
+no opposite interior face. The boundary distance is half the local normal cell
+spacing. Open boundary conductances participate in the same matrix, factorized
+action, and weighted gradient.
+
+A zero-reaction operator is singular if at least one active connected component
+has neither an open Dirichlet conductance nor a nonzero connection to an
+imposed inactive cell. Gauges are applied only to those components.
+
 Pass `assemble_matrix = false` for a factorized operator without an assembled
 matrix; then `matrix` is `nothing`.
 """
-struct EllipticOperator{T, M <: BlockTreeMesh, G <: GradientOperator{T}}
+mutable struct EllipticOperator{T, M <: BlockTreeMesh, G <: GradientOperator{T}}
     mesh::M
     gradient_operator::G
     face_coefficient::Vector{T}
     square_root_face_coefficient::Vector{T}
+    boundary_sides::NTuple{4, Bool}
+    boundary_face_coefficient::Vector{T}
+    boundary_aperture::Vector{T}
+    boundary_gradient::Vector{T}
+    boundary_diagonal::Vector{T}
     stiffness::SparseMatrixCSC{T, Int}
     matrix::Union{Nothing, SparseMatrixCSC{T, Int}}
     volumes::Vector{T}
@@ -253,6 +369,7 @@ struct EllipticOperator{T, M <: BlockTreeMesh, G <: GradientOperator{T}}
     references::Vector{CellRef}
     refresh::Union{Nothing, StiffnessRefresh{T}}
     inactive_condition::Symbol
+    components::Union{Nothing, EllipticComponentWorkspace{T}}
     singular::Bool
 end
 
@@ -371,6 +488,8 @@ end
 function EllipticOperator(
         mesh::M; reaction = 0, diffusion = 1,
         face_coefficient = 1,
+        velocity_boundary = nothing, boundary_face_coefficient = nothing,
+        boundary_aperture = nothing,
         T = eltype(mesh.origin),
         construction_cache = GradientConstructionCache(T),
         gradient_operator = nothing,
@@ -422,11 +541,32 @@ function EllipticOperator(
         ),
     )
     constraints = T.(.!active)
+    sides = _pressure_boundary_sides(velocity_boundary)
+    boundary_material = isnothing(boundary_face_coefficient) ?
+        _boundary_material(mesh, face_coefficient, sides, T) :
+        T.(boundary_face_coefficient)
+    apertures = isnothing(boundary_aperture) ?
+        ones(T, length(mesh.boundary_faces)) : T.(boundary_aperture)
+    length(boundary_material) == length(apertures) == length(mesh.boundary_faces) ||
+        throw(DimensionMismatch("one coefficient and aperture are required per boundary face"))
+    all(isfinite, boundary_material) && all(>=(zero(T)), boundary_material) ||
+        throw(ArgumentError("boundary coefficients must be finite and nonnegative"))
+    all(isfinite, apertures) && all(a -> zero(T) <= a <= one(T), apertures) ||
+        throw(ArgumentError("boundary apertures must lie in [0, 1]"))
+    boundary_gradient = zeros(T, length(apertures))
+    boundary_diagonal = zeros(T, ncells(mesh))
+    _elliptic_boundary_data!(
+        boundary_diagonal, boundary_gradient, mesh, sides,
+        boundary_material, apertures, constraints,
+    )
     if assemble_matrix
         stiffness = _complete_elliptic_stiffness_pattern(
             mesh, gradient_operator,
             _integrated_stiffness(mesh, gradient_operator, coefficients),
         )
+        for cell in eachindex(boundary_diagonal)
+            _add_existing_sparse!(stiffness, cell, cell, boundary_diagonal[cell])
+        end
         matrix = copy(stiffness)
         nonzeros(matrix) .*= diffusion_value
         if !iszero(reaction_value)
@@ -452,15 +592,18 @@ function EllipticOperator(
         matrix = nothing
         refresh_map = nothing
     end
-    singular = iszero(reaction_value) && !(
-        inactive_condition === :dirichlet && any(!iszero, constraints)
-    )
-    return EllipticOperator{T, M, typeof(gradient_operator)}(
+    operator = EllipticOperator{T, M, typeof(gradient_operator)}(
         mesh, gradient_operator, coefficients, sqrt.(coefficients),
+        sides, boundary_material, apertures, boundary_gradient, boundary_diagonal,
         stiffness, matrix, volumes, constraints,
         reaction_value, diffusion_value, _cell_references(mesh),
-        refresh_map, inactive_condition, singular,
+        refresh_map, inactive_condition, nothing, false,
     )
+    if iszero(reaction_value)
+        operator.components = EllipticComponentWorkspace(operator)
+        operator.singular = !isempty(operator.components.anchors)
+    end
+    return operator
 end
 
 """Reassemble only the coefficient-dependent part of an elliptic operator.
@@ -471,10 +614,14 @@ rebuilding the vertex-patch metric and its geometric search every time step is
 both unnecessary and substantially more expensive than the coefficient update.
 """
 function _replace_face_coefficient(
-        operator::EllipticOperator{T}, face_coefficient
+        operator::EllipticOperator{T}, face_coefficient;
+        boundary_face_coefficient = nothing,
     ) where {T}
     coefficients = _face_coefficients(
         operator.mesh, face_coefficient, T
+    )
+    isnothing(boundary_face_coefficient) || _update_elliptic_boundary_coefficient!(
+        operator, boundary_face_coefficient,
     )
     return _update_elliptic_face_coefficient!(operator, coefficients)
 end
@@ -487,6 +634,30 @@ end
     return matrix
 end
 
+"""Update boundary coefficients and nullspace metadata.
+
+Follow with `_update_elliptic_face_coefficient!` to refresh assembled matrices,
+then refresh any preconditioner hierarchy that uses this operator.
+"""
+function _update_elliptic_boundary_coefficient!(
+        operator::EllipticOperator{T}, material,
+    ) where {T}
+    length(material) == length(operator.boundary_face_coefficient) ||
+        throw(DimensionMismatch("one coefficient is required per boundary face"))
+    all(isfinite, material) && all(>=(zero(T)), material) ||
+        throw(ArgumentError("boundary coefficients must be finite and nonnegative"))
+    # Boundary anchors may change independently of interior connectivity.
+    copyto!(operator.boundary_face_coefficient, material)
+    _elliptic_boundary_data!(
+        operator.boundary_diagonal, operator.boundary_gradient,
+        operator.mesh, operator.boundary_sides, operator.boundary_face_coefficient,
+        operator.boundary_aperture, operator.constraints,
+    )
+    isnothing(operator.components) ||
+        _refresh_elliptic_components!(operator.components, operator)
+    return operator
+end
+
 
 function _update_elliptic_face_coefficient!(
         operator::EllipticOperator{T}, coefficients::Vector{T}
@@ -496,6 +667,8 @@ function _update_elliptic_face_coefficient!(
         @inbounds operator.square_root_face_coefficient[index] =
             sqrt(coefficients[index])
     end
+    isnothing(operator.components) ||
+        _refresh_elliptic_components!(operator.components, operator)
     refresh = operator.refresh
     isnothing(refresh) && return operator
     stiffness_values = nonzeros(operator.stiffness)
@@ -526,6 +699,11 @@ function _update_elliptic_face_coefficient!(
             @inbounds stiffness_values[transpose_pointer] = average
         end
     end
+    for cell in eachindex(operator.boundary_diagonal)
+        _add_existing_sparse!(
+            operator.stiffness, cell, cell, operator.boundary_diagonal[cell],
+        )
+    end
     _impose_inactive_constraints!(operator.stiffness, operator.constraints)
 
     matrix = operator.matrix::SparseMatrixCSC{T, Int}
@@ -549,7 +727,11 @@ function _update_elliptic_face_coefficient!(
     return operator
 end
 
-"""Refresh a fixed-topology operator's active-cell Dirichlet mask."""
+"""Refresh a fixed-topology operator's active-cell Dirichlet mask.
+
+Call `_update_elliptic_face_coefficient!` afterwards to reassemble the stored
+matrix with the updated constraints, then refresh any dependent hierarchy.
+"""
 function _update_elliptic_activity!(
         operator::EllipticOperator{T}, active_cells, volumes,
     ) where {T}
@@ -560,12 +742,6 @@ function _update_elliptic_activity!(
     )
     length(active_cells) == length(operator.constraints) == length(volumes) ||
         throw(DimensionMismatch("elliptic activity arrays have the wrong size"))
-    has_inactive = any(!, active_cells)
-    has_inactive == !operator.singular || throw(
-        ArgumentError(
-            "active-mask nullspace changed; rebuild the elliptic operator",
-        )
-    )
     @_parallel for index in eachindex(operator.constraints)
         active = @inbounds active_cells[index]
         volume = T(@inbounds volumes[index])
@@ -579,19 +755,34 @@ function _update_elliptic_activity!(
             operator.volumes[index] = volume
         end
     end
+    _elliptic_boundary_data!(
+        operator.boundary_diagonal, operator.boundary_gradient,
+        operator.mesh, operator.boundary_sides, operator.boundary_face_coefficient,
+        operator.boundary_aperture, operator.constraints,
+    )
+    isnothing(operator.components) ||
+        _refresh_elliptic_components!(operator.components, operator)
     return operator
 end
 
-"""Construct the periodic positive Poisson operator `-div(kappa*grad(u))`."""
+"""
+    PoissonOperator(mesh; face_coefficient=1, velocity_boundary=nothing,
+                    boundary_face_coefficient=nothing, ...)
+
+Construct the positive Poisson operator `-div(kappa*grad(u))`. Pass the same
+`velocity_boundary` to this constructor and to a standalone `project!` call.
+"""
 PoissonOperator(
-    mesh::BlockTreeMesh; face_coefficient = 1,
+    mesh::BlockTreeMesh; face_coefficient = 1, velocity_boundary = nothing,
+    boundary_face_coefficient = nothing,
     T = eltype(mesh.origin),
     construction_cache = GradientConstructionCache(T),
     assemble_matrix = true,
 ) =
     EllipticOperator(
     mesh; reaction = 0, diffusion = 1,
-    face_coefficient, construction_cache, assemble_matrix, T
+    face_coefficient, velocity_boundary, boundary_face_coefficient,
+    construction_cache, assemble_matrix, T
 )
 
 """Reusable vector scratch for applying an `EllipticOperator` to fields."""
@@ -718,7 +909,11 @@ function _factorized_elliptic_mul!(
     # Field applications do not own the Krylov action's cell-incidence cache.
     for index in eachindex(destination)
         @inbounds destination[index] = iszero(operator.constraints[index]) ?
-            reaction * operator.volumes[index] * source[index] : source[index]
+            (
+                reaction * operator.volumes[index] +
+                diffusion * operator.boundary_diagonal[index]
+            ) * source[index] :
+            source[index]
     end
     for (face_index, face) in pairs(faces)
         minus = _cell_index(face.minus, nx, ny)
@@ -773,7 +968,8 @@ function mul!(
             continue
         end
         value = @inbounds (
-            reaction * operator.volumes[cell]
+            reaction * operator.volumes[cell] +
+                diffusion * operator.boundary_diagonal[cell]
         ) * source[cell]
         for pointer in action.cell_face_offsets[cell]:(
                 action.cell_face_offsets[cell + 1] - 1
@@ -861,6 +1057,17 @@ function apply!(
     return destination
 end
 
+function _elliptic_boundary_gradient!(
+        destination::FaceVelocity{T}, pressure::CellField{T},
+        operator::EllipticOperator{T},
+    ) where {T}
+    for (index, face) in pairs(operator.mesh.boundary_faces)
+        @inbounds destination.boundary[index] =
+            -T(face.side) * operator.boundary_gradient[index] * _get(pressure, face.cell)
+    end
+    return destination
+end
+
 """
     weighted_gradient!(destination, pressure, operator, workspace)
 
@@ -891,7 +1098,7 @@ function weighted_gradient!(
         @inbounds destination.interior[index] =
             operator.square_root_face_coefficient[index] * workspace.face_output[index]
     end
-    fill!(destination.boundary, zero(T))
+    _elliptic_boundary_gradient!(destination, pressure, operator)
     return destination
 end
 

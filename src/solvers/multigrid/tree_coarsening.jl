@@ -343,11 +343,14 @@ struct FaceCoefficientRestriction{T}
 end
 
 function _face_coefficient_restriction(
-        coarse::BlockTreeMesh, fine::BlockTreeMesh, ::Type{T},
+        coarse::BlockTreeMesh, fine::BlockTreeMesh, ::Type{T};
+        boundary = false,
     ) where {T}
     lattice_size = _tree_common_lattice_size(fine, coarse)
+    fine_faces = boundary ? fine.boundary_faces : fine.faces
+    coarse_faces = boundary ? coarse.boundary_faces : coarse.faces
     lines = Dict{Tuple{Int, Int}, Vector{NTuple{3, Int}}}()
-    for (index, face) in pairs(fine.faces)
+    for (index, face) in pairs(fine_faces)
         normal, lo, hi = _face_lattice_geometry(
             fine, face, lattice_size,
         )
@@ -359,12 +362,12 @@ function _face_coefficient_restriction(
     for segments in values(lines)
         sort!(segments; by = first)
     end
-    row_pointers = Vector{Int}(undef, length(coarse.faces) + 1)
+    row_pointers = Vector{Int}(undef, length(coarse_faces) + 1)
     fine_indices = Int[]
     weights = T[]
     empty_line = NTuple{3, Int}[]
     row_pointers[1] = 1
-    for (index, face) in pairs(coarse.faces)
+    for (index, face) in pairs(coarse_faces)
         normal, lo, hi = _face_lattice_geometry(
             coarse, face, lattice_size,
         )
