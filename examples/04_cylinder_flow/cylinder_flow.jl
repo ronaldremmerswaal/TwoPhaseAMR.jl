@@ -1,12 +1,14 @@
 using TwoPhaseAMR
 
 """
-    run_example(; reynolds=100, max_level=3, final_time=40,
+    run_example(; reynolds=100, max_level=3, final_time=40, perturbation=0,
                 start_studio=nothing, recorder_options=(;), kwargs...)
 
 Run nondimensional flow around a unit cylinder in a unit free stream.
 `domain_origin`, `domain_extent`, and `base_mesh` control the computational
 domain and its base grid; `vorticity_tolerance` controls wake refinement.
+`perturbation` sets the strength of a localized, divergence-free initial
+vortex that breaks wake symmetry without changing the boundary inflow.
 Pass `start_studio=studio` after loading TwoPhaseAMRStudio to follow the run
 live. `recorder_options` overrides the recording schedule; other keywords are
 passed to [`FlowSimulation`](@ref).

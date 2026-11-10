@@ -106,7 +106,7 @@ jobs:
       - run: julia --project=. -e 'using Pkg; Pkg.test(test_args=["performance"])'
 
   makie:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
@@ -182,6 +182,7 @@ jobs:
           cache: npm
           cache-dependency-path: lib/TwoPhaseAMRStudio/frontend/package-lock.json
       - run: julia --project=lib/TwoPhaseAMRStudio -e 'using Pkg; Pkg.instantiate()'
+      - run: julia --project=examples -e 'using Pkg; Pkg.instantiate()'
       - run: npm ci
         working-directory: lib/TwoPhaseAMRStudio/frontend
       - run: npx playwright install --with-deps chromium
@@ -189,6 +190,8 @@ jobs:
       - run: npm run test:smoke
         working-directory: lib/TwoPhaseAMRStudio/frontend
       - run: npm run test:live-amr
+        working-directory: lib/TwoPhaseAMRStudio/frontend
+      - run: npm run test:examples
         working-directory: lib/TwoPhaseAMRStudio/frontend
 
   benchmark:
@@ -267,7 +270,7 @@ jobs:
     # A run cancelled by a newer run on the same branch must not report a
     # failing ci-ok for its commit; the newer run reports the result.
     if: ${{ !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))) }}
-    needs: [format, unit, studio, frontend]
+    needs: [format, unit, makie, studio, frontend]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
@@ -276,6 +279,7 @@ jobs:
         env:
           FORMAT_RESULT: ${{ needs.format.result }}
           UNIT_RESULT: ${{ needs.unit.result }}
+          MAKIE_RESULT: ${{ needs.makie.result }}
           STUDIO_RESULT: ${{ needs.studio.result }}
           FRONTEND_RESULT: ${{ needs.frontend.result }}
-        run: test "$FORMAT_RESULT" = success && test "$UNIT_RESULT" = success && test "$STUDIO_RESULT" = success && test "$FRONTEND_RESULT" = success
+        run: test "$FORMAT_RESULT" = success && test "$UNIT_RESULT" = success && test "$MAKIE_RESULT" = success && test "$STUDIO_RESULT" = success && test "$FRONTEND_RESULT" = success

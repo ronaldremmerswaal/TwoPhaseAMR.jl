@@ -177,15 +177,6 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
         " (t/T = ", stored[impact].time / period, "), pocket centre = ", centre,
         ", previous stored state t = ", stored[impact - 1].time
     )
-    candidates = stored[[impact - 1, impact, min(impact + 2, end), min(impact + 6, end)]]
-    figure = Figure(size = (1100, 800))
-    for (k, frame) in enumerate(candidates)
-        axis = fieldaxis(figure[fld1(k, 2), mod1(k, 2)]; camera = window, title = title(frame))
-        amrfield!(axis, frame, :velocity_vorticity; colorrange = (-60, 60))
-    end
-    candidates_path = joinpath(tempdir(), "10_impact_candidates.png")
-    save(candidates_path, figure)
-    println("Impact candidates: ", candidates_path)
     export_figure(
         joinpath(outdir, "hero.png"), stored[impact]; field = :velocity_vorticity,
         camera = window, title = frame -> "Breaking impact, " * title(frame)

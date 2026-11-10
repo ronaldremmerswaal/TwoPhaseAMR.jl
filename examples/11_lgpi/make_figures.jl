@@ -1,11 +1,10 @@
 using CairoMakie
-using Serialization
 
 Base.include(@__MODULE__, joinpath(@__DIR__, "lgpi.jl"))
 
 function make_figures(;
         outdir = joinpath(@__DIR__, "assets"), size = :docs,
-        final_time = nothing, display_time = nothing, recording = nothing,
+        final_time = nothing, display_time = nothing,
     )
     size in (:docs, :default) || throw(ArgumentError("size must be :docs or :default"))
     mkpath(outdir)
@@ -13,37 +12,31 @@ function make_figures(;
     full_time = 1.2sqrt((1000 + 1) / (1000 - 1) * 2pi * initial.wavelength / 9.81)
     target_time = isnothing(final_time) ? full_time : final_time
     level = size == :docs ? 3 : 4
-    flow = result = recorder = nothing
-    local store
-    if isnothing(recording)
-        elapsed = @elapsed begin
-            flow = run_example(max_level = level, final_time = 0).flow
-            fields = VisualizationFieldRegistry()
-            register_field!(
-                fields, :velocity_vorticity, flow.velocity, flow.interface, Vorticity();
-                label = "Vorticity", colormap = :balance
-            )
-            register_interface!(fields, flow.interface)
-            register_geometry!(fields, flow.solver.geometry)
-            recorder = Recorder(
-                fields; diagnostics = flow, keyframes = EquispacedTimes(41),
-                preview = nothing
-            )
-            result = simulate!(flow, target_time; observer = recorder)
-        end
-        println("Setup and simulation time (s; includes first-call compilation): ", elapsed)
-        print_simulation_summary(flow, result)
-        println("Unresolved curvature faces (cumulative): ", result.total_unresolved_curvature_faces)
-        solid_levels = [
-            block.key.level for block in flow.velocity[1].mesh.blocks
-                if initial.bathymetry_levelset(block.origin...) <= 0
-        ]
-        println("Maximum level of blocks touching solid at final time: ", maximum(solid_levels))
-        store = snapshot_store(recorder)
-        serialize(joinpath(tempdir(), "viz-lgpi-recording.jls"), store)
-    else
-        store = deserialize(recording)
+    local flow, result, recorder
+    elapsed = @elapsed begin
+        flow = run_example(max_level = level, final_time = 0).flow
+        fields = VisualizationFieldRegistry()
+        register_field!(
+            fields, :velocity_vorticity, flow.velocity, flow.interface, Vorticity();
+            label = "Vorticity", colormap = :balance
+        )
+        register_interface!(fields, flow.interface)
+        register_geometry!(fields, flow.solver.geometry)
+        recorder = Recorder(
+            fields; diagnostics = flow, keyframes = EquispacedTimes(41),
+            preview = nothing
+        )
+        result = simulate!(flow, target_time; observer = recorder)
     end
+    println("Setup and simulation time (s; includes first-call compilation): ", elapsed)
+    print_simulation_summary(flow, result)
+    println("Unresolved curvature faces (cumulative): ", result.total_unresolved_curvature_faces)
+    solid_levels = [
+        block.key.level for block in flow.velocity[1].mesh.blocks
+            if initial.bathymetry_levelset(block.origin...) <= 0
+    ]
+    println("Maximum level of blocks touching solid at final time: ", maximum(solid_levels))
+    store = snapshot_store(recorder)
     display_end = isnothing(display_time) ? target_time : min(target_time, display_time)
     selected = filter(info -> info.time <= display_end, keyframes(store))
     isempty(selected) && error("No recorded frames at or before the requested display time")

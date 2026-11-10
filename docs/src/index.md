@@ -31,8 +31,9 @@ result = simulate!(flow, 0.1)
 ```
 
 Start with [Getting started](getting-started.md). The [Public API](api.md)
-contains the complete configuration matrix, while [Diagnostics](diagnostics.md)
-shows headless histories and live-visualization integration.
+contains the complete configuration matrix, [Diagnostics](diagnostics.md)
+shows simulation-owned histories, and [Recording and visualization](visualization.md)
+describes live Studio and static output.
 
 ## What is implemented
 

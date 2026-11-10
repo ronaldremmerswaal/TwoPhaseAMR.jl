@@ -63,7 +63,6 @@ function run_example(;
             recorder_options,
         )...,
     )
-    app = isnothing(start_studio) ? nothing : start_studio(recorder)
     streamfunction(x, y) = sinpi(x)^2 * sinpi(y)^2 / pi
     function set_velocity!(time)
         for (index, face) in pairs(mesh.faces)
@@ -89,7 +88,8 @@ function run_example(;
     steps = 0
     mesh_updates = 0
     dt = 0.0
-    try
+    app = isnothing(start_studio) ? nothing : start_studio(recorder)
+    result = try
         observe!(
             recorder, :initial, SimulationState(velocity, nothing, nothing, time, steps),
             StepInfo(; dt, final_time)
@@ -107,27 +107,43 @@ function run_example(;
             )
             time += dt
             steps += 1
-            if adapt!(adaptation, refinement; step = steps, time).changed
+            topology_changed = adapt!(adaptation, refinement; step = steps, time).changed
+            if topology_changed
                 workspace = WYAdvectionWorkspace(interface)
                 mesh_updates += 1
             end
             observe!(
                 recorder, :step, SimulationState(velocity, nothing, nothing, time, steps),
-                StepInfo(; dt, final_time)
+                StepInfo(; dt, final_time, topology_changed)
             )
         end
         observe!(
             recorder, :completed, SimulationState(velocity, nothing, nothing, time, steps),
             StepInfo(; dt, final_time)
         )
-    catch
-        isnothing(app) || close(app)
+        (;
+            time, steps, mesh_updates,
+            volume_error = abs(integrate(interface) - initial_volume),
+        )
+    catch exception
+        try
+            failure = exception isa Exception ? exception :
+                ErrorException(sprint(showerror, exception))
+            observe!(
+                recorder, :failed,
+                SimulationState(velocity, nothing, nothing, time, steps),
+                StepInfo(; dt, final_time, exception = failure),
+            )
+        catch
+            # Preserve the error that stopped the run if reporting fails.
+        end
+        try
+            isnothing(app) || close(app)
+        catch
+            # Do not replace the original error if closing the app fails.
+        end
         rethrow()
     end
-    result = (;
-        time, steps, mesh_updates,
-        volume_error = abs(integrate(interface) - initial_volume),
-    )
     return (; interface, velocity, result, recorder, app)
 end
 

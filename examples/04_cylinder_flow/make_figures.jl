@@ -1,6 +1,5 @@
 using CairoMakie
 using Statistics
-using Serialization
 Base.include(@__MODULE__, joinpath(@__DIR__, "cylinder_flow.jl"))
 
 function readme_animations(outdir, store, window)
@@ -70,15 +69,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     end
     lift = diagnostic_history(flow, :pressure_lift)
     drag = diagnostic_history(flow, :pressure_drag)
-    open(joinpath(tempdir(), "viz-cylinder-forces.csv"), "w") do io
-        println(io, "time,pressure_drag,pressure_lift")
-        for i in eachindex(lift.times)
-            println(io, lift.times[i], ",", drag.values[i], ",", lift.values[i])
-        end
-    end
     store = snapshot_store(recorder)
-    serialize(joinpath(tempdir(), "viz-cylinder-recording.jls"), store)
-    println("Saved forces and recording under ", tempdir())
     sample_times = collect(range(window...; step = 0.05))
     samples = [lift.values[searchsortedlast(lift.times, t)] for t in sample_times]
     smoothed = [mean(@view samples[max(1, i - 5):min(end, i + 5)]) for i in eachindex(samples)]

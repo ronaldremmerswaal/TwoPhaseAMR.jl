@@ -45,7 +45,10 @@ julia --project=examples -e 'include("examples/05_vortex_reverse/make_figures.jl
 Append `--studio` to the example command to follow the run in a browser;
 press Ctrl+C to close Studio after the run.
 
-`make_figures(size=:default)` uses the example's level-5 default. This example owns its VOF stepping loop rather than a `FlowSimulation`, and records keyframes in `run.recorder` (accessible via `snapshot_store(run.recorder)`) for the figure script.
+`make_figures(size=:default)` uses the example's level-5 default. This example
+owns its VOF stepping loop rather than a `FlowSimulation` and records keyframes
+in `run.recorder` (accessible via `snapshot_store(run.recorder)`) for the figure
+script. The recorder's `step_log` also identifies steps that changed the mesh.
 
 ## Results
 

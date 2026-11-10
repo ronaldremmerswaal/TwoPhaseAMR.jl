@@ -79,8 +79,8 @@ Add custom reductions with [`Diagnostic`](@ref) or
 [`print_simulation_summary`](@ref) for an end-of-run model, mesh, solver, AMR,
 and diagnostics report.
 
-See [Diagnostics](diagnostics.md) for definitions and visualization
-subscription.
+See [Diagnostics](diagnostics.md) for definitions and recording of
+simulation-owned histories.
 
 ## Recording, Studio, and static output
 

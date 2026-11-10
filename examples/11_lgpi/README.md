@@ -73,17 +73,16 @@ julia --project=examples -t 1 examples/11_lgpi/make_figures.jl
 julia --project=examples -t 1 examples/11_lgpi/lgpi.jl
 ```
 
-The figure generator also accepts `final_time` to change the simulated end
-time, `display_time` to limit the exported frames without shortening the
-simulation, and `recording` to load an existing serialized snapshot store:
+The figure generator always runs the simulation. It accepts `final_time` to
+change the simulated end time and `display_time` to limit the exported frames
+without shortening the simulation:
 
 ```julia
 include("examples/11_lgpi/make_figures.jl")
-make_figures(recording="/path/to/recording.jls", display_time=0.9)
+make_figures(display_time=0.9)
 ```
 
-By default the figures show the full simulation. Set `display_time` to a
-number to limit the exported frames without shortening the simulation.
+By default the figures show all recorded frames.
 
 ## Results
 

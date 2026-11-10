@@ -95,6 +95,49 @@ end
     close(stopped.app)
 end
 
+@testset "Vortex-reversal failure reporting and cleanup" begin
+    example = load_example(:vortex_reverse)
+    for fail_reporting in (false, true)
+        app = IOBuffer()
+        recorder = Ref{Any}()
+        failure = ErrorException("clock failed")
+        reporting_failure = ErrorException("failure-event clock failed")
+        failed_clock_calls = Ref(0)
+        clock = () -> begin
+            if run_state(recorder[]) === :completed
+                failed_clock_calls[] += 1
+                failed_clock_calls[] == 1 && throw(failure)
+                fail_reporting && throw(reporting_failure)
+            end
+            0.0
+        end
+        caught = try
+            call_example(
+                example, :run_example; max_level = 0, final_time = 0.1,
+                recorder_options = (; keyframes = nothing, preview = nothing, clock),
+                start_studio = observed -> begin
+                    recorder[] = observed
+                    request_stop!(observed)
+                    app
+                end,
+            )
+            nothing
+        catch exception
+            exception
+        end
+        @test caught === failure
+        @test failed_clock_calls[] == 2
+        @test !isopen(app)
+        if !fail_reporting
+            @test run_state(recorder[]) === :failed
+            event = only(run_events(snapshot_store(recorder[])))
+            @test event.kind === :failure
+            @test event.time == 0.0 && event.step == 0
+            @test occursin(sprint(showerror, failure), event.message)
+        end
+    end
+end
+
 @testset "Adaptive decaying turbulence example" begin
     example = load_example(:decaying_turbulence)
     # Levels through 2 are protected by the example's minimum_level, so use
@@ -117,10 +160,22 @@ end
     run = call_example(
         example, :run_example;
         max_level = 2, final_time = 0.6,
+        recorder_options = (; keyframes = EveryStep()),
     )
     @test run.result.time ≈ 0.6
     @test run.result.steps >= 5
     @test run.result.mesh_updates > 0
+    store = snapshot_store(run.recorder)
+    recorded = keyframes(store)
+    log = step_log(store)
+    @test [info.step for info in recorded] == collect(0:run.result.steps)
+    @test log.step == collect(1:run.result.steps)
+    @test count(log.topology_changed) == run.result.mesh_updates
+    @test any(!, log.topology_changed)
+    @test log.topology_changed == [
+        recorded[i].topology != recorded[i + 1].topology
+            for i in eachindex(log.step)
+    ]
     @test all(isfinite, run.velocity.interior)
     @test all(isfinite, run.velocity.boundary)
     @test all(
