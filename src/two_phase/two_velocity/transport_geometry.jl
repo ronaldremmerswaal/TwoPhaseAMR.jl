@@ -54,11 +54,71 @@ function _frozen_interface_stable_timestep(
             work.gas_aperture[face_index]
         aperture > zero(T) || continue
         u = velocity[phase].interior[face_index]
+        iszero(u) && continue
         donor = u >= 0 ? face.minus : face.plus
-        maxrate = max(
-            maxrate,
-            abs(u) / mesh.blocks[donor.block].spacing[face.axis],
+        block = mesh.blocks[donor.block]
+        maxrate = max(maxrate, abs(u) / block.spacing[face.axis])
+
+        # This is the same donor and frozen phase-subface used by the sweep.
+        # A cut donor may have little open volume behind just this subface,
+        # even when its whole-cell incoming and outgoing bounds are satisfied.
+        lo, hi = _frozen_subface_interval(
+            work.interface, work, face, face_index, donor, phase == 1,
+            geometry,
         )
+        rate = abs(u) * face.area * aperture
+        if isnothing(geometry)
+            # Normally this reproduces |u|/h exactly. Also account for a
+            # subface whose represented width is smaller due to round-off.
+            area = T(0.5) * T(hi - lo)
+            maxrate = max(maxrate, _wy_strip_rate(rate, area, block.volume))
+        else
+            solid = geometry.solid
+            area = _wy_open_strip_area(
+                solid, donor, face.axis, lo, hi, -T(0.5), T(0.5),
+            )
+            maxrate = max(maxrate, _wy_strip_rate(rate, area, block.volume))
+
+            # Opposing cut-cell subfaces can overlap even when each swept
+            # volume fits its own strip. Split their common open support and
+            # constrain each volume to its own side. Visit each pair once,
+            # from the positive face, including both phase carriers.
+            if u > zero(T) && _get(solid.fraction, donor) > zero(T)
+                cell = (donor.block - 1) * cells_per_block +
+                    (donor.j - 1) * nx + donor.i
+                for pointer in work.cell_face_offsets[cell]:(
+                        work.cell_face_offsets[cell + 1] - 1
+                    )
+                    work.cell_face_orientations[pointer] == -1 || continue
+                    other_index = work.cell_faces[pointer]
+                    other_face = mesh.faces[other_index]
+                    other_face.axis == face.axis || continue
+                    for other_phase in 1:2
+                        other_aperture = other_phase == 1 ?
+                            work.liquid_aperture[other_index] :
+                            work.gas_aperture[other_index]
+                        other_aperture > zero(T) || continue
+                        other_u = velocity[other_phase].interior[other_index]
+                        other_u < zero(T) || continue
+                        other_lo, other_hi = _frozen_subface_interval(
+                            work.interface, work, other_face, other_index,
+                            donor, other_phase == 1, geometry,
+                        )
+                        areas = _wy_opposing_strip_areas(
+                            solid, donor, face.axis, other_lo, other_hi, lo, hi,
+                        )
+                        isnothing(areas) && continue
+                        left_area, right_area = areas
+                        other_rate = abs(other_u) * other_face.area * other_aperture
+                        maxrate = max(
+                            maxrate,
+                            _wy_strip_rate(other_rate, left_area, block.volume),
+                            _wy_strip_rate(rate, right_area, block.volume),
+                        )
+                    end
+                end
+            end
+        end
     end
     for block in eachindex(mesh.blocks)
         incoming = @inbounds work.incoming.blocks[block]

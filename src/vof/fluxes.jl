@@ -55,14 +55,8 @@ function _swept_fraction(
     (c == 0 || c == 1) && return c
     mesh = field.mesh
     block = mesh.blocks[donor.block]
-    axis, tangent = face.axis, 3 - face.axis
-    center = cellcenter(mesh, donor.block, donor.i, donor.j)
-    transverse = _wrapped_delta(
-        face.center[tangent] - center[tangent],
-        mesh.extent[tangent], mesh.periodic[tangent]
-    ) / block.spacing[tangent]
-    halfwidth = face.area / (2block.spacing[tangent])
-    tlow, thigh = transverse - halfwidth, transverse + halfwidth
+    axis = face.axis
+    tlow, thigh = _face_local_tangent_interval(mesh, donor, face)
     distance = abs(u) * dt / block.spacing[axis]
     low, high = u >= 0 ?
         (0.5 - distance, 0.5) : (-0.5, -0.5 + distance)

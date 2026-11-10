@@ -23,9 +23,11 @@ end
 """
 Conservative pre-transport CFL bound for a two-velocity tuple.
 
-Frozen-interface transport uses the time-step-start phase apertures. Projected
-transport bounds both the projected liquid velocity and extended gas velocity.
-For another workspace policy, the bound is the minimum of the two individual
+Frozen-interface transport uses the time-step-start phase apertures. With a
+solid, it also freezes subface ordering and bounds the open donor strip of
+each carrier to keep opposing swept open regions disjoint. Projected transport
+bounds both the projected liquid velocity and extended gas velocity. For
+another workspace policy, the bound is the minimum of the two individual
 velocity bounds.
 """
 function stable_timestep(
@@ -248,11 +250,11 @@ end
     ) / 2
 end
 
-"""Copy current face apertures into transport's frozen time-step-start state.
+"""Freeze phase apertures and the cut-cell subface ordering.
 
-After the first projection, the interface-owned apertures already describe
-this state. The geometric clipping is then done only once, after transport,
-for the next pressure projection; this call is just two vector copies.
+The PLIC is reconstructed between directional sweeps. With a solid, freezing
+the ordering with the apertures keeps the swept intervals equal to those used
+by the pre-transport geometric timestep bound.
 """
 function _freeze_phase_apertures!(
         field::InterfaceField{T, M}, work::WYAdvectionWorkspace{T, M},
@@ -269,6 +271,21 @@ function _freeze_phase_apertures!(
     )
     copyto!(work.liquid_aperture, liquid)
     copyto!(work.gas_aperture, gas)
+    if work.interface_transport isa FrozenInterfaceFluxes && !isnothing(field.geometry)
+        length(work.liquid_subface_lower) == length(liquid) || throw(
+            DimensionMismatch("WY subface workspace does not match the mesh"),
+        )
+        geometry = field.geometry
+        for (index, face) in pairs(field.mesh.faces)
+            open = @inbounds geometry.aperture[index]
+            liquid_partial = zero(T) < liquid[index] < open
+            gas_partial = zero(T) < gas[index] < open
+            # Full-width and empty subfaces do not use their ordering.
+            @inbounds work.liquid_subface_lower[index] =
+                (liquid_partial || gas_partial) &&
+                _averaged_tangent_normal(field, face, 3 - face.axis) >= zero(T)
+        end
+    end
     return work
 end
 
@@ -304,9 +321,12 @@ function _frozen_subface_interval(
     phase_width > zero(T) || return open_lo, open_lo
     phase_width >= open_width && return open_lo, open_hi
 
-    tangent = 3 - face.axis
-    liquid_tangent = _averaged_tangent_normal(field, face, tangent)
-    liquid_is_lower = liquid_tangent >= zero(T)
+    # Without a solid the velocity-based extrusion bound keeps the donating
+    # regions disjoint regardless of ordering. Preserve the current PLIC
+    # ordering there, and freeze it only where the cut bound depends on it.
+    liquid_is_lower = isnothing(geometry) ?
+        _averaged_tangent_normal(field, face, 3 - face.axis) >= zero(T) :
+        @inbounds(work.liquid_subface_lower[face_index])
     phase_is_lower = liquid_carrier == liquid_is_lower
     return phase_is_lower ?
         (open_lo, open_lo + phase_width) :

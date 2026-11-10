@@ -32,6 +32,7 @@ mutable struct WYAdvectionWorkspace{T, M <: BlockTreeMesh, P, F, W}
     const gas_flux::Vector{T}
     const liquid_aperture::Vector{T}
     const gas_aperture::Vector{T}
+    const liquid_subface_lower::Vector{Bool}
     const cell_face_offsets::Vector{Int}
     const cell_faces::Vector{Int}
     const cell_face_orientations::Vector{Int8}
@@ -74,6 +75,7 @@ function WYAdvectionWorkspace(
         zeros(T, number_of_faces),
         zeros(T, number_of_faces), zeros(T, number_of_faces),
         zeros(T, number_of_faces), zeros(T, number_of_faces),
+        fill(false, transport isa FrozenInterfaceFluxes && !isnothing(field.geometry) ? number_of_faces : 0),
         offsets, faces, Int8.(-signs),
         [block.key for block in mesh.blocks], threshold,
         transport, PhaseFluxDiagnostics(T),
@@ -133,6 +135,10 @@ function _reconfigure_wy_workspace!(
         )
         resize!(flux, length(field.mesh.faces))
         fill!(flux, zero(T))
+    end
+    if workspace.interface_transport isa FrozenInterfaceFluxes && !isnothing(field.geometry)
+        resize!(workspace.liquid_subface_lower, length(field.mesh.faces))
+        fill!(workspace.liquid_subface_lower, false)
     end
     offsets, faces, signs = _cell_face_incidence(field.mesh)
     empty!(workspace.cell_face_offsets)
@@ -246,12 +252,71 @@ function _check_phase_wy_velocity(velocity, work, geometry::G, phase) where {G}
     return nothing
 end
 
+"""Open area of a donor rectangle in normalized cell coordinates."""
+@inline function _wy_open_strip_area(
+        solid::InterfaceField{T}, donor, axis, tangent_lo, tangent_hi,
+        normal_lo, normal_hi,
+    ) where {T}
+    lo, hi = T(tangent_lo), T(tangent_hi)
+    nlo, nhi = T(normal_lo), T(normal_hi)
+    bounds = axis == 1 ? (nlo, nhi, lo, hi) : (lo, hi, nlo, nhi)
+    return _open_subcell_area(solid, donor, bounds...)
+end
+
+"""
+Areas available to opposing outgoing strips, separated inside their common
+open support. Return `nothing` when the strips have no open overlap.
+"""
+@inline function _wy_opposing_strip_areas(
+        solid::InterfaceField{T}, donor, axis,
+        left_lo, left_hi, right_lo, right_hi,
+    ) where {T}
+    lo, hi = max(T(left_lo), T(right_lo)), min(T(left_hi), T(right_hi))
+    lo < hi || return nothing
+    half = T(0.5)
+    overlap = _wy_open_strip_area(solid, donor, axis, lo, hi, -half, half)
+    overlap > zero(T) || return nothing
+
+    # The open solid PLIC is a half-plane. Find its normal support in the
+    # intersection of the two tangential intervals, then split that support
+    # in its interior. A fixed cell midpoint can have zero open area on one
+    # side even though both outgoing strips can be swept disjointly.
+    normal_lo, normal_hi = -half, half
+    fraction = _get(solid.fraction, donor)
+    if zero(T) < fraction < one(T)
+        nx = _get(solid.normal_x, donor)
+        ny = _get(solid.normal_y, donor)
+        normal, tangent = axis == 1 ? (nx, ny) : (ny, nx)
+        intercept = _get(solid.intercept, donor)
+        tangent_max = max(tangent * lo, tangent * hi)
+        if normal > zero(T)
+            normal_lo = clamp((intercept - tangent_max) / normal, -half, half)
+        elseif normal < zero(T)
+            normal_hi = clamp((intercept - tangent_max) / normal, -half, half)
+        end
+    end
+    split = (normal_lo + normal_hi) / 2
+    left_area = _wy_open_strip_area(
+        solid, donor, axis, left_lo, left_hi, -half, split,
+    )
+    right_area = _wy_open_strip_area(
+        solid, donor, axis, right_lo, right_hi, split, half,
+    )
+    return left_area, right_area
+end
+
+@inline function _wy_strip_rate(rate::T, area, volume) where {T}
+    return iszero(area) ? T(Inf) : rate / (2area * volume)
+end
+
 """
     stable_timestep(velocity, work::WYAdvectionWorkspace; cfl=0.5)
 
 WY incoming-volume CFL: `dt*sum(max(-outward_volume_rate,0))/cell_volume`.
-Also constrain outgoing volume and each face extrusion to half the donor cell
-width; the latter protects subfaces on mixed-level meshes. `0 < cfl <= 0.5`.
+Also constrain outgoing volume and each face extrusion. With an embedded
+solid, limit each outgoing flux by its donor's open strip and constrain pairs
+of opposing strips to disjoint open regions, including hanging faces.
+`0 < cfl <= 0.5`.
 """
 function stable_timestep(
         velocity::FaceVelocity, work::WYAdvectionWorkspace{T, M};
@@ -303,6 +368,44 @@ function stable_timestep(
             maxrate,
             abs(u) / mesh.blocks[donor.block].spacing[face.axis],
         )
+        if !isnothing(geometry) && !iszero(u)
+            aperture = geometry.aperture[i]
+            solid = geometry.solid
+            if aperture > zero(T) && _get(solid.fraction, donor) > zero(T)
+                lo, hi = _face_local_tangent_interval(mesh, donor, face)
+                volume = mesh.blocks[donor.block].volume
+                rate = abs(u) * face.area * aperture
+                area = _wy_open_strip_area(solid, donor, face.axis, lo, hi, -0.5, 0.5)
+                maxrate = max(maxrate, _wy_strip_rate(rate, area, volume))
+
+                # Visit each pair once, from the positive (right/top) face.
+                # Both rectangles use the same open solid half-plane, so
+                # separating their open parts suffices for boundedness.
+                if u > zero(T)
+                    cell = (donor.block - 1) * cells_per_block + (donor.j - 1) * nx + donor.i
+                    for pointer in work.cell_face_offsets[cell]:(work.cell_face_offsets[cell + 1] - 1)
+                        other_index = work.cell_faces[pointer]
+                        other = mesh.faces[other_index]
+                        other.axis == face.axis && other.plus == donor || continue
+                        other_u = velocity.interior[other_index]
+                        other_u < zero(T) || continue
+                        other_aperture = geometry.aperture[other_index]
+                        other_aperture > zero(T) || continue
+                        other_lo, other_hi = _face_local_tangent_interval(mesh, donor, other)
+                        areas = _wy_opposing_strip_areas(
+                            solid, donor, face.axis, other_lo, other_hi, lo, hi,
+                        )
+                        isnothing(areas) && continue
+                        left_area, right_area = areas
+                        other_rate = abs(other_u) * other.area * other_aperture
+                        maxrate = max(
+                            maxrate, _wy_strip_rate(other_rate, left_area, volume),
+                            _wy_strip_rate(rate, right_area, volume),
+                        )
+                    end
+                end
+            end
+        end
     end
     for b in eachindex(mesh.blocks)
         incoming_values = @inbounds work.incoming.blocks[b]

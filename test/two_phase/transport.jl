@@ -1,4 +1,5 @@
 using Test, TwoPhaseAMR
+using Random: MersenneTwister, rand
 isdefined(@__MODULE__, :test_allocated_call) ||
     include(joinpath(@__DIR__, "..", "test_utils.jl"))
 const TP = TwoPhaseAMR
@@ -906,6 +907,28 @@ function wy_cut_hanging_counterexample(parameters)
     return field, right, left
 end
 
+function check_wy_cut_fractions(field)
+    refs = TP._cell_references(field.mesh)
+    tolerance = 128eps(eltype(field))
+    @test all(refs) do ref
+        conditional = TP._get(field.conditional_fraction, ref)
+        isfinite(conditional) && -tolerance <= conditional <= 1 + tolerance
+    end
+    @test all(refs) do ref
+        physical = TP._get(field.fraction, ref)
+        open = TP._get(field.geometry.open_fraction, ref)
+        isfinite(physical) && isfinite(open) &&
+            -tolerance <= physical <= open + tolerance
+    end
+    @test all(refs) do ref
+        physical = TP._get(field.fraction, ref)
+        conditional = TP._get(field.conditional_fraction, ref)
+        open = TP._get(field.geometry.open_fraction, ref)
+        isapprox(physical, open * conditional; atol = tolerance, rtol = 0)
+    end
+    return nothing
+end
+
 @testset "WY sliver-cell bound distinguishes round-off from violations" begin
     for T in (Float32, Float64)
         open = T(4.7e-4)
@@ -929,10 +952,13 @@ end
     @test TP._wy_fraction_in_bounds(1.000000000000035, 4.7e-4)
     @test TP._wy_fraction_in_bounds(1.000000000000035, Float32(4.7e-4))
     @test !TP._wy_negative_fraction_out_of_bounds(-4.79159355422365e-14, 4.7e-4)
+end
 
-    # The audited #56 counterexamples are real overshoots, not round-off.
-    # The stable step must still be rejected for both phase carriers.
-    for frozen in (false, true)
+@testset "WY cut hanging donor counterexamples (#56)" begin
+    # These are the audited overshoots, rather than round-off violations.
+    # Each run starts from the same state and uses the public CFL check.
+    for frozen in (false, true), order in ((1, 2), (2, 1)),
+            factor in (frozen ? (1.0, 0.99) : (1.0,))
         parameters = frozen ?
             (
                 tw = 6.047103058103431, ow = 0.3519469972142466,
@@ -959,14 +985,162 @@ end
             velocity = liquid
             work = WYAdvectionWorkspace(field)
         end
+        before = vof_values(field)
         dt = stable_timestep(velocity, work)
-        err = try
-            advect!(field, velocity, dt, work; check_timestep = false)
-            nothing
-        catch exception
-            exception
+        @test isfinite(dt) && dt > 1024eps(Float64)
+        advect!(field, velocity, factor * dt, work; sweep_order = order)
+        check_wy_cut_fractions(field)
+        @test any(!iszero, work.open_flux)
+        @test maximum(abs, vof_values(field) .- before) > 1024eps(Float64)
+    end
+end
+
+@testset "WY cut half-strip at a level transition (#52)" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (12, 12), block_size = (4, 4), extent = (12.0, 12.0),
+        periodic = (false, false), max_level = 1,
+        refine = (k, o, e) -> k == BlockKey(0, 1, 1),
+    )
+    geometry = GeometryField(mesh, (x, y) -> y - 2.2625 - 0.25x; lipschitz = 1.04)
+    initial = InterfaceField(
+        mesh, (x, y) -> y - 2.65 - 0.2x; geometry, lipschitz = 1.02,
+    )
+    velocity = FaceVelocity(mesh, (x, y, t, axis) -> axis == 2 ? 1.0 : 0.0)
+    enforce_no_permeation!(velocity)
+    for order in ((1, 2), (2, 1))
+        field = copy(initial)
+        work = WYAdvectionWorkspace(field)
+        before = vof_values(field)
+        dt = stable_timestep(velocity, work)
+        @test isfinite(dt) && dt > 1024eps(Float64)
+        advect!(field, velocity, dt, work; sweep_order = order)
+        check_wy_cut_fractions(field)
+        @test any(!iszero, work.open_flux)
+        @test maximum(abs, vof_values(field) .- before) > 1024eps(Float64)
+    end
+end
+
+# Build the same straight wall in every cell's local coordinates. In
+# particular, coarse and fine traces are consistent at the hanging side.
+function wy_planar_cut_geometry(mesh, wall, slope)
+    refs = TP._cell_references(mesh)
+    fractions = CellField(mesh)
+    for ref in refs
+        x, y = cellcenter(mesh, ref.block, ref.i, ref.j)
+        dx, dy = mesh.blocks[ref.block].spacing
+        TP._set!(fractions, TP._plane_fraction(-slope * dx, dy, -wall(x, y)), ref)
+    end
+    solid = InterfaceField(fractions; fraction_floor = eps(Float64))
+    for ref in refs
+        x, y = cellcenter(mesh, ref.block, ref.i, ref.j)
+        dx, dy = mesh.blocks[ref.block].spacing
+        TP._set!(solid.normal_x, -slope * dx, ref)
+        TP._set!(solid.normal_y, dy, ref)
+        TP._set!(solid.intercept, -wall(x, y), ref)
+    end
+    return GeometryField(solid)
+end
+
+function wy_planar_cut_interface(mesh, geometry, donor, phase_slope)
+    # A line through an interior point of the open donor ensures a genuine
+    # triple cell, even when the wall passes very close to a coarse corner.
+    polygon = TP._open_cell_polygon(geometry, donor)
+    x, y = cellcenter(mesh, donor.block, donor.i, donor.j)
+    dx, dy = mesh.blocks[donor.block].spacing
+    x0 = x + dx * sum(first, polygon) / length(polygon)
+    y0 = y + dy * sum(last, polygon) / length(polygon)
+    fractions = CellField(mesh)
+    for ref in TP._cell_references(mesh)
+        x, y = cellcenter(mesh, ref.block, ref.i, ref.j)
+        dx, dy = mesh.blocks[ref.block].spacing
+        open = TP._open_cell_polygon(geometry, ref)
+        liquid = TP._clip_polygon(
+            open, dx, phase_slope * dy, x0 - x - phase_slope * (y - y0),
+        )
+        area = clamp(TP._polygon_area(liquid), 0, TP._get(geometry.open_fraction, ref))
+        TP._set!(fractions, area, ref)
+    end
+    return InterfaceField(fractions; geometry, fraction_floor = eps(Float64))
+end
+
+function wy_cut_streamfunction_velocity(mesh, geometry, wall)
+    # The streamfunction vanishes at the wall and the domain boundary.
+    # Differences at face endpoints telescope, including at hanging vertices.
+    psi(x, y) = max(wall(x, y), 0) * sinpi(x / 4)^2 * sinpi(y / 4)^2
+    velocity = FaceVelocity(mesh)
+    divergence = CellField(mesh)
+    missing_flux = 0.0
+    for (index, face) in pairs(mesh.faces)
+        x, y = face.center
+        h = face.area / 2
+        flux = face.axis == 1 ? psi(x, y + h) - psi(x, y - h) :
+            -(psi(x + h, y) - psi(x - h, y))
+        aperture = geometry.aperture[index]
+        if iszero(aperture)
+            missing_flux = max(missing_flux, abs(flux))
+            continue
         end
-        @test err isa ErrorException &&
-            occursin("WY conditional fraction out of bounds", sprint(showerror, err))
+        velocity.interior[index] = flux / (face.area * aperture)
+        flux = face.area * aperture * velocity.interior[index]
+        TP._add!(divergence, flux, face.minus)
+        TP._add!(divergence, -flux, face.plus)
+    end
+    @test missing_flux <= 512eps(Float64)
+    @test maximum(abs, vof_values(divergence)) <= 512eps(Float64)
+    return velocity
+end
+
+@testset "WY randomized cut walls at a level transition" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (4, 4), block_size = (2, 2), extent = (4.0, 4.0),
+        periodic = (false, false), max_level = 1,
+        refine = (key, origin, extent) -> key == BlockKey(0, 1, 1),
+    )
+    donor = only(
+        ref for ref in TP._cell_references(mesh)
+            if cellcenter(mesh, ref.block, ref.i, ref.j) == (1.5, 2.5)
+    )
+    hanging = [
+        i for (i, face) in pairs(mesh.faces)
+            if face.axis == 1 && face.minus == donor &&
+            mesh.blocks[face.plus.block].key.level > mesh.blocks[donor.block].key.level
+    ]
+    @test length(hanging) == 2
+    rng = MersenneTwister(0x52_56)
+    for sample in 1:64
+        @testset "wall $sample" begin
+            height = 2.25 + 0.5rand(rng)
+            slope = 0.8rand(rng) - 0.4
+            phase_slope = 0.8rand(rng) - 0.4
+            wall(x, y) = y - height - slope * (x - 2)
+            geometry = wy_planar_cut_geometry(mesh, wall, slope)
+            @test 0 < TP._get(geometry.open_fraction, donor) < 1
+            initial = wy_planar_cut_interface(mesh, geometry, donor, phase_slope)
+            @test 0 < TP._conditional_fraction(initial, donor) < 1
+            carrier = wy_cut_streamfunction_velocity(mesh, geometry, wall)
+            @test any(i -> geometry.aperture[i] > 0 && carrier.interior[i] > 0, hanging)
+            for frozen in (false, true), order in ((1, 2), (2, 1))
+                field = copy(initial)
+                velocity = frozen ? (carrier, copy(carrier)) : carrier
+                work = frozen ?
+                    WYAdvectionWorkspace(field, velocity; interface_transport = FrozenInterfaceFluxes()) :
+                    WYAdvectionWorkspace(field)
+                before = vof_values(field)
+                mass = integrate(field)
+                dt = stable_timestep(velocity, work)
+                @test isfinite(dt) && dt > 1024eps(Float64)
+                advect!(field, velocity, dt, work; sweep_order = order)
+                check_wy_cut_fractions(field)
+                @test any(!iszero, work.open_flux)
+                @test any(i -> work.open_flux[i] > 0, hanging)
+                @test maximum(abs, vof_values(field) .- before) > 1024eps(Float64)
+                # The carrier is discretely divergence-free; the tiny floor
+                # limits phase snapping to round-off during the split sweeps.
+                @test isapprox(
+                    integrate(field), mass;
+                    atol = 1024eps(Float64) * max(1, abs(mass)), rtol = 0,
+                )
+            end
+        end
     end
 end

@@ -54,8 +54,8 @@ end
     FrozenInterfaceFluxes()
 
 Two-velocity interface-advection policy which freezes the time-step-start
-liquid/gas subdivision of every open face and extrudes each subface with its
-own phase velocity.
+liquid/gas face apertures and extrudes each subface with its own phase
+velocity. With a solid, subface ordering is frozen as well.
 """
 struct FrozenInterfaceFluxes <: AbstractInterfaceTransportMethod end
 

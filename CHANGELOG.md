@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Bound WY cut-donor timesteps by the actual swept strips, including hanging faces and frozen phase subfaces; freeze subface ordering with apertures in solid geometry to keep opposing donating regions disjoint (#52, #56).
 - Prevented CG from using asymmetric multigrid V-cycles and selected CG for volume-weighted symmetric embedded viscous systems (#128).
 - Shared the stepping controls, force bounds and surface-tension/gravity stages across flow models, and consolidated topology-dependent workspace rebuilding.
 - `NavierStokesSystem` is now the concrete equation-system type, and `FlowSimulation` exposes it as `flow.system`; numerical options and physics are retained on the system.
