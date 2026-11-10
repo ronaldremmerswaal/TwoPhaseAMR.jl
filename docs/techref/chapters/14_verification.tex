@@ -1,20 +1,717 @@
 \chapter{Verification}\label{ch:verification}
-\chapterstatus{outline}
-Thesis Chapters~3, 4, 6, and~7 report transport and flow validation
-studies~\cite{remmerswaal2023}. This chapter will connect package claims to
-reproducible convergence, conservation, balanced-force, and AMR tests.
+\chapterstatus[c46cf60f29a3ee5a0771ec516942ab3987ee28c7]{reference}
+The preceding chapters state what the code computes. This chapter states how
+that is checked. It defines the diagnostics through which tests, examples and
+users observe a flow (\cref{sec:verif:diagnostics}), describes the test suite
+and the tiers in which continuous integration runs it
+(\cref{sec:verif:suite}), the regression oracle that detects any change of
+the results of the examples (\cref{sec:verif:oracle}) and the derivation
+audits that check the statements of this reference against the code
+(\cref{sec:verif:audits}). It then lists the verification cases with what
+each asserts: manufactured solutions and observed orders
+(\cref{sec:verif:orders}), conservation and other invariants
+(\cref{sec:verif:invariants}), benchmark flows with exact, theoretical or
+published references (\cref{sec:verif:benchmarks}) and the examples gallery
+(\cref{sec:verif:gallery}), and it closes with the known gaps
+(\cref{sec:verif:gaps}). The thesis validates the VOF
+transport~\thesis{\S3.5}, the surface-tension models~\thesis{\S4.8}, the
+two-fluid transport~\thesis{\S6.5} and the two-fluid flow
+solver~\thesis{\S7.7}; several cases below repeat those studies. Validation
+against experiments is not part of the suite.
 
-\section{Convergence and reference cases}
-Tables in a completed reference should be generated from reproducible
-verification scripts and distinguish observed rates from test thresholds.
+\section{Diagnostics}\label{sec:verif:diagnostics}
+A diagnostic maps the state at the end of a step to a number or a pair of
+numbers. The kinetic energy and the linear momentum are sums over the
+interior faces $\facesint$, weighted with the open staggered volumes
+$\opendualvol{f}$ ($=\dualvol{f}$ without a solid), the staggered mixture
+density $\stagdens_f$ and the clamped staggered liquid fraction
+$\clampfrac{f}$ of~\cref{eq:forces:density}: with one velocity
+\begin{equation}\label{eq:verif:energy}
+  \kinenergy=\tfrac12\sum_{f\in\facesint}\opendualvol{f}\,\stagdens_f\,\velo_f^2,\qquad
+  \linmom{k}=\sum_{f\in\facesint\cap\facesaxis{k}}\opendualvol{f}\,\stagdens_f\,\velo_f ,
+\end{equation}
+with $\stagdens_f$ replaced by the density $\dens$ in one phase, and with two
+velocities
+\begin{equation}\label{eq:verif:energy-two}
+  \begin{gathered}
+  \kinenergy=\tfrac12\sum_{f\in\facesint}\opendualvol{f}\roundpar{\dens^{\liq}\clampfrac{f}(\velo^{\liq}_f)^2+\dens^{\gas}(1-\clampfrac{f})(\velo^{\gas}_f)^2},\\
+  \linmom{k}=\sum_{f\in\facesint\cap\facesaxis{k}}\opendualvol{f}\roundpar{\dens^{\liq}\clampfrac{f}\velo^{\liq}_f+\dens^{\gas}(1-\clampfrac{f})\velo^{\gas}_f},
+  \end{gathered}
+\end{equation}
+where a product with a vanishing weight is zero, also where the phase
+velocity is undefined. Boundary faces carry prescribed values, not unknowns,
+and do not enter. The phase volumes
+$\phasevol{\liq}=\sum_c\meas{c}\phasefrac{\liq}{c}$ and
+$\phasevol{\gas}=\meas{\opencell{\domain}}-\phasevol{\liq}$, with the open
+volume $\meas{\opencell{\domain}}=\sum_c\meas{c}\openfrac{c}$
+($\meas{\domain}$ without a solid), give the phase masses
+$\dens^{\phase}\phasevol{\phase}$. The potential and surface energies are
+\begin{equation}\label{eq:verif:energies}
+  \begin{gathered}
+  \potenergy=-\gravacc\cdot\roundpar{\dens^{\liq}\firstmom{\liq}+\dens^{\gas}\roundpar{\firstmom{\open}-\firstmom{\liq}}},\qquad
+  \surfenergy=\surftens\meas{\interface},\\
+  \meas{\interface}=\sum_{c:\ 0<\condfrac{\liq}{c}<1}\meas{\interface_c}
+    +\sum_{f\in\facesint\ \text{separating}}\meas{f}\,\aperture{f},
+  \end{gathered}
+\end{equation}
+where $\firstmom{\open}$ and $\firstmom{\liq}$ are the first moments
+$\int\coord\dd\coord$ of the open region and of the reconstructed liquid
+region: in a cell with $0<\condfrac{\liq}{c}<1$ the part of $\opencell{c}$ on
+the liquid side of its PLIC line (\cref{ch:interface}), and $\opencell{c}$
+itself if $\condfrac{\liq}{c}\ge1$. A mixed cell thus contributes the moment
+of its phase polygons, not its mass at its centre; the potential is zero at
+the origin. $\interface_c$ is the PLIC segment of a mixed cell, clipped to
+the open part, and a face is separating if one neighbour has
+$\condfrac{\liq}{c}\le\ffloor$ and the other $\condfrac{\liq}{c}\ge1-\ffloor$:
+an interface on a grid line has no PLIC segment and is measured by the face.
+The total energy is $\kinenergy+\potenergy+\surfenergy$; in one phase
+$\potenergy=\surfenergy=0$.
+The divergence norm is
+\begin{equation}\label{eq:verif:divergence-norm}
+  \divnorm=\Big(\sum_{c:\ \openfrac{c}>0}\meas{\opencell{c}}\,(\mathfrak{D}\velo)_c^2\Big)^{1/2},\qquad
+  \mathfrak{D}\velo=\begin{cases}
+    \divh\velo, & \text{one velocity, no solid},\\
+    \divopen\velo, & \text{one velocity, solid},\\
+    \divmix(\velo^{\liq},\velo^{\gas}), & \text{two velocities},
+  \end{cases}
+\end{equation}
+with the divergences of \cref{eq:setting:divergence,eq:setting:open-divergence,eq:projection:mixture-divergence}:
+the constraint of the projection (\cref{ch:projection}), not a
+density-weighted divergence. The largest velocity is $\max\abs{\velo_f}$ over
+the interior and boundary faces, with two velocities over the faces on which
+a phase is active; the remaining diagnostics are the time-step bound
+$\dtflow(\flowcfl)$ of~\cref{eq:stab:flow-bound} and the numbers of leaf
+blocks and cells.
+
 \begin{implnote}
-\apifun{simulate!}, \apitype{FlowSimulation}.
+Diagnostics \apitype{KineticEnergy}, \apitype{PotentialEnergy},
+\apitype{SurfaceEnergy}, \apitype{TotalEnergy}, \apitype{LinearMomentum},
+\apitype{PhaseVolume}, \apitype{PhaseMass}, \apitype{InterfaceMeasure},
+\apitype{MaximumVelocity}, \apitype{CFLTimeStep}, \apitype{DivergenceNorm},
+\apitype{LeafBlockCount}, \apitype{CellCount}, evaluated by
+\srcsym{src/simulation/diagnostics/interface.jl}{diagnostic_value}
+with \srcsym{src/simulation/diagnostics/interface.jl}{_one_velocity_kinetic_energy},
+\srcsym{src/simulation/diagnostics/interface.jl}{_two_velocity_kinetic_energy},
+\srcsym{src/simulation/diagnostics/interface.jl}{_one_velocity_linear_momentum},
+\srcsym{src/simulation/diagnostics/interface.jl}{_two_velocity_linear_momentum},
+\srcsym{src/simulation/diagnostics/interface.jl}{_diagnostic_volume_flux!};
+clamped fraction \srcsym{src/two_phase/forces.jl}{_staggered_liquid_fraction};
+first moments \srcsym{src/two_phase/forces.jl}{_phase_first_moments} and
+\srcsym{src/two_phase/forces.jl}{_gravitational_potential_energy}; segments
+\apifun{plic_segments} (\srcsym{src/visualization/plic_geometry.jl}{plic_segments}).
+A \apitype{FlowSimulation} records each diagnostic when it is added, after
+the steps that its schedule selects (\apitype{EveryStep} by default) and at
+the end of a call of \apifun{simulate!}, never twice for the same state
+(\srcsym{src/simulation/diagnostics/history.jl}{_diagnostic_due!});
+\srcsym{src/navier_stokes/flow_diagnostics.jl}{record_diagnostics!} records
+in a hand-written loop and \apifun{diagnostic_history} returns the record.
+Tests:
+\testsym{test/diagnostics.jl}{one- and two-velocity physical diagnostics}
+(exact energies, momenta, volumes, masses and interface measure on a
+$4\times4$ mesh, including an interface on a grid line and a mixed one),
+\testsym{test/diagnostics.jl}{embedded and adaptive diagnostic measures}
+(cut and adapted meshes),
+\testsym{test/diagnostics.jl}{two-velocity divergence uses the projection volume flux}
+(equal to an independent face sum to $2\times10^{-13}$, independent of the
+densities),
+\testsym{test/diagnostics.jl}{two-velocity projected-step divergence with slip}.
 \end{implnote}
 
-\section{Conservation and balance}
-The claim-to-test index will identify phase-volume, momentum, hydrostatic,
-energy, and divergence checks without claiming unverified properties.
+\section{Test suite and continuous integration}\label{sec:verif:suite}
+Every Julia file under \code{test/} is registered in \code{test/groups.jl}:
+in one or more test groups (an integration group lists its prerequisites),
+among the helpers, or among the exclusions (the entry points, the separately
+provisioned Makie suite and the MimeticFV comparison). The group
+\code{registry} fails when a file is unregistered or a registered file is
+missing, and when a default group is not in exactly one unit shard. The
+default suite (\code{Pkg.test()}) is \code{registry} and the
+eleven groups that are neither integration groups nor \code{performance}.
+Arguments select groups by name, \code{integration} selects the thirteen
+integration groups and \code{shard:A}, \code{shard:B}, \code{shard:C} the unit
+shards. The unit groups check contracts, exact identities and short
+manufactured-solution studies; the integration groups run refinement studies
+and benchmark flows; \code{performance} holds allocation contracts.
+\Cref{tab:verif:tiers} lists when continuous integration runs what.
+
+\begin{table}[tbp]
+  \centering\footnotesize
+  \caption{Tiers of continuous integration (workflow \code{CI}, and the
+  technical-reference job of workflow \code{Documentation}). Julia ``1'' is
+  the current release; the unit and integration jobs run on two threads.
+  The \code{ci-ok} check of a pull request requires the five jobs of the
+  first row.}\label{tab:verif:tiers}
+  \begin{tabular}{@{}>{\raggedright}p{2.0cm}>{\raggedright}p{3.2cm}>{\raggedright\arraybackslash}p{6.9cm}@{}}
+    \toprule
+    Tier & Trigger & Jobs and contents\\
+    \midrule
+    Pull request & every pull request and push to \code{main} & \code{format} (Runic 1.10.0); \code{unit} shards A (\code{two_phase}), B (\code{registry}, \code{mesh}, \code{threading}, \code{indicators}, \code{operators}, \code{solvers}, \code{aqua}) and C (\code{navier_stokes}, \code{diagnostics}, \code{examples}, \code{recording}) with coverage; \code{makie} (visualisation extension); \code{studio} (Studio server, Julia 1.11 and 1.12); \code{frontend} (browser client tests and bundle check)\\
+    Main & push to \code{main} & \code{unit-minimum} (default suite on Julia 1.11, the lower compat bound); \code{contracts} (group \code{performance}, one thread); \code{benchmark} (one-sample smoke run of the benchmarks and the latency probe)\\
+    Integration & weekly (Monday 03:00 UTC), dispatch, or a pull request labelled \code{run-integration} & eleven integration groups in three shards: A \code{two_velocity_vortex}, \code{two_velocity_transport}, \code{staggered_wave_equation}; B \code{two_phase_waves}, \code{two_phase_droplet}, \code{wave_equation}, \code{amr_manufactured_flow}; C \code{two_phase_vortex}, \code{two_velocity_rotation}, \code{anisotropic_cells}, \code{two_phase_sessile_droplet}\\
+    Heavy & monthly (1st, 04:00 UTC) or dispatch & \code{two_velocity_instabilities} and \code{single_phase_cylinder}; a failure does not fail the run (\code{continue-on-error})\\
+    Browser & weekly and monthly schedule, dispatch & \code{studio-browser}: Studio smoke, live AMR and examples tests in Chromium\\
+    Reference & every pull request and push to \code{main} & \code{check_links.py --skip-api} (blocking), PDF build, rejection of undefined references (\cref{sec:verif:audits})\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+A commit on \code{main} is thus checked by the unit and main tiers; the
+integration groups run on it only at the next weekly run and the heavy groups
+at the next monthly run, unless a run is dispatched or the pull request is
+labelled. Three checks are manual: the regression oracle
+(\cref{sec:verif:oracle}); the developed-wake cylinder study
+\nolinkurl{benchmark/validation/cylinder_study.jl} (\cref{sec:verif:benchmarks});
+and the comparison of one first-order upwind step with the package
+MimeticFV.jl, \nolinkurl{test/integration/mimeticfv_reference.jl}, excluded from
+the registry so that the reference package is not a test dependency, which
+passed at relative and absolute tolerances of $3\times10^{-14}$ on
+2026-09-13 (\nolinkurl{test/reference-validation.md}). At the audited commit the
+\code{contracts} job fails on \code{main}: one solve of the staggered elliptic
+solver allocates $624$ bytes (\issue{127}).
+
 \begin{implnote}
-\apitype{PhaseVolume}, \apitype{LinearMomentum}, \apitype{DivergenceNorm},
-\apifun{diagnostic_history}.
+Registry \srcsym{test/groups.jl}{TEST_GROUPS},
+\srcsym{test/groups.jl}{UNIT_SHARDS}, \srcsym{test/groups.jl}{TEST_HELPERS},
+\srcsym{test/groups.jl}{TEST_EXCLUSIONS}; selection and registry check
+\srcsym{test/runtests.jl}{selected_groups},
+\srcsym{test/runtests.jl}{default_groups},
+\srcsym{test/runtests.jl}{check_registry}. Workflows
+\code{.github/workflows/CI.yml} and \code{.github/workflows/Documentation.yml};
+the entry points and their use are documented in \code{docs/src/testing.md}.
 \end{implnote}
+
+\section{Regression oracle}\label{sec:verif:oracle}
+The regression oracle detects every change of the results of ten short runs
+of the examples (\cref{tab:verif:oracle}); it does not judge whether a change
+is an improvement. For each case it records the number of steps, the final
+time, the last value of every diagnostic history of the flow (the volume
+error for the transport-only vortex), and for each velocity component (per
+phase with two velocities, on the owned interior faces of its direction), the
+pressure and the liquid fraction (on the cell interiors) four statistics: the
+SHA-256 hash of the raw values, the Euclidean norm and the largest magnitude
+of the finite values, and the numbers of values and of finite values.
+Inactive two-velocity faces hold \code{NaN}: they enter the hash and the
+counts, not the norms. \nolinkurl{benchmark/oracle/check.jl} compares the
+steps and the counts exactly and the final time and the diagnostics with
+relative and absolute tolerance $10^{-10}$; it compares the fields by their
+hashes, that is bitwise, when the Julia version and the thread count equal
+those of the record (Julia 1.12.7, one thread), and otherwise by their norms
+and largest magnitudes with the same tolerance. The mode and the tolerance
+can be set, and \code{ORACLE_PERTURB=1} changes one velocity of
+the Taylor--Green case by one unit in the last place to exercise the failure
+path. \nolinkurl{benchmark/oracle/perf.jl} records first-run latency and the time
+and allocations of ten warm steps (\code{perf_baseline.toml}); these are
+machine-local reference points, not contracts.
+
+\begin{table}[tbp]
+  \centering\footnotesize
+  \caption{Cases of the regression oracle: the examples of the gallery
+  (\cref{sec:verif:gallery}) at a reduced maximum level and final time. All
+  flows except the two marked use one velocity.}\label{tab:verif:oracle}
+  \setlength\tabcolsep{5pt}
+  \begin{tabular}{@{}llll@{}}
+    \toprule
+    Case & Example & Run & Steps\\
+    \midrule
+    \code{taylor_green} & 01 Taylor--Green vortex & level 2, $\tend=0.02$, $\dt=0.002$ & 10\\
+    \code{cavity} & 02 lid-driven cavity & level 1, $\tend=0.02$, $\dt=0.002$ & 10\\
+    \code{cylinder} & 04 flow past a cylinder & level 1, $\tend=0.01$, $\dt=0.001$ & 10\\
+    \code{vortex_reverse} & 05 vortex reversal (transport only) & level 2, $\tend=0.05$, automatic step & 6\\
+    \code{capillary_one} & 06 capillary wave & level 1, $\tend=0.02$, $\dt=0.001$ & 20\\
+    \code{capillary_cmdgfm} & 06, two velocities, CMDGFM & as above & 20\\
+    \code{capillary_mimetic} & 06, two velocities, mimetic & as above & 20\\
+    \code{sessile} & 08 sessile droplet & level 1, $\tend=0.01$, $\dt=0.001$ & 10\\
+    \code{sloped} & 09 sloped sessile droplet & level 1, $\tend=0.01$, $\dt=0.001$ & 10\\
+    \code{stokes3} & 10 third-order Stokes wave & level 1, $\tend=0.01$, $\dt=0.001$ & 10\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+No workflow runs the oracle. A pull request that restructures code without
+intending a numerical change runs it by hand and reports the result (``oracle
+bitwise (10 cases)'' for pull request 124, merged as the audited commit).
+\nolinkurl{benchmark/oracle/record.jl} rewrites the record; this is done
+only when the numerical reference or the measurement environment changes
+intentionally, together with the tests that verify the change. Since its
+introduction on 2026-11-07 the record was rewritten for the mimetic projection
+changes of work item 4D.2 (results within the solver tolerance; tolerance mode
+passes at $2\times10^{-9}$), for the deterministic face order needed on
+Julia 1.11 and 1.13 (every face list reordered; tolerance mode passes at
+$10^{-10}$, and at $2\times10^{-9}$ for the mimetic case), and after the
+fixes of the triple-cell reconstruction (\issue{48}), of the staggered
+momentum transport at walls, level transitions and cut walls (\issue{60},
+\issue{61}, \issue{62}), of the cut-face gravity (\issue{74}), of the
+cut-cell diffusion (\issue{79}, \issue{87}), of the incremental projection
+(all cases within $10^{-10}$ relative) and of the projection (\issue{93},
+\issue{94}: outflow reset, dimensionless two-velocity defects, mixed pressure
+gauges).
+
+\begin{implnote}
+Cases \srcsym{benchmark/oracle/cases.jl}{CASES}; statistics
+\srcsym{benchmark/oracle/cases.jl}{stats} of the fields gathered by
+\srcsym{benchmark/oracle/cases.jl}{capture}; record
+\srcsym{benchmark/oracle/cases.jl}{record_cases}; comparison
+\srcsym{benchmark/oracle/check.jl}{check_all} and
+\srcsym{benchmark/oracle/check.jl}{close_value}. Usage in
+\code{benchmark/README.md}; the record is \code{benchmark/oracle/baseline.toml}.
+\end{implnote}
+
+\section{Derivation audits}\label{sec:verif:audits}
+A derivation audit checks one claim of this reference (an equation, an
+identity, a bound or a measured statement) independently of the chapter that
+states it: symbolically, and numerically against the package, mostly through
+an independent re-implementation of the discrete formula evaluated on random
+2:1-balanced, periodic, walled and cut meshes. Each audit is archived in a
+folder of \code{proof_review/}, mostly named after the label of the claim,
+with \code{audit.md} (the steps, the errors found, the sharpness of the claim
+and its history) and \code{scripts/}, whose \code{run_all.jl} reruns every
+check and exits with an error if one fails; \code{proof_review/README.md} has
+one row per audited claim with the audited lines, the date, the status and
+the outcome. At the audited commit $63$ audit folders cover Chapters 3 to 10,
+12 and 13. A finding is either applied to the chapter or, if the code is at
+fault, filed as an issue and stated in a deviation box or in the text, as
+\issue{63} and \issue{70} from the audits of \cref{ch:momentum-transport} and
+\issue{78} and \issue{79} from those of \cref{ch:viscosity}.
+
+Each reference chapter states the commit against which it was audited (the
+optional argument of \verb|\chapterstatus|, printed below its title);
+\code{coverage.toml} repeats the commit, and \code{check_links.py} fails if
+the two differ. The same script checks that every \verb|\srcsym| names a
+symbol defined in its file, every \verb|\testsym| an existing \code{@testset}
+title, and every claim of \code{coverage.toml} its source symbols and test
+titles. Its re-audit report, which does not fail, lists for each reference
+chapter the files it refers to (through \verb|\srcsym|, the sources of its
+claims and the source files classified for it in \code{coverage.toml}) that
+changed between the audited commit and \code{HEAD}. A listed chapter is
+re-read against the changes and re-pinned, with a new audit where a stated
+equation changed. Numbers quoted in the chapters are computed by the scripts
+of \code{docs/techref/figures/}, whose assertions fail when the
+implementation no longer matches the statements; they need Julia and are run
+by hand (\code{generate.jl}, or \code{generate.jl amr} and
+\code{generate.jl stability} for one chapter), while the PDF build reads only
+their committed output.
+
+\begin{implnote}
+\code{proof_review/README.md} (index), \code{docs/techref/coverage.toml}
+(claims, chapter status and audited commits, classification of every file of
+\code{src/} and \code{ext/}), \code{docs/techref/check_links.py} (checks and
+re-audit report), \code{docs/techref/figures/generate.jl} (figure data and
+the number macros of \code{figures/generated/checks.tex}).
+\end{implnote}
+
+\section{Manufactured solutions and observed orders}\label{sec:verif:orders}
+\Cref{tab:verif:orders} lists the refinement studies with an exact or
+manufactured reference. A study computes the errors on two to four meshes
+refined by a common ratio and asserts lower bounds on the rates between
+consecutive meshes (\emph{all}), on the rate between the two finest
+(\emph{fin}) or on the endpoint rate between the coarsest and the finest
+(\emph{end}); several also assert that the errors decrease. The formal orders
+of the building blocks and the time-step policy of the flow studies are those
+of \cref{sec:stab:accuracy}. The measured values are those that the tests
+print in continuous integration (two threads): the unit groups in the run of
+the audited commit, the integration and heavy groups in the runs of commit
+\code{e736e6b} (pull request 116, merged as \code{800e4ae}), after which the
+sources changed only by recording code and by the refactor of pull request
+124, which reproduces the oracle bitwise; ``--'' marks a test that prints
+nothing. The rows that pin a known first-order defect are those of
+\issue{110} (inclined walls) and \issue{112} (variable stress at level
+transitions).
+
+{\footnotesize\setlength\tabcolsep{3pt}
+\begin{longtable}{@{}>{\raggedright}p{2.35cm}>{\raggedright}p{2.85cm}>{\raggedright}p{1.85cm}>{\raggedright}p{2.45cm}>{\raggedright\arraybackslash}p{2.6cm}@{}}
+  \caption{Refinement studies with an exact or manufactured reference
+  (mm: manufactured). Meshes as cells per unit length or per diameter;
+  rates as defined in the text.}\label{tab:verif:orders}\\
+  \toprule
+  Case & Quantity & Reference & Measured & Asserted\\
+  \midrule
+  \endfirsthead
+  \toprule
+  Case & Quantity & Reference & Measured & Asserted\\
+  \midrule
+  \endhead
+  \bottomrule
+  \endfoot
+  \multicolumn{5}{@{}l}{\emph{Operators}}\\
+  Gradient, composite & face-normal gradient, displacement-weighted $L^2$ & mm pressure & -- & both $>1.4$\\
+  Gradient, stretched composite & face gradient, area-weighted $L^2$ & mm pressure & -- & all $>1.0$, decreasing\\
+  Poisson, composite, multigrid & cell $L^2$ & mm, Dirichlet & -- & all $>1.7$, decreasing\\
+  Staggered Laplacian, uniform periodic & dual-volume $L^2$ of the tendency & mm velocity & -- & both $>1.9$\\
+  Corrected Laplacian, composite & as above & mm velocity & -- & $>1.8$, $>1.5$\\
+  Cut-cell Helmholtz, walls and transitions (\issue{87}) & maximum norm & mm velocity & -- & all $\ge1.8$\\
+  Aligned embedded wall (\issue{106}) & maximum, $L^2$, $L^1$ & mm velocity & -- & all $\ge1.5$ (max.), $\ge1.8$ ($L^2$, $L^1$)\\
+  Inclined embedded wall (\issue{106}, \issue{110}) & maximum, $L^2$, $L^1$ & mm velocity & -- & all $\ge0.6$ (max.), $\ge0.8$ ($L^2$, $L^1$); finest error $\le1.02\times$ pinned\\
+  Variable stress, bulk & $L^2$ of the tendency & mm, $\visc(x)$ & -- & all $\ge1.8$\\
+  Variable stress, shifted solve on fixed and adapted trees & solution $L^2$ & mm, $\visc(x)$ & -- & all $\ge0.8$, decreasing\\
+  Two-phase embedded-wall Helmholtz (\issue{106}) & dual-volume $L^2$ per direction & mm, piecewise stream function & $1.86$--$2.06$ & all $\ge1.9$ (equal viscosities, uniform); else within $\log_2 1.1$ of the open domain\\
+  Stress with uniform viscosity versus scalar diffusion & $L^2$ difference & scalar Laplacian & $2.11$--$2.83$ (uniform); $0.48$--$0.50$ (composite) & all $\ge2.0$ (uniform); composite: below $1.1\times$ the open-domain difference\\
+  Lax--Wendroff translation & $L^2$ & exact translation & -- & both $>1.9$\\
+  Staggered convection, composite & dual-volume $L^2$ of the tendency & mm velocity & -- & all $>1.3$; $>1.35$ (Lax--Wendroff, limited at transitions)\\
+  \multicolumn{5}{@{}l}{\emph{Interface}}\\
+  LHF curvature, circle & maximum over LHF cells & exact circle & -- & all $\ge1.7$\\
+  PLIC position, circle & RMS distance of segment midpoints & exact circle & -- & all $>1.49$\\
+  Contact-angle curvature at triple points, five angles & maximum & exact circle & -- & all $\ge0.7$; $\ge1.8$ at $90^\circ$\\
+  Triple-cell normals, three methods, $60^\circ$--$120^\circ$ & median normal error & exact circle & $0.039$, $0.010$, $7.4\times10^{-4}$ & decreasing; finest below half the coarsest\\
+  Embedded contact curvature, sloped walls & median & exact circle & -- & end $>0.8$\\
+  Embedded height reconstruction & symmetric difference & clipped circle & $3.70$, $2.13$ & all $\ge1.8$\\
+  Geometry-aware level-set initialisation & open-volume symmetric difference & clipped circle & -- & all $\ge1.8$\\
+  Anisotropic ($2{:}1$) cells & mean normal and curvature errors & exact circle & -- & end $>0.9$ (normal), $>1.5$ (curvature)\\
+  \multicolumn{5}{@{}l}{\emph{Transport}}\\
+  Anisotropic VOF translation & $L^1$ fraction & exact translation & -- & all $>1.8$\\
+  Anisotropic centred scalar advection & volume-weighted $L^2$ & exact translation & -- & all $>0.9$\\
+  Cut-cell WY contact-line translation and reversal & symmetric difference & exact positions & $2.77$, $3.70$; reversal end $2.90$ & all $\ge1.8$; reversal end $\ge1.8$\\
+  Vortex reversal $T=1$, one velocity, uniform (16--64) & symmetric difference; $L^1$ fraction; $L^1$ cell and staggered phase scalars & initial state & $2.16$, $2.24$; $2.21$, $2.16$; $1.89$, $1.63$; $1.59$, $2.12$ & end and fin $\ge1.5$\\
+  \quad composite and adaptive (8--32) & as above & initial state & composite $1.87$, $2.29$; adaptive $3.20$, $2.55$ (symmetric difference) & end and fin $\ge1.5$\\
+  Vortex reversal, two velocities & symmetric difference; $L^1$ fraction; staggered liquid and gas scalars & initial state & uniform projected $2.17$, $2.28$; gas $1.96$, $1.29$ & end $\ge1.5$; fin $\ge1.5$ ($\ge1.2$ gas)\\
+  Split-WY reversal, two velocities (16, 24, 32) & $L^1$ fraction; phase scalars & initial state & projected $2.59$, $2.99$; $1.35$, $1.58$ & fin $\ge1.8$ (uniform), $\ge1.5$ (scalars)\\
+  Rotating disc, tangential jump & $L^1$ fraction after the rotation & initial state & projected end $2.50$; frozen $1.31$ & end $\ge2.0$ (projected), $\ge0.8$ (frozen)\\
+  Rotating disc, mimetic and CMDGFM projections (8--32) & $L^1$ fraction & initial state & end $1.27$ (mimetic), $1.40$ (CMDGFM) & end $\ge1.2$ (mimetic, projected), $\ge0.9$\\
+  Phase-scalar AMR transfer & phase-weighted $L^1$ after one refinement & mm scalars & -- & all $\ge1.8$\\
+  CMDGFM jump interpolant & mean jump error over resolved stencils & affine velocity with a constant jump & -- & end $\ge0.8$, decreasing\\
+  \multicolumn{5}{@{}l}{\emph{Flows}}\\
+  Taylor--Green vortex (12, 24) & velocity $L^2$ & exact decay & -- & $>1.8$; divergence $\le2\times10^{-8}$\\
+  Wave equation, composite & pressure and velocity $L^2$ and maximum & exact standing wave & -- & all $>1.5$ ($L^2$); maximum $>1.5$ (pressure), $>1.0$ (velocity)\\
+  Staggered wave equation & $L^2$, maximum & exact standing wave & -- & uniform all $>1.9$; composite $>1.5$ ($L^2$), $>0.9$ (maximum)\\
+  Localised manufactured vortex, AMR, 1 to 3 levels & velocity $L^2$ & mm vortex & -- & all $>0.8$; smaller error than a uniform mesh with as many cells, fewer than $0.6$ of the cells of the uniform mesh at the finest width\\
+  Anisotropic Navier--Stokes (8, 16) & phase velocity $L^2$ & exact decaying shear & -- & $>1.8$ (one phase), $>1.35$ (two phases)\\
+\end{longtable}}
+
+Where the tests print their errors, every measured order exceeds its bound.
+On the adaptive meshes, whose refined band follows the interface, the vortex
+reversal converges with $3.2$ and $2.5$ in the symmetric difference. The
+maximum norm of the fraction
+is not asserted and does not converge (uniform $0.60$, $0.37$; composite
+$-0.16$, $0.28$). With a level transition the two-phase embedded-wall rates
+stay within $\log_2 1.1$ of the open-domain rates, and the difference between
+the stress with uniform viscosity and the scalar Laplacian converges with
+order $0.5$ on composite meshes, with and without the wall: the $L^2$ order
+of a difference of order one in the rows along a level transition, whose
+cells cover an area of order $\minwidth$. The solution converges with order
+one there; the shifted solve pins $0.8$ (\issue{112}).
+
+\begin{implnote}
+Tests in the order of \cref{tab:verif:orders}:
+\testsym{test/operators/gradient.jl}{mixed-level gradient convergence},
+\testsym{test/operators/gradient.jl}{compatible pressure gradient},
+\testsym{test/operators/poisson.jl}{geometric multigrid Poisson convergence},
+\testsym{test/operators/staggered_diffusion.jl}{uniform periodic staggered Laplacian convergence},
+\testsym{test/operators/staggered_diffusion.jl}{corrected AMR Laplacian converges and has stable spectrum},
+\testsym{test/operators/staggered_diffusion.jl}{cut-cell Helmholtz convergence at walls and level transitions (#87)},
+\testsym{test/operators/embedded_wall_rows.jl}{grid-aligned embedded-wall Helmholtz convergence (#106)},
+\testsym{test/operators/embedded_wall_rows.jl}{inclined embedded-wall Helmholtz comparison (#106)},
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable stress manufactured bulk convergence},
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable stress shifted solve on fixed and adapted trees},
+\testsym{test/operators/embedded_variable_wall_mms.jl}{two-phase embedded-wall manufactured Helmholtz (#106)},
+\testsym{test/operators/embedded_variable_wall_mms.jl}{uniform-viscosity stress versus scalar diffusion (#106)},
+\testsym{test/operators/advection/staggered_advection.jl}{Lax-Wendroff convergence},
+\testsym{test/operators/advection/staggered_advection.jl}{mixed-level staggered convection convergence};
+\testsym{test/indicator/phase/height_functions.jl}{Circular LHF curvature converges},
+\testsym{test/indicator/geometry.jl}{PLIC geometry converges and produces filled solid visualization},
+\testsym{test/indicator/phase/height_functions.jl}{Contact-angle curvature converges at triple points},
+\testsym{test/indicator/geometry.jl}{Triple-cell normals converge with matching and mismatched angles},
+\testsym{test/indicator/geometry.jl}{Embedded GHF contact curvature converges on sloped walls},
+\testsym{test/indicator/geometry.jl}{Embedded height reconstruction converges in symmetric difference},
+\testsym{test/indicator/geometry.jl}{Geometry-aware level-set initialization converges in open volume},
+\testsym{test/indicator/phase/anisotropic_cells.jl}{anisotropic reconstruction refinement};
+\testsym{test/integration/anisotropic_cells.jl}{anisotropic geometric VOF advection},
+\testsym{test/indicator/phase/anisotropic_cells.jl}{anisotropic centred advection refinement},
+\testsym{test/indicator/geometry.jl}{Cut-cell WY reverses wall-tangent contact-line translation},
+\testsym{test/integration/two_phase_vortex.jl}{Classical T=1 vortex refinement study},
+\testsym{test/integration/two_velocity_vortex.jl}{Continuous two-velocity vortex reversal},
+\testsym{test/integration/two_velocity_transport.jl}{Two-velocity split-WY reversal convergence},
+\testsym{test/integration/two_velocity_rotation.jl}{Tangentially discontinuous circular-disc rotation},
+\testsym{test/integration/two_velocity_rotation.jl}{Rotating disc with the physical mimetic projection},
+\testsym{test/integration/two_velocity_rotation.jl}{Rotating disc with the CMDGFM projection},
+\testsym{test/two_phase/transport.jl}{Intrinsic phase scalar AMR transfer convergence},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM jump interpolant consistency};
+\testsym{test/navier_stokes/navier_stokes.jl}{Taylor--Green Navier--Stokes integration},
+\testsym{test/integration/wave_equation.jl}{mixed-level manufactured wave equation},
+\testsym{test/integration/staggered_wave_equation.jl}{manufactured staggered wave equation},
+\testsym{test/integration/amr_manufactured_flow.jl}{localized manufactured vortex demonstrates AMR benefit},
+\testsym{test/integration/anisotropic_cells.jl}{anisotropic Navier--Stokes model refinement}.
+The vortex studies share \srcsym{test/integration/vortex_problem.jl}{phase_vortex}.
+\end{implnote}
+
+\section{Conservation and invariants}\label{sec:verif:invariants}
+\Cref{tab:verif:invariants} lists the tests of the properties that the
+discretisation has by construction: conservation of the phase volumes,
+masses and momenta, boundedness of the fractions, the energy identities, the
+divergence after a projection or a regrid, the balance of forces at rest and
+the exactness for constant and affine data. The tolerances are multiples of
+the unit round-off $\machineeps$, scaled with the number of faces and steps
+where errors accumulate, or of the solver tolerance where a linear solve
+enters.
+
+{\footnotesize\setlength\tabcolsep{3pt}
+\begin{longtable}{@{}>{\raggedright}p{2.6cm}>{\raggedright}p{6.0cm}>{\raggedright\arraybackslash}p{3.65cm}@{}}
+  \caption{Conservation and invariant tests; $n$ is the number of steps and
+  $\#\facesint$ that of interior faces.}\label{tab:verif:invariants}\\
+  \toprule
+  Property & Setting & Asserted\\
+  \midrule
+  \endfirsthead
+  \toprule
+  Property & Setting & Asserted\\
+  \midrule
+  \endhead
+  \bottomrule
+  \endfoot
+  Volume, phase constants, bounds & WY sweeps on uniform, composite, adapted and multi-root meshes, density ratio $1000$, $20$ steps & volume and constants to $2\times10^{-14}$; fractions in $[0,1]$\\
+  Phase constants with dilation & exact face fluxes with a time-dependent dilation & $3\times10^{-14}$\\
+  Root partition & one versus four root blocks & transported values to $4\times10^{-14}$\\
+  Volume and amounts in regrids & refine and coarsen with advection & volume $3\times10^{-14}$, liquid amount $3\times10^{-11}$\\
+  Volume and amounts in flows & vortex reversals; rotating discs; standing waves; two-velocity reversal & $16n\,\#\facesint\,\machineeps$, plus $2n\ffloor\meas{\domain}$ for the discs and waves; reversal $16n\max(10^{-12},\machineeps)$\\
+  Volume, sessile and contact-line runs & sessile droplet; contact-line translation & $4096\machineeps$\\
+  Momentum, two-phase transport & one-velocity momentum with every flux interpolant & $512\machineeps$\\
+  Momentum, cut coarse cells (\issue{63}) & mass--momentum consistency of a cut coarse--fine cell & operator identity to $2\times10^{-13}$, drift $128\machineeps$\\
+  Momentum, viscous step & two-velocity implicit diffusion on uniform, composite and cut meshes & $2\times10^{-10}$ relative; jump unchanged to $16\machineeps$\\
+  Momentum, AMR transfer & refine and coarsen of a face velocity & $2\times10^{-13}$; divergence does not grow\\
+  Momentum, wall force (\issue{106}) & aligned embedded wall, three wall types, single and double precision & momentum loss equal to the viscosity times the wall length, to $512\machineeps$ times that length\\
+  Skew-symmetry & centred staggered convection, uniform and composite & $2\times10^{-14}$; constant field $64\machineeps$\\
+  Energy, viscous operator & stable core, uniform and composite & energy rate $\le256\,\#\facesint\,\machineeps$; smallest stiffness eigenvalue $\ge-2\times10^{-12}$\\
+  Energy, mimetic projection & Pythagoras identity, periodic, cut and split domains, density ratio $10$ and $1000$ & reported identity error to $4096\machineeps$ and $\le128\times$ tolerance\\
+  Divergence, projections & CMDGFM and mimetic projections, after a regrid, with slip, open boundaries & defects $\le$ solver tolerance; flows $\le2\times10^{-8}$\\
+  Gradient--divergence duality & elliptic operator & $8\times10^{-13}$; symmetric to $4\times10^{-14}$\\
+  Hydrostatic rest & flat heavy interface, vertical and oblique gravity, density ratio $1000$; mimetic projection; sloped solid on a composite mesh; CMDGFM with solids (\issue{76}) & velocity $<10^{-9}$; $\le2048\machineeps$; relative speed $\le10^{-8}$; $\le10^{-7}\dt\abs{\gravacc}$\\
+  Static drop & variable-density CSF and CGFM with constant curvature & velocity after the projection $<10^{-9}$\\
+  Exactness & affine face prolongation; limited cell prolongation; constant fields in transfer and advection; translation by the frozen subfaces; prescribed through-flow & $5\times10^{-14}$; $4\machineeps$; exact; $512\machineeps$; $64\machineeps$\\
+\end{longtable}}
+
+No test asserts the balance of the total energy over a complete step: the
+energy enters through the identities of the projection and of the viscous
+operator, the decay of the parasitic currents of the floating droplet
+(\cref{sec:verif:benchmarks}) and the identity error below $10^{-6}$ of the
+mimetic projections in the Kelvin--Helmholtz runs (\cref{sec:stab:gaps}).
+
+\begin{implnote}
+Tests in the order of \cref{tab:verif:invariants}:
+\testsym{test/two_phase/transport.jl}{WY volume and phase constants on uniform, mixed and regridded meshes},
+\testsym{test/two_phase/transport.jl}{WY dimensional dilation preserves phase constants},
+\testsym{test/two_phase/transport.jl}{WY transport is independent of base-root partitioning},
+\testsym{test/two_phase/transport.jl}{Geometric phase transfer through dynamic refinement and coarsening},
+\testsym{test/integration/two_phase_vortex.jl}{Classical T=1 vortex refinement study},
+\testsym{test/integration/two_velocity_rotation.jl}{Tangentially discontinuous circular-disc rotation},
+\testsym{test/integration/two_phase_waves.jl}{Prosperetti standing waves on uniform and AMR meshes},
+\testsym{test/integration/two_velocity_transport.jl}{Two-velocity split-WY reversal convergence},
+\testsym{test/integration/two_phase_sessile_droplet.jl}{Sessile droplet equilibrium convergence},
+\testsym{test/indicator/geometry.jl}{Cut-cell WY reverses wall-tangent contact-line translation},
+\testsym{test/two_phase/transport.jl}{All staggered flux interpolants transport one-velocity momentum},
+\testsym{test/two_phase/transport.jl}{Cut coarse-fine mass-momentum consistency},
+\testsym{test/two_phase/two_velocity/diffusion.jl}{Two-velocity implicit diffusion identities},
+\testsym{test/mesh/adaptivity.jl}{in-place conservative adaptive field transfer},
+\testsym{test/operators/embedded_wall_force.jl}{aligned embedded-wall force balances viscous momentum loss (#106)},
+\testsym{test/operators/advection/staggered_advection.jl}{centred staggered convection is skew-symmetric},
+\testsym{test/operators/advection/staggered_advection.jl}{AMR staggered flux compatibility and stability},
+\testsym{test/operators/staggered_diffusion.jl}{staggered diffusion stable core on uniform and AMR meshes},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Mimetic absolute pressure projection},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Mimetic correction boundary pressure work},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM projection invariants},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{CMDGFM incremental projection satisfies the coupled system},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic pressure projection on an AMR interface},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Mimetic absolute projection after regridding},
+\testsym{test/navier_stokes/navier_stokes.jl}{open channel pressure flux and divergence},
+\testsym{test/operators/poisson.jl}{elliptic operator preserves gradient-divergence duality},
+\testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Flat heavy interface remains hydrostatic},
+\testsym{test/two_phase/forces.jl}{Mimetic hydrostatic balance},
+\testsym{test/two_phase/forces.jl}{Hydrostatic liquid at a sloped solid on a composite mesh},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM hydrostatic rest with embedded solids (issue #76)},
+\testsym{test/two_phase/forces.jl}{Variable-density balanced CSF and CGFM projection},
+\testsym{test/mesh/adaptivity.jl}{face prolongation is affine exact},
+\testsym{test/mesh/variables.jl}{cell fields, halos, restriction, and prolongation},
+\testsym{test/operators/advection/cell_advection.jl}{conservative centred advection},
+\testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Frozen-subface WY common-normal translation},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection preserves prescribed through-flow}.
+\end{implnote}
+
+\section{Benchmark flows}\label{sec:verif:benchmarks}
+\Cref{tab:verif:benchmarks} lists the flows compared with an exact solution of
+the flow problem, with linear theory or with published data. The amplitude
+errors of the standing and unstable waves are the time-integrated $L^2$
+errors of the amplitude history (the cosine moment of the liquid fraction)
+normalised by the norm of the reference history. The Prosperetti and
+instability studies refine the step with the mesh through the bounds of
+\cref{eq:stab:flow-bound}.
+
+{\footnotesize\setlength\tabcolsep{3pt}
+\begin{longtable}{@{}>{\raggedright}p{2.35cm}>{\raggedright}p{2.5cm}>{\raggedright}p{2.3cm}>{\raggedright}p{2.45cm}>{\raggedright\arraybackslash}p{2.5cm}@{}}
+  \caption{Benchmark flows. Density ratio $\dens^{\liq}/\dens^{\gas}$
+  (DR); Weber (We), Bond (Bo) and Laplace (La) numbers as defined in the
+  tests; cells per wavelength or diameter.}\label{tab:verif:benchmarks}\\
+  \toprule
+  Flow & Quantity & Reference & Measured & Asserted\\
+  \midrule
+  \endfirsthead
+  \toprule
+  Flow & Quantity & Reference & Measured & Asserted\\
+  \midrule
+  \endhead
+  \bottomrule
+  \endfoot
+  Lid-driven cavity, $\mathrm{Re}=100$, $32\times32$, $t=15$ & centre-line velocities at 15 points each & Ghia, Ghia and Shin~\cite{ghia1982}, Tables I--II & -- & RMS $<0.004$ ($u$), $<0.006$ ($v$); maximum $<0.006$, $<0.012$; change to $t=16$ $<10^{-4}$\\
+  Cylinder, $\mathrm{Re}=100$, symmetric start, $t=1$ (4, 8) & total drag; largest lift & pinned transient values $0.89447$, $1.0506$ & $0.8982$, $1.0607$; $4\times10^{-14}$, $1\times10^{-13}$ & drag within $0.02$; lift $<10^{-9}$\\
+  Capillary wave, La $3000$, DR $1$, one velocity (8, 16, 32) & amplitude error & Prosperetti~\cite{prosperetti1981} & $0.0646$, $0.0126$, $0.0043$; end $1.96$ & decreasing; end $\ge1.8$\\
+  \quad DR $1000$ & as above & as above & end $1.63$ & end $\ge1.5$\\
+  \quad gravity wave, DR $1000$ & as above & as above & end $0.66$ & end $\ge0.4$\\
+  \quad capillary--gravity, DR $1000$, uniform, composite, adaptive & as above & as above & end $1.63$ & end $\ge1.5$\\
+  \quad two velocities, frozen and projected & as above & as above & DR $1$: end $1.98$, $2.55$; DR $1000$: $1.67$, $1.58$ & as one velocity\\
+  \quad flat interface at rest & amplitude and speed & rest & $1.1\times10^{-14}$ & $\le10^{-9}$\\
+  Floating droplet, mode 4, DR $1000$ (16, 32) & period of the kinetic energy; largest kinetic energy & Lamb period & -- & period error and energy fall by more than $4$; viscous peaks decay\\
+  Sessile droplet, $90^\circ$, Bo $1.21$, La $550$ (12, 24, 48) & $L^1$ fraction at a quarter capillary time & Laplace--Young profile & $2.23$, $2.72$ & all $\ge1.2$, decreasing\\
+  Kelvin--Helmholtz, two velocities (8, 16, 32) & amplitude error & dispersion relation~\thesis{App.~7.B} & DR $1$, We $0.5$: end $1.56$ (frozen), $1.59$ (projected); DR $1000$: $0.91$, $0.51$; DR $1$, We $5$: $1.02$, $1.21$ & end $\ge0.8$; $\ge0.48$ (DR $1000$, projected); decreasing\\
+  \quad mimetic projection (8, 16) & as above & as above & We $0.5$: $1.210$, $1.257$; We $5$: $0.229$, $0.104$ & We $0.5$: maximum $<1.35$; We $5$: decreasing\\
+  Rayleigh--Taylor, frozen (8, 16, 32) & amplitude error & as above & DR $3$, Bo $0.5$: end $3.05$; DR $1000$: $1.78$; DR $3$, Bo $2$: $1.36$ & end $\ge1.7$; $\ge1.3$ (Bo $2$); decreasing\\
+  Combined KH--RT, DR $3$, We $0.5$, Bo $0.75$ & as above & as above & end $0.95$ & end $\ge0.79$; decreasing\\
+\end{longtable}}
+
+The capillary-wave and floating-droplet cases repeat studies of the
+thesis~\thesis{\S\S4.8.1, 4.8.2, 7.7.2}; the dispersion relation of the
+Kelvin--Helmholtz and Rayleigh--Taylor waves is the inviscid relation of the
+thesis~\thesis{App.~7.B}. Several bounds lie below the order of the scheme
+for a reason recorded in the test: the gravity wave (the gravity bound makes
+$\dt\propto\minwidth^{1/2}$, so that the first-order splitting limits the
+order to $\half$ until the advective bound is active,
+\cref{sec:stab:accuracy}), the projected liquid velocity at density ratio
+$1000$ (bound $0.48$; an earlier run recorded in the test gave $0.493$), the
+Rayleigh--Taylor wave at Bond number $2$ ($1.3$) and the combined wave
+($0.79$). The mimetic Kelvin--Helmholtz wave at Weber number $0.5$ does not
+converge from $8$ to $16$ cells; its bound is on the larger error only. The
+sessile droplet converges faster than the order of about $1.5$ that the
+thesis observes for the symmetric difference of its sessile
+droplets~\thesis{\S4.8.3}.
+
+\emph{Cylinder.} The regression test does not measure the developed wake: a
+symmetric start keeps the lift at round-off, and it pins the total drag at
+$t=1$ on two uniform meshes. The developed wake at $\mathrm{Re}=100$ is the
+manual study \nolinkurl{benchmark/validation/cylinder_study.jl}: perturbed start,
+$t=100$, $4$, $8$ and $16$ cells per diameter, compared with the
+Strouhal number $0.165$, the drags $0.93$ (pressure) and $1.24$ (total) and
+the largest lift $0.3$ of Verstappen and Dröge~\cite{verstappen2005}. It
+asserts that the finest mesh is closer to each reference than the coarsest
+and a pressure-drag order of at least $1.75$; the earlier unperturbed study to
+$t=40$, recorded in the test, measured $-0.884$. The gallery flow at
+$\mathrm{Re}=200$ (\cref{sec:verif:gallery}) is compared with other
+reference data and asserts nothing.
+
+\begin{implnote}
+Tests in the order of \cref{tab:verif:benchmarks}:
+\testsym{test/navier_stokes/navier_stokes.jl}{Ghia Re=100 lid-driven cavity},
+\testsym{test/integration/single_phase_cylinder.jl}{Re=100 cylinder short symmetric-start regression},
+\testsym{test/integration/two_phase_waves.jl}{Prosperetti standing waves on uniform and AMR meshes}
+(\srcsym{test/integration/two_phase_waves.jl}{wave_case}, reference
+\srcsym{examples/06_capillary_wave/prosperetti_amplitude.jl}{prosperetti_amplitude}),
+\testsym{test/integration/two_phase_droplet.jl}{Floating droplet: equilibrium and Lamb frequency}
+(\srcsym{test/integration/two_phase_droplet.jl}{floating_droplet_case}),
+\testsym{test/integration/two_phase_sessile_droplet.jl}{Sessile droplet equilibrium convergence},
+\testsym{test/integration/two_velocity_instabilities.jl}{Two-velocity Kelvin--Helmholtz dispersion convergence},
+\testsym{test/integration/two_velocity_instabilities.jl}{Mimetic KH projection mesh and time refinement},
+\testsym{test/integration/two_velocity_instabilities.jl}{Two-velocity Rayleigh--Taylor dispersion convergence},
+\testsym{test/integration/two_velocity_instabilities.jl}{Combined KH/RT dispersion convergence};
+dispersion relation
+\srcsym{test/integration/interfacial_instability_problem.jl}{instability_dispersion},
+checked analytically by
+\testsym{test/integration/two_velocity_instabilities.jl}{General two-velocity dispersion relation}.
+Manual study \testsym{benchmark/validation/cylinder_study.jl}{Re=100 cylinder paper validation}
+with the reference values
+\srcsym{test/integration/cylinder_reference_problem.jl}{CYLINDER_REFERENCE}.
+\end{implnote}
+
+\section{The examples gallery}\label{sec:verif:gallery}
+Each example of \code{examples/} states in its \code{README.md} numbers of a
+run at documentation size (\cref{tab:verif:gallery}), the size at which
+\nolinkurl{examples/make_all_figures.jl} generates the gallery. They are
+snapshots: no test asserts them and no job regenerates them. The tests of the
+group \code{examples} run every example at reduced size and assert its
+structure, the convergence of the pressure solves, finite fields, bounded
+fractions and the conservation of the phase volumes; the group
+\code{navier_stokes} runs the quick start of the package \code{README.md}.
+The oracle (\cref{sec:verif:oracle}) shows whether the code has moved since
+a number was written: between the commits that introduced the numbers and the
+audited commit, its records of the Taylor--Green, cavity, vortex,
+one-velocity capillary and sessile runs are unchanged to round-off, those of
+the two-velocity capillary and Stokes runs changed by at most
+$5\times10^{-9}$ relative and that of the sloped droplet by
+$6\times10^{-7}$, while the cylinder velocities changed by $5\times10^{-3}$
+relative when the record was rewritten for \issue{93} and \issue{94}; the
+README numbers of the cylinder flow predate that change. The oracle runs only
+a few steps at reduced size: an unchanged record does not prove an unchanged
+documentation run, while a changed one shows that the numbers predate the
+code.
+
+\begin{table}[tbp]
+  \centering\footnotesize
+  \caption{Numbers stated in the gallery READMEs at documentation size; none
+  is asserted by a test.}\label{tab:verif:gallery}
+  \begin{tabular}{@{}>{\raggedright}p{2.2cm}>{\raggedright}p{3.4cm}>{\raggedright}p{2.5cm}>{\raggedright\arraybackslash}p{3.6cm}@{}}
+    \toprule
+    Example & Quantity & Reference & README value\\
+    \midrule
+    01 Taylor--Green & kinetic energy at $t=5$ & exact decay, $6.61579$ & $6.28788$ (error $0.327914$)\\
+    02 lid-driven cavity & divergence norm; kinetic energy at $t=15$ & none (Ghia et al.\ not compared) & $2.39154\times10^{-7}$; $0.0327184$\\
+    03 decaying turbulence & divergence norm; projected kinetic energy & none & $1.03542\times10^{-6}$; $715.044\to344.946$\\
+    04 cylinder, $\mathrm{Re}=200$ & mean pressure drag ($t=30$--$50$); Strouhal number & Qu et al.~\cite{qu2013}: $1.068$, $0.1958$ & $1.02563$ ($-4.0\,\%$); $0.2303$ ($+17.6\,\%$)\\
+    05 vortex reversal & volume change at $T=8$ & zero & $4.75607\times10^{-11}$\\
+    06 capillary wave & amplitude at $t=0.399142$; largest sampled error & Prosperetti~\cite{prosperetti1981}, $0.00614806$ & $0.00625680$; $1.32120\times10^{-4}$ (two velocities $1.31329\times10^{-4}$)\\
+    07 interfacial instability & amplitude at $t=2\operatorname{arcosh}2$; largest sampled error & linear theory, $0.02$ & $0.0196321$; $3.67921\times10^{-4}$\\
+    08 sessile droplet & area change; final kinetic energy & zero; none & $-3.49632\times10^{-10}$; $3.39393\times10^{-5}$\\
+    09 sloped sessile droplet & volume change; divergence norm & zero & $-1.46794\times10^{-11}$; $7.9249\times10^{-8}$\\
+    10 Stokes wave & interface after two periods versus initial profile (RMS; maximum) & third-order Stokes profile (not an exact solution) & $0.0449043$; $0.103414$\\
+    11 LGPI & liquid volume change & zero & $-3.61\times10^{-9}$ of $0.182426$\\
+    12 manufactured Poisson & pressure RMS/maximum error, $32$ cells & manufactured & mimetic $0.0388801/0.192510$; joint-face $0.0253219/0.160006$; CMDGFM $1.04378/8.98783$\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{implnote}
+Gallery driver \srcsym{examples/make_all_figures.jl}{gallery_options}; tests
+\testsym{test/examples/basic_examples.jl}{Adaptive vortex-reversal example},
+\testsym{test/examples/basic_examples.jl}{Manufactured Poisson example},
+\testsym{test/examples/basic_examples.jl}{Adaptive decaying turbulence example},
+\testsym{test/examples/stokes3_example.jl}{Stokes-wave refinement window},
+\testsym{test/examples/lgpi_example.jl}{Adaptive LGPI example},
+\testsym{test/examples/two_phase_examples.jl}{Sloped droplet transport through sliver cells},
+\testsym{test/readme.jl}{README quick start}.
+\end{implnote}
+
+\section{Known gaps}\label{sec:verif:gaps}
+\emph{Open defects.} Of the issues labelled \emph{bug} and open at the audited
+commit, these concern accuracy or the completion of a step: first-order
+velocity next to inclined embedded no-slip walls (\issue{110}) and at level
+transitions with variable viscosity (\issue{112}), both pinned by tests at the
+observed orders; first-order shear across an aligned material viscosity jump
+with the geometric-mean vertex viscosity (\issue{113}), not tested; fractions
+outside $[0,1]$ (\issue{56}) and a stopped transport (\issue{52}) at the
+stable step for cut coarse donors, caught by the run-time checks and not
+exercised by a test (\cref{sec:stab:gaps}); a CMDGFM projection with the ILU
+preconditioner that stops unconverged with iterations left (\issue{126});
+conjugate gradients with non-symmetric multigrid cycles (\issue{128}); a
+degenerate vertex patch with two cells per periodic period, which limits the
+coarsest multigrid level (\issue{36}); and a level-set initialisation that
+can fail for valid input (\issue{49}). The open bugs \issue{117} and
+\issue{118} (refinement criteria), \issue{121} (the one-phase \code{cfl}
+range) and \issue{127} (an allocation contract) do not affect accuracy. Open
+investigations: unbounded CTU fluxes at hanging dual faces (\issue{70}), dual
+Courant numbers above one next to a solid (\issue{72}), energy growth of the
+corrected Laplacian at level transitions (\issue{80}) and the fallback for
+orphaned edges at open walls (\issue{99}).
+
+\emph{Order in time.} No test asserts an order in time
+(\cref{sec:stab:accuracy}). The temporal series at a fixed mesh, with the
+step halved twice, assert that the error does not increase (one-velocity
+capillary wave) or does not grow by more than a factor $1.5$, $2$ or $2.1$
+(two-velocity capillary and Kelvin--Helmholtz waves). The one-velocity
+capillary wave at density ratio one gave $0.0126$, $0.0046$ and $0.0030$,
+the frozen two-velocity wave $0.00655$, $0.00782$ and $0.01137$ and the
+mimetic Kelvin--Helmholtz wave $1.257$, $1.135$ and $1.153$.
+
+\emph{References.} The examples' numbers are not asserted and can lag the
+code (\cref{sec:verif:gallery}). The cylinder regression pins a transient,
+the developed-wake comparison is manual, and the gallery's cylinder flow is
+at another Reynolds number than the test and the manual study. No test
+compares the sloped sessile droplet, the decaying turbulence, the Stokes wave
+or the LGPI case with a reference, and none asserts a contact angle or the
+size of the parasitic currents of a sessile drop. The Ghia comparison runs on
+one mesh.
+
+\emph{Tiers.} The integration groups run weekly and the heavy groups
+monthly, the latter without failing the run, so that a regression only they
+detect reaches \code{main} first; the oracle, the cylinder study and the
+MimeticFV comparison run by hand (\cref{sec:verif:suite}).
