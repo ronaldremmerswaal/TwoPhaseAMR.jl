@@ -68,7 +68,7 @@ recording), `:completed` (once at the end, also after a requested stop), or
 [`SimulationState`](@ref) and `info` the [`StepInfo`](@ref). The observer must
 not modify solver-owned data. An exception thrown at `:initial` aborts the run
 before its first step. Later observer exceptions are logged and the simulation
-continues.
+continues, except `InterruptException`, which propagates to the caller.
 """
 function observe! end
 
@@ -79,6 +79,7 @@ function _observe_safely!(observer::AbstractObserver, event, state, info)
     try
         observe!(observer, event, state, info)
     catch exception
+        exception isa InterruptException && rethrow()
         @error "Observer event failed; the simulation continues" event exception = (
             exception, catch_backtrace(),
         )
@@ -92,7 +93,7 @@ end
 Polled by [`simulate!`](@ref) before the first step and after every completed
 step. Returning `true` makes `simulate!` finish at that step boundary: it emits
 `:completed` and returns with `stopped = true`. Exceptions during polling are
-logged and treated as `false`.
+logged and treated as `false`, except `InterruptException`, which propagates.
 """
 stop_requested(::AbstractObserver) = false
 
@@ -101,6 +102,7 @@ function _observer_stop_requested(observer::AbstractObserver)
     try
         return stop_requested(observer)::Bool
     catch exception
+        exception isa InterruptException && rethrow()
         @error "Observer stop poll failed; the simulation continues" exception = (
             exception, catch_backtrace(),
         )

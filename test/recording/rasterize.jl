@@ -105,6 +105,39 @@ end
     @test_throws ArgumentError rasterize(frame, :missing, (0, 1, 0, 1), (8, 8))
 end
 
+@testset "Rasterized values at rounded block boundaries" begin
+    # The centre at 0.825 is a block boundary but rounds slightly below the
+    # origin of the block selected by the raster's pixel bounds.
+    extent = 2.2
+    width = 1500
+    for axis in 1:2
+        base_mesh = axis == 1 ? (64, 8) : (8, 64)
+        pixels = axis == 1 ? (width, 1) : (1, width)
+        mesh = BlockTreeMesh(;
+            block_size = (8, 8), base_mesh, extent = (extent, extent),
+            periodic = (false, false),
+        )
+        field = CellField(mesh)
+        for block in eachindex(mesh.blocks), j in 1:8, i in 1:8
+            interior(field, block)[i, j] = 1000block + 10j + i
+        end
+        registry = VisualizationFieldRegistry()
+        register_field!(registry, :block, field)
+        frame = TwoPhaseAMR._registry_frame(registry)
+        key = axis == 1 ? BlockKey(0, 3, 0) : BlockKey(0, 0, 3)
+        block = findfirst(leaf -> leaf.key == key, mesh.blocks)
+        boundary = mesh.blocks[block].origin[axis]
+        pixel_width = extent / width
+        pixel = ceil(Int, boundary / pixel_width + 0.5)
+        centre = (pixel - 0.5) * pixel_width
+        @test 0 < boundary - centre <= 8eps(boundary)
+        image = rasterize(frame, :block, (0.0, extent, 0.0, extent), pixels)
+        local_i, local_j = axis == 1 ? (1, 5) : (5, 1)
+        expected = Float32(1000block + 10local_j + local_i)
+        @test (axis == 1 ? image[pixel, 1] : image[1, pixel]) == expected
+    end
+end
+
 @testset "Face fields fill their staggered dual cells" begin
     # Coarse–fine interfaces, boundary half cells, and periodic seams.
     for periodic in ((true, true), (false, false), (true, false))

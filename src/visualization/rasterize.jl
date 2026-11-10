@@ -90,10 +90,10 @@ function _rasterize!(
         tile_base = (block - 1) * columns * rows
         for j in j0:j1
             η = (ymin + (j - 0.5) * pixel_y - oy) / dy
-            cj = min(floor(Int, η), ny - 1)
+            cj = clamp(floor(Int, η), 0, ny - 1)
             for i in i0:i1
                 ξ = (xmin + (i - 0.5) * pixel_x - ox) / dx
-                ci = min(floor(Int, ξ), nx - 1)
+                ci = clamp(floor(Int, ξ), 0, nx - 1)
                 cell = first_cell + cj * nx + ci
                 index = if placement isa Cell
                     cell
