@@ -1,0 +1,15 @@
+section.diagnostic-panel { overflow-y: auto; }
+.diagnostic-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem .8rem; padding: .3rem .55rem 0; font-size: .78rem; }
+.diagnostic-toolbar label { display: inline-flex; align-items: center; gap: .4rem; }
+.diagnostic-toolbar button, .diagnostic-toolbar select { padding: .15rem .4rem; }
+.diagnostic-toolbar button[aria-disabled="true"] { color: var(--muted); border-style: dashed; cursor: not-allowed; }
+.diagnostic-legend { flex: 0 0 auto; max-height: 12rem; overflow: auto; padding-bottom: .2rem; }
+.diagnostic-series { display: inline-flex; align-items: center; gap: .25rem; padding: .12rem .35rem; text-align: left; color: var(--diagnostic-text); }
+.diagnostic-series[aria-pressed="false"] { border-style: dashed; background: var(--surface); }
+.diagnostic-series-swatch { font-weight: 700; }
+.diagnostic-series-label { overflow-wrap: anywhere; }
+.diagnostic-series-visibility { color: var(--muted); font-size: .7rem; }
+.diagnostic-scale-note, .diagnostic-readout { flex: 0 0 auto; margin: .2rem .55rem; color: var(--muted); font-size: .72rem; }
+.diagnostic-readout { height: 2.8em; overflow: auto; overflow-wrap: anywhere; }
+.diagnostic-panel .u-cursor-x, .diagnostic-panel .u-cursor-y { border-color: var(--diagnostic-axis); }
+.diagnostic-plot { flex: 1 0 100px; min-height: 100px; }

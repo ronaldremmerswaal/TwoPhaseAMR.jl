@@ -45,3 +45,31 @@ When adding an equation system or model specialization, add focused
 constructor/dispatch tests, a regression for every numerical invariant at
 risk, and a small public-API example. Keep case-specific factories beside the
 study; only broadly reusable test utilities belong in `test/test_utils.jl`.
+
+## Studio
+
+Studio has a separate environment, so its server tests do not add browser or
+HTTP dependencies to the core package. From the repository root:
+
+```sh
+julia --project=lib/TwoPhaseAMRStudio -t 1,1 -e 'using Pkg; Pkg.test()'
+julia --project=. -e 'using Pkg; Pkg.test(test_args=["registry", "recording"])'
+```
+
+For the browser client:
+
+```sh
+cd lib/TwoPhaseAMRStudio/frontend
+npm ci
+npm test -- --run
+npm run check:bundle
+PLAYWRIGHT_SKIP_BROWSER_GC=1 npx playwright install chromium
+npm run test:smoke
+```
+
+The bundle check rebuilds and compares the committed assets. The smoke test
+starts a Julia server with a real recorder and advances an adaptive flow
+through a regrid; it does not require a display server. It checks WCAG AA
+text-token contrast and saves light and dark screenshots of the advanced run
+in `/tmp/studio-shots/`. CI runs the Julia and frontend checks on pull
+requests and the browser smoke on scheduled runs.

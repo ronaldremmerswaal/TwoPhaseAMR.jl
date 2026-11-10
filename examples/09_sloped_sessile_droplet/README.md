@@ -10,9 +10,9 @@ A liquid drop relaxes against an inclined embedded wall under capillarity and wa
 | --- | --- |
 | **Physics** | Two phases with densities `(1, 0.001)`, surface tension `σ=1`, radius `R=0.16`, Bond number `1.21`, Laplace number `550`, and embedded contact angle `π/2`; the nonperiodic unit square uses `FreeSlip()` domain boundaries. The wall passes through `(0.5, 0.22)` at angle `π/12`. |
 | **Algorithms** | One velocity by default, geometric WY VOF transport, `:lhf` PLIC reconstruction with WY fallback, CGFM surface tension, Lax–Wendroff momentum advection and implicit-midpoint viscosity. Pressure and two-phase diffusion use CG with tree-geometric multigrid. Interface, curvature (8 cells per radius), and embedded-geometry indicators drive AMR; attempts occur every 2 steps with coarsen delay 2. |
-| **Worth varying** | `wall_angle=π/12` rotates both wall and gravity; `bond=1.21` changes gravity; `laplace=550` changes viscosity; `density_ratio=1000` changes gas density and capillary time; `contact_angle=π/2` changes the initial cap and wall curvature condition; `max_level=2` changes the AMR ceiling; `final_time=nothing` selects four capillary times; `visualize=false` disables the viewer. |
-| **Validated against** | Liquid volume should remain constant: `:phase_volume` changes by `1.00403e-11` at docs size. The final volume-weighted `:divergence_norm` is `2.23919e-6` against zero. No analytical drop-shape or contact-angle error is claimed. |
-| **Cost** | Both `:docs` and `:default` use `max_level=2` and `T=4t_c≈0.2561`; image dimensions differ. The docs run had 422 steps and 640 final cells and took 44.36 s for setup and simulation in a single-thread shared gallery process, including incremental compilation. |
+| **Worth varying** | `wall_angle=π/12` rotates both wall and gravity; `bond=1.21` changes gravity; `laplace=550` changes viscosity; `density_ratio=1000` changes gas density and capillary time; `contact_angle=π/2` changes the initial cap and wall curvature condition; `max_level=2` changes the AMR ceiling; `final_time=nothing` selects four capillary times. |
+| **Validated against** | Liquid volume should remain constant: `:phase_volume` changes by `-1.46794e-11` at docs size. The final volume-weighted `:divergence_norm` is `7.9249e-8` against zero; 3 curvature faces were unresolved cumulatively. No analytical drop-shape or contact-angle error is claimed. |
+| **Cost** | Both gallery sizes use `max_level=3` (square cells, `dx = dy = 1/64` at level 3, 10 cells per radius) and `T=4t_c≈0.2561`; image dimensions differ. The docs run had 722 steps and 1984 final cells and took 96.24 s for setup and simulation in a single-thread shared gallery process, including incremental compilation. `run_example` keeps `max_level=2`. |
 
 ## Setup
 
@@ -36,12 +36,15 @@ run = run_example(max_level=2, final_time=0.1)
 print_simulation_summary(run.flow, run.result)
 ```
 
-Generate the gallery figures with CairoMakie, or open the example's GLMakie viewer:
+Generate the gallery figures with CairoMakie, or run the example to record keyframes in `run.recorder` (accessible via `snapshot_store(run.recorder)`):
 
 ```sh
 julia --project=examples examples/09_sloped_sessile_droplet/make_figures.jl
 julia --project=examples examples/09_sloped_sessile_droplet/sloped_sessile_droplet.jl
 ```
+
+Append `--studio` to the example command to follow the run in a browser;
+press Ctrl+C to close Studio after the run.
 
 ## Results
 
@@ -49,7 +52,11 @@ The hero shows liquid volume fraction and reconstructed interface, with the fill
 
 ![Kinetic energy over time](assets/kinetic_energy.png)
 
-At the end of the run `:kinetic_energy` is `0.0094906`, while liquid volume changed by `1.00403e-11` from its initial discrete value.
+At the end of the run `:kinetic_energy` is `0.0182955`, while liquid volume changed by `-1.46794e-11` from its initial discrete value.
+
+![Drop spreading on the inclined wall, with the kinetic energy](assets/relaxation.gif)
+
+The 41 retained states: volume fraction, interface and wall, next to the kinetic energy with a cursor at the shown time.
 
 ## Variations
 
@@ -63,4 +70,4 @@ run_example(max_level=3, final_time=0.1)        # finer local refinement
 
 - [sloped_sessile_droplet.jl](sloped_sessile_droplet.jl): simulation and interactive entry point.
 - [make_figures.jl](make_figures.jl): headless snapshot and kinetic-energy figures.
-- `assets/`: generated PNGs.
+- `assets/`: generated PNGs and GIF.

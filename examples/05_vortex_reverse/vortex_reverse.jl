@@ -1,20 +1,23 @@
 using TwoPhaseAMR
 
 """
-    run_example(; max_level=5, final_time=8, visualize=false,
-                  reconstruction_method=:lhf, kwargs...)
+    run_example(; max_level=5, final_time=8, reconstruction_method=:lhf,
+                start_studio=nothing, recorder_options=(;), kwargs...)
 
 Run the classical direction-reversing VOF transport problem. This prescribed
 carrier-flow example does not construct a Navier--Stokes `FlowSimulation`.
-Additional keywords are passed to [`InterfaceField`](@ref).
-The default `:lhf` uses LHF with WY fallback. Use `:lhf_ghf` for the original
-GHF fallback as well, or `:wy` for WY PLIC normals throughout.
+Pass `start_studio=studio` after loading TwoPhaseAMRStudio to follow the run
+live. `recorder_options` overrides the recording schedule; other keywords are
+passed to [`InterfaceField`](@ref). The default `:lhf` uses LHF with WY
+fallback. Use `:lhf_ghf` for the original GHF fallback as well, or `:wy` for
+WY PLIC normals throughout.
 """
 function run_example(;
         max_level = 5,
         final_time = 8.0,
-        visualize = false,
         reconstruction_method = :lhf,
+        start_studio = nothing,
+        recorder_options = (;),
         kwargs...,
     )
     levelset = (x, y) -> hypot(x - 0.5, y - 0.75) - 0.15
@@ -48,23 +51,18 @@ function run_example(;
     end
     initial_volume = integrate(interface)
     workspace = WYAdvectionWorkspace(interface)
-    visualization = nothing
-    observer = NoVisualization()
-    if visualize
-        fields = VisualizationFieldRegistry()
-        register_default_fields!(
-            fields, :volume_fraction, interface, :velocity, velocity,
-        )
-        viewer = TwoPhaseAMR.visualize(
-            fields; field = :volume_fraction, show_blocks = true,
-        )
-        session = VisualizationSession(
-            fields; viewer, checkpoints = 21, live_dt = final_time / 200,
-            asynchronous = true,
-        )
-        observer = session
-        visualization = (; fields, viewer, session)
-    end
+    fields = VisualizationFieldRegistry()
+    register_default_fields!(fields, :volume_fraction, interface, :velocity, velocity)
+    recorder = Recorder(
+        fields;
+        merge(
+            (;
+                keyframes = EquispacedTimes(21),
+                preview = isnothing(start_studio) ? nothing : EveryWallInterval(0.2),
+            ),
+            recorder_options,
+        )...,
+    )
     streamfunction(x, y) = sinpi(x)^2 * sinpi(y)^2 / pi
     function set_velocity!(time)
         for (index, face) in pairs(mesh.faces)
@@ -89,49 +87,80 @@ function run_example(;
     time = 0.0
     steps = 0
     mesh_updates = 0
-    initialize_visualization!(
-        observer; time, step = steps, final_time,
-        velocity, pressure = nothing, solver = nothing,
-    )
-    while time < final_time - 16eps(final_time)
-        set_velocity!(0.0)
-        dt = min(
-            stable_timestep(velocity, workspace; cfl = 0.4),
-            final_time - time,
+    dt = 0.0
+    app = isnothing(start_studio) ? nothing : start_studio(recorder)
+    result = try
+        observe!(
+            recorder, :initial, SimulationState(velocity, nothing, nothing, time, steps),
+            StepInfo(; dt, final_time)
         )
-        set_velocity!(time + dt / 2)
-        advect!(
-            interface, velocity, dt, workspace;
-            sweep_order = iseven(steps) ? (1, 2) : (2, 1),
-        )
-        time += dt
-        steps += 1
-        if adapt!(adaptation, refinement; step = steps, time).changed
-            workspace = WYAdvectionWorkspace(interface)
-            mesh_updates += 1
+        while time < final_time - 16eps(final_time) && !stop_requested(recorder)
+            set_velocity!(0.0)
+            dt = min(
+                stable_timestep(velocity, workspace; cfl = 0.4),
+                final_time - time,
+            )
+            set_velocity!(time + dt / 2)
+            advect!(
+                interface, velocity, dt, workspace;
+                sweep_order = iseven(steps) ? (1, 2) : (2, 1),
+            )
+            time += dt
+            steps += 1
+            topology_changed = adapt!(adaptation, refinement; step = steps, time).changed
+            if topology_changed
+                workspace = WYAdvectionWorkspace(interface)
+                mesh_updates += 1
+            end
+            observe!(
+                recorder, :step, SimulationState(velocity, nothing, nothing, time, steps),
+                StepInfo(; dt, final_time, topology_changed)
+            )
         end
-        update_visualization!(
-            observer; event = :step, time, step = steps, final_time,
-            velocity, pressure = nothing, solver = nothing,
+        observe!(
+            recorder, :completed, SimulationState(velocity, nothing, nothing, time, steps),
+            StepInfo(; dt, final_time)
         )
+        (;
+            time, steps, mesh_updates,
+            volume_error = abs(integrate(interface) - initial_volume),
+        )
+    catch exception
+        try
+            failure = exception isa Exception ? exception :
+                ErrorException(sprint(showerror, exception))
+            observe!(
+                recorder, :failed,
+                SimulationState(velocity, nothing, nothing, time, steps),
+                StepInfo(; dt, final_time, exception = failure),
+            )
+        catch
+            # Preserve the error that stopped the run if reporting fails.
+        end
+        try
+            isnothing(app) || close(app)
+        catch
+            # Do not replace the original error if closing the app fails.
+        end
+        rethrow()
     end
-    update_visualization!(
-        observer; event = :completed, time, step = steps, final_time,
-        velocity, pressure = nothing, solver = nothing,
-    )
-    isnothing(visualization) || wait_visualization!(visualization.session)
-    result = (;
-        time, steps, mesh_updates,
-        volume_error = abs(integrate(interface) - initial_volume),
-    )
-    return (; interface, velocity, result, visualization)
+    return (; interface, velocity, result, recorder, app)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    using GLMakie
-    GLMakie.activate!()
-    run = run_example(visualize = true)
+    if "--studio" in ARGS
+        using TwoPhaseAMRStudio
+        run = run_example(; start_studio = studio)
+    else
+        run = run_example()
+    end
     println(run.result)
-    scene = visualization_figure(run.visualization.viewer).scene
-    scene.events.window_open[] && wait(scene)
+    println(snapshot_store(run.recorder))
+    if !isnothing(run.app)
+        try
+            wait(run.app)
+        finally
+            close(run.app)
+        end
+    end
 end

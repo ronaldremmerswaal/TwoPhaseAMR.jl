@@ -157,9 +157,9 @@ walks outward from the insertion point until it finds the two local bracketing
 lines. It therefore does not scan all old faces or all normal coordinates for
 each new face. Cell ownership and halo donors use quadtree leaf descent.
 
-Visualization frames carry an immutable, shared snapshot of their topology, so
-nearest-solution checkpoints remain displayable after later regrids. Exact
-off-grid checkpoints are currently rejected with dynamic adaptation because an
+Recorded frames carry an immutable, shared snapshot of their topology, so
+nearest-state keyframes remain displayable after later regrids. Exact off-grid
+keyframes are currently rejected with dynamic adaptation because an
 independent side step would require a historical clone of the tree and all
 topology-dependent solver state.
 

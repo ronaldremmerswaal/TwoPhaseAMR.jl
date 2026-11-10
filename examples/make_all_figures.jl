@@ -74,7 +74,7 @@ function main(args)
                     println(relpath(path, @__DIR__), ": ", bytes, " bytes")
                     extension = lowercase(splitext(file)[2])
                     limit = extension == ".png" ? 150_000 :
-                        extension == ".gif" ? 600_000 : nothing
+                        extension == ".gif" ? 2_000_000 : nothing
                     options.size !== :docs || isnothing(limit) || bytes <= limit ||
                         error("$path exceeds the $(limit)-byte gallery limit")
                 end

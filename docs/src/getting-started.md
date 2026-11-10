@@ -148,4 +148,4 @@ simulate!(flow, 1e-4; dt = 1e-4)
 
 See [Public API](api.md) for the option matrix,
 [Adaptive refinement](adaptive-refinement.md) for regridding, and
-[Visualization](visualization.md) for live output.
+[Recording and visualization](visualization.md) for recorded output.

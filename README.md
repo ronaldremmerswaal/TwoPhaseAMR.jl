@@ -6,6 +6,27 @@
 [![Julia 1.11+](https://img.shields.io/badge/Julia-1.11%2B-9558B2?logo=julia)](https://julialang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="examples/10_stokes3_wave/assets/readme_dark.gif">
+  <img alt="Vorticity and interface of a third-order Stokes wave that plunges, traps a gas pocket, and splashes up on an adaptive quadtree mesh" src="examples/10_stokes3_wave/assets/readme_light.gif">
+</picture>
+
+*[Third-order Stokes wave breaking on an adaptive quadtree mesh: vorticity, PLIC interface, and blocks over the second half of the first period (one-velocity model, level 5)](examples/10_stokes3_wave/)*
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="examples/07_interfacial_instability/assets/readme_dark.gif">
+  <img alt="Horizontal velocity and interface of a Kelvin–Helmholtz billow rolling up: the liquid and gas velocities jump sharply across the interface" src="examples/07_interfacial_instability/assets/readme_light.gif">
+</picture>
+
+*[Kelvin–Helmholtz roll-up with the two-velocity model: liquid and gas keep separate velocities, so the shear layer is a sharp velocity jump at the interface](examples/07_interfacial_instability/)*
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="examples/04_cylinder_flow/assets/readme_dark.gif">
+  <img alt="Vortex shedding behind an embedded cylinder on an adaptive quadtree mesh" src="examples/04_cylinder_flow/assets/readme_light.gif">
+</picture>
+
+*[Vortex shedding behind a cylinder: embedded cut-cell geometry on an adaptive quadtree mesh (Re = 200)](examples/04_cylinder_flow/)*
+
 TwoPhaseAMR.jl is a Julia package for two-dimensional, incompressible
 single- and two-phase flow on block-structured quadtree meshes. It combines
 geometric VOF, conservative AMR transfer, embedded solid geometry, one- and
@@ -130,26 +151,59 @@ simulate!(flow, 0.1)
 history = diagnostic_history(flow, :maximum_pressure)
 ```
 
-A live visualization can subscribe to the same stored diagnostic. It does not
-own the reduction or maintain a second authoritative history:
+A `Recorder` stores owned field frames at scheduled keyframes and mirrors the
+same diagnostics; it does not own the reductions or keep a second
+authoritative history:
 
 ```julia
 fields = VisualizationFieldRegistry()
 register_default_fields!(fields, flow)
-register_diagnostic!(fields, flow, :kinetic_energy; label = "Kinetic energy")
-
-session = VisualizationSession(fields; viewer = NoVisualization())
-simulate!(flow, 0.2; visualization = session)
+recorder = Recorder(fields; diagnostics = flow, keyframes = EquispacedTimes(21))
+simulate!(flow, 0.2; observer = recorder)
+store = snapshot_store(recorder)
 ```
 
-Load GLMakie and replace `NoVisualization()` with `visualize(fields)` for an
-interactive viewer. Diagnostics can use `EveryStep()`, `EveryNSteps(n)`, or
-`EveryTimeInterval(dt)`. Custom manual stepping loops call
-`record_diagnostics!(flow)` after a completed step.
+The optional [`TwoPhaseAMRStudio`](lib/TwoPhaseAMRStudio/) subpackage provides
+a browser workspace with dockable field and diagnostic panels, a timeline,
+solver controls, and export. From the repository root, instantiate its
+environment and start Julia with an interactive thread:
 
-Discontinuous quantities default to cell-wise values: liquid at a liquid
-fraction of at least 50%, gas otherwise. Use
-`visualize(fields; phase_rendering = :plic)` to show both phases on sharply
+```sh
+julia --project=lib/TwoPhaseAMRStudio -e 'using Pkg; Pkg.instantiate()'
+julia --project=lib/TwoPhaseAMRStudio -t 1,1
+```
+
+In that Julia session, create the flow and recorder as above, then start Studio
+**before** continuing the run:
+
+```julia
+using TwoPhaseAMRStudio
+app = studio(recorder; open = :none)
+url(app)  # open this secret URL in a browser
+result = simulate!(flow, 0.3; observer = recorder)
+# Inspect the recorded frames, then close the server:
+close(app)
+```
+
+The default `studio(recorder)` opens a browser automatically. Studio uses a
+tokenized local URL; see [Recording and visualization](docs/src/visualization.md#studio)
+for setup, remote access, and security details.
+
+Diagnostics can use `EveryStep()`, `EveryNSteps(n)`, or
+`EveryTimeInterval(dt)`. Custom manual stepping loops call
+`record_diagnostics!(flow)` after a completed step. For static output, load
+CairoMakie (included in the Studio and examples environments):
+
+```julia
+using CairoMakie
+export_figure("vorticity.png", store; field = :velocity_vorticity)
+export_animation("run.gif", store; field = :velocity_vorticity, diagnostics = :all)
+```
+
+The figure uses the latest stored frame; the animation shows keyframes next
+to diagnostics, with a fixed view and colour range. Discontinuous quantities
+default to cell-wise values (liquid at a liquid fraction of at least 50%, gas
+otherwise); pass `phase_rendering = :plic` to show both phases on sharply
 clipped interface geometry instead.
 
 ## Examples
@@ -163,8 +217,9 @@ programs, including:
 - [Interfacial instability](examples/07_interfacial_instability/) — comparison
   of one- and two-velocity models.
 
-Each example defines `run_example`, runs headlessly when included, and opens a
-GLMakie viewer when executed directly. The gallery documents the available
+Each example defines `run_example`, runs headlessly when included, and prints
+a run summary when executed directly. Most time-dependent examples also accept
+`--studio` for live browser viewing; the gallery documents setup, available
 parameters, diagnostics, results, and costs.
 
 ## Documentation

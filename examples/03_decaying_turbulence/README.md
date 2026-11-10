@@ -12,7 +12,7 @@ A seeded periodic velocity field decays while pressure-driven adaptation changes
 | **Algorithms** | Initial velocity projection, Lax–Wendroff staggered advection, implicit-midpoint diffusion and pressure projection. Pressure uses CG/tree multigrid; diffusion uses tree multigrid and selects CG or BiCGSTAB by matrix symmetry. Pressure interpolation-error AMR uses refine/coarsen thresholds 0.6/0.2, update interval 5, coarsen delay 25 and minimum level `min(2, max_level)`. Automatic stepping uses CFL 0.45. |
 | **Worth varying** | `reynolds=400` changes viscosity; `max_level=4` changes the finest possible level; `final_time=10` sets the duration; `dt=nothing` selects automatic steps. At `max_level=2` the protected minimum equals the maximum, so no coarsening below level 2 is possible. |
 | **Validated against** | Incompressibility has exact reference zero: the final volume-weighted `:divergence_norm` is `1.03542e-6` at docs size. `:projected_kinetic_energy` decreases from `715.044` to `344.946`; no exact turbulent-flow trajectory is claimed. |
-| **Cost** | Default: level 4, `T=10`, initially 16384 cells; runtime unmeasured. Docs: level 3, `T=2`, initially 4096 and finally 2752 cells, 1744 steps and 67 mesh updates; setup and simulation took 20.48 s. Incremental generator compilation, including rendering, was 7.70 s in a shared single-thread process. |
+| **Cost** | Default: level 4, `T=10`, initially 16384 cells; runtime unmeasured. Docs: level 3, `T=2`, initially 4096 and finally 2752 cells, 1744 steps and 67 mesh updates; setup and simulation took 15.52 s. Incremental generator compilation, including rendering, was 8.44 s in a shared single-thread process. |
 
 The gallery measurement used Julia 1.12.7, one Julia thread and one BLAS thread; compilation depends on earlier examples and package loading is excluded.
 
@@ -38,12 +38,15 @@ run = run_example(max_level = 3, final_time = 2.0)
 cells = diagnostic_history(run.flow, :cells)
 ```
 
-The direct example opens a live viewer using the larger example defaults. The figure command uses CairoMakie and the smaller gallery settings:
+The direct example records keyframes in `run.recorder` (accessible via `snapshot_store(run.recorder)`) using the larger example defaults. The figure command uses CairoMakie and the smaller gallery settings:
 
 ```sh
 julia --project=examples examples/03_decaying_turbulence/decaying_turbulence.jl
 julia --project=examples examples/03_decaying_turbulence/make_figures.jl
 ```
+
+Append `--studio` to the example command to follow the run in a browser;
+press Ctrl+C to close Studio after the run.
 
 Use `make_figures(; outdir=..., size=:default)` for the level-4, `T=10` simulation. Both sizes print the simulation and diagnostic summary, including cell and regrid counts, and runtime.
 
@@ -57,7 +60,7 @@ The projected energy falls from `715.044` to `344.946`, while active cells fall 
 
 ![Animation of adaptive vorticity](assets/vorticity.gif)
 
-The animation retains 11 nearest completed-step checkpoints (not interpolated states), with separately scaled vorticity colors in each frame.
+The animation shows 41 nearest completed-step states (not interpolated), with one symmetric vorticity range over all frames, next to the kinetic energy and active cell count with a cursor at the shown time.
 
 ## Variations
 
@@ -71,5 +74,5 @@ run_example(reynolds = 200, max_level = 3, final_time = 2.0)  # stronger viscosi
 
 ## Files
 
-- [decaying_turbulence.jl](decaying_turbulence.jl) — seeded initial condition, AMR and live viewer.
-- [make_figures.jl](make_figures.jl) — headless checkpoints, histories and animation.
+- [decaying_turbulence.jl](decaying_turbulence.jl) — seeded initial condition, AMR and recorded keyframes.
+- [make_figures.jl](make_figures.jl) — headless keyframes, histories and animation.
