@@ -781,7 +781,7 @@ end
         ),
         numerics = NavierStokesOptions(diffusion = LinearSolverOptions(preconditioner = nothing)),
     )
-    model = flow.solver.two_phase
+    model = flow.system.two_phase
     state = TwoPhaseAMR._two_velocity_flow_workspace!(flow.workspace.two_phase, model)
     TwoPhaseAMR._copy_velocity!(state.convected, flow.velocity)
     wall_faces = [
@@ -795,7 +795,7 @@ end
         end
     end
     TwoPhaseAMR._diffusion_substep!(
-        flow.velocity, flow.solver, flow.workspace, 0.01, 0.0, model;
+        flow.velocity, flow.system, flow.workspace, 0.01, 0.0, model;
         tolerance = 1.0e-10, max_cycles = 1000,
     )
     @test flow.workspace.two_phase.diffusion_solver.stats.converged

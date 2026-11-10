@@ -535,7 +535,7 @@ end
             )
         ),
     )
-    old_state = CMD._two_velocity_flow_workspace!(flow.workspace.two_phase, flow.solver.two_phase)
+    old_state = CMD._two_velocity_flow_workspace!(flow.workspace.two_phase, flow.system.two_phase)
     old_work = old_state.projection_workspace
     result = simulate!(
         flow, 2.0e-3; tolerance = 1.0e-7, max_cycles = 1000,
@@ -544,7 +544,7 @@ end
     @test result.mesh_updates == 1
     @test result.pressure isa CMDGFMProjectionStats
     @test result.pressure.converged
-    @test flow.solver.two_phase.pressure_projection isa CMDGFMProjection
+    @test flow.system.two_phase.pressure_projection isa CMDGFMProjection
     @test flow.workspace.two_phase.two_velocity[].projection_workspace === old_work
     @test CMD._cmdgfm_same_topology(old_work.pressure_cache.keys, mesh)
 
@@ -555,7 +555,7 @@ end
         force_mesh, (x, y) -> 0.5 + 0.02cospi(2x) - y;
         lipschitz = 1.01,
     )
-    force_solver = IncompressibleNavierStokesSolver(
+    force_solver = NavierStokesSystem(
         force_mesh; density = (10.0, 1.0),
         dynamic_viscosity = (0.0, 0.0), interface = force_interface,
         surface_tension = 0.01, surface_tension_formulation = CGFM(),
@@ -597,7 +597,7 @@ end
             open = CMD._get(geometry.open_fraction, ref)
             !(0 < c < 1 && 0 < open < 1)
         end
-        solver = IncompressibleNavierStokesSolver(
+        solver = NavierStokesSystem(
             mesh; geometry, interface, density = (1000.0, 1.0),
             dynamic_viscosity = (0.0, 0.0), gravity, boundary = FreeSlip(),
             two_velocity_projection = CMDGFMProjection(),

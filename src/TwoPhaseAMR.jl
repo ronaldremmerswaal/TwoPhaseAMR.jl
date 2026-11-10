@@ -61,7 +61,6 @@ export LinearSolverOptions, MultigridOptions
 export AdvectionOptions, NavierStokesOptions, Adaptivity
 export SinglePhase, TwoPhase, SurfaceTension
 export AbstractVelocityModel, OneVelocityModel, TwoVelocityModel
-export IncompressibleNavierStokesSolver
 export NavierStokesSystem
 export NavierStokesWorkspace, step!, simulate!
 export FlowSimulation

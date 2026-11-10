@@ -2,15 +2,15 @@ using Test, TwoPhaseAMR
 
 function droplet_energy(flow)
     density = mixture_density(
-        flow.solver.two_phase.interface,
-        flow.solver.two_phase.density
+        flow.system.two_phase.interface,
+        flow.system.two_phase.density
     )
     energy = 0.0
-    for (index, face) in pairs(flow.solver.mesh.faces)
-        hm = flow.solver.mesh.blocks[
+    for (index, face) in pairs(flow.system.mesh.faces)
+        hm = flow.system.mesh.blocks[
             face.minus.block,
         ].spacing[face.axis]
-        hp = flow.solver.mesh.blocks[
+        hp = flow.system.mesh.blocks[
             face.plus.block,
         ].spacing[face.axis]
         dual_volume = face.area * (hm + hp) / 2

@@ -2,6 +2,7 @@
 #
 #     julia --project=docs/techref/figures docs/techref/figures/generate.jl
 #     julia --project=docs/techref/figures docs/techref/figures/generate.jl amr
+#     julia --project=docs/techref/figures docs/techref/figures/generate.jl solvers
 #
 # Writes TikZ data fragments and number macros to `generated/`. The LaTeX
 # build only reads those committed files; it never runs Julia. Every drawn
@@ -9,10 +10,11 @@
 # TwoPhaseAMR mesh, field or operator, and the assertions below fail if the
 # implementation no longer matches the statements in Chapters 2 to 12.
 # Chapter 4 to 12 data: interface.jl, cutcells.jl, vof.jl, momentum.jl,
-# forces.jl, viscosity.jl, projection.jl and amr.jl (included below). With
-# the argument `amr` only the Chapter 12 data are regenerated: its figure
-# data are rewritten and its macros replaced in checks.tex, all other lines
-# of checks.tex are kept.
+# forces.jl, viscosity.jl, projection.jl, solvers.jl and amr.jl (included
+# below). With the argument `amr` only the Chapter 12 data are regenerated:
+# its figure data are rewritten and its macros replaced in checks.tex, all
+# other lines of checks.tex are kept; `solvers` (Chapter 11) and `stability`
+# (Chapter 13) do the same for their macros.
 
 using TwoPhaseAMR
 using LinearAlgebra: Symmetric, eigmin, norm, svdvals
@@ -492,6 +494,7 @@ include("momentum.jl")
 include("forces.jl")
 include("viscosity.jl")
 include("projection.jl")
+include("solvers.jl")
 include("amr.jl")
 
 # Figures and checks of Chapters 4 and 7; returns the number macros.
@@ -668,6 +671,9 @@ function main(arguments = ARGS)
     for (name, value) in projection_outputs(write_output)
         print(checks, macro_line(name, value))
     end
+    for (name, value) in solvers_outputs(write_output)
+        print(checks, macro_line(name, value))
+    end
     for (name, value) in amr_outputs(write_output)
         print(checks, macro_line(name, value))
     end
@@ -684,10 +690,13 @@ function main(arguments = ARGS)
     return nothing
 end
 
-# `generate.jl stability` regenerates only the Chapter 13 numbers
-# (stability.jl) and keeps every other line of checks.tex.
+# `generate.jl stability` and `generate.jl solvers` regenerate only the
+# Chapter 13 (stability.jl) and Chapter 11 (solvers.jl) numbers and keep every
+# other line of checks.tex.
 if ARGS == ["stability"]
     stability_checks_only(write_output)
+elseif ARGS == ["solvers"]
+    solvers_checks_only(write_output)
 else
     main()
 end

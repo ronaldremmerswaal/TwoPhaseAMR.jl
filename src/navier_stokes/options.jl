@@ -81,27 +81,3 @@ function NavierStokesOptions(;
     )
     return NavierStokesOptions(advection, pressure, diffusion, multigrid)
 end
-
-function _navier_stokes_keywords(
-        options::NavierStokesOptions, adaptivity::Adaptivity,
-    )
-    advection = options.advection
-    pressure = options.pressure
-    diffusion = options.diffusion
-    multigrid = options.multigrid
-    return (;
-        scheme = advection.scheme,
-        amr_interface_scheme = advection.amr_interface_scheme,
-        pressure_krylov = pressure.krylov,
-        pressure_krylov_options = pressure.krylov_options,
-        pressure_preconditioner = pressure.preconditioner,
-        pressure_preconditioner_options = pressure.preconditioner_options,
-        diffusion_krylov = diffusion.krylov,
-        diffusion_krylov_options = diffusion.krylov_options,
-        diffusion_preconditioner = diffusion.preconditioner,
-        diffusion_preconditioner_options = diffusion.preconditioner_options,
-        multigrid,
-        refinement_indicators = adaptivity.criteria,
-        adaptive_fields = adaptivity.fields,
-    )
-end

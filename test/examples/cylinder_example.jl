@@ -11,7 +11,7 @@ using Test, TwoPhaseAMR
     @test isopen(run.app)
     close(run.app)
     @test run.result.pressure.converged
-    @test !isnothing(run.flow.solver.geometry)
+    @test !isnothing(run.flow.system.geometry)
     @test :pressure_drag in diagnostic_names(run.flow)
     pressure_drag = diagnostic_history(run.flow, :pressure_drag)
     # The example suppresses its impulsive-start force spike with a NaN at
@@ -35,7 +35,7 @@ end
     @test run.result.time ≈ 8.0e-4
     @test run.result.steps == 8
     @test run.result.pressure.converged
-    mesh = run.flow.solver.mesh
+    mesh = run.flow.system.mesh
     @test any(block -> block.key.level == 2, mesh.blocks)
     @test mesh.adaptation.last_update_step > 2
     test_finite_example_fields(run.flow)

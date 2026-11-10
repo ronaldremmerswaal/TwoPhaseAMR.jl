@@ -16,25 +16,32 @@ function _copy_interface!(destination::InterfaceField, source::InterfaceField)
     return reconstruct!(destination)
 end
 
+function _copy_phase_scalar(interface, scalar::PhaseScalar)
+    return PhaseScalar(interface, copy(scalar.liquid), copy(scalar.gas))
+end
+
 function _independent_solver(
-        solver::IncompressibleNavierStokesSolver{T}
+        solver::NavierStokesSystem{T}
     ) where {T}
-    configuration = _navier_stokes_configuration(
-        solver; refinement_indicators = (), adaptive_fields = ()
-    )
-    if !isnothing(solver.two_phase)
-        interface = copy(solver.two_phase.interface)
-        scalars = map(solver.two_phase.scalars) do scalar
-            PhaseScalar(
-                interface, copy(scalar.liquid), copy(scalar.gas)
-            )
-        end
-        configuration = merge(
-            configuration, (; interface, phase_scalars = scalars)
+    model = solver.two_phase
+    physics = if isnothing(model)
+        solver.physics
+    else
+        interface = copy(model.interface)
+        scalars = map(Base.Fix1(_copy_phase_scalar, interface), model.scalars)
+        TwoPhase(
+            interface; density = model.density,
+            dynamic_viscosity = model.dynamic_viscosity,
+            surface_tension = SurfaceTension(model.sigma; method = model.formulation),
+            gravity = model.gravity, scalars,
         )
     end
-    return IncompressibleNavierStokesSolver(
-        solver.mesh; configuration...
+    return NavierStokesSystem(
+        solver.mesh, physics; options = solver.options,
+        geometry = solver.geometry, boundary = solver.boundary,
+        interface_transport = isnothing(model) ? FrozenInterfaceFluxes() : model.interface_transport,
+        two_velocity_projection = isnothing(model) ? CMDGFMProjection() : model.pressure_projection,
+        T,
     )
 end
 
@@ -52,7 +59,7 @@ mutable struct IndependentNavierStokesStep{SS, S, W, F, O, I, Q, R} <: Function
 end
 
 function _independent_step_procedure(
-        solver::IncompressibleNavierStokesSolver{T}, force, options,
+        solver::NavierStokesSystem{T}, force, options,
         source_workspace::NavierStokesWorkspace
     ) where {T}
     independent_solver = _independent_solver(solver)
@@ -99,7 +106,7 @@ end
 
 function _prepare_independent_step!(
         procedure::IndependentNavierStokesStep,
-        solver::IncompressibleNavierStokesSolver,
+        solver::NavierStokesSystem,
         source_workspace::NavierStokesWorkspace, reference_dt,
     )
     if !isnothing(source_workspace.advection)

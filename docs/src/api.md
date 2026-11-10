@@ -16,7 +16,9 @@ TwoPhaseAMR
 | Adaptivity | [`Adaptivity`](@ref) | refinement criteria and additional fields |
 | State | [`FlowSimulation`](@ref) | fields, equation system, workspace, time, histories |
 
-`NavierStokesSystem` names the configured PDE system.
+`flow.system` is the configured [`NavierStokesSystem`](@ref); it retains the
+physical configuration as `flow.system.physics` and numerical choices as
+`flow.system.options`.
 The `solvers/` source area is reserved for linear solvers.
 
 ### Compact standard API

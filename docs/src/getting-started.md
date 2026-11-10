@@ -28,7 +28,7 @@ result = simulate!(flow, 0.01; tolerance = 1e-8, max_cycles = 40)
 (result.time, result.steps, result.pressure.converged)
 ```
 
-`flow.velocity`, `flow.pressure`, and `flow.solver` are the same field and
+`flow.velocity`, `flow.pressure`, and `flow.system` are the same field and
 equation-system objects used by the lower-level API. `flow.workspace` is
 retained between calls. A second call continues the calculation:
 

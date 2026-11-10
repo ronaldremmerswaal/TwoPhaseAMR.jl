@@ -1313,14 +1313,14 @@ end
         refinement_labels!(labels, reference.indicator; time)
         transfer = TV._navier_stokes_amr_workspace(
             reference.flow.velocity, reference.flow.pressure,
-            reference.flow.solver,
+            reference.flow.system,
         )
         @test adapt!(transfer, labels; step, force = true).changed
         return nothing
     end
 
     function check_regrid_projection(flow, reference, step_size, tolerance; max_cycles)
-        solver, workspace = reference.flow.solver, reference.flow.workspace
+        solver, workspace = reference.flow.system, reference.flow.workspace
         TV._rebuild_topology_dependent_state!(solver, workspace; dt = step_size)
         TV._enforce_phase_velocity_boundary!(reference.flow.velocity, solver, reference.flow.time)
         TV._mark_inactive_phase_velocities!(reference.flow.velocity, reference.interface)
@@ -1680,14 +1680,14 @@ end
             # Snapshot the same old-geometry phase extension used by momentum
             # transport; it remains finite if the moving interface activates a face.
             state = TV._two_velocity_flow_workspace!(
-                flow.workspace.two_phase, flow.solver.two_phase,
+                flow.workspace.two_phase, flow.system.two_phase,
             )
             extended = (FaceVelocity(mesh), FaceVelocity(mesh))
             TV._prepare_momentum_advection!(state.momentum, flow.velocity)
             TV._copy_momentum_velocity!(extended, state.momentum)
 
             stats = step!(
-                flow.velocity, flow.pressure, flow.solver, dt, flow.workspace;
+                flow.velocity, flow.pressure, flow.system, dt, flow.workspace;
                 tolerance, max_cycles, _reference_dt = reference_dt,
             )
             @test stats.converged
@@ -1697,7 +1697,7 @@ end
             current_old_flux = reference_mixture_flux(interface, extended)
             @test maximum(abs, current_old_flux .- initial_flux) > 1.0e-9
 
-            references = flow.solver.pressure_solver.operator.references
+            references = flow.system.pressure_solver.operator.references
             final_flux = reference_mixture_flux(interface, flow.velocity)
             target_scale = stats isa CMDGFMProjectionStats ? 1 - dt / reference_dt : 0.0
             if stats isa CMDGFMProjectionStats
@@ -1792,17 +1792,17 @@ end
             equal_case = reference_flux_case(projection)
             @test_throws ArgumentError step!(
                 default_case.flow.velocity, default_case.flow.pressure,
-                default_case.flow.solver, dt, default_case.flow.workspace;
+                default_case.flow.system, dt, default_case.flow.workspace;
                 tolerance, max_cycles, _reference_dt = dt / 2,
             )
             default_stats = step!(
                 default_case.flow.velocity, default_case.flow.pressure,
-                default_case.flow.solver, dt, default_case.flow.workspace;
+                default_case.flow.system, dt, default_case.flow.workspace;
                 tolerance, max_cycles,
             )
             equal_stats = step!(
                 equal_case.flow.velocity, equal_case.flow.pressure,
-                equal_case.flow.solver, dt, equal_case.flow.workspace;
+                equal_case.flow.system, dt, equal_case.flow.workspace;
                 tolerance, max_cycles, _reference_dt = dt,
             )
             @test default_stats.converged && equal_stats.converged

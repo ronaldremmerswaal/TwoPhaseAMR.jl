@@ -1,6 +1,6 @@
 """Return a read-only view of the current state owned by `flow`."""
 simulation_state(flow::FlowSimulation) = SimulationState(
-    flow.velocity, flow.pressure, flow.solver, flow.time, flow.steps,
+    flow.velocity, flow.pressure, flow.system, flow.time, flow.steps,
     flow.workspace,
 )
 
@@ -143,21 +143,23 @@ function _print_projection_summary(io::IO, stats::_ProjectionSummaryStats)
 end
 
 function _flow_model_name(flow::FlowSimulation)
-    isnothing(flow.solver.two_phase) && return "single phase"
+    isnothing(flow.system.two_phase) && return "single phase"
     return flow.velocity isa TwoPhaseVelocity ?
         "two phase / two velocity" : "two phase / one velocity"
 end
 
 function _print_physics_summary(io::IO, flow::FlowSimulation)
-    solver = flow.solver
+    solver = flow.system
     _summary_property(io, "model", _flow_model_name(flow))
     _summary_property(io, "velocity field", nameof(typeof(flow.velocity)))
-    _summary_property(io, "density", solver.density)
-    _summary_property(io, "dynamic viscosity", solver.dynamic_viscosity)
-    _summary_property(io, "boundary", nameof(typeof(solver.boundary)))
-    _summary_property(io, "advection", nameof(typeof(solver.scheme)))
-    _summary_property(io, "embedded geometry", !isnothing(solver.geometry))
     model = solver.two_phase
+    density = isnothing(model) ? _single_phase_density(solver) : model.density
+    viscosity = isnothing(model) ? eltype(flow.pressure)(solver.physics.dynamic_viscosity) : model.dynamic_viscosity
+    _summary_property(io, "density", density)
+    _summary_property(io, "dynamic viscosity", viscosity)
+    _summary_property(io, "boundary", nameof(typeof(solver.boundary)))
+    _summary_property(io, "advection", nameof(typeof(solver.options.advection.scheme)))
+    _summary_property(io, "embedded geometry", !isnothing(solver.geometry))
     isnothing(model) && return nothing
     _summary_property(io, "surface tension", model.sigma)
     _summary_property(io, "surface-tension method", nameof(typeof(model.formulation)))
@@ -210,7 +212,7 @@ accepted. Residuals use each solver's native norm.
 function print_simulation_summary(
         io::IO, flow::FlowSimulation, result::NamedTuple,
     )
-    mesh = flow.solver.mesh
+    mesh = flow.system.mesh
     levels = sort!(unique(block.key.level for block in mesh.blocks))
     println(io, "TwoPhaseAMR simulation summary")
     _print_physics_summary(io, flow)
@@ -235,7 +237,7 @@ function print_simulation_summary(
     _summary_property(io, "levels", levels; indent = "    ")
     _summary_property(io, "block size", mesh.block_size; indent = "    ")
     _summary_property(
-        io, "refinement criteria", length(flow.solver.refinement_indicators);
+        io, "refinement criteria", length(flow.system.adaptivity.criteria);
         indent = "    ",
     )
     _print_projection_summary(io, result.pressure)

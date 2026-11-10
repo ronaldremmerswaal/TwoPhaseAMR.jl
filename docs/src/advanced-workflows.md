@@ -6,33 +6,33 @@ workflows can be mixed without data conversion.
 
 ## Explicit object construction
 
-The high-level constructor is equivalent to:
+The high-level constructor retains the typed physics and numerical options on
+its equation system. The equivalent explicit construction is:
 
 ```julia
 velocity = FaceVelocity(mesh, initial_velocity)
 pressure = CellField(mesh)
 system = NavierStokesSystem(
-    mesh; density, dynamic_viscosity, solver_options...)
+    mesh, physics; options=numerics, adaptivity, boundary, geometry)
 workspace = NavierStokesWorkspace(system; dt=fixed_dt)
 
 result = simulate!(
     velocity, pressure, system, final_time, workspace; run_options...)
 ```
 
-The explicit two-phase path uses the same objects and adds the interface and
-material properties to `NavierStokesSystem`:
+For two-phase flow, construct the interface and its physical configuration
+before constructing the system:
 
 ```julia
 interface = InterfaceField(mesh, levelset)
-system = NavierStokesSystem(
-    mesh;
-    interface,
+physics = TwoPhase(
+    interface;
     density=(rho_liquid, rho_gas),
     dynamic_viscosity=(mu_liquid, mu_gas),
-    surface_tension=sigma,
-    surface_tension_formulation=CGFM(),
+    surface_tension=SurfaceTension(sigma; method=CGFM()),
     gravity=(0.0, -gravity_acceleration),
 )
+system = NavierStokesSystem(mesh, physics; options=numerics, geometry=interface.geometry)
 workspace = NavierStokesWorkspace(system; dt=fixed_dt)
 ```
 
