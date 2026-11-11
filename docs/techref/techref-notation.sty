@@ -377,6 +377,9 @@
 \DefineNotation{\flowcfl}{\nu^{\mathrm{f}}}{\flowcfl}
   {CFL parameter of the flow bound, $\stagcfl$ in one phase and $\wycflval$ in
    two phases (\cref{eq:stab:flow-bound})}{\code{cfl}}{new}
+\DefineNotation{\cflmax}{\nu^{\mathrm{max}}}{\cflmax}
+  {Top of the accepted range of $\flowcfl$, $1$ in one phase and $\half$ in
+   two phases; the step check~\cref{eq:stab:check} uses it}{\code{cfl}}{new}
 \DefineNotation{\dtadv}{\dt_{\mathrm{adv}}}{\dtadv}
   {Advective bound of a flow (\cref{eq:stab:flow-bound})}{\apifun{stable_timestep}}{new}
 \DefineNotation{\dtflow}{\dt_{\mathrm{flow}}}{\dtflow(\flowcfl)}

@@ -654,7 +654,16 @@ faces~\cref{eq:momentum:boundary}, with $\dtstag=\infty$ for a vanishing
 velocity.
 \apifun{stable_timestep}\code{(velocity, workspace; cfl=0.9)}
 returns it; \apifun{step!} requires $\dt\le(1+10^{-6}+32\machineeps)\dtstag$ (\cref{eq:stab:check}, \issue{98}) with
-$\stagcfl=\half$, and \apifun{simulate!} chooses steps with $\stagcfl=0.45$.
+$\stagcfl=1$, the top of the range (one phase; two phases bound the step as
+in~\cref{sec:vof:cfl}), and \apifun{simulate!} chooses steps with
+$\stagcfl=0.45$. The check at $\stagcfl=1$ accepts every step that
+\apifun{stable_timestep} returns for \code{cfl} in $(0,1]$ (\issue{121}): the
+sum in~\cref{eq:momentum:cfl} bounds $\dt\abs{\dualrate{g}}$ by
+$\stagcfl\min\curlypar{\stagvol{\dminus{g}},\stagvol{\dplus{g}}}$ for every
+dual face $g$, because $g$ belongs to both adjacent control volumes and each
+term of the sum is bounded by the sum. Hence $\mathcfl_g\le\stagcfl\le1$, and
+the Lax--Wendroff face state of~\cref{eq:momentum:states} is a convex
+combination of its two upwind neighbours.
 Small open volumes reduce the bound, as no cells are merged. Under the bound
 the unsplit upwind update (\apitype{Upwind} as both schemes) of a discretely
 solenoidal velocity is a convex combination of old and boundary values: by
