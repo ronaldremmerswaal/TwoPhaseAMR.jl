@@ -89,6 +89,10 @@ function _advance_rotation!(case; final_time = 0.03125)
     maximum_normal_velocity_defect = 0.0
     while time < final_time - 16eps()
         _set_stationary_rotation!(case)
+        maximum_preprojection_error = _maximum_projection_error(
+            maximum_preprojection_error,
+            _face_velocity_linf(case, case.velocity),
+        )
         projection = _project_rotation!(case)
         stats = projection.stats
         converged &= stats.converged
@@ -98,8 +102,8 @@ function _advance_rotation!(case; final_time = 0.03125)
         maximum_normal_velocity_defect = max(
             maximum_normal_velocity_defect, stats.normal_velocity_defect,
         )
-        maximum_preprojection_error = _maximum_projection_error(
-            maximum_preprojection_error,
+        maximum_postprojection_error = _maximum_projection_error(
+            maximum_postprojection_error,
             _face_velocity_linf(case, case.velocity),
         )
         maximum_projection_components = _maximum_projection_error(
