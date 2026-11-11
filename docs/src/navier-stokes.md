@@ -464,13 +464,13 @@ for a heavy liquid above the gas has offset
 surface tension, and gravity passed to `FlowSimulation` are derived internally
 from those nondimensional inputs.
 
-Pressure and coupled two-phase stress diffusion default to preconditioned
-Krylov.jl CG because their operators are symmetric positive (semi-)definite.
-Single-phase staggered diffusion selects CG for a symmetric operator and
-BiCGSTAB when the AMR consistency correction makes it nonsymmetric. Pressure
-and diffusion use rediscretized tree-geometric hierarchies for both
-single-phase and two-phase flow. The single-phase diffusion hierarchy keeps
-separate x/y component operators; the two-phase hierarchy retains the coupled
+Pressure, single-phase staggered diffusion, and coupled two-phase stress
+diffusion default to preconditioned Krylov.jl CG because their operators are
+symmetric positive (semi-)definite. Automatic selection still falls back to
+BiCGSTAB for a nonsymmetric operator. Pressure and diffusion use rediscretized
+tree-geometric hierarchies for both single-phase and two-phase flow. The
+single-phase diffusion hierarchy keeps separate x/y component operators; the
+two-phase hierarchy retains the coupled
 stress operator. Both can be configured independently. Below the root level,
 each hierarchy agglomerates 2×2 base roots until it reaches `coarse_size` or
 `max_levels`, either root count cannot be halved, or a periodic axis would have
