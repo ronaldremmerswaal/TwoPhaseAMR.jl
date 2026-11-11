@@ -1,16 +1,13 @@
-% Figure: CMDGFM rows and the mimetic jump space (Chapter 10). Cells,
-% solid, liquid polygons, PLIC segments, the classification of the mixed
-% faces, one CMDGFM stencil, the active and inactive mimetic jump faces, the
-% smoothed constraint rows and the support of one fitted row are read from the
-% code: generated/projection.tex (projection.jl, projection_data). Labels
-% hand-written.
+% Figure: CMDGFM rows (Chapter 10). Cells, solid, liquid polygons, PLIC
+% segments, the classification of the mixed faces and one CMDGFM stencil are
+% read from the code: generated/projection.tex (projection.jl,
+% projection_data). Labels hand-written.
 \begin{figure}
   \centering
   \def\fxpnone{%
     \def\fxpcell##1##2##3##4##5##6##7{}\def\fxpsolid##1##2{}\def\fxpwall##1##2##3##4##5{}%
     \def\fxpliquid##1##2{}\def\fxpplic##1##2##3##4##5{}%
-    \def\fxpclass##1##2##3##4##5{}\def\fxpstencil##1##2##3##4##5{}\def\fxpnormal##1##2##3##4{}%
-    \def\fxpactive##1##2##3##4##5{}\def\fxprow##1##2##3##4##5{}\def\fxpsupport##1##2##3##4##5{}}%
+    \def\fxpclass##1##2##3##4##5{}\def\fxpstencil##1##2##3##4##5{}\def\fxpnormal##1##2##3##4{}}%
   % A face segment of axis #3 and length #4 at (#1,#2), drawn with style #5.
   \def\fxpsegment#1#2#3#4#5{%
     \ifnum#3=1 \draw[#5] (#1,#2-#4/2) -- (#1,#2+#4/2);
@@ -33,7 +30,7 @@
     \def\fxpplic##1##2##3##4##5{\ifnum##1=#1 \draw[tr plic] (##2,##3) -- (##4,##5);\fi}%
     \input{figures/generated/projection.tex}%
     \fxpnone}%
-  \begin{subfigure}[b]{0.555\textwidth}
+  \begin{subfigure}[b]{0.7\textwidth}
     \centering
     \begin{tikzpicture}[x=3.6cm,y=3.6cm]
       \begin{scope}
@@ -72,52 +69,16 @@
     \end{tikzpicture}
     \caption{CMDGFM rows}
     \label{fig:projection:stencils:cmdgfm}
-  \end{subfigure}\hfill
-  \begin{subfigure}[b]{0.435\textwidth}
-    \centering
-    \begin{tikzpicture}[x=3.6cm,y=3.6cm]
-      \begin{scope}
-        \clip (5.0,1.0) rectangle (6.5,2.25);
-        \fxpbackground{2}
-        % Support of the fitted row of the marked cell: line width by |coefficient|.
-        \def\fxpsupport#1#2#3#4#5{\fxpsegment{#1}{#2}{#3}{#4}{line width=0.5pt+2.6pt*#5,trpurple}}%
-        \input{figures/generated/projection.tex}%
-        \fxpnone
-        % Jump faces: active (disc), inactive (open square).
-        \def\fxpactive#1#2#3#4#5{%
-          \ifcase#5 \node[circle,fill=black,inner sep=0pt,minimum size=3.4pt] at (#1,#2) {};
-          \or \node[rectangle,draw=black,fill=white,line width=0.6pt,inner sep=0pt,minimum size=4.2pt] at (#1,#2) {};\fi}%
-        \input{figures/generated/projection.tex}%
-        \fxpnone
-        % Constraint rows: cell centre and the direction of the row normal.
-        \def\fxprow#1#2#3#4#5{%
-          \ifnum#5=1 \draw[tr vector] (#1,#2) -- ++(0.16*#3,0.16*#4);
-          \else \draw[tr thin vector,black] (#1,#2) -- ++(0.11*#3,0.11*#4);\fi
-          \node[tr centroid] at (#1,#2) {};}%
-        \input{figures/generated/projection.tex}%
-        \fxpnone
-      \end{scope}
-      \draw[black,line width=0.6pt] (5.0,1.0) rectangle (6.5,2.25);
-      \node[tr label,anchor=north west,trred,fill=white,fill opacity=0.8,text opacity=1] at (5.9,1.86) {$\rownormal{r}$};
-    \end{tikzpicture}
-    \caption{Mimetic jump space}
-    \label{fig:projection:stencils:mimetic}
   \end{subfigure}
-  \caption{Constraint rows of the two-velocity projections on the composite
+  \caption{Constraint rows of the CMDGFM projection on the composite
     cut fixture of \cref{tab:projection:counts} (a drop on the sloped solid;
-    level transition dashed; liquid shaded, solid hatched).
-    (a)~Near the top of the drop. Rows of the mixed faces: disc
+    level transition dashed; liquid shaded, solid hatched), near the top of
+    the drop. Rows of the mixed faces: disc
     $\jumpbeta_f=1$, triangle $\jumpbeta_f<1$ (with inference faces), open
     circle unresolved~\cref{eq:projection:unresolved}. The stencil of one row
     with $\abs{\normratio{f}}>1$~\cref{eq:projection:cmdgfm-row}: the face $f$
     (red) with its staggered normal $\normalstag_f$, the transverse faces
     $\transfaces{f}$ (purple) and the inference faces $\inferface{\gas}$
-    (grey) and $\inferface{\liq}$ (blue). (b)~Near the right contact point,
-    \code{:joint_smoothed}. Jump faces: active (disc) and inactive (open
-    square)~\cref{eq:projection:active}, the latter next to the cut cells;
-    constraint rows (cell centres) with the direction of their row normal
-    $\rownormal{r}$~\cref{eq:projection:smoothed-rows}; purple: the
-    \chkFigSupport\ faces of the fitted row of the marked cell, line width
-    proportional to the magnitude of its coefficient~\cref{eq:projection:joint-fit}.}
+    (grey) and $\inferface{\liq}$ (blue).}
   \label{fig:projection:stencils}
 \end{figure}

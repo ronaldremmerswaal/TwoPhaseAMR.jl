@@ -276,22 +276,20 @@ mass-weighted mixture velocity and gives both phases its increment.
 \emph{Projection} (\cref{ch:projection}). Every step ends with one pressure
 projection: a Poisson projection for a shared velocity (one phase, or two
 phases with one velocity), and for the phase velocities the conservative
-multidimensional ghost-fluid method (CMDGFM) of the thesis, the default, or
-a legacy mimetic projection that minimises the kinetic energy of the
-correction subject to fitted normal-jump constraints. The one-velocity and
-CMDGFM projections are incremental: the step subtracts the gradient of the
-previous pressure and the projection solves for the increment, so that a
-shortened step removes only its share of the divergence left by the previous
-step. After a regrid the phase velocities are projected once more.
+multidimensional ghost-fluid method (CMDGFM) of the thesis. Both are
+incremental: the step subtracts the gradient of the previous pressure and the
+projection solves for the increment, so that a shortened step removes only
+its share of the divergence left by the previous step. After a regrid the
+phase velocities are projected once more.
 
 \emph{Linear solvers} (\cref{ch:solvers}). The projections, the viscous step
 and the projected liquid carrier are sparse linear systems, solved by Krylov
 methods with a stopping rule and a round-off floor: CG for the Poisson
 projection, the liquid carrier and the two-phase viscous step, CG or
-BiCGSTAB after a symmetry test for the one-phase viscous step, BiCGSTAB for
-the CMDGFM and MINRES for the mimetic system. Except for the mimetic system
-and the liquid carrier they are preconditioned by V-cycles of a tree
-geometric multigrid built from the forest (\cref{tab:solvers:systems}).
+BiCGSTAB after a symmetry test for the one-phase viscous step, and BiCGSTAB
+for the CMDGFM. Except for the liquid carrier they are preconditioned by
+V-cycles of a tree geometric multigrid built from the forest
+(\cref{tab:solvers:systems}).
 
 \emph{Refinement and transfer} (\cref{ch:amr-criteria-transfer}). After a
 step, refinement indicators (interface and solid bands, curvature, vorticity
@@ -358,8 +356,8 @@ $1-\dt/\dtref$ of the divergence that it inherits
       & surface tension and gravity as explicit increments
       & surface tension moved from T5 (\cref{dev:forces:st-stage}); common increments with two velocities (\cref{dev:forces:two-velocity})\\
     T5, pressure Poisson problem
-      & old-pressure predictor and incremental projection (one velocity, CMDGFM); absolute mimetic projection
-      & \cref{dev:projection:incremental,dev:projection:mimetic}\\
+      & old-pressure predictor and incremental projection (one velocity, CMDGFM)
+      & \cref{dev:projection:incremental}\\
     --
       & projection after a regrid (two velocities)
       & \cref{dev:projection:regrid}\\
@@ -487,9 +485,7 @@ where their phase has no staggered volume.
   interface is reconstructed and the one-velocity coefficient rebuilt, so
   that $\forcemaptv=\forcemap$; with a solid the CMDGFM uses the operator
   that it caches, with the coefficient $\twocoef$ of the transported
-  fractions (\cref{sec:forces:two-velocity}). The mimetic projection forms
-  its map in the same way, the one-velocity operator without a solid and
-  its cached operator with one, and only if there are phase forces.
+  fractions (\cref{sec:forces:two-velocity}).
 \item \emph{Phase forces.} The common increments
   $\dt\forcemaptv\fjump{\surftens}+\dt\forcemaptv\fjump{\gravacc}$ are added
   to both phases where they are present~\cref{eq:forces:two-velocity},
@@ -500,10 +496,7 @@ where their phase has no staggered volume.
   the system~\cref{eq:projection:cmdgfm-system} is solved for the increment
   $\presinc$ and the gradient jump $\gradjump$, with the saved flux for a
   shortened step, and
-  $\pres^{\timelevel{n+1}}=\pres^{\timelevel{n}}+\presinc$. Mimetic:
-  $\velo^{\phase,\stage{3}}$ is projected by the KKT
-  system~\cref{eq:projection:kkt}, whose pressure replaces $\pres$
-  (\cref{sec:projection:pressure-update}).
+  $\pres^{\timelevel{n+1}}=\pres^{\timelevel{n}}+\presinc$.
 \end{enumerate}
 
 \begin{implnote}
@@ -525,8 +518,7 @@ Tests:
 \testsym{test/two_phase/two_velocity/diffusion.jl}{Two-velocity implicit diffusion identities},
 \testsym{test/two_phase/forces.jl}{Surface tension precedes gravity for each velocity model},
 \testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Two-velocity short-step reference flux},
-\testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{CMDGFM incremental projection satisfies the coupled system},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Mimetic stepping uses the absolute momentum predictor}.
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{CMDGFM incremental projection satisfies the coupled system}.
 \end{implnote}
 
 \subsection{A run}\label{sec:overview:run}
@@ -619,8 +611,8 @@ events \apifun{observe!} with \apitype{SimulationState} and
       & \apitype{FrozenInterfaceFluxes}; \apitype{ProjectedLiquidVelocity} (legacy)
       & \cref{sec:vof:two-velocity}\\
     two-velocity projection (\code{pressure_projection} of \apitype{TwoVelocityModel})
-      & \apitype{CMDGFMProjection}; \apitype{MimeticProjection} (legacy; \code{variant} \code{:joint_smoothed} or \code{:joint_face})
-      & \cref{sec:projection:cmdgfm,sec:projection:mimetic}\\
+      & \apitype{CMDGFMProjection}
+      & \cref{sec:projection:cmdgfm}\\
     CMDGFM preconditioner (\code{preconditioner} of \apitype{CMDGFMProjection})
       & \code{:block}, \code{:ilu}, \code{nothing}
       & \cref{sec:solvers:projection}\\
@@ -637,7 +629,7 @@ events \apifun{observe!} with \apitype{SimulationState} and
       & \code{:lhf}, \code{:lhf_ghf}, \code{:wy}
       & \cref{sec:interface:normals}\\
     Krylov method and preconditioner (\apitype{LinearSolverOptions} and \apitype{MultigridOptions})
-      & pressure projection and viscous steps: CG, or BiCGSTAB after a symmetry test for the one-phase viscous step (CG on a uniform, BiCGSTAB on a composite mesh), with the tree geometric multigrid (\code{:auto}); the CMDGFM system (BiCGSTAB) and the mimetic KKT system (MINRES) have their own preconditioners, the liquid carrier (CG) none (\cref{tab:solvers:systems})
+      & pressure projection and viscous steps: CG, or BiCGSTAB after a symmetry test for the one-phase viscous step (CG on a uniform, BiCGSTAB on a composite mesh), with the tree geometric multigrid (\code{:auto}); the CMDGFM system (BiCGSTAB) has its own preconditioner, the liquid carrier (CG) none (\cref{tab:solvers:systems})
       & \cref{ch:solvers}\\
     time step (\code{dt} and \code{cfl} of \apifun{simulate!})
       & automatic with CFL number $0.45$; a prescribed step
@@ -654,16 +646,10 @@ two-velocity method is the frozen interface fluxes with the CMDGFM
 projection. The projected liquid velocity is the carrier of the
 thesis~\thesis{\S6.3.2}; the frozen interface fluxes, which the thesis
 derives but does not pursue~\thesis{\S6.3.4}, replace it as the default
-(\cref{sec:vof:frozen}). The mimetic projection replaces the thesis' mimetic
-gradient~\thesis{\S7.4} (\cref{dev:projection:mimetic}). Both are legacy
-options, kept for comparison: the mimetic projection is absolute,
-so that very short steps still give pressure spikes
-(\cref{sec:projection:pressure-update}), it does not preserve hydrostatic
-rest (\cref{dev:projection:hydrostatic}) and in single precision it fails to
-converge on a mixed-cell case (\cref{dev:solvers:float32}). Every
-combination of carrier, projection and surface-tension method can be
-configured; the carrier and the projection apply to the two-velocity model
-only. \Cref{tab:overview:api} maps the public types to the chapters that
+(\cref{sec:vof:frozen}). The projected liquid velocity is a legacy carrier,
+kept for comparison. Every
+combination of carrier and surface-tension method can be configured; the
+carrier applies to the two-velocity model only. \Cref{tab:overview:api} maps the public types to the chapters that
 state what they compute; the implementation boxes give them in context.
 
 \begin{implnote}
@@ -673,8 +659,7 @@ state what they compute; the implementation boxes give them in context.
 passes the carrier and the projection of the velocity model to the system),
 \srcsym{src/navier_stokes/options.jl}{AdvectionOptions},
 \srcsym{src/navier_stokes/options.jl}{NavierStokesOptions},
-\srcsym{src/two_phase/projection/methods.jl}{CMDGFMProjection} and
-\srcsym{src/two_phase/projection/methods.jl}{MimeticProjection}. Tests:
+\srcsym{src/two_phase/projection/methods.jl}{CMDGFMProjection}. Tests:
 \testsym{test/navier_stokes/configuration.jl}{explicit one- and two-velocity models}
 (the defaults),
 \testsym{test/navier_stokes/configuration.jl}{typed two-phase choice matrix constructs}
@@ -727,9 +712,7 @@ passes the carrier and the projection of the velocity model to the system),
       \apitype{Inflow}, \apitype{Outflow}, \apitype{ZeroGradientVelocity}\\
     \ref{ch:projection}, projection & \apitype{ProjectionWorkspace},
       \apitype{CMDGFMProjection}, \apitype{CMDGFMProjectionSolver},
-      \apitype{CMDGFMProjectionWorkspace}, \apitype{CMDGFMProjectionStats},
-      \apitype{MimeticProjection}, \apitype{MimeticProjectionSolver},
-      \apitype{MimeticProjectionWorkspace}, \apitype{MimeticProjectionStats}\\
+      \apitype{CMDGFMProjectionWorkspace}, \apitype{CMDGFMProjectionStats}\\
     \ref{ch:solvers}, solvers & \apitype{EllipticSolver},
       \apitype{StaggeredEllipticSolver}, \apitype{LinearSolverOptions},
       \apitype{LinearSolverStats}, \apitype{MultigridOptions},
@@ -761,8 +744,8 @@ in time is claimed for the split step, and the orders in space that the
 tests assert, with their known first-order spots, are those of
 \cref{tab:stab:orders}. Small cut cells are not merged and reduce the step
 (\cref{sec:vof:cfl}), and a step that fails a run-time check is not retried
-(\cref{sec:stab:gaps}). The projected liquid velocity and the mimetic
-projection are legacy options (\cref{sec:overview:options}).
+(\cref{sec:stab:gaps}). The projected liquid velocity is a legacy option
+(\cref{sec:overview:options}).
 \Cref{tab:overview:limitations} groups the defects and open questions that
 the chapters state and that are tracked by issues open at the audited commit;
 \cref{sec:verif:gaps} adds the gaps of the verification itself.
@@ -807,10 +790,6 @@ the chapters state and that are tracked by issues open at the audited commit;
       \apifun{step!} checks at $\half$, so \apifun{simulate!} with
       \code{cfl} above $\half$ stops at its first advection-limited step
       & \issue{121} & \cref{sec:stab:bounds}\\
-    \multicolumn{3}{@{}l}{\emph{Forces and projection}}\\
-    The mimetic projection does not preserve hydrostatic rest; the cause is
-      not derived
-      & \issue{76} & \cref{dev:projection:hydrostatic,sec:forces:two-velocity}\\
     \multicolumn{3}{@{}l}{\emph{Viscosity}}\\
     One phase: the corrected rows at level transitions are not symmetric, and
       the implicit step can raise the energy (by up to $2.7$ per step in the
@@ -830,9 +809,6 @@ the chapters state and that are tracked by issues open at the audited commit;
       look like gas
       & \issue{119} & \cref{sec:amr:band}\\
     \multicolumn{3}{@{}l}{\emph{Linear solvers}}\\
-    The mimetic projection does not converge in single precision on a
-      mixed-cell case
-      & \issue{45} & \cref{dev:solvers:float32}\\
     CG is accepted with non-symmetric multigrid cycles, and symmetric
       embedded viscous systems are solved by BiCGSTAB
       & \issue{128} & \cref{sec:solvers:vcycle,sec:solvers:shifted}\\

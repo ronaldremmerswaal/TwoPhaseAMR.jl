@@ -6,8 +6,7 @@
 # "independent" evaluate the formulas of Chapter 10 without the projection
 # kernels: the defect identity and the kinetic energy of the one-velocity
 # projection, the CMDGFM staggered normal, stencils, beta and row condition,
-# the mixture divergence, the moments of the fitted mimetic rows and the
-# kinetic energy of the mimetic projection. They read only mesh topology,
+# the mixture divergence of the two-velocity projector. They read only mesh topology,
 # fractions, apertures and the code's face metric; the assertions fail if
 # the code no longer matches the chapter.
 
@@ -445,76 +444,10 @@ function regrid_scaling_check()
     return difference / scale
 end
 
-# --- Mimetic (Section "mimetic") -----------------------------------------------------------
+# --- Figure data: CMDGFM rows ---------------------------------------------------------------
 
-# Independent phase kinetic energy |ubar|^2_M(tv) + sum m^r |w^o| (u_g - u_l)^2.
-function proj_phase_energy(field, operator, data, velocity; factor = nothing)
-    mesh = field.mesh
-    n = length(mesh.faces)
-    product(w, u) = iszero(w) ? 0.0 : w * u
-    common = [(product(data.ml[f], velocity[1].interior[f]) + product(data.mg[f], velocity[2].interior[f])) / data.m[f] for f in 1:n]
-    energy, factor = proj_kinetic_norm(field, operator, operator.face_coefficient, common; factor)
-    volumes = isnothing(field.geometry) ? mesh.face_dual_volumes : field.geometry.face_dual_volumes
-    for f in 1:n
-        (data.ml[f] > 0 && data.mg[f] > 0) || continue
-        w = velocity[2].interior[f] - velocity[1].interior[f]
-        energy += data.ml[f] * data.mg[f] / data.m[f] * volumes[f] * w^2
-    end
-    return energy, factor
-end
-
-function mimetic_check(kind::Symbol; solid::Bool, variant::Symbol)
-    field = projection_fixture(kind; solid)
-    mesh = field.mesh
-    solver = MimeticProjectionSolver(field; density = FORCE_DENSITY, variant)
-    work = MimeticProjectionWorkspace(solver)
-    predictor = proj_two_predictor(field)
-    velocity = proj_copy(predictor)
-    # The assembled system (also used by project!) for the moment check.
-    assembled = AMR._assemble_mimetic_system!(solver, work, PROJ_DT, proj_copy(predictor))
-    reconstruction = AMR._local_joint_reconstruction(solver, assembled.data, assembled.active_faces, assembled.relative_diagonal)
-    Z = zeros(length(assembled.active_faces), 2)
-    for (local_face, f) in pairs(assembled.active_faces)
-        Z[local_face, mesh.faces[f].axis] = 1
-    end
-    target = Matrix(reconstruction.normal * Z)
-    fitted = Matrix(assembled.candidate_constraint * Z)
-    moment = isempty(target) ? 0.0 : maximum(abs, fitted .- target) / max(maximum(abs, target), eps())
-    stats = project!(velocity, CellField(mesh), solver, PROJ_DT, work; tolerance = PROJ_TOL_TWO, max_iterations = 8000, check_symmetry = true)
-    @assert stats.converged
-    data = proj_face_data(field)
-    operator = work.cache.pressure.operator
-    energy_star, factor = proj_phase_energy(field, operator, data, predictor)
-    energy_end, _ = proj_phase_energy(field, operator, data, velocity; factor)
-    change = (proj_copy(velocity[1]), proj_copy(velocity[2]))
-    for phase in 1:2
-        change[phase].interior .-= predictor[phase].interior
-    end
-    energy_change, _ = proj_phase_energy(field, operator, data, change; factor)
-    inactive = isempty(assembled.inactive_faces) ? 0.0 :
-        maximum(abs(velocity[2].interior[f] - velocity[1].interior[f]) for f in assembled.inactive_faces)
-    volume_defect = PROJ_DT * proj_mixture_divergence(field, velocity)
-    return (;
-        symmetry = stats.matrix_symmetry_error,
-        energy = abs(energy_star - energy_end - energy_change) / energy_star,
-        removed = energy_change / energy_star,
-        code_energy = stats.energy_identity_error / energy_star,
-        moment, inactive, volume_defect, code_volume_defect = stats.mixture_volume_defect,
-        active = stats.jump_unknowns, mixed = length(data.mixed),
-        embedded = stats.embedded_deactivated_faces, mass = stats.mass_deactivated_faces,
-        candidate = stats.candidate_constraint_rows, independent = stats.independent_constraint_rows,
-        dependent = stats.dependent_constraint_rows, underresolved = stats.underresolved_constraint_rows,
-        fallback = stats.fallback_constraint_rows, commuting = stats.commuting_residual,
-        pressure_commuting = stats.pressure_commuting_constraint_rows,
-        normal = stats.normal_velocity_defect, iterations = stats.iterations,
-    )
-end
-
-# --- Figure data: CMDGFM rows and mimetic jump space ----------------------------------------
-
-const PROJ_WINDOWS = ((3.25, 5.0, 3.0, 4.25), (5.0, 6.5, 1.0, 2.25))   # x0, x1, y0, y1
-const PROJ_STENCIL_FACE = (4.5, 3.875, 1)    # beta < 1 row of panel (a): centre, axis
-const PROJ_ROW_CELL = (5.875, 1.875)         # fitted mimetic row of panel (b)
+const PROJ_WINDOWS = ((3.25, 5.0, 3.0, 4.25),)   # x0, x1, y0, y1
+const PROJ_STENCIL_FACE = (4.5, 3.875, 1)    # beta < 1 row: centre, axis
 
 proj_face_at(mesh, x, y, axis) = findfirst(
     face -> face.axis == axis && hypot(face.center[1] - x, face.center[2] - y) < 1.0e-9, mesh.faces,
@@ -560,9 +493,6 @@ end
 #   \fxpclass{x}{y}{axis}{length}{class}    class 0: beta = 1, 1: beta < 1, 2: unresolved
 #   \fxpstencil{x}{y}{axis}{length}{role}   role 0: f, 1: transverse, 2: h^g, 3: h^l
 #   \fxpnormal{x}{y}{nx}{ny}                staggered normal of f
-#   \fxpactive{x}{y}{axis}{length}{state}   state 0: active, 1: inactive
-#   \fxprow{x}{y}{nx}{ny}{shown}            row cell centre, unit row normal, 1 for the shown row
-#   \fxpsupport{x}{y}{axis}{length}{weight} |coefficient| of the shown row over its maximum
 function projection_data()
     field = projection_fixture(:amr; solid = true)
     mesh = field.mesh
@@ -592,44 +522,7 @@ function projection_data()
     normal = proj_staggered_normal(field, mesh.faces[f])
     println(io, "\\fxpnormal{$(fmt(mesh.faces[f].center[1]))}{$(fmt(mesh.faces[f].center[2]))}{$(fmt(normal[1]))}{$(fmt(normal[2]))}")
     stencil_info = (; beta = s.beta, ratio = s.ratio, weights = s.transverse_weights)
-
-    msolver = MimeticProjectionSolver(field; density = FORCE_DENSITY)
-    mwork = MimeticProjectionWorkspace(msolver)
-    assembled = AMR._assemble_mimetic_system!(msolver, mwork, PROJ_DT, proj_two_predictor(field))
-    for (state, faces) in ((0, assembled.active_faces), (1, assembled.inactive_faces))
-        for g in faces
-            face = mesh.faces[g]
-            proj_inside(PROJ_WINDOWS[2], face.center...) || continue
-            println(io, "\\fxpactive", proj_face_line(face), "{$state}")
-        end
-    end
-    reconstruction = AMR._local_joint_reconstruction(msolver, assembled.data, assembled.active_faces, assembled.relative_diagonal)
-    Z = zeros(length(assembled.active_faces), 2)
-    for (local_face, g) in pairs(assembled.active_faces)
-        Z[local_face, mesh.faces[g].axis] = 1
-    end
-    moments = reconstruction.normal * Z
-    references = AMR._cell_references(mesh)
-    shown = 0
-    for (r, location) in pairs(reconstruction.candidate_cells)
-        ref = references[location]
-        centre = cellcenter(mesh, ref.block, ref.i, ref.j)
-        proj_inside(PROJ_WINDOWS[2], centre...) || continue
-        is_shown = hypot(centre[1] - PROJ_ROW_CELL[1], centre[2] - PROJ_ROW_CELL[2]) < 1.0e-9
-        is_shown && (shown = r)
-        n = moments[r, :] ./ hypot(moments[r, :]...)
-        println(io, "\\fxprow{$(fmt(centre[1]))}{$(fmt(centre[2]))}{$(fmt(n[1]))}{$(fmt(n[2]))}{$(Int(is_shown))}")
-    end
-    @assert shown > 0
-    row = assembled.candidate_constraint[shown, :]
-    largest = maximum(abs, row)
-    support = 0
-    for (local_face, value) in pairs(row)
-        iszero(value) && continue
-        support += 1
-        println(io, "\\fxpsupport", proj_face_line(mesh.faces[assembled.active_faces[local_face]]), "{$(fmt(abs(value) / largest))}")
-    end
-    return String(take!(io)), (; stencil_info..., support)
+    return String(take!(io)), stencil_info
 end
 
 # --- Outputs -------------------------------------------------------------------
@@ -642,15 +535,11 @@ function projection_outputs(write_output)
     outflow = outflow_check()
     cmdgfm = [cmdgfm_check(kind; solid) for (kind, solid) in fixtures]
     scaling = regrid_scaling_check()
-    smoothed = [mimetic_check(kind; solid, variant = :joint_smoothed) for (kind, solid) in fixtures]
-    face_rows = [mimetic_check(kind; solid, variant = :joint_face) for (kind, solid) in fixtures]
 
     println("projection one velocity:     ", one)
     println("projection outflow:          ", outflow)
     println("projection cmdgfm:           ", cmdgfm)
     println("projection regrid scaling:   ", scaling)
-    println("projection mimetic smoothed: ", smoothed)
-    println("projection mimetic face:     ", face_rows)
     println("projection figure:           ", figure_info)
 
     @assert maximum(r.identity for r in one) <= 1.0e-14
@@ -667,11 +556,6 @@ function projection_outputs(write_output)
         @assert abs(r.row_defect - r.code_row_defect) <= 1.0e-15 && abs(r.volume_defect - r.code_volume_defect) <= 1.0e-15
     end
     @assert scaling <= 1.0e-10
-    mimetic = vcat(smoothed, face_rows)
-    for r in mimetic
-        @assert r.symmetry == 0 && r.energy <= 1.0e-10 && r.moment <= 1.0e-12 && r.inactive <= 1.0e-12
-        @assert r.volume_defect <= PROJ_TOL_TWO && r.normal <= PROJ_TOL_TWO && r.fallback == 0
-    end
 
     percent(x) = @sprintf("%.0f", 100x)
     row(values) = join(values, " & ")
@@ -695,18 +579,8 @@ function projection_outputs(write_output)
         ("chkCmdJumpIdentity", sci(maximum(r.jump_identity for r in cmdgfm))),
         ("chkCmdMomentumIdentity", sci(maximum(r.momentum_identity for r in cmdgfm))),
         ("chkRegridScaling", sci(scaling)),
-        ("chkMimEnergy", sci(maximum(r.energy for r in mimetic))),
-        ("chkMimRemovedMin", percent(minimum(r.removed for r in mimetic))),
-        ("chkMimRemovedMax", percent(maximum(r.removed for r in mimetic))),
-        ("chkMimMoment", sci(maximum(r.moment for r in mimetic))),
-        ("chkMimInactive", sci(maximum(r.inactive for r in mimetic))),
-        ("chkMimCommutingMin", @sprintf("%.3f", minimum(r.commuting for r in mimetic))),
-        ("chkMimCommutingMax", @sprintf("%.2f", maximum(r.commuting for r in mimetic))),
-        ("chkMimPressureMin", percent(minimum(r.pressure_commuting / r.candidate for r in mimetic))),
-        ("chkMimPressureMax", percent(maximum(r.pressure_commuting / r.candidate for r in mimetic))),
         ("chkFigBeta", @sprintf("%.3f", figure_info.beta)),
         ("chkFigRatio", @sprintf("%.2f", figure_info.ratio)),
-        ("chkFigSupport", figure_info.support),
         # Table rows: the four fixtures in the order of `fixtures`.
         ("chkTabMixed", row(r.mixed for r in cmdgfm)),
         ("chkTabResolved", row(r.resolved for r in cmdgfm)),
@@ -715,11 +589,5 @@ function projection_outputs(write_output)
         ("chkTabNeighbour", row(unresolved(r, :normal_neighbour) for r in cmdgfm)),
         ("chkTabOtherUnresolved", row(r.mixed - r.resolved - unresolved(r, :normal_neighbour) for r in cmdgfm)),
         ("chkTabCmdIterations", row(r.iterations for r in cmdgfm)),
-        ("chkTabActive", row(r.active for r in smoothed)),
-        ("chkTabEmbedded", row(r.embedded for r in smoothed)),
-        ("chkTabMass", row(r.mass for r in smoothed)),
-        ("chkTabRowsSmoothed", row("$(r.independent) ($(r.pressure_commuting))" for r in smoothed)),
-        ("chkTabRowsFace", row("$(r.independent) ($(r.pressure_commuting))" for r in face_rows)),
-        ("chkTabMimIterations", row("$(a.iterations)/$(b.iterations)" for (a, b) in zip(smoothed, face_rows))),
     ]
 end

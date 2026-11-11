@@ -54,13 +54,10 @@ velocity_model = TwoVelocityModel(
 flow = FlowSimulation(mesh, physics; velocity_model)
 ```
 
-The alternative interface carrier is [`ProjectedLiquidVelocity`](@ref), and
-the alternative pressure formulation is [`MimeticProjection`](@ref). Its
-default uses jointly fitted smoothed-aperture rows; pass
-`MimeticProjection(variant=:joint_face)` for the CMDGFM-selected face-row
-layout. These are the two supported mimetic variants. See
-[Two-velocity advection](two-velocity-advection.md) for their discrete
-definitions. A shared velocity initializer works with either model. To start
+The alternative interface carrier is [`ProjectedLiquidVelocity`](@ref). It is
+the only choice besides the default carrier; see
+[Two-velocity advection](two-velocity-advection.md) for its discrete
+definition. A shared velocity initializer works with either model. To start
 the phases differently, pass a liquid/gas pair of fields or callables together
 with `TwoVelocityModel()`.
 

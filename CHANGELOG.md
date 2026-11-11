@@ -1,7 +1,6 @@
-# Changelog
-
 ## Unreleased
 
+- **Breaking:** removed the legacy mimetic two-velocity pressure projection. `MimeticProjection`, `MimeticProjectionSolver`, `MimeticProjectionWorkspace`, `MimeticProjectionStats` and `mimetic_gradient!` are gone; `CMDGFMProjection` is the only `AbstractTwoVelocityProjection` and still the default. The `ProjectedLiquidVelocity` carrier is unchanged. The `capillary_mimetic` oracle case, the mimetic example variants, tests, documentation and technical-reference sections were removed with it.
 - `step!(flow, dt)` now performs a complete flow step, including time and counter updates, post-step adaptivity, diagnostics, and the `:step` observer event; `simulate!` repeats these steps and retains run lifecycle events and continuation.
 - `FlowSimulation` accepts `force` and stores it as `flow.force`, the default body acceleration for its stepping and simulation calls. Field-level `step!` remains available for the physical solve alone.
 - Prevented CG from using asymmetric multigrid V-cycles and selected CG for volume-weighted symmetric embedded viscous systems (#128).

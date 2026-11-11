@@ -121,9 +121,7 @@ not an additional projection.
 An input pressure supplied to `FlowSimulation` is the initial physical
 pressure; if omitted, it is zero. A fresh hydrostatic calculation therefore
 starts with ``p^0=0``; its first projection builds the pressure.
-A nonzero initial pressure enters the first incremental predictor; a mimetic
-step instead replaces it with the absolute pressure solution.
-The mimetic method's existing hydrostatic limitation is not removed.
+A nonzero initial pressure enters the first incremental predictor.
 Resumed calculations use the retained physical pressure, including after
 transfer to an adapted mesh.
 The standalone `project!(flow)` can prepare the initial velocity constraint;
@@ -133,45 +131,15 @@ add their solved increments to the supplied pressure and expect an input
 velocity already predicted with that pressure. Repeatedly projecting an
 unpredicted velocity with a reused pressure field therefore accumulates
 impulses; pass fresh zero pressure for an absolute velocity projection.
-The lower-level mimetic `project!` overwrites its pressure with the absolute
-pressure solve and expects a predictor without an old-pressure subtraction.
 
 ### Two-velocity projection
 
-[`TwoVelocityModel`](@ref) selects either CMDGFM or the legacy symmetric
-three-block mimetic formulation through its `pressure_projection` field.
-The default is `CMDGFMProjection()`. The default interface carrier is
+[`TwoVelocityModel`](@ref) selects its pressure projection through the
+`pressure_projection` field; `CMDGFMProjection()` is the only supported
+choice and the default. The default interface carrier is
 `FrozenInterfaceFluxes()`; `ProjectedLiquidVelocity()` is a legacy carrier.
 
-The mimetic formulation solves for the absolute physical pressure
-``p^{n+1}``, the phase-gradient jump correction `xi` on mixed faces, and a
-cell multiplier `lambda`:
-
-```math
-\begin{bmatrix}-A_p&C&0\\C^T&K_\xi&B^T\\0&B&0\end{bmatrix}
-\begin{bmatrix}p^{n+1}\\\xi\\\lambda\end{bmatrix}
-=
-\begin{bmatrix}\Delta t^{-1}D\langle au^H\rangle\\0\\
--\Delta t^{-1}D([a][u^H])\end{bmatrix}.
-```
-
-`A_p` uses the existing AMR Riesz gradient and cut-cell pressure operator.
-`B` uses the same conservative face/cell incidence and the aperture jump.
-Only faces on which both staggered phase fractions exceed the interface's
-global `fraction_floor` retain `xi`; the method does not divide by an
-individual phase mass or by the aperture jump. MINRES uses a symmetric
-positive block preconditioner. Surface tension and gravity are added to the
-predictor before this solve and therefore enter its right hand side.
-
-The mimetic predictor does not subtract the old pressure: a common pressure
-gradient alone is not the complete phase-gradient correction of the KKT
-system. This legacy projection is unchanged from the absolute-pressure
-method and does not use the reference-step divergence policy above. Its
-mixture-divergence, normal-jump, and inactive-face jump rows divide their
-velocity defects by the actual step. Very short steps can therefore produce
-pressure spikes through these rows; this aspect of issue #90 remains unresolved.
-
-`CMDGFMProjection()` instead solves the nonsymmetric two-block system
+`CMDGFMProjection()` solves the nonsymmetric two-block system
 
 ```math
 \begin{bmatrix}L_{pp}&L_{p\xi}\\L_{\xi p}&L_{\xi\xi}\end{bmatrix}
@@ -318,8 +286,7 @@ contribution even when the linear solve converges: inspect `compatible` and
 the componentwise removed RHS means, or use `compatibility=:error` to reject
 such data. The two-velocity systems anchor each connected pressure component.
 The accumulated CMDGFM
-pressure retains its incoming anchor gauge; the mimetic absolute solve uses
-its anchored gauge.
+pressure retains its incoming anchor gauge.
 
 The viscous closure is independent:
 
