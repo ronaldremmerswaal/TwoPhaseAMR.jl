@@ -34,9 +34,10 @@ orchestrator without further owner approval once the prerequisites below are met
 `audit/audit-twophase.md`, `audit/audit-perf.md`, `audit/AUDIT.md`)
 
 1. **Re-measure first** on current `main`: 1/2/4/8 threads on Taylor–Green 128²
-   (hierarchical), capillary wave with CMDGFM (k = 4), the cylinder, and the
-   Stokes-3 wave (`examples/10_stokes3_wave`) with both `OneVelocityModel()` and the
-   two-velocity model, at the example's default resolution and one level finer;
+   (hierarchical), the cylinder, and the Stokes-3 wave (`examples/10_stokes3_wave`)
+   with both `OneVelocityModel()` and the two-velocity model, at the default resolution
+   and one level finer (the capillary wave is dropped as a target case: owner, 2026-11-12,
+   its functionality is covered by Stokes-3);
    profile the serial fraction of a step. Audit baseline (pre-4B–4E.3): 4 threads gave
    TG 1.17× (uniform), 1.53× (hierarchical), CMDGFM 1.16×. Order step 4 by the
    profile, not by the audit's guesses.
@@ -63,9 +64,9 @@ orchestrator without further owner approval once the prerequisites below are met
 ## Acceptance
 
 - Owner decision (2026-11-12):
-  - **Hard acceptance:** 4 threads ≥ 2× on TG 128² (hierarchical), capillary CMDGFM
-    k = 4 and the Stokes-3 wave with the one- and the two-velocity model, results
-    bitwise identical for every thread count.
+  - **Hard acceptance:** 4 threads ≥ 2× on TG 128² (hierarchical), the cylinder and
+    the Stokes-3 wave with the one- and the two-velocity model, results bitwise
+    identical for every thread count.
   - **Stretch goal:** 8 threads ≥ 4× (≥ 50 % parallel efficiency) on the same cases
     one level finer than their default/benchmark resolution (Stokes-3: one level finer
     than the example default). Where it is missed, report the profile showing what
@@ -75,8 +76,7 @@ orchestrator without further owner approval once the prerequisites below are met
     block a target, do **not** replace them with parallel variants: stop that line of
     work and report the measured cost; switching methods changes iteration counts and
     results and is an owner decision.
-  - Report a 1/2/4/8-thread table for all cases incl. the cylinder and the
-    example-default Stokes-3 resolution.
+  - Report a 1/2/4/8-thread table for all target cases at both resolutions.
 - Oracle: one bitwise record valid for every thread count. One re-record is allowed in
   the PR introducing fixed-chunk reductions (separate commit, every changed case listed
   with its max relative change vs the old record, ≤ 1e-10); otherwise unchanged.
