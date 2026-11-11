@@ -53,11 +53,11 @@ describe('authenticated Studio client', () => {
     expect(state.connection).toBe('connected');
     client.control('pause');
     client.getFrames();
-    client.recording({ type: 'recording', action: 'start', source: 'stored', path: 'run.mp4', field: 'p', diagnostics: ['mass'] });
+    client.recording({ type: 'recording', action: 'start', source: 'live', path: 'run.mp4', field: 'p', diagnostics: ['mass'], fps: 20, sim_per_second: 1, camera: 'fit', phase_rendering: 'cell', size: [640, 360], theme: 'light', arrangement: 'right', interface: true, geometry: true, blocks: false });
     expect(socket.sent.slice(0, 3)).toEqual([
       { type: 'control', action: 'pause' },
       { type: 'get', what: 'frames' },
-      { type: 'recording', action: 'start', source: 'stored', path: 'run.mp4', field: 'p', diagnostics: ['mass'] },
+      { type: 'recording', action: 'start', source: 'live', path: 'run.mp4', field: 'p', diagnostics: ['mass'], fps: 20, sim_per_second: 1, camera: 'fit', phase_rendering: 'cell', size: [640, 360], theme: 'light', arrangement: 'right', interface: true, geometry: true, blocks: false },
     ]);
     const first = client.getField(7, 'p', 'f32', 'liquid');
     const second = client.getField(8, 'p');
@@ -151,7 +151,7 @@ describe('authenticated Studio client', () => {
     const command: PreviewCommand = {
       type: 'recording', action: 'preview', source: 'stored', frame: 7, field: 'p', diagnostics: [],
       frames: 'all', camera: 'fit', colorrange: 'global', phase_rendering: 'cell',
-      size: [640, 360], framerate: 12, every: 1, theme: 'light', arrangement: 'right',
+      size: [640, 360], fps: 12, duration: 2, theme: 'light', arrangement: 'right',
       interface: true, geometry: true, blocks: false,
     };
     const preview = client.preview(command);
@@ -161,6 +161,25 @@ describe('authenticated Studio client', () => {
     const rejected = expect(client.preview(command)).rejects.toThrow('Studio origin');
     socket.message(JSON.stringify({ type: 'recording_preview', request: 2, url: '/\\evil.test/preview' }));
     await rejected;
+  });
+
+  it('correlates a stored schedule reply', async () => {
+    vi.stubGlobal('WebSocket', FakeSocket);
+    const state = new StudioState();
+    const client = new StudioClient(state, new URL('http://example.test/?token=secret'));
+    client.connect();
+    const socket = FakeSocket.instances[0];
+    socket.message(hello);
+    const schedule = client.schedule({
+      type: 'recording', action: 'schedule', source: 'stored', field: 'p', diagnostics: [],
+      frames: 'keyframes', fps: 20, duration: 2,
+    });
+    expect(socket.sent[0]).toMatchObject({ action: 'schedule', fps: 20, duration: 2, request: 1 });
+    socket.message(JSON.stringify({
+      type: 'recording_schedule', request: 1, frames: 41, distinct: 3, repeats: 38, sparse: true,
+      window: [0, 0.04], fps: 20, duration: 2, spacing: 0.001, sim_per_second: 0.02, first_frame: 1,
+    }));
+    await expect(schedule).resolves.toMatchObject({ frames: 41, distinct: 3, sparse: true, first_frame: 1 });
   });
 
   it('delivers request errors and rejects incompatible versions', async () => {

@@ -100,6 +100,33 @@ export function parseServerMessage(text: string): ServerMessage {
         throw new Error('Invalid data request id');
       }
       break;
+    case 'recording_schedule': {
+      if (typeof message.request !== 'number' || !Number.isInteger(message.request) || message.request < 0 ||
+          message.request > MAX_UINT32) throw new Error('Invalid recording schedule request');
+      const count = (key: string): number => {
+        const value = message[key];
+        if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+          throw new Error(`Invalid recording schedule ${key}`);
+        }
+        return value;
+      };
+      count('frames'); count('distinct'); count('repeats'); count('fps');
+      for (const key of ['duration', 'spacing', 'sim_per_second']) {
+        const value = message[key];
+        if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+          throw new Error(`Invalid recording schedule ${key}`);
+        }
+      }
+      const window = message.window;
+      if (!Array.isArray(window) || window.length !== 2 ||
+          !window.every(value => typeof value === 'number' && Number.isFinite(value)) ||
+          window[0] > window[1]) throw new Error('Invalid recording schedule window');
+      if (typeof message.sparse !== 'boolean') throw new Error('Invalid recording schedule sparse flag');
+      if ((typeof message.first_frame !== 'number' && typeof message.first_frame !== 'string')) {
+        throw new Error('Invalid recording schedule frame');
+      }
+      break;
+    }
     case 'recording_preview':
       if (typeof message.request !== 'number' || !Number.isInteger(message.request) || message.request < 0 ||
           message.request > MAX_UINT32 || typeof message.url !== 'string' || !message.url.startsWith('/') || message.url.startsWith('//')) {

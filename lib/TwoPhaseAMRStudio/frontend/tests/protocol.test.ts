@@ -69,6 +69,18 @@ describe('Studio JSON messages', () => {
     expect(() => parseServerMessage('{"type":"recording_preview","request":4,"url":"//evil.test/image"}')).toThrow();
     expect(() => parseServerMessage('{"type":"recording_preview","request":-1,"url":"/preview/4"}')).toThrow();
     expect(() => parseServerMessage('{"type":"unknown"}')).toThrow();
+    const schedule = {
+      type: 'recording_schedule', request: 4, frames: 41, distinct: 3, repeats: 38, sparse: true,
+      window: [0, 0.04], fps: 20, duration: 2, spacing: 0.001, sim_per_second: 0.02, first_frame: 1,
+    };
+    expect(parseServerMessage(JSON.stringify(schedule)).type).toBe('recording_schedule');
+    for (const bad of [
+      { ...schedule, request: -1 }, { ...schedule, frames: 1.5 }, { ...schedule, distinct: -1 },
+      { ...schedule, duration: -1 }, { ...schedule, spacing: Number.NaN },
+      { ...schedule, window: [1, 0] }, { ...schedule, sparse: 'yes' }, { ...schedule, first_frame: null },
+    ]) {
+      expect(() => parseServerMessage(JSON.stringify(bad))).toThrow();
+    }
   });
 
   it('parses continuation metadata and rejects malformed capability or suggestions', () => {
