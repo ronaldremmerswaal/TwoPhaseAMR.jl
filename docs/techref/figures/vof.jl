@@ -221,7 +221,10 @@ end
 
 # Frozen phase subfaces (FrozenInterfaceFluxes): independent interval
 # placement and donating regions.
-function independent_subface(field, liquid_aperture, gas_aperture, index, face, donor, liquid_carrier)
+function independent_subface(
+        field, liquid_aperture, gas_aperture, index, face, donor, liquid_carrier,
+        liquid_lower = nothing,
+    )
     mesh = field.mesh
     lo, hi = tangent_interval(mesh, donor, face)
     width = hi - lo
@@ -237,9 +240,11 @@ function independent_subface(field, liquid_aperture, gas_aperture, index, face, 
     phase_aperture = liquid_carrier ? liquid_aperture : gas_aperture
     phase_width = clamp(phase_aperture, 0.0, open_aperture) * width
     phase_width >= open_aperture * width && return (open_lo, open_hi)
-    t = 3 - face.axis
-    ln(ref) = liquid_plane(field, ref)[1][t]
-    liquid_lower = (ln(face.minus) + ln(face.plus)) / 2 >= 0
+    if isnothing(liquid_lower)
+        t = 3 - face.axis
+        ln(ref) = liquid_plane(field, ref)[1][t]
+        liquid_lower = (ln(face.minus) + ln(face.plus)) / 2 >= 0
+    end
     lower = liquid_carrier == liquid_lower
     return lower ? (open_lo, open_lo + phase_width) : (open_hi - phase_width, open_hi)
 end
@@ -358,7 +363,20 @@ liquid_volume(field) = sum(
 
 # Carrier specifications of the three transport paths.
 one_velocity_carrier(velocity) = (; kind = :one, velocity)
-frozen_carrier(velocity, apertures) = (; kind = :frozen, velocity, apertures)
+function frozen_carrier(velocity, apertures, field)
+    lower = if isnothing(field.geometry)
+        nothing
+    else
+        map(field.mesh.faces) do face
+            tangent = 3 - face.axis
+            (
+                liquid_plane(field, face.minus)[1][tangent] +
+                    liquid_plane(field, face.plus)[1][tangent]
+            ) / 2 >= 0
+        end
+    end
+    return (; kind = :frozen, velocity, apertures, lower)
+end
 projected_carrier(liquid, gas) = (; kind = :projected, velocity = liquid, gas)
 
 # Fluxes of one sweep, evaluated independently on the current reconstruction:
@@ -378,7 +396,10 @@ function replica_fluxes(field, carrier, dt, axis)
                 iszero(u) && continue
                 volume = dt * u * face.area * aperture
                 donor = u >= 0 ? face.minus : face.plus
-                interval = independent_subface(field, al, ag, index, face, donor, phase == 1)
+                lower = isnothing(carrier.lower) ? nothing : carrier.lower[index]
+                interval = independent_subface(
+                    field, al, ag, index, face, donor, phase == 1, lower,
+                )
                 result = independent_donating_region(field, face, u, dt, volume; interval)
                 V += volume; L += result.liquid
                 push!(regions, (; index, phase, result))
@@ -509,7 +530,7 @@ function frozen_step_check(field, velocity::Tuple; order = (1, 2))
     dt = stable_timestep(velocity, work)
     apertures = (copy(work.liquid_aperture), copy(work.gas_aperture))
     before = liquid_volume(field)
-    replica = wy_replica(field, frozen_carrier(velocity, apertures), dt, order)
+    replica = wy_replica(field, frozen_carrier(velocity, apertures, field), dt, order)
     scalar = PhaseScalar(field; liquid = 3.0, gas = 7.0)
     advect!(field, velocity, dt, work; scalars = (scalar,), sweep_order = order)
     after = liquid_volume(field)
@@ -564,33 +585,73 @@ end
 
 # --- Time-step bound -----------------------------------------------------------
 
-# Independent bound: nu_in, nu_out per open cell, extrusion per face (or
-# phase subface), each <= cfl.
-function independent_wy_bound(field, rates; cfl = 0.5)
+# Independently clip each active strip and each pair of opposing strips.
+# The polygon's normal support supplies the separation point, without calling
+# the production swept-area or timestep routines.
+function independent_wy_bound(field, rates; cfl = 0.5, frozen = nothing)
     mesh = field.mesh
     incidence = cell_faces(mesh)
-    incoming = outgoing = extrusion = 0.0
+    incoming = outgoing = extrusion = geometric = 0.0
     for ref in all_cells(mesh)
         open = open_volume_of(field, ref)
         open > 0 || continue
         rin = rout = 0.0
+        strips = []
         for (index, o) in get(incidence, ref, Tuple{Int, Int}[])
-            for (u, a) in rates(index)
-                rate = o * u * mesh.faces[index].area * a
-                rout += max(rate, 0.0); rin += max(-rate, 0.0)
+            face = mesh.faces[index]
+            for (phase, (u, a)) in enumerate(rates(index))
+                rate = o * u * face.area * a
+                rout += max(rate, 0.0)
+                rin += max(-rate, 0.0)
+                if rate > 0 && 0 < solid_fraction_of(field, ref) < 1
+                    lo, hi = isnothing(frozen) ? tangent_interval(mesh, ref, face) :
+                        independent_subface(
+                            field, frozen.liquid_aperture[index], frozen.gas_aperture[index],
+                            index, face, ref, phase == 1, frozen.liquid_subface_lower[index],
+                        )
+                    area = shoelace(open_part(field, ref, donating_rectangle(face.axis, o, 1.0, lo, hi)))
+                    geometric = max(geometric, rate / (2area * cell_volume(mesh, ref)))
+                    push!(strips, (; axis = face.axis, o, lo, hi, rate))
+                end
             end
         end
-        incoming = max(incoming, rin / open); outgoing = max(outgoing, rout / open)
+        incoming = max(incoming, rin / open)
+        outgoing = max(outgoing, rout / open)
+        for left in strips, right in strips
+            left.o < 0 && right.o > 0 && left.axis == right.axis || continue
+            lo, hi = max(left.lo, right.lo), min(left.hi, right.hi)
+            lo < hi || continue
+            overlap = open_part(field, ref, donating_rectangle(left.axis, 1, 1.0, lo, hi))
+            shoelace(overlap) > 0 || continue
+            split = (
+                minimum(p[left.axis] for p in overlap) +
+                    maximum(p[left.axis] for p in overlap)
+            ) / 2
+            left_area = shoelace(
+                open_part(
+                    field, ref, donating_rectangle(left.axis, -1, split + 0.5, left.lo, left.hi),
+                )
+            )
+            right_area = shoelace(
+                open_part(
+                    field, ref, donating_rectangle(right.axis, 1, 0.5 - split, right.lo, right.hi),
+                )
+            )
+            volume = cell_volume(mesh, ref)
+            geometric = max(
+                geometric, left.rate / (2left_area * volume), right.rate / (2right_area * volume),
+            )
+        end
     end
     for (index, face) in pairs(mesh.faces), (u, a) in rates(index)
         a > 0 || continue
         donor = u >= 0 ? face.minus : face.plus
         extrusion = max(extrusion, abs(u) / cell_spacing(mesh, donor)[face.axis])
     end
-    rate = max(incoming, outgoing, extrusion)
+    rate = max(incoming, outgoing, extrusion, geometric)
     return (;
         bound = cfl / rate, incoming = cfl / incoming, outgoing = cfl / outgoing,
-        extrusion = cfl / extrusion,
+        extrusion = cfl / extrusion, geometric = cfl / geometric,
     )
 end
 
@@ -645,7 +706,7 @@ end
 function frozen_cfl_check(field, velocity::Tuple)
     work = WYAdvectionWorkspace(field, velocity; interface_transport = FrozenInterfaceFluxes())
     code = stable_timestep(velocity, work)
-    indep = independent_wy_bound(field, frozen_rates(velocity, work))
+    indep = independent_wy_bound(field, frozen_rates(velocity, work); frozen = work)
     return (;
         code, indep, relative = abs(code - indep.bound) / indep.bound,
         accepted = accepts(field, velocity, code),
@@ -653,19 +714,9 @@ function frozen_cfl_check(field, velocity::Tuple)
     )
 end
 
-# A cut donor whose open part is the triangle below its anti-diagonal, next to
-# an uncut cell: the trace of the shared face is 0 from the donor and 1 from
-# the neighbour, so a_f = 1/2. A region of depth d over the whole face has open
-# area d^2/2 (local units), the swept volume is |f| a_f |u_f| dt = (1/2) nu |c|
-# with nu = |u_f| dt / h, and the outgoing bound nu_out = nu <= 1/2 allows
-# d = sqrt(nu) = 1/sqrt(2) > 1/2 (independent closed form).
-triangle_depth_example() = sqrt(0.5)
-
-# A coarse cut donor at a level transition whose half-strip behind one fine
-# segment is nearly closed by the wall: at the stable time step the swept
-# volume of that segment exceeds the open area of its strip, and advect!
-# raises an error (limitation stated in Section 5.4; independent of the
-# velocity's divergence).
+# A cut coarse donor at a level transition with a nearly closed strip.
+# The former whole-cell bound was too large; the current bound must admit a
+# genuine step whose segment flux fits the independently clipped strip.
 function strip_limitation_check()
     mesh = vof_amr_mesh(; periodic = (false, false))
     geometry = GeometryField(mesh, vof_wall; lipschitz = hypot(1, VOF_WALL.slope))
@@ -682,13 +733,8 @@ function strip_limitation_check()
     strip = shoelace(open_part(field, donor, donating_rectangle(2, 1, 1.0, lo, hi)))
     target = dt * velocity.interior[index] * face.area * aperture_of(field, index) /
         cell_volume(mesh, donor)
-    message = try
-        advect!(field, velocity, dt, work)
-        ""
-    catch error
-        sprint(showerror, error)
-    end
-    @assert occursin("exceeds the donor's open subcell volume", message)
+    advect!(field, velocity, dt, work)
+    @assert 0 < dt && target <= strip + 256eps()
     return (;
         dt, strip, target, open = open_fraction_of(field, donor),
         aperture = aperture_of(field, index), fraction = cond(field, donor),
@@ -921,7 +967,7 @@ function frozen_data()
         work = WYAdvectionWorkspace(field, velocity; interface_transport = FrozenInterfaceFluxes())
         dt = stable_timestep(velocity, work)
         apertures = (copy(work.liquid_aperture), copy(work.gas_aperture))
-        replica = wy_replica(field, frozen_carrier(velocity, apertures), dt, (1, 2))
+        replica = wy_replica(field, frozen_carrier(velocity, apertures, field), dt, (1, 2))
         mesh = field.mesh
         println(io, "\\ifnum\\fxvpanel=$panel")
         state_text(io, field, FROZEN_WINDOW)
@@ -1049,13 +1095,13 @@ function vof_outputs(write_output)
     @assert replica <= 1.0e-15 && residual <= 1.0e-14 && reduction == 0
     @assert abs(projected_cut.change) <= projected_cut.dilation_bound + 1.0e-14
     strip = strip_limitation_check()
-    @assert strip.target > strip.strip
+    @assert strip.target <= strip.strip + 256eps()
     println("vof flux check:              ", (; worst, count, mixed, partition))
     println("vof frozen check:            ", (; frozen_worst, frozen_faces, frozen_split, frozen_cfl, equal))
     println("vof balance:                 ", (; replica, residual, reduction, reset, steps, open_divergence))
     println("vof projected (cut):         ", projected_cut)
     println("vof cfl:                     ", (; cfl_diff, deepest, cut_info))
-    println("vof strip limitation:        ", strip)
+    println("vof cut strip bound:         ", strip)
     fix2(x) = @sprintf("%.2f", x)
     return Any[
         ("chkVofFluxUniformFaces", count[:uniform]), ("chkVofFluxUniformMixed", mixed[:uniform]),

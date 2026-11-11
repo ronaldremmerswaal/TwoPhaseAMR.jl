@@ -23,9 +23,13 @@ end
 """
 Conservative pre-transport CFL bound for a two-velocity tuple.
 
-Frozen-interface transport uses the time-step-start phase apertures. Projected
-transport bounds both the projected liquid velocity and extended gas velocity.
-For another workspace policy, the bound is the minimum of the two individual
+Frozen-interface transport uses the time-step-start phase apertures. With a
+solid, it also freezes subface ordering and bounds the open donor strip of
+each carrier to keep opposing swept open regions disjoint; a phase aperture
+below a round-off residue is snapped to zero, and a strip with no resolvable
+open area is reported by face and donor cell. Projected transport bounds both
+the projected liquid velocity and extended gas velocity. For another
+workspace policy, the bound is the minimum of the two individual
 velocity bounds.
 """
 function stable_timestep(
@@ -106,7 +110,7 @@ function _advect_two_velocity!(
     # at the beginning of the directional WY sweeps.
     if check_timestep
         limit = stable_timestep(velocity, work)
-        dt <= limit * (1 + 1.0e-6 + 32eps(T)) || throw(
+        dt <= limit * (one(T) + _wy_step_slack(T)) || throw(
             ArgumentError("time step exceeds the WY CFL limit"),
         )
     else
@@ -132,7 +136,7 @@ function _advect_two_velocity!(
         stable_timestep(projected, work),
         stable_timestep(gas, work),
     )
-    dt <= limit * (1 + 1.0e-6 + 32eps(T)) || throw(
+    dt <= limit * (one(T) + _wy_step_slack(T)) || throw(
         ArgumentError(
             "time step exceeds the projected two-velocity WY CFL limit",
         )
@@ -248,11 +252,11 @@ end
     ) / 2
 end
 
-"""Copy current face apertures into transport's frozen time-step-start state.
+"""Freeze phase apertures and the cut-cell subface ordering.
 
-After the first projection, the interface-owned apertures already describe
-this state. The geometric clipping is then done only once, after transport,
-for the next pressure projection; this call is just two vector copies.
+The PLIC is reconstructed between directional sweeps. With a solid, freezing
+the ordering with the apertures keeps the swept intervals equal to those used
+by the pre-transport geometric timestep bound.
 """
 function _freeze_phase_apertures!(
         field::InterfaceField{T, M}, work::WYAdvectionWorkspace{T, M},
@@ -269,7 +273,46 @@ function _freeze_phase_apertures!(
     )
     copyto!(work.liquid_aperture, liquid)
     copyto!(work.gas_aperture, gas)
+    if work.interface_transport isa FrozenInterfaceFluxes && !isnothing(field.geometry)
+        length(work.liquid_subface_lower) == length(liquid) || throw(
+            DimensionMismatch("WY subface workspace does not match the mesh"),
+        )
+        geometry = field.geometry
+        for (index, face) in pairs(field.mesh.faces)
+            open = @inbounds geometry.aperture[index]
+            liquid_partial = zero(T) < liquid[index] < open
+            gas_partial = zero(T) < gas[index] < open
+            # Full-width and empty subfaces do not use their ordering.
+            @inbounds work.liquid_subface_lower[index] =
+                (liquid_partial || gas_partial) &&
+                _averaged_tangent_normal(field, face, 3 - face.axis) >= zero(T)
+        end
+    end
     return work
+end
+
+"""
+Width of one frozen phase subface in donor-cell coordinates.
+
+It is the phase aperture times the full face interval, capped by the open
+width, so it does not inherit the cancellation of the clipped interval
+endpoints when the subface sits at the far end of its interval.
+"""
+@inline function _frozen_subface_width(
+        field::InterfaceField{T}, work::WYAdvectionWorkspace{T},
+        face, face_index, donor, liquid_carrier::Bool, geometry,
+    ) where {T}
+    full_lo, full_hi = _face_local_tangent_interval(field.mesh, donor, face)
+    full_width = T(full_hi - full_lo)
+    open_aperture = isnothing(geometry) ? one(T) :
+        @inbounds(geometry.aperture[face_index])
+    phase_aperture = liquid_carrier ?
+        @inbounds(work.liquid_aperture[face_index]) :
+        @inbounds(work.gas_aperture[face_index])
+    return min(
+        clamp(phase_aperture, zero(T), open_aperture) * full_width,
+        clamp(open_aperture, zero(T), one(T)) * full_width,
+    )
 end
 
 """Frozen open/phase subface interval in coordinates of the donor cell."""
@@ -304,9 +347,12 @@ function _frozen_subface_interval(
     phase_width > zero(T) || return open_lo, open_lo
     phase_width >= open_width && return open_lo, open_hi
 
-    tangent = 3 - face.axis
-    liquid_tangent = _averaged_tangent_normal(field, face, tangent)
-    liquid_is_lower = liquid_tangent >= zero(T)
+    # Without a solid the velocity-based extrusion bound keeps the donating
+    # regions disjoint regardless of ordering. Preserve the current PLIC
+    # ordering there, and freeze it only where the cut bound depends on it.
+    liquid_is_lower = isnothing(geometry) ?
+        _averaged_tangent_normal(field, face, 3 - face.axis) >= zero(T) :
+        @inbounds(work.liquid_subface_lower[face_index])
     phase_is_lower = liquid_carrier == liquid_is_lower
     return phase_is_lower ?
         (open_lo, open_lo + phase_width) :
@@ -316,11 +362,12 @@ end
 """Liquid fraction of one frozen phase-subface donating region."""
 function _frozen_subface_swept_fraction(
         field::InterfaceField{T}, face, donor, u, dt,
-        tangent_lo, tangent_hi, target, geometry,
+        tangent_lo, tangent_width, target, geometry,
     ) where {T}
     target > zero(T) || return zero(T)
-    transverse_width = T(tangent_hi - tangent_lo)
+    transverse_width = T(tangent_width)
     transverse_width > zero(T) || return zero(T)
+    tangent_hi = T(tangent_lo) + transverse_width
     mesh = field.mesh
     axis = face.axis
     function swept_bounds(distance)
@@ -353,6 +400,9 @@ function _frozen_subface_swept_fraction(
             geometry.solid, donor, swept_bounds(one(T))...,
         )
         tolerance = T(256) * eps(T) * max(one(T), maximum_area)
+        # The step checks accept a step up to `1 + _wy_step_slack(T)` times
+        # the bound, so the swept volume may exceed the strip by that much.
+        tolerance += T(2) * _wy_step_slack(T) * maximum_area
         target <= maximum_area + tolerance || error(
             "frozen phase-subface flux exceeds the donor open volume",
         )
@@ -411,12 +461,16 @@ function _compute_directional_wy_fluxes!(
             iszero(u) && continue
             donor = u >= 0 ? face.minus : face.plus
             volume = T(dt) * u * face.area * aperture
-            tangent_lo, tangent_hi = _frozen_subface_interval(
+            tangent_lo, _ = _frozen_subface_interval(
+                field, work, face, face_index, donor, liquid_carrier,
+                geometry,
+            )
+            width = _frozen_subface_width(
                 field, work, face, face_index, donor, liquid_carrier,
                 geometry,
             )
             fraction = _frozen_subface_swept_fraction(
-                field, face, donor, u, dt, tangent_lo, tangent_hi,
+                field, face, donor, u, dt, tangent_lo, width,
                 abs(volume) / mesh.blocks[donor.block].volume,
                 geometry,
             )

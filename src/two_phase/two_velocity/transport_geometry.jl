@@ -52,13 +52,90 @@ function _frozen_interface_stable_timestep(
     for (face_index, face) in pairs(mesh.faces), phase in 1:2
         aperture = phase == 1 ? work.liquid_aperture[face_index] :
             work.gas_aperture[face_index]
-        aperture > zero(T) || continue
+        # A subface at round-off width carries no flux the sweep can resolve.
+        aperture > _wy_strip_area_tolerance(T) || continue
         u = velocity[phase].interior[face_index]
+        iszero(u) && continue
         donor = u >= 0 ? face.minus : face.plus
-        maxrate = max(
-            maxrate,
-            abs(u) / mesh.blocks[donor.block].spacing[face.axis],
+        block = mesh.blocks[donor.block]
+        maxrate = max(maxrate, abs(u) / block.spacing[face.axis])
+
+        # This is the same donor and frozen phase-subface used by the sweep.
+        # A cut donor may have little open volume behind just this subface,
+        # even when its whole-cell incoming and outgoing bounds are satisfied.
+        lo, hi = _frozen_subface_interval(
+            work.interface, work, face, face_index, donor, phase == 1,
+            geometry,
         )
+        rate = abs(u) * face.area * aperture
+        if isnothing(geometry)
+            # The subface spans its aperture, so its width is exactly the
+            # aperture times the full interval; differencing the clipped
+            # interval endpoints would shrink it by round-off.
+            width = _frozen_subface_width(
+                work.interface, work, face, face_index, donor, phase == 1,
+                geometry,
+            )
+            area = T(0.5) * width
+            maxrate = max(maxrate, _wy_strip_rate(rate, area, block.volume))
+        else
+            solid = geometry.solid
+            area = _wy_open_strip_area(
+                solid, donor, face.axis, lo, hi, -T(0.5), T(0.5),
+            )
+            maxrate = max(
+                maxrate,
+                _wy_cut_strip_rate(
+                    rate, area, aperture, block.volume, face_index, face, donor,
+                    phase,
+                ),
+            )
+
+            # Opposing cut-cell subfaces can overlap even when each swept
+            # volume fits its own strip. Split their common open support and
+            # constrain each volume to its own side. Visit each pair once,
+            # from the positive face, including both phase carriers.
+            if u > zero(T) && _get(solid.fraction, donor) > zero(T)
+                cell = (donor.block - 1) * cells_per_block +
+                    (donor.j - 1) * nx + donor.i
+                for pointer in work.cell_face_offsets[cell]:(
+                        work.cell_face_offsets[cell + 1] - 1
+                    )
+                    work.cell_face_orientations[pointer] == -1 || continue
+                    other_index = work.cell_faces[pointer]
+                    other_face = mesh.faces[other_index]
+                    other_face.axis == face.axis || continue
+                    for other_phase in 1:2
+                        other_aperture = other_phase == 1 ?
+                            work.liquid_aperture[other_index] :
+                            work.gas_aperture[other_index]
+                        other_aperture > _wy_strip_area_tolerance(T) || continue
+                        other_u = velocity[other_phase].interior[other_index]
+                        other_u < zero(T) || continue
+                        other_lo, other_hi = _frozen_subface_interval(
+                            work.interface, work, other_face, other_index,
+                            donor, other_phase == 1, geometry,
+                        )
+                        areas = _wy_opposing_strip_areas(
+                            solid, donor, face.axis, other_lo, other_hi, lo, hi,
+                        )
+                        isnothing(areas) && continue
+                        left_area, right_area = areas
+                        other_rate = abs(other_u) * other_face.area * other_aperture
+                        maxrate = max(
+                            maxrate,
+                            _wy_side_strip_rate(
+                                other_rate, left_area, other_aperture,
+                                block.volume,
+                            ),
+                            _wy_side_strip_rate(
+                                rate, right_area, aperture, block.volume,
+                            ),
+                        )
+                    end
+                end
+            end
+        end
     end
     for block in eachindex(mesh.blocks)
         incoming = @inbounds work.incoming.blocks[block]
@@ -177,6 +254,36 @@ end
     )
 end
 
+"""
+Phase aperture below which a face is treated as single-phase.
+
+The two adjacent face traces are clipped independently, so their average can
+miss the shared open aperture by a few ulp and leave a residue on a phase
+that does not reach the face. Such a residue is not a physical opening: its
+subface has essentially zero width and no open strip, which would make the
+cut-donor bound infinite. Both traces are fractions of the *whole* face, so
+their rounding error is absolute rather than proportional to the aperture.
+"""
+@inline _phase_aperture_residue(::Type{T}) where {T} = T(64) * eps(T)
+
+"""
+    _snap_phase_apertures(liquid, open)
+
+Split `open` into liquid and gas apertures, collapsing a round-off residue on
+either phase to exactly zero. The pair always sums to `open`, and a face whose
+own open extent is at round-off level keeps both apertures: the cut-donor
+bounds treat such a face as carrying no resolvable flux.
+"""
+@inline function _snap_phase_apertures(liquid::T, open::T) where {T}
+    liquid = clamp(liquid, zero(T), open)
+    gas = open - liquid
+    residue = _phase_aperture_residue(T)
+    open > residue || return liquid, gas
+    liquid <= residue && return zero(T), open
+    gas <= residue && return open, zero(T)
+    return liquid, gas
+end
+
 """Physical phase apertures on one owned interior face."""
 @inline function _phase_face_apertures(
         field::InterfaceField{T}, geometry, index,
@@ -200,8 +307,7 @@ end
         _face_aperture(field, geometry, face, face.minus) +
             _face_aperture(field, geometry, face, face.plus)
     ) / 2
-    liquid = clamp(liquid, zero(T), open)
-    return liquid, open - liquid
+    return _snap_phase_apertures(T(liquid), open)
 end
 
 @inline _phase_face_apertures(field::InterfaceField, index) =
@@ -255,7 +361,7 @@ end
     liquid = clamp(
         _face_aperture(field, geometry, face, face.cell), zero(T), open,
     )
-    return liquid, open - liquid
+    return _snap_phase_apertures(T(liquid), open)
 end
 
 @inline _phase_boundary_face_apertures(field::InterfaceField, index) =

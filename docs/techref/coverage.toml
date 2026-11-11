@@ -578,7 +578,9 @@ sources = [
   { file = "src/vof/fluxes.jl", symbol = "_swept_fraction" },
   { file = "src/vof/workspace.jl", symbol = "stable_timestep" }
 ]
-tests = []
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "WY cut donor strip at a level transition (#52)" },
+]
 check = "strip_limitation_check"
 [[claims]]
 label = "eq:vof:snap"
@@ -597,6 +599,17 @@ sources = [
 ]
 tests = [
   { file = "test/two_phase/transport.jl", testset = "WY volume and phase constants on uniform, mixed and regridded meshes" }
+]
+check = "cfl_check"
+[[claims]]
+label = "eq:vof:geometric-cfl"
+sources = [
+  { file = "src/vof/workspace.jl", symbol = "stable_timestep" },
+  { file = "src/two_phase/two_velocity/transport_geometry.jl", symbol = "_frozen_interface_stable_timestep" },
+]
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "WY cut hanging donor counterexamples (#56)" },
+  { file = "test/two_phase/transport.jl", testset = "WY randomized cut walls at a level transition" },
 ]
 check = "cfl_check"
 [[claims]]
@@ -641,7 +654,8 @@ sources = [
   { file = "src/two_phase/two_velocity/interface_transport.jl", symbol = "_frozen_subface_interval" }
 ]
 tests = [
-  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Frozen-subface WY tangential transport" }
+  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Frozen-subface WY tangential transport" },
+  { file = "test/two_phase/two_velocity/transport/two_velocity_wy_reference.jl", testset = "Frozen subface cut-donor CFL and boundedness (#56)" }
 ]
 check = "frozen_flux_check"
 [[claims]]
@@ -661,7 +675,8 @@ sources = [
   { file = "src/two_phase/two_velocity/transport_geometry.jl", symbol = "_frozen_interface_stable_timestep" }
 ]
 tests = [
-  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Frozen-subface WY tangential transport" }
+  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Frozen-subface WY tangential transport" },
+  { file = "test/two_phase/two_velocity/transport/two_velocity_wy_reference.jl", testset = "Frozen subface uses its own donor-open strip" }
 ]
 check = "frozen_cfl_check"
 [[claims]]
@@ -1915,7 +1930,9 @@ sources = [
   { file = "src/vof/fluxes.jl", symbol = "_swept_fraction" },
   { file = "src/vof/workspace.jl", symbol = "stable_timestep" }
 ]
-tests = []
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "WY cut donor strip at a level transition (#52)" },
+]
 check = "strip_limitation_check"
 [[claims]]
 label = "dev:stab:boundedness"
@@ -1923,14 +1940,20 @@ sources = [
   { file = "src/vof/fluxes.jl", symbol = "_advect_wy!" },
   { file = "src/two_phase/two_velocity/transport_geometry.jl", symbol = "_frozen_interface_stable_timestep" }
 ]
-tests = []
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "WY cut hanging donor counterexamples (#56)" },
+  { file = "test/two_phase/transport.jl", testset = "WY randomized cut walls at a level transition" },
+]
 [[claims]]
 label = "dev:stab:frozen-flux"
 sources = [
   { file = "src/two_phase/two_velocity/interface_transport.jl", symbol = "_compute_directional_wy_fluxes!" },
   { file = "src/two_phase/two_velocity/transport_geometry.jl", symbol = "_frozen_interface_stable_timestep" }
 ]
-tests = []
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "WY cut hanging donor counterexamples (#56)" },
+  { file = "test/two_phase/two_velocity/transport/two_velocity_wy_reference.jl", testset = "Frozen projected carrier for the wavy-wall drop (#56)" },
+]
 [[claims]]
 label = "eq:verif:energy"
 sources = [

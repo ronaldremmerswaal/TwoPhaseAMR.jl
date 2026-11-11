@@ -7,6 +7,7 @@
 - Made single-phase composite-grid viscous diffusion dissipative in the dual-volume norm, using shared geometric transition contacts instead of nonsymmetric corrected rows, and gave a split boundary side's wall strips their own half-wall rows, matching the embedded operator (#80).
 - `step!(flow, dt)` now performs a complete flow step, including time and counter updates, post-step adaptivity, diagnostics, and the `:step` observer event; `simulate!` repeats these steps and retains run lifecycle events and continuation.
 - `FlowSimulation` accepts `force` and stores it as `flow.force`, the default body acceleration for its stepping and simulation calls. Field-level `step!` remains available for the physical solve alone.
+- Bound WY cut-donor timesteps by the actual swept strips, including hanging faces and frozen phase subfaces; freeze subface ordering with apertures in solid geometry to keep opposing donating regions disjoint, snap round-off phase apertures to an exact single phase, and report an empty donor strip by face and cell instead of returning a zero step (#52, #56).
 - Prevented CG from using asymmetric multigrid V-cycles and selected CG for volume-weighted symmetric embedded viscous systems (#128).
 - Shared the stepping controls, force bounds and surface-tension/gravity stages across flow models, and consolidated topology-dependent workspace rebuilding.
 - `NavierStokesSystem` is now the concrete equation-system type, and `FlowSimulation` exposes it as `flow.system`; numerical options and physics are retained on the system.

@@ -265,23 +265,18 @@ wrapped across periodic seams.
 
 \input{figures/vof_donating}
 
-\emph{Limitation at level transitions.} The bisection requires that the open
-part of the strip $\drect{f}(1)$ hold the carrier volume. For uncut donors and
-for cut donors whose sides normal to $\unitvec{k}$ are single faces this
-follows from the outgoing bound of \cref{eq:vof:cfl} (the open part of the
-strip is then $\meas{\opencell{\donor{f}}}$ or, for an uncut donor, the
-rectangle itself). For a coarse cut donor the strip behind one segment is
-half of the cell and its open part can be much smaller than the aperture of
-the segment suggests. In the fixture of \code{strip_limitation_check}
-(\code{figures/vof.jl}), a coarse cell with open fraction
-$\chkVofStripOpen$ next to two finer cells, the segment with
-$\aperture{f}=\chkVofStripAperture$ must sweep $\chkVofStripTarget$ of the
-coarse volume at $\dt=\dtwy=\chkVofStripDt$, but its half-strip has only
-$\chkVofStripArea$ open, so \apifun{advect!} stops with the error at the time
-step that \apifun{stable_timestep} returns (the donor is mixed: in the one-velocity path pure donors need no rectangle, whereas the frozen carrier
-evaluates the strip over each phase subface also in pure donors and can refuse a step on a single-level cut
-mesh as well); the largest accepted step is $\dtwy$ times the ratio of the open area of the strip to the carrier volume of the
-segment ($0.947$ in this fixture; see \issue{56}).
+\emph{Cut donor strips.} On a hanging side the open part of the strip behind
+one segment can be much smaller than the whole open cell. The time-step
+restriction therefore includes the actual open strip of each outgoing
+segment and the open portions available to pairs of opposing segments
+(\cref{sec:vof:cfl}). In the fixture of \code{strip_limitation_check}
+the former whole-cell bound returned a step at which the segment had to sweep
+more than its strip could hold (on \code{origin/main}: $0.0267$ against
+$0.0253$ at $\dt=0.0594$); the revised bound limits that segment before the
+sweep, so the returned step $\dt=\chkVofStripDt$ keeps the segment volume
+$\chkVofStripTarget$ within the open strip $\chkVofStripArea$ (\issue{52}).
+The same restriction applies to each frozen
+phase subface, including in a pure donor.
 
 \emph{Checks} (\code{figures/vof.jl}, \code{one_velocity_flux_check}). An
 independent evaluation of~\cref{eq:vof:rectangle,eq:vof:depth,eq:vof:region,eq:vof:swept-fraction,eq:vof:phase-flux}
@@ -332,8 +327,9 @@ $[0,\meas{\opencell{c}}]$ by more than $128\machineeps\meas{c}$
 (\srcsym{src/vof/fluxes.jl}{_wy_fraction_in_bounds}): the round-off of the
 clipped and summed volumes is measured in units of the full cell, not
 amplified by a small open fraction (since \issue{55}), while genuine
-violations, such as those of \issue{56}, still raise. Otherwise it clamps
-$\preclamp{\liq,\splitlevel{j}}{c}$ to $[0,1]$ and snaps it, which together give
+violations still raise, including those produced by an excessive step.
+Otherwise it clamps $\preclamp{\liq,\splitlevel{j}}{c}$ to $[0,1]$ and
+snaps it, which together give
 \begin{equation}\label{eq:vof:snap}
   \condfrac{\liq,\splitlevel{j}}{c}=\begin{cases}
     0, & \preclamp{\liq,\splitlevel{j}}{c}\le\ffloor,\\
@@ -348,10 +344,10 @@ liquid volume by at most $\ffloor\meas{\opencell{c}}$, each clamp by at most
 $128\machineeps\meas{c}$, and both enter the balance
 \cref{eq:vof:step} (\cref{dev:interface:floor}).
 
-\emph{Boundedness.}\phantomsection\label{prop:vof:boundedness} The run-time check is the only guarantee in general. The
+\emph{Boundedness.}\phantomsection\label{prop:vof:boundedness} The
 argument of the thesis' boundedness lemma~\thesis{Lemma~3.3} carries over when,
-in the sweep, the rectangles of the faces through which a cell donates are
-pairwise disjoint: the outflow of the phase that the cell moves
+in the sweep, the open portions of the rectangles through which a cell
+donates are pairwise disjoint: the outflow of the phase that the cell moves
 conservatively (liquid if $\indicator{\liq}_c=0$, gas otherwise) is then at
 most the volume of that phase in the reconstruction, so that phase fraction
 stays non-negative, and its inflow over both sweeps is at most
@@ -359,29 +355,19 @@ $\cflin{c}\le\wycflval\le\half$ of the cell (\cref{eq:vof:cfl}), so it stays
 at most $\half+\cflin{c}\le1$; up to rounding and to the at most $\ffloor$ added
 by a snap after the first sweep, $0\le C\le1$ before clamping. The
 rectangles are disjoint in uncut donors, where $\drdepth{f}\le\wycflval\le\half$
-by the extrusion bound, so rectangles of opposite sides lie in opposite halves
-and those of the two segments of one side have disjoint tangential extents.
-They are also disjoint in a cut donor whose two sides normal to $\unitvec{k}$ are single faces
-when the rectangles span the whole side (one-velocity and projected carriers): two overlapping
-full-width rectangles would cover the cell, so their open volumes would sum to at least
-$\meas{\opencell{c}}$, whereas the outgoing bound limits them to
-$\wycflval\meas{\opencell{c}}<\meas{\opencell{c}}$. Neither argument applies to a cut coarse
-donor with two segments on a side, nor to the frozen carrier in cut donors, whose subface
-rectangles span only part of the side, and there the bound can fail: if the donor's own plane
-closes a side (trace $0$) while the uncut neighbour behind it is open (trace $1$), the face has
-$\aperture{f}=\half$, the rectangle of such a segment can reach almost through the cell, overlap the
-rectangle of the opposite face in the open moved phase and make its outflow exceed its volume with
-all of~\cref{eq:vof:cfl} satisfied; the run-time check then stops the run
-(\issue{56} collects explicit
-configurations at the stable step, for one velocity and for the frozen carrier).
-\phantomsection\label{ex:vof:depth-triangle}In cut donors $\drdepth{f}$ can
-exceed $\half$, and approach $1$: if the open part of the donor is the triangle below its
-anti-diagonal and the neighbour behind the face is uncut, the traces of the face are $0$ and $1$, so
-$\aperture{f}=\half$, and the open area of the full-width rectangle is $\hat d^2/2$, so
-$\cflout{c}=\cflext{f}=\half$ gives $\drdepth{f}=1/\sqrt2$; for the triangle with legs $\epsilon$ in the
-far corner, $\cflout{c}=\half$ gives $\drdepth{f}=1-\epsilon+\epsilon/\sqrt2\to1$. The bound
-$\cflin{c}\le\half$ cannot be relaxed: a cell with $\condfrac{\liq,\timelevel{n}}{c}=\half$ that receives
-liquid from both sides reaches $\condfrac{\liq}{c}=\half+\cflin{c}$.
+by the extrusion bound. In a cut donor the corresponding \emph{open parts}
+are disjoint: outgoing regions from one side have disjoint tangential
+intervals, while each pair from opposing sides is separated within their
+common open support by the geometric bound of \cref{sec:vof:cfl}. This also
+applies to hanging sides and frozen subfaces. The check remains active to
+detect genuine violations, including steps supplied with the check disabled.
+\phantomsection\label{ex:vof:depth-triangle}The separation plane need not be
+the cell midpoint: a cut strip may have no open area on the half adjacent to
+the face but have positive open area farther inside. The adaptive separation
+still permits a positive step whenever the required strip areas are positive.
+The bound $\cflin{c}\le\half$ cannot be relaxed: a cell with
+$\condfrac{\liq,\timelevel{n}}{c}=\half$ that receives liquid from both sides
+reaches $\condfrac{\liq}{c}=\half+\cflin{c}$.
 
 \begin{implnote}
 Check, clamp and snap: \srcsym{src/vof/fluxes.jl}{_advect_wy!}; the
@@ -400,21 +386,49 @@ in every open cell and on every face,
   \cflext{f}=\frac{\dt\abs{\velo_f}}{\cellwidth{\donor{f}}{\faxis{f}}},
   \end{gathered}
 \end{equation}
-summed over the faces of both axes, by $\wycflval$. \apifun{stable_timestep}
-returns the largest such step,
-\begin{equation}\label{eq:vof:dtwy}
-  \dtwy=\wycflval\Big/\max\curlypar{\max_{c}\frac{\cflin{c}}{\dt},\,\max_{c}\frac{\cflout{c}}{\dt},\,\max_{f}\frac{\cflext{f}}{\dt}},
-  \qquad 0<\wycflval\le\half\ (\text{default }\half),
+summed over the faces of both axes, by $\wycflval$. For every outgoing face
+of a cut donor let $q_f=\meas{f}\aperture{f}\abs{\velo_f}$ and let $A_f$
+be the physical open area of its complete tangential strip. For each pair
+of outgoing faces on opposite sides whose tangential intervals overlap in
+the open part of the donor, choose a plane halfway between the minimum and
+maximum normal coordinates of that common open part. Each face of the pair
+also receives the area $A$ of its own strip on its side of this plane. All
+such full-strip and pairwise areas define constraints
+\begin{equation}\label{eq:vof:geometric-cfl}
+  \nu^{\mathrm{geom}}=\frac{\dt q_f}{2A}\le\wycflval .
 \end{equation}
-and $\infty$ for a vanishing velocity; covered cells do not enter. It also
+If the common open part is empty, no pairwise restriction is needed. A
+positive rate through a strip whose open area is zero, or below the sweep's
+area tolerance $256\machineeps\aperture{f}$, cannot be represented by a
+donating region in that donor: the bound raises an \code{ArgumentError}
+naming the face, the donor cell and the strip area instead of returning an
+unusable step. Phase apertures within $64\machineeps$ of a pure phase are
+snapped to zero (the traces are fractions of the whole face, so their
+rounding is absolute), and a face whose own open extent is at that level is
+left out of the strip constraints because it carries no resolvable flux. The
+sweep's area tolerance is widened by the slack of the step check
+(\cref{eq:stab:check}), so a step that passes the check is not rejected by the
+sweep.
+Otherwise \apifun{stable_timestep} returns
+\begin{equation}\label{eq:vof:dtwy}
+  \begin{split}
+  \dtwy={}&\wycflval\Big/\max\Bigl\{\max_{c}\frac{\cflin{c}}{\dt},\,
+  \max_{c}\frac{\cflout{c}}{\dt},\\
+  &\hspace{3em}\max_{f}\frac{\cflext{f}}{\dt},\,
+  \max\frac{\nu^{\mathrm{geom}}}{\dt}\Bigr\},
+  \qquad 0<\wycflval\le\half\ (\text{default }\half).
+  \end{split}
+\end{equation}
+where the last maximum is zero without geometric constraints. It returns
+$\infty$ for a vanishing velocity; covered cells do not enter. It also
 requires a finite velocity with $\velo_f=0$ on every physical boundary face
 (``impermeable or periodic boundaries''); inflow and outflow boundaries are
 not supported by the VOF transport. \apifun{advect!} checks
 $\dt\le(1+10^{-6}+32\machineeps)\dtwy$ with $\wycflval=\half$ unless
-\code{check_timestep=false}. The extrusion bound keeps every uncut rectangle
-in the half of its donor next to the face: for a segment on a coarse donor,
-whose length is half the side, the thesis' bound on $\dt\meas{f}\abs{\velo_f}$
-would allow a depth of a whole cell.
+\code{check_timestep=false}. In an uncut donor the extrusion bound confines
+every rectangle to the half of the donor next to its face. In a cut donor,
+\cref{eq:vof:geometric-cfl} gives $\dt q_f\le A$ and hence disjoint open
+donating regions even when their rectangles extend beyond the cell midpoint.
 
 In a flow simulation, \apifun{step!} checks
 $\dt\le(1+10^{-6}+32\machineeps)\min\curlypar{\dtwy,\dtcap,\dtgrav}$ (\cref{eq:stab:check}; the $10^{-6}$ admits the stretched last step of \issue{98}) with
@@ -441,10 +455,10 @@ $\chkVofCflDiff$ (relative) on the uniform, composite and cut fixtures,
 \apifun{advect!} accepts $\dtwy$ and rejects $(1+2\times10^{-6})\dtwy$, and the
 deepest uncut rectangle at $\dtwy$ has $\drdepth{f}=\chkVofCflDepth$. On the
 cut fixture with the plain streamfunction velocity of
-\cref{sec:vof:conservation} the outgoing bound of the smallest cut cell
-($\openfrac{c}=\chkVofCutSmallest$) gives $\dtwy=\chkVofCutDt$, whereas the
-extrusion bound alone would allow $\chkVofCutExtrusionDt$: small cut cells
-reduce the step, since no cells are merged.
+\cref{sec:vof:conservation}, whose smallest open fraction is
+$\chkVofCutSmallest$, the full bound gives $\dtwy=\chkVofCutDt$, whereas
+the extrusion bound alone would allow $\chkVofCutExtrusionDt$: small cut
+cells can reduce the step, since no cells are merged.
 \end{sloppypar}
 
 \begin{deviation}{Time-step bound}
@@ -452,9 +466,10 @@ The thesis imposes the incoming bound~\thesis{eqs.~(3.50)--(3.51)} with
 $\wycflval=\half$ and full cell volumes, and the incoming and outgoing bounds
 for compressible flow~\thesis{eq.~(3.55)}, from which the containment of every
 donating region in half of its cell follows on a uniform mesh~\thesis{eq.~(3.56)}.
-The code always imposes both bounds with open volumes and adds the extrusion
-bound $\cflext{f}\le\wycflval$, which restores that containment for the
-segments of coarse donors; a flow simulation selects steps with
+The code always imposes both bounds with open volumes, adds the extrusion
+bound $\cflext{f}\le\wycflval$ for coarse-donor segments, and applies
+the geometric strip and opposing-pair constraints in cut donors
+(\cref{eq:vof:geometric-cfl}); a flow simulation selects steps with
 $\wycflval=0.45$.
 \end{deviation}
 
@@ -613,10 +628,12 @@ main two-velocity method.
 
 \subsection{Frozen interface fluxes}\label{sec:vof:frozen}
 The phase apertures $\phaseaperture{\liq}{f}$, $\phaseaperture{\gas}{f}$ of the
-reconstruction at the start of the step (\cref{eq:interface:phase-aperture})
-are frozen for both sweeps. In a flow simulation they are those of the
-preceding physical projection, or of the projection after an intervening
-regrid. Each face is divided into an open interval and two phase
+reconstruction at the start of the step
+(\cref{eq:interface:phase-aperture}) are frozen for both sweeps. With a solid
+the phase-subface ordering is also frozen, so the sweep uses the intervals
+checked by the geometric bound. In a flow simulation the apertures are those
+of the preceding physical projection, or of the projection after an
+intervening regrid. Each face is divided into an open interval and two phase
 subfaces. In the local tangential coordinate of the donor, with
 $w=\rhi{t}-\rlo{t}$, the open interval lies at the end towards which the
 averaged tangential solid normal points, and the liquid subface at the end
@@ -635,8 +652,9 @@ towards which the averaged tangential interface normal does not point,
 where $\phasepart{\phase}{f}=\opencell{f}$ if
 $\phaseaperture{\phase}{f}\ge\aperture{f}$. The stored local normals of both
 cells enter (in pure cells those of the WY stencil); the solid's are those
-of~\cref{eq:cutcells:solid}; the widths are frozen, the positions follow the
-current reconstruction. Every phase with $\phaseaperture{\phase}{f}>0$ and
+of~\cref{eq:cutcells:solid}. With a solid the ordering is frozen at the
+start of the step; without a solid it follows the current reconstruction.
+Every phase with $\phaseaperture{\phase}{f}>0$ and
 $\velo^{\phase}_f\ne0$ sweeps the rectangle~\cref{eq:vof:rectangle} over
 $\phasepart{\phase}{f}$, upwind of $\velo^{\phase}_f$, whose open part has the
 volume $\dt\meas{f}\phaseaperture{\phase}{f}\abs{\velo^{\phase}_f}$ (bisection
@@ -663,8 +681,8 @@ simulation, if AMR changes the topology after that projection, the transferred
 velocities are projected again on the new apertures before the next transport
 step; the transferred physical pressure is kept. Standalone \apifun{adapt!} does
 not project, so a passive transport caller must impose the constraint. The time-step
-bound is~\cref{eq:vof:cfl} with the rate of each face replaced by the rates of
-its two subfaces,
+bound is~\cref{eq:vof:cfl,eq:vof:geometric-cfl} with the rate and
+tangential interval of each phase subface treated separately,
 \begin{equation}\label{eq:vof:frozen-cfl}
   \cflin{c}=\frac{\dt}{\meas{\opencell{c}}}\sum_{f\in\faceset{c}}\sum_{\phase}\posflux{-\orient{c}{f}\meas{f}\phaseaperture{\phase}{f}\velo^{\phase}_f},\qquad
   \cflext{f}=\max_{\phase:\,\phaseaperture{\phase}{f}>0}\frac{\dt\abs{\velo^{\phase}_f}}{\cellwidth{\donor{f}}{\faxis{f}}},
@@ -674,9 +692,10 @@ $\velo^{\phase}_f=0$ on the boundary faces of cells that contain the phase.
 Without a solid and with $\velo^{\liq}_f=\velo^{\gas}_f$ on every face the two subface rectangles tile
 the one-velocity rectangle: their widths add up to the segment because
 $\phaseaperture{\liq}{f}+\phaseaperture{\gas}{f}=\aperture{f}=1$ (to rounding), both have the depth
-$\dt\abs{\velo_f}/\cellwidth{\donor{f}}{k}$, and in the second sweep the widths are still the frozen ones
-while the positions follow the current reconstruction. The carrier, the phase volumes and the
-time-step bound then coincide with those of \cref{sec:vof:donating} up to rounding. With a solid
+$\dt\abs{\velo_f}/\cellwidth{\donor{f}}{k}$, and in the second sweep the
+widths remain frozen while their positions follow the current reconstruction.
+The carrier, the phase volumes and the time-step bound then coincide with
+those of \cref{sec:vof:donating} up to rounding. With a solid
 the subfaces lie in the open interval of the segment and each has the depth that holds its own volume
 in its own open strip, whereas the one-velocity rectangle spans the whole segment with one depth, so
 the fluxes differ.
