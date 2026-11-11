@@ -964,8 +964,13 @@ function _encode_live!(
     growing = false
     recorder_frames = TwoPhaseAMR.frames(store)
     seed = isempty(recorder_frames) ? nothing : newest_frame(store)
-    sampler = isnothing(seed) ? nothing :
-        LiveVideoSampler{Frame}(seed.time, sim_per_second / fps)
+    # Start at the simulation time at job start, not at the possibly lagging
+    # newest stored frame. The seed only anchors the left neighbour.
+    step_times = TwoPhaseAMR.step_log(store).time
+    t_start = isempty(step_times) ? (isnothing(seed) ? nothing : seed.time) :
+        last(step_times)
+    sampler = isnothing(t_start) ? nothing :
+        LiveVideoSampler{Frame}(t_start, sim_per_second / fps)
     seed_id = isnothing(seed) ? 0 : seed.id
 
     function show!(frame)
@@ -1025,7 +1030,13 @@ function _encode_live!(
             end
             decide!(push_live_frame!(sampler, frame, frame.time))
         end
-        isnothing(sampler) || decide!(flush_live_frames!(sampler))
+        if !isnothing(sampler)
+            # Hold the last arrived frame through the simulation time at stop,
+            # so sparse streams still cover the elapsed time.
+            stop_times = TwoPhaseAMR.step_log(store).time
+            t_end = isempty(stop_times) ? sampler.left_time : last(stop_times)
+            decide!(flush_live_frames!(sampler, t_end))
+        end
         isnothing(stream) &&
             throw(ArgumentError("the live recording produced no output frames"))
         Makie.save(getfield(recording, :path), stream)

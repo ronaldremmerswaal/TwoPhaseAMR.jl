@@ -91,6 +91,7 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
   let lastSchedule: RecordingSchedule | null = null;
   let scheduleKey = '';
   let pendingKey = '';
+  let scheduledKey = '';
   let scheduleTimer: number | undefined;
   let scheduleGeneration = 0;
   const download = find<HTMLAnchorElement>('[data-testid="export-download"]');
@@ -152,7 +153,6 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
       phase_rendering: view.mode,
       size: [Number(width.value), Number(height.value)] as [number, number],
       fps: Number(fps.value),
-      theme: themeValue(),
       arrangement: arrangement.value === 'below' ? 'below' as const : 'right' as const,
       interface: view.overlays.interface,
       geometry: view.overlays.solid,
@@ -172,6 +172,7 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
       frames: frameSelection(frames.value),
       ...(window.window ? { window: window.window } : {}),
       colorrange: range.value === 'current' ? common.colorrange ?? view.colorrange! : 'global',
+      theme: themeValue(),
       duration: Number(duration.value),
     };
   }
@@ -250,7 +251,10 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
     const command = scheduleCommand();
     if (!command) { renderSchedule(); return; }
     const key = JSON.stringify(command);
-    if (key === pendingKey || (key === scheduleKey && lastSchedule)) return;
+    // `update()` runs on every incoming frame; do not re-arm an unchanged
+    // request, or the timer would never fire during a running simulation.
+    if (key === scheduledKey || key === pendingKey) return;
+    scheduledKey = key;
     window.clearTimeout(scheduleTimer);
     scheduleTimer = window.setTimeout(() => requestSchedule(command, key), 120);
   }
@@ -263,11 +267,12 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
     for (const item of [panel, source, camera, arrangement, frames, range, from, to, duration, simPerSecond, width, height, fps, theme, format, path]) {
       item.disabled = recording.active;
     }
-    frames.disabled = frames.disabled || live;
-    from.disabled = from.disabled || live;
-    to.disabled = to.disabled || live;
-    duration.disabled = duration.disabled || live;
-    simPerSecond.disabled = simPerSecond.disabled || !live;
+    frames.disabled = recording.active || live;
+    from.disabled = recording.active || live;
+    to.disabled = recording.active || live;
+    duration.disabled = recording.active || live;
+    simPerSecond.disabled = recording.active || !live;
+    theme.disabled = recording.active || live;
     if (live) {
       range.options[0].hidden = true;
       range.options[1].hidden = false;
@@ -280,7 +285,7 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
     for (const input of diagnostics.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input, select')) input.disabled = recording.active;
     const selectedView = views().find(view => view.id === panel.value);
     note.textContent = (live
-      ? 'Live export samples arriving frames on a uniform simulation-time grid from the start time until stopped; a sparse stream repeats the last frame.'
+      ? 'Live export samples arriving frames on a uniform simulation-time grid from the start time until stopped; a sparse stream repeats the last frame. Theme applies to stored exports only.'
       : 'Stored export samples the candidate frames on a uniform simulation-time grid over the chosen window.') +
       ' Diagnostic exports use the selected panel’s visible series and y-axis scale.' +
       (selectedView?.overlays.cells || selectedView?.overlays.levels ? ' Cell edges and level colours are not included in server-side output.' : '');
@@ -315,9 +320,9 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
   }
   panel.addEventListener('change', () => { if (!pathWasEdited) setDefaultPath(); update(); });
   window.addEventListener('studio-view-change', update);
-  source.addEventListener('change', () => { lastSchedule = null; scheduleKey = ''; update(); });
+  source.addEventListener('change', () => { lastSchedule = null; scheduleKey = ''; scheduledKey = ''; update(); });
   for (const input of [from, to, duration, fps, frames]) {
-    input.addEventListener('input', () => { lastSchedule = null; scheduleKey = ''; update(); });
+    input.addEventListener('input', () => { lastSchedule = null; scheduleKey = ''; scheduledKey = ''; update(); });
   }
   simPerSecond.addEventListener('input', update);
   format.addEventListener('change', () => {
@@ -342,6 +347,7 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
     previewImage.hidden = true;
     lastSchedule = null;
     scheduleKey = '';
+    scheduledKey = '';
     const availableDiagnostics = diagnosticViews();
     diagnostics.replaceChildren(...groupDiagnostics((state.runs[0]?.diagnostics ?? []) as DiagnosticMetadata[]).map(group => {
       const row = document.createElement('div');

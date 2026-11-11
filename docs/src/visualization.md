@@ -329,7 +329,9 @@ two sources; a recording uses exactly one source:
   recording stops.
 
 Choose a camera, colour range, diagnostic arrangement (right or below),
-resolution, theme and output file. Width and height must be positive even
+resolution, output file, and (for stored frames) a theme. Theme is
+stored-only: the live figure is created lazily on the encoder task, outside
+the caller's theme block. Width and height must be positive even
 pixel counts; the frame rate is a positive integer. The dialog reports
 progress and offers a download when a file completes. When diagnostics sit to
 the right in a fixed-size export, the requested camera view is fitted
@@ -609,10 +611,11 @@ export returns its path. Cancellation is cooperative.
 previews and keyframes alike, including previews that retention later thins.
 Its uniform output spacing is `Δt = sim_per_second / fps`: output frame `k`
 shows the arrived frame nearest to `t_start + k · Δt`, where `t_start` is the
-simulation time of the newest stored frame when recording starts. A frame
-that arrives decides every output time up to its own time, so only one frame
-of look-ahead is needed; sparse streams repeat frames, dense streams skip
-them, and the last frame is held for the remaining output times. For example,
+simulation time at recording start (the last completed step, seeded with the
+newest stored frame). A frame that arrives decides every output time up to
+its own time, so only one frame of look-ahead is needed; sparse streams repeat
+frames and dense streams skip them. On `close`, the last arrived frame is held
+through the simulation time at stop. For example,
 continue the flow to a later time with a fresh recorder:
 
 ```julia

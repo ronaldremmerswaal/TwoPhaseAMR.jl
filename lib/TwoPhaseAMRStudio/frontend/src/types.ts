@@ -123,7 +123,6 @@ export interface LiveExportOptions {
   size: [number, number];
   fps: number;
   sim_per_second: number;
-  theme: 'light' | 'dark';
   arrangement: 'right' | 'below';
   interface: boolean;
   geometry: boolean;

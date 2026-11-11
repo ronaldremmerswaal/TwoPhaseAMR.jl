@@ -180,15 +180,21 @@ function push_live_frame!(sampler::LiveVideoSampler{F}, frame::F, time::Real) wh
 end
 
 """
-    flush_live_frames!(sampler)
+    flush_live_frames!(sampler, t_end = sampler.left_time)
 
-Return the frames for the remaining output times up to the last arrived
-frame's time, then empty the sampler's history.
+Return the frames for the remaining output times up to `t_end`, then empty
+the sampler's history. Every remaining output time shows the last arrived
+frame, which holds the final state when the stream is sparse or stops before
+the last output time. Without `t_end`, the last arrived frame's time is used;
+pass the simulation time at stop so the output count follows the elapsed
+simulation time rather than the last delivered frame.
 """
-function flush_live_frames!(sampler::LiveVideoSampler{F}) where {F}
+function flush_live_frames!(sampler::LiveVideoSampler{F}, t_end::Real = sampler.left_time) where {F}
     isnothing(sampler.left) && return F[]
+    isfinite(t_end) ||
+        throw(ArgumentError("the live end time must be finite, got $t_end"))
     decided = F[]
-    while _output_time(sampler, sampler.next_index) <= sampler.left_time
+    while _output_time(sampler, sampler.next_index) <= t_end
         push!(decided, sampler.left)
         sampler.next_index += 1
     end

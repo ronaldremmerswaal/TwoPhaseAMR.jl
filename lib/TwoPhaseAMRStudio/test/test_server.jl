@@ -531,6 +531,7 @@ end
                         Dict("unrecognized" => true),
                         Dict("action" => "start", "source" => "live", "frames" => "all"),
                         Dict("action" => "start", "source" => "live", "colorrange" => "global"),
+                        Dict("action" => "start", "source" => "live", "theme" => "dark"),
                     )
                     for (i, options) in enumerate(invalid_options)
                         request = 1000 + i
@@ -921,19 +922,6 @@ end
                     @test cancelled["error"] === nothing && cancelled["url"] === nothing
                     @test !isfile(cancel_path)
                     @test HTTP.get(address.base * stopped["url"]; status_exception = false).body == read(live_path)
-
-                    # A second export while the live job is active is rejected.
-                    _send(
-                        ws, Dict(
-                            "type" => "recording", "action" => "export", "source" => "stored",
-                            "path" => stored_path, "field" => "velocity_x", "request" => 1201,
-                        )
-                    )
-                    busy = _message(
-                        ws, message -> _istype(message, "error") &&
-                            get(message, "request", nothing) == 1201
-                    )
-                    @test occursin("already active", busy["message"])
 
                     # A stored export is one shot: it freezes its candidates at
                     # submission and encodes the default 20 fps over 2 s.

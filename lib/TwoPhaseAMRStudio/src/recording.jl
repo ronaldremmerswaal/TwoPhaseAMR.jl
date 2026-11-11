@@ -287,6 +287,11 @@ function _validate_recording(app, message, one_shot)
     theme = get(message, "theme", nothing)
     if !isnothing(theme)
         theme in ("light", "dark") || throw(ArgumentError("theme must be light or dark"))
+        # The live figure is created lazily on the encoder task, outside the
+        # caller's with_theme block, so only stored exports can apply one.
+        source == "stored" || throw(
+            ArgumentError("theme applies only to stored exports; the live figure is built while encoding"),
+        )
         theme = Symbol(theme)
     end
     arrangement = get(message, "arrangement", "right")

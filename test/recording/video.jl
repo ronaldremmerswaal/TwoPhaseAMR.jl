@@ -194,6 +194,19 @@ end
     @test length(early_shown) == 7
     @test [frame.id for frame in early_shown] == first(stored.indices, 7)
 
+    # The stop-time flush holds the last arrived frame through the elapsed
+    # simulation time, so sparse streams still cover it.
+    held = LiveVideoSampler{TestFrame}(0.0, 0.1)
+    held_shown = TestFrame[]
+    for frame in frames
+        frame.time <= 0.31 || break
+        append!(held_shown, push_live_frame!(held, frame, frame.time))
+    end
+    append!(held_shown, flush_live_frames!(held, 0.55))
+    @test length(held_shown) == 6
+    @test [frame.id for frame in held_shown] == [1, 7, 8, 8, 8, 8]
+    @test issorted([frame.time for frame in held_shown])
+
     # The first frame also decides output times before it.
     late = LiveVideoSampler{TestFrame}(0.0, 0.1)
     first_late = push_live_frame!(late, TestFrame(7, 0.02), 0.02)
