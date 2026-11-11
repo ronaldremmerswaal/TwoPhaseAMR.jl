@@ -83,10 +83,7 @@ end
                 interface; density = (1000.0, 1.0),
                 dynamic_viscosity = (0.02, 0.001)
             );
-            velocity_model = TwoVelocityModel(
-                pressure_projection = projection,
-                interface_transport = transport
-            ),
+            velocity_model = TwoVelocityModel(interface_transport = transport),
             velocity = (
                 (x, y, t, a) -> a == 1 ? 0.05 : 0.0,
                 (x, y, t, a) -> a == 1 ? -0.02 : 0.0,

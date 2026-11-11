@@ -1479,11 +1479,11 @@ end
         # the regrid defect gauge, protecting a resumed full-size step.
         remainder = 4.0e-8 # Above the final-step absorption threshold.
         case = make_flow(
-            CMDGFMProjection(); t_init = 2dt + remainder / 2,
+            ; t_init = 2dt + remainder / 2,
             t_end = 2dt + 2remainder,
         )
         reference = make_flow(
-            CMDGFMProjection(); update_interval = 4,
+            ; update_interval = 4,
             t_init = 2dt + remainder / 2, t_end = 2dt + 2remainder,
         )
         (; flow, interface) = case
