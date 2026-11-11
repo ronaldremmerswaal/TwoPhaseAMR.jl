@@ -8,7 +8,7 @@ using TwoPhaseAMR: BlockTreeMesh, ViewCamera, DiagnosticCollection, DiagnosticGr
     SnapshotStore, TopologySnapshot, VisualizationFieldRegistry,
     diagnostic_groups, diagnostic_history, diagnostic_info, diagnostic_names,
     frame_at, keyframes, newest_frame, rasterize, snapshot_store, video_frame_schedule,
-    visible_rect
+    LiveVideoSampler, push_live_frame!, flush_live_frames!, visible_rect
 
 const _automatic = Makie.automatic
 

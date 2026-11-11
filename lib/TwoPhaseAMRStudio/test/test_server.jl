@@ -590,7 +590,7 @@ end
                             "camera" => [0, 1, 0, 1], "colorrange" => [-1, 1],
                             "colormap" => "viridis", "phase_rendering" => "cell",
                             "size" => [400, 300], "fps" => 8, "sim_per_second" => 0.08,
-                            "capacity" => 32, "arrangement" => "below", "theme" => "dark",
+                            "capacity" => 32, "arrangement" => "below",
                         )
                     )
                     started = _message(
