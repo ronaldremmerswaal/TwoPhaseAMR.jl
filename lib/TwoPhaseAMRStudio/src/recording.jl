@@ -643,9 +643,10 @@ function _record_job!(app, job)
         if job.source === :stored
             _cancel_requested(app, job) && return _finish_cancelled!(app, job)
             # Without an independent thread defer rendering until the solver
-            # is idle. The selected candidate frames are already frozen.
+            # stops stepping; a paused run is idle, so its export renders right
+            # away. The selected candidate frames are already frozen.
             if Threads.nthreads(:interactive) == 0 && Threads.nthreads(:default) == 1
-                while TwoPhaseAMR.run_state(app.recorder) in (:running, :pause_requested, :paused, :stopping)
+                while TwoPhaseAMR.run_state(app.recorder) in (:running, :pause_requested, :stopping)
                     _cancel_requested(app, job) && return _finish_cancelled!(app, job)
                     sleep(0.05)
                 end

@@ -240,7 +240,11 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
 
   function setScheduleText(text: string, schedule: RecordingSchedule | null = null): void {
     scheduleElement.textContent = text;
-    for (const key of Object.keys(scheduleElement.dataset)) delete scheduleElement.dataset[key];
+    // Clear the attributes written below; `dataset` also carries the element's
+    // test id, which must survive so callers can still address the summary.
+    for (const key of Object.keys(scheduleElement.dataset)) {
+      if (key !== 'testid') delete scheduleElement.dataset[key];
+    }
     if (schedule) {
       for (const [key, value] of Object.entries(scheduleAttributes(schedule))) {
         scheduleElement.setAttribute(key, value);

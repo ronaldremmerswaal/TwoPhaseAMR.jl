@@ -1,6 +1,9 @@
 import 'dockview/dist/styles/dockview.css';
 import './style.css';
 import './continue.css';
+// Before anything that imports uPlot, which formats ticks with the reported
+// browser locale while it loads.
+import './locale';
 import { createDockview, themeDark, themeLight, type DockviewApi } from 'dockview';
 import { StudioClient } from './client';
 import { groupDiagnostics, type DiagnosticGroup, type DiagnosticMetadata } from './diagnostic-data';
