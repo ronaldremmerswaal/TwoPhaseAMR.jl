@@ -13,6 +13,23 @@ struct TwoVelocityMomentumAdvectionWorkspace{
     y::Y
 end
 
+"""
+    MomentumAdvectionWorkspace(interface, velocity::TwoPhaseVelocity)
+
+Construct the compatible staggered workspace for separate liquid and gas
+momentum transport. The returned object contains intrinsic velocity fields;
+it does not retain phase-weighted momentum.
+"""
+function MomentumAdvectionWorkspace(
+        interface::InterfaceField{T, M}, velocity::TwoPhaseVelocity,
+    ) where {T, M}
+    _validate_two_phase_velocity(velocity, interface.mesh, T)
+    return TwoVelocityMomentumAdvectionWorkspace(
+        interface, PhaseFaceScalar{1}(interface),
+        PhaseFaceScalar{2}(interface),
+    )
+end
+
 function _reconfigure_momentum_workspace!(
         workspace::TwoVelocityMomentumAdvectionWorkspace{T},
         interface::InterfaceField{T, M},
@@ -123,17 +140,15 @@ _phase_momentum_sources(workspace::TwoVelocityMomentumAdvectionWorkspace) = (
 
 function _advect_phase_momentum!(
         workspace::TwoVelocityMomentumAdvectionWorkspace, work, field, axis,
-        sources, density, scheme, amr_interface_scheme; auxiliary_gas,
+        sources, density, scheme, amr_interface_scheme,
     )
     _advect_phase_faces!(
         workspace.x, work, axis, sources[1], work.ctu_threshold, scheme,
-        amr_interface_scheme; auxiliary_gas,
-        gas_momentum_component = 1, gas_density = density[2],
+        amr_interface_scheme,
     )
     _advect_phase_faces!(
         workspace.y, work, axis, sources[2], work.ctu_threshold, scheme,
-        amr_interface_scheme; auxiliary_gas,
-        gas_momentum_component = 2, gas_density = density[2],
+        amr_interface_scheme,
     )
     return workspace
 end

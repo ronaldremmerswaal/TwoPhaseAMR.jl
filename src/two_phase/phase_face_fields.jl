@@ -77,15 +77,13 @@ struct PhaseFaceAdvectionScratch{T}
     source_gas::Vector{T}
     liquid_fraction::Vector{T}
     predicted_liquid::Vector{T}
-    gas_fraction::Vector{T}
-    predicted_gas::Vector{T}
     values::Vector{T}
     increment::Vector{T}
     rates::Vector{T}
 end
 
 function PhaseFaceAdvectionScratch(::Type{T}, count) where {T}
-    return PhaseFaceAdvectionScratch(ntuple(_ -> zeros(T, count), 9)...)
+    return PhaseFaceAdvectionScratch(ntuple(_ -> zeros(T, count), 7)...)
 end
 
 """

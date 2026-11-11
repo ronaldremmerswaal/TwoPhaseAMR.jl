@@ -1,80 +1,41 @@
 """
     WYAdvectionWorkspace(interface, velocity::TwoPhaseVelocity; kwargs...)
 
-Construct the existing geometric-advection workspace after validating the
-liquid/gas velocity tuple.  Phase flux storage continues to live in the WY
-workspace rather than in the velocity fields.
+Construct the geometric-advection workspace after validating the liquid/gas
+velocity tuple. Phase flux storage continues to live in the WY workspace
+rather than in the velocity fields.
 """
 function WYAdvectionWorkspace(
-        field::InterfaceField{T}, velocity::TwoPhaseVelocity;
-        interface_transport = nothing, kwargs...,
+        field::InterfaceField{T}, velocity::TwoPhaseVelocity; kwargs...,
     ) where {T}
     _validate_two_phase_velocity(velocity, field.mesh, T)
-    transport = _select_interface_transport(interface_transport, FrozenInterfaceFluxes())
-    transport isa _TwoVelocityInterfaceAdvection || throw(
-        ArgumentError(
-            "two-velocity interface_transport must be " *
-                "ProjectedLiquidVelocity() or FrozenInterfaceFluxes()",
-        ),
-    )
-    return WYAdvectionWorkspace(field; interface_transport = transport, kwargs...)
+    return WYAdvectionWorkspace(field; kwargs...)
 end
 
 """
 Conservative pre-transport CFL bound for a two-velocity tuple.
 
-Frozen-interface transport uses the time-step-start phase apertures. With a
-solid, it also freezes subface ordering and bounds the open donor strip of
-each carrier to keep opposing swept open regions disjoint; a phase aperture
-below a round-off residue is snapped to zero, and a strip with no resolvable
-open area is reported by face and donor cell. Projected transport bounds both
-the projected liquid velocity and extended gas velocity. For another
-workspace policy, the bound is the minimum of the two individual
-velocity bounds.
+Interface transport uses the time-step-start phase apertures. With a solid, it
+also freezes subface ordering and bounds the open donor strip of each carrier
+to keep opposing swept open regions disjoint; a phase aperture below a
+round-off residue is snapped to zero, and a strip with no resolvable open area
+is reported by face and donor cell.
 """
 function stable_timestep(
         velocity::TwoPhaseVelocity, work::WYAdvectionWorkspace{T}; cfl = 0.5,
     ) where {T}
     _validate_two_phase_velocity(velocity, work.mesh, T)
-    return _stable_timestep(work.interface_transport, velocity, work; cfl)
-end
-
-function _stable_timestep(
-        ::FrozenInterfaceFluxes, velocity::TwoPhaseVelocity,
-        work::WYAdvectionWorkspace; cfl,
-    )
     _freeze_phase_apertures!(work.interface, work)
     return _frozen_interface_stable_timestep(velocity, work; cfl)
-end
-
-function _stable_timestep(
-        ::ProjectedLiquidVelocity, velocity::TwoPhaseVelocity,
-        work::WYAdvectionWorkspace; cfl,
-    )
-    projected = _project_liquid_velocity!(work, velocity)
-    gas = _extend_projected_gas_velocity!(work, velocity)
-    return min(
-        stable_timestep(projected, work; cfl),
-        stable_timestep(gas, work; cfl),
-    )
-end
-
-function _stable_timestep(
-        ::Any, velocity::TwoPhaseVelocity, work::WYAdvectionWorkspace; cfl,
-    )
-    return min(
-        stable_timestep(velocity[1], work; cfl),
-        stable_timestep(velocity[2], work; cfl),
-    )
 end
 
 """
     advect!(interface, velocity::TwoPhaseVelocity, dt, workspace; kwargs...)
 
-Common tuple entry point. Every velocity tuple uses the explicitly selected
-projected-liquid or frozen-interface policy, including tuples whose phase
-velocities happen to have equal values. Both policies advance centred phase
-scalars with the phase fluxes used by the interface update.
+Two-velocity tuple entry point. Both phase velocities are extruded through
+their own frozen phase subfaces, including tuples whose phase velocities
+happen to have equal values. Centred phase scalars are advanced with the phase
+fluxes used by the interface update.
 """
 function advect!(
         field::InterfaceField{T}, velocity::TwoPhaseVelocity, dt,
@@ -82,27 +43,6 @@ function advect!(
     ) where {T}
     _validate_two_phase_velocity(velocity, field.mesh, T)
     momentum = get(kwargs, :momentum, nothing)
-    return _advect_two_velocity!(
-        work.interface_transport, field, velocity, dt, work, momentum;
-        check_timestep, kwargs...,
-    )
-end
-
-@inline function _validate_two_velocity_momentum(momentum)
-    isnothing(momentum) || momentum isa TwoPhaseVelocity || throw(
-        ArgumentError(
-            "two-phase velocities require a liquid/gas momentum " *
-                "destination tuple",
-        ),
-    )
-    return nothing
-end
-
-function _advect_two_velocity!(
-        ::FrozenInterfaceFluxes, field::InterfaceField{T},
-        velocity::TwoPhaseVelocity, dt, work::WYAdvectionWorkspace{T},
-        momentum; check_timestep, kwargs...,
-    ) where {T}
     _validate_two_velocity_momentum(momentum)
     # Public advection still prepares its own time-step-start geometry and
     # validates an independently chosen step. The CFL query already
@@ -123,36 +63,14 @@ function _advect_two_velocity!(
     )
 end
 
-function _advect_two_velocity!(
-        ::ProjectedLiquidVelocity, field::InterfaceField{T},
-        velocity::TwoPhaseVelocity, dt, work::WYAdvectionWorkspace{T},
-        momentum; check_timestep, kwargs...,
-    ) where {T}
-    _validate_two_velocity_momentum(momentum)
-    _reset!(work.diagnostics)
-    projected = _project_liquid_velocity!(work, velocity)
-    gas = _extend_projected_gas_velocity!(work, velocity)
-    limit = min(
-        stable_timestep(projected, work),
-        stable_timestep(gas, work),
-    )
-    dt <= limit * (one(T) + _wy_step_slack(T)) || throw(
+@inline function _validate_two_velocity_momentum(momentum)
+    isnothing(momentum) || momentum isa TwoPhaseVelocity || throw(
         ArgumentError(
-            "time step exceeds the projected two-velocity WY CFL limit",
-        )
+            "two-phase velocities require a liquid/gas momentum " *
+                "destination tuple",
+        ),
     )
-    return _advect_wy!(
-        field, (projected, gas), dt, work;
-        momentum_source = velocity, reset_diagnostics = false,
-        check_timestep = false, kwargs...,
-    )
-end
-
-function _advect_two_velocity!(
-        ::Any, field, velocity, dt, work, momentum;
-        check_timestep, kwargs...,
-    )
-    error("unsupported two-velocity interface-advection policy")
+    return nothing
 end
 
 """Advance after the flow-step guard prepared/validated frozen geometry.
@@ -162,81 +80,14 @@ geometry itself. The aperture vectors must remain those of the time-step-start
 interface throughout both directional sweeps.
 """
 function _advect_transport_substep!(
-        ::FrozenInterfaceFluxes, field::InterfaceField,
-        velocity::TwoPhaseVelocity, dt,
-        work::WYAdvectionWorkspace{T, M, <:FrozenInterfaceFluxes}; kwargs...,
-    ) where {T, M}
+        field::InterfaceField, velocity::TwoPhaseVelocity, dt,
+        work::WYAdvectionWorkspace; kwargs...,
+    )
     return _advect_wy!(
         field, velocity, dt, work;
         check_timestep = false, initial_geometry_prepared = true,
         kwargs...,
     )
-end
-
-function _advect_transport_substep!(
-        ::Any, field, velocity, dt, work; kwargs...,
-    )
-    return advect!(field, velocity, dt, work; kwargs...)
-end
-
-function _uses_auxiliary_gas_carrier(
-        ::TwoPhaseVelocity, ::WYAdvectionWorkspace{T, M, P},
-    ) where {T, M, P <: ProjectedLiquidVelocity}
-    return true
-end
-
-"""
-Populate the projected-liquid physical flux and the auxiliary gas-carrier
-flux for one split sweep. The liquid flux is cut from the donating region of
-the projected liquid velocity. The gas flux is cut independently from the
-donating region of the gas velocity; it therefore need not complement the
-liquid flux. `open_flux` is the projected carrier flux used by the physical
-liquid WY update.
-"""
-function _compute_directional_wy_fluxes!(
-        field::InterfaceField{T}, velocity::TwoPhaseVelocity, dt,
-        work::WYAdvectionWorkspace{T, M, <:ProjectedLiquidVelocity}, axis,
-    ) where {T, M}
-    mesh = field.mesh
-    geometry = field.geometry
-    liquid_velocity, gas_velocity = velocity
-    @_parallel for face_index in eachindex(mesh.faces)
-        face = mesh.faces[face_index]
-        face.axis == axis || continue
-        aperture = isnothing(geometry) ? one(T) :
-            @inbounds(geometry.aperture[face_index])
-
-        liquid_u = @inbounds liquid_velocity.interior[face_index]
-        liquid_volume = T(dt) * liquid_u * face.area * aperture
-        liquid_flux = zero(T)
-        if !iszero(liquid_volume)
-            donor = liquid_u >= 0 ? face.minus : face.plus
-            liquid_fraction = _swept_fraction(
-                field, face, donor, liquid_u, dt,
-                abs(liquid_volume) / mesh.blocks[donor.block].volume,
-            )
-            liquid_flux = liquid_volume * liquid_fraction
-        end
-
-        gas_u = @inbounds gas_velocity.interior[face_index]
-        gas_volume = T(dt) * gas_u * face.area * aperture
-        gas_flux = zero(T)
-        if !iszero(gas_volume)
-            donor = gas_u >= 0 ? face.minus : face.plus
-            liquid_fraction = _swept_fraction(
-                field, face, donor, gas_u, dt,
-                abs(gas_volume) / mesh.blocks[donor.block].volume,
-            )
-            gas_flux = gas_volume * (one(T) - liquid_fraction)
-        end
-
-        @inbounds begin
-            work.open_flux[face_index] = liquid_volume
-            work.liquid_flux[face_index] = liquid_flux
-            work.gas_flux[face_index] = gas_flux
-        end
-    end
-    return work
 end
 
 @inline function _averaged_tangent_normal(field, face, tangent)
@@ -273,7 +124,7 @@ function _freeze_phase_apertures!(
     )
     copyto!(work.liquid_aperture, liquid)
     copyto!(work.gas_aperture, gas)
-    if work.interface_transport isa FrozenInterfaceFluxes && !isnothing(field.geometry)
+    if !isnothing(field.geometry)
         length(work.liquid_subface_lower) == length(liquid) || throw(
             DimensionMismatch("WY subface workspace does not match the mesh"),
         )
@@ -395,42 +246,40 @@ function _frozen_subface_swept_fraction(
         represented = (xhi - xlo) * (yhi - ylo)
         return clamp(liquid * represented / target, zero(T), one(T))
     end
-    if !isnothing(geometry)
-        maximum_area = _open_subcell_area(
-            geometry.solid, donor, swept_bounds(one(T))...,
+    maximum_area = _open_subcell_area(
+        geometry.solid, donor, swept_bounds(one(T))...,
+    )
+    tolerance = T(256) * eps(T) * max(one(T), maximum_area)
+    # The step checks accept a step up to `1 + _wy_step_slack(T)` times
+    # the bound, so the swept volume may exceed the strip by that much.
+    tolerance += T(2) * _wy_step_slack(T) * maximum_area
+    target <= maximum_area + tolerance || error(
+        "frozen phase-subface flux exceeds the donor open volume",
+    )
+    lo, hi = zero(T), one(T)
+    for _ in 1:54
+        middle = (lo + hi) / 2
+        candidate = _open_subcell_area(
+            geometry.solid, donor, swept_bounds(middle)...,
         )
-        tolerance = T(256) * eps(T) * max(one(T), maximum_area)
-        # The step checks accept a step up to `1 + _wy_step_slack(T)` times
-        # the bound, so the swept volume may exceed the strip by that much.
-        tolerance += T(2) * _wy_step_slack(T) * maximum_area
-        target <= maximum_area + tolerance || error(
-            "frozen phase-subface flux exceeds the donor open volume",
-        )
-        lo, hi = zero(T), one(T)
-        for _ in 1:54
-            middle = (lo + hi) / 2
-            candidate = _open_subcell_area(
-                geometry.solid, donor, swept_bounds(middle)...,
-            )
-            if candidate < target
-                lo = middle
-            else
-                hi = middle
-            end
+        if candidate < target
+            lo = middle
+        else
+            hi = middle
         end
-        distance = (lo + hi) / 2
     end
+    distance = (lo + hi) / 2
     bounds = swept_bounds(distance)
     xlo, xhi, ylo, yhi = bounds
     rectangle = NTuple{2, T}[
         (xlo, ylo), (xhi, ylo), (xhi, yhi), (xlo, yhi),
     ]
-    open_polygon = isnothing(geometry) ? rectangle : _clip_polygon(
-            rectangle,
-            _get(geometry.solid.normal_x, donor),
-            _get(geometry.solid.normal_y, donor),
-            _get(geometry.solid.intercept, donor); keep_less = false,
-        )
+    open_polygon = _clip_polygon(
+        rectangle,
+        _get(geometry.solid.normal_x, donor),
+        _get(geometry.solid.normal_y, donor),
+        _get(geometry.solid.intercept, donor); keep_less = false,
+    )
     liquid_polygon = _clip_polygon(
         open_polygon,
         _get(field.normal_x, donor), _get(field.normal_y, donor),
@@ -441,7 +290,7 @@ end
 
 function _compute_directional_wy_fluxes!(
         field::InterfaceField{T}, velocity::TwoPhaseVelocity, dt,
-        work::WYAdvectionWorkspace{T, M, <:FrozenInterfaceFluxes}, axis,
+        work::WYAdvectionWorkspace{T, M}, axis,
     ) where {T, M}
     geometry = field.geometry
     mesh = field.mesh

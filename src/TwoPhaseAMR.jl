@@ -37,8 +37,6 @@ export FaceVelocity, TwoPhaseVelocity, set_velocities!, enforce_no_permeation!
 export AdvectionWorkspace, advect!, stable_timestep
 export InterfaceField, PolygonIndicator, reconstruct!, interface_height
 export WYAdvectionWorkspace, PhaseScalar
-export AbstractInterfaceTransportMethod
-export ProjectedLiquidVelocity, FrozenInterfaceFluxes
 export phase_flux_diagnostics
 export GeometryField, refresh_geometry!, enforce_geometry_no_slip!, plic_segments
 export GeometryRefinementIndicator
@@ -182,7 +180,6 @@ include("two_phase/phase_face_transport.jl")
 include("two_phase/phase_face_transfer.jl")
 # two_phase/two_velocity
 include("two_phase/two_velocity/momentum_workspace.jl")
-include("two_phase/two_velocity/transport_workspace.jl")
 include("two_phase/two_velocity/velocity_fields.jl")
 include("two_phase/two_velocity/interface_transport.jl")
 include("two_phase/two_velocity/transport_geometry.jl")

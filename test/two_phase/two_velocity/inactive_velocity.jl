@@ -75,28 +75,26 @@ end
 end
 
 @testset "NaN phase storage survives transport, diffusion and projection" begin
-    for transport in (FrozenInterfaceFluxes(), ProjectedLiquidVelocity())
-        mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, false))
-        interface = InterfaceField(mesh, (x, y) -> y - 0.47)
-        flow = FlowSimulation(
-            mesh, TwoPhase(
-                interface; density = (1000.0, 1.0),
-                dynamic_viscosity = (0.02, 0.001)
-            );
-            velocity_model = TwoVelocityModel(interface_transport = transport),
-            velocity = (
-                (x, y, t, a) -> a == 1 ? 0.05 : 0.0,
-                (x, y, t, a) -> a == 1 ? -0.02 : 0.0,
-            ), boundary = FreeSlip()
-        )
-        @test _phase_storage_contract(flow.velocity, interface)
-        @test isfinite(stable_timestep(flow))
-        @test simulate!(flow, 0.001; dt = 0.001).pressure.converged
-        @test _phase_storage_contract(flow.velocity, interface)
-        state = simulation_state(flow)
-        @test isfinite(diagnostic_value(KineticEnergy(), state))
-        @test all(isfinite, diagnostic_value(LinearMomentum(), state))
-        @test isfinite(diagnostic_value(DivergenceNorm(), state))
-        @test isfinite(diagnostic_value(MaximumVelocity(), state))
-    end
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, false))
+    interface = InterfaceField(mesh, (x, y) -> y - 0.47)
+    flow = FlowSimulation(
+        mesh, TwoPhase(
+            interface; density = (1000.0, 1.0),
+            dynamic_viscosity = (0.02, 0.001)
+        );
+        velocity_model = TwoVelocityModel(),
+        velocity = (
+            (x, y, t, a) -> a == 1 ? 0.05 : 0.0,
+            (x, y, t, a) -> a == 1 ? -0.02 : 0.0,
+        ), boundary = FreeSlip()
+    )
+    @test _phase_storage_contract(flow.velocity, interface)
+    @test isfinite(stable_timestep(flow))
+    @test simulate!(flow, 0.001; dt = 0.001).pressure.converged
+    @test _phase_storage_contract(flow.velocity, interface)
+    state = simulation_state(flow)
+    @test isfinite(diagnostic_value(KineticEnergy(), state))
+    @test all(isfinite, diagnostic_value(LinearMomentum(), state))
+    @test isfinite(diagnostic_value(DivergenceNorm(), state))
+    @test isfinite(diagnostic_value(MaximumVelocity(), state))
 end

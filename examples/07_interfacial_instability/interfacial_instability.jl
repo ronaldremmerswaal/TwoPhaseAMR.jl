@@ -7,8 +7,8 @@ using TwoPhaseAMR
                 recorder_options=(;), kwargs...)
 
 Run a combined Kelvin--Helmholtz/Rayleigh--Taylor wave. The physical default
-is `TwoVelocityModel(interface_transport=FrozenInterfaceFluxes(),
-pressure_projection=CMDGFMProjection())`. Passing `OneVelocityModel()` uses
+is `TwoVelocityModel(pressure_projection=CMDGFMProjection())`. Passing
+`OneVelocityModel()` uses
 the density-weighted mean of the phase-specific initial velocities and thus
 represents a different closure. Pass `start_studio=studio` after loading
 TwoPhaseAMRStudio to follow the run live. `recorder_options` overrides the
@@ -21,7 +21,6 @@ function run_example(;
         max_level = 4,
         final_time = nothing,
         velocity_model = TwoVelocityModel(
-            interface_transport = FrozenInterfaceFluxes(),
             pressure_projection = CMDGFMProjection(),
         ),
         start_studio = nothing,

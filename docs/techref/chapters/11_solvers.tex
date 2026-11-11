@@ -1,9 +1,8 @@
 \chapter{Operators and linear solvers}\label{ch:solvers}
 \chapterstatus[c46cf60f29a3ee5a0771ec516942ab3987ee28c7]{reference}
 Every implicit part of a time step is a sparse linear system: the pressure
-projections (\cref{ch:projection}), the implicit viscous step
-(\cref{ch:viscosity}) and the projection of the liquid carrier velocity
-(\cref{sec:vof:projected}). The thesis analyses the conditioning of its
+projections (\cref{ch:projection}) and the implicit viscous step
+(\cref{ch:viscosity}). The thesis analyses the conditioning of its
 pressure matrices, whose largest-to-smallest nonzero eigenvalue ratio after
 diagonal (Jacobi) scaling grows as $h^{-2}$, the multidimensional ghost-fluid
 matrix being nonsymmetric with complex eigenvalues~\thesis{\S7.3.6}, but it
@@ -32,7 +31,6 @@ step enters only through the matrices and tolerances of the calling chapters.
     System & Matrix & Property & Krylov & Preconditioner & Cap\\
     \midrule
     one-velocity projection & \cref{eq:solvers:cell-matrix}, $\reactcoef=0$ & SPSD & CG & tree MG (cells) & 100 / 500\\
-    liquid carrier (\cref{sec:vof:projected}) & \cref{eq:solvers:cell-matrix}, $\reactcoef=0$ & SPSD & CG & none & 200\\
     viscous, one phase & \cref{eq:solvers:shifted-single} & SPD & CG & tree MG (faces of an axis) & 100\\
     viscous, two phases & \cref{eq:viscosity:phase-midpoint} & SPD & CG & tree MG (all faces) & 500\\
     CMDGFM projection & \cref{eq:projection:cmdgfm-system} & nonsymmetric & BiCGSTAB & V-cycle and ILU blocks & 500\\
@@ -206,7 +204,6 @@ $\strongnorm{\resvec}\le\stoplevel$ with
 where \apifun{solve!} defaults to $\reltol=10^{-10}$, $\abstol=0$ and $100$
 iterations. The one-velocity projection passes $\reltol=0$ and
 $\abstol=\presstol/\dt^2$, which is~\cref{eq:projection:one-tolerance}; the
-liquid-carrier projection passes $\reltol=0$ and $\abstol=\projtol$; the
 viscous solves stop relative to the right-hand side
 (\cref{sec:viscosity:time}), so that their stop level does not depend on the
 initial guess. The round-off floor is the scale of the terms that a residual
@@ -767,10 +764,7 @@ Tests: \testsym{test/operators/staggered_diffusion.jl}{implicit midpoint stagger
 solve with $\reactcoef=0$, $\diffcoef=1$ and the stop
 level~\cref{eq:projection:one-tolerance}, from a zero increment, by CG with
 the tree multigrid; with a solid the hierarchy is built with the solver's
-geometry. The liquid-carrier projection of \cref{sec:vof:projected} solves a
-\code{:dirichlet} cell system, updated in place in every call, by CG without
-preconditioner, with \code{compatibility=:project} if its operator is singular
-and \code{:error} otherwise.
+geometry.
 
 \emph{CMDGFM.} The two-block system~\cref{eq:projection:cmdgfm-system} is
 nondimensionalised before the iteration with the largest domain extent $L$
@@ -826,8 +820,7 @@ zero and lowers the Euclidean residual (\cref{sec:projection:defects}).
 \apifun{project!} of \apitype{ProjectionWorkspace} (one velocity),
 \apitype{CMDGFMProjection}\code{(; preconditioner=:block, preconditioner_options=(;))}
 with \apitype{CMDGFMProjectionSolver}.
-One velocity \srcsym{src/navier_stokes/projection.jl}{project!}; liquid
-carrier \srcsym{src/two_phase/two_velocity/transport_workspace.jl}{_project_liquid_velocity!};
+One velocity \srcsym{src/navier_stokes/projection.jl}{project!};
 CMDGFM \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_project_cmdgfm_assembled!}
 with the defect of the gauge rows
 \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_anchor_residual_defect},

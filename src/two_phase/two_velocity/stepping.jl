@@ -49,8 +49,7 @@ function _transport_substep!(
         )
     end
     _advect_transport_substep!(
-        state.advection.interface_transport, model.interface,
-        state.old_velocity, dt, state.advection;
+        model.interface, state.old_velocity, dt, state.advection;
         scalars = model.scalars,
         momentum = state.convected, density = model.density,
         momentum_workspace = state.momentum,

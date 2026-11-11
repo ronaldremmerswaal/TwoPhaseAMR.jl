@@ -178,9 +178,7 @@ _pressure_model_interface(model) = model.interface
 end
 
 @testset "lazy two-velocity workspace types across AMR" begin
-    for T in (Float32, Float64),
-            transport in (FrozenInterfaceFluxes(), ProjectedLiquidVelocity()),
-            cut in (false, true)
+    for T in (Float32, Float64), cut in (false, true)
         mesh = BlockTreeMesh(
             base_mesh = (8, 4), block_size = (4, 4), max_level = 1,
             periodic = (true, true), origin = (zero(T), zero(T)),
@@ -195,7 +193,7 @@ end
                 interface; density = (T(10), one(T)),
                 dynamic_viscosity = (zero(T), zero(T))
             );
-            velocity_model = TwoVelocityModel(interface_transport = transport),
+            velocity_model = TwoVelocityModel(),
             velocity = _pressure_reuse_velocity(mesh),
         )
         phase = flow.workspace.two_phase

@@ -43,7 +43,6 @@ $\dens^{\liq}=\dens^{\gas}$) is $\infty$.
     $\dtstag$, staggered convection & \cref{eq:momentum:cfl} & $0<\stagcfl\le1$ ($0.9$) & one phase\\
     $\dtwy$, WY sweeps of one carrier & \cref{eq:vof:cfl,eq:vof:dtwy} & $0<\wycflval\le\half$ ($\half$) & two phases\\
     $\dtwy$, frozen phase subfaces & \cref{eq:vof:frozen-cfl} & as above & two velocities\\
-    projected liquid and gas carriers & \cref{sec:vof:projected} & as above & two velocities\\
     $\dtcell$, cell-centred scalar & \cref{eq:momentum:cell-cfl} & $0<\stagcfl\le1$ ($0.9$) & no\\
     $\dtcap$, capillary & \cref{eq:vof:dt-forces} & none & two phases\\
     $\dtgrav$, gravity & \cref{eq:vof:dt-forces} & none & two phases\\
@@ -60,15 +59,13 @@ and \apifun{stable_timestep}\code{(flow; cfl=0.45)} return
   \dtadv(\flowcfl)=\begin{cases}
     \dtstag\ \text{at }\stagcfl=\flowcfl, & \text{one phase},\\
     \dtwy\ \text{of the velocity at }\wycflval=\flowcfl, & \text{two phases, one velocity},\\
-    \dtwy\ \text{of~\cref{eq:vof:frozen-cfl}}, & \text{frozen interface fluxes},\\
-    \min\curlypar{\dtwy(\projvelo^{\liq}),\ \dtwy(\extvelo{\gas})}, & \text{projected liquid velocity},
+    \dtwy\ \text{of~\cref{eq:vof:frozen-cfl}}, & \text{two velocities},\\
   \end{cases}
   \end{gathered}
 \end{equation}
 for the velocity passed to them, with $\dtcap$ and $\dtgrav$ only in two
-phases; the last two rows are the transports of
-\cref{sec:vof:frozen,sec:vof:projected}, and the code takes the minimum over
-the two carriers of any other two-velocity transport. Both force bounds use
+phases; the last row is the transport of
+\cref{sec:vof:frozen}. Both force bounds use
 $\minwidth=\min_{c,k}\cellwidth{c}{k}$, the smallest width of all leaf cells
 in either direction, not the width at the interface; on a mesh refined
 elsewhere, at a solid for instance, they are stricter than the interface
@@ -550,8 +547,7 @@ Taylor--Green vortex $1.8$ (step proportional to $\minwidth$); a manufactured
 wave equation on composite meshes $1.5$ in $L^2$ ($1.0$ for the velocity in
 the maximum norm); Prosperetti's standing capillary waves $1.8$ at density
 ratio one and $1.5$ at $1000$, the gravity wave $0.4$; the two-velocity
-Kelvin--Helmholtz dispersion $0.8$ ($0.48$ for the projected liquid velocity
-at density ratio $1000$, Weber number $0.5$), the Rayleigh--Taylor dispersion
+Kelvin--Helmholtz dispersion $0.8$, the Rayleigh--Taylor dispersion
 $1.7$ ($1.3$ at density ratio $3$) and the combined wave $0.79$; the vortex
 reversal $1.5$; and the sessile droplet $1.2$.
 

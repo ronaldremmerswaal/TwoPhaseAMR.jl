@@ -39,7 +39,6 @@ velocities, for example across a tangential velocity jump:
 
 ```julia
 model = TwoVelocityModel(
-    interface_transport=FrozenInterfaceFluxes(),
     pressure_projection=CMDGFMProjection(),
 )
 flow = FlowSimulation(mesh, physics; velocity_model=model)
@@ -55,11 +54,10 @@ objects. The tuple never selects the velocity model implicitly.
 | --- | --- | --- | --- |
 | velocity formulation | `OneVelocityModel()`, `TwoVelocityModel(...)` | one velocity | two-phase flow |
 | surface-tension force | `CGFM()`, `CSF()` | CGFM | either two-phase velocity model |
-| interface carrier | `FrozenInterfaceFluxes()`, `ProjectedLiquidVelocity()` | frozen | two velocity only |
 | pressure projection | `CMDGFMProjection()` | CMDGFM | two velocity only |
 
-Surface tension is configured by [`SurfaceTension`](@ref), while the carrier
-and projection are fields of [`TwoVelocityModel`](@ref). This ownership makes
+Surface tension is configured by [`SurfaceTension`](@ref), while the
+projection is a field of [`TwoVelocityModel`](@ref). This ownership makes
 invalid combinations visible at construction time. See
 [Two-phase flow](two-phase-flow.md) and
 [Pressure gradient](pressure-gradient.md) for the numerical definitions.

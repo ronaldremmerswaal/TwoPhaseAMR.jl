@@ -1,7 +1,7 @@
 """
     NavierStokesSystem(mesh, physics; options=NavierStokesOptions(),
         adaptivity=Adaptivity(), boundary=NoSlip(), geometry=nothing,
-        interface_transport=nothing, two_velocity_projection=CMDGFMProjection())
+        two_velocity_projection=CMDGFMProjection())
     NavierStokesSystem(mesh; density, dynamic_viscosity,
         boundary=NoSlip(), scheme=LaxWendroff(),
         amr_interface_scheme=default_amr_interface_scheme(scheme),
@@ -119,7 +119,6 @@ function NavierStokesSystem(
         interface = nothing, surface_tension = 0.0,
         surface_tension_formulation = CGFM(), gravity = (0.0, 0.0),
         phase_scalars = (),
-        interface_transport = nothing,
         two_velocity_projection = CMDGFMProjection(),
         T = eltype(mesh.origin)
     ) where {M <: BlockTreeMesh}
@@ -149,7 +148,7 @@ function NavierStokesSystem(
     adaptivity = Adaptivity(; criteria = refinement_indicators, fields = adaptive_fields)
     return NavierStokesSystem(
         mesh, physics; options, adaptivity, boundary, geometry,
-        interface_transport, two_velocity_projection, T,
+        two_velocity_projection, T,
     )
 end
 
@@ -158,7 +157,6 @@ function NavierStokesSystem(
         options::NavierStokesOptions = NavierStokesOptions(),
         adaptivity::Adaptivity = Adaptivity(),
         boundary = NoSlip(), geometry = nothing,
-        interface_transport = nothing,
         two_velocity_projection = CMDGFMProjection(),
         T = eltype(mesh.origin),
     ) where {M <: BlockTreeMesh}
@@ -187,10 +185,8 @@ function NavierStokesSystem(
         interface = physics.interface
         interface isa InterfaceField{T, M} && interface.mesh === mesh ||
             throw(ArgumentError("interface must share solver mesh and scalar type"))
-        transport = _select_interface_transport(interface_transport, FrozenInterfaceFluxes())
         phase_model = TwoPhaseModel(
-            physics; interface_transport = transport,
-            pressure_projection = two_velocity_projection,
+            physics; pressure_projection = two_velocity_projection,
         )
         phase_model, phase_model.density, phase_model.dynamic_viscosity
     end

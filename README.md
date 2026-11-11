@@ -95,7 +95,6 @@ The high-level API makes the physical and numerical choices explicit:
 | --- | --- | --- |
 | Physics | `SinglePhase`, `TwoPhase`, `SurfaceTension` | — |
 | Phase velocity | `OneVelocityModel`, `TwoVelocityModel` | one velocity |
-| Interface transport | `FrozenInterfaceFluxes`, `ProjectedLiquidVelocity` | frozen |
 | Two-velocity pressure | `CMDGFMProjection` | CMDGFM |
 | Surface tension | `CGFM`, `CSF` | CGFM |
 | Momentum advection | `AdvectionOptions` | Lax--Wendroff |
@@ -122,7 +121,6 @@ physics = TwoPhase(
 flow = FlowSimulation(
     mesh, physics;
     velocity_model = TwoVelocityModel(
-        interface_transport = FrozenInterfaceFluxes(),
         pressure_projection = CMDGFMProjection(),
     ),
     boundary = FreeSlip(),
