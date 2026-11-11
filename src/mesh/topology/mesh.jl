@@ -929,7 +929,10 @@ function _build_halo_schedule(root, nodes, blocks, block_size, halo, periodic)
     donor_counts = Vector{Int}(undef, number_of_entries)
     candidate_donors = Vector{CellRef}(undef, 4number_of_entries)
     candidate_weights = Vector{T}(undef, 4number_of_entries)
-    @_parallel for entry_index in 1:number_of_entries
+    # Tree searches through `root` and the `node_to_block` dictionary: launched
+    # as one closure rather than a `@batch` body over these objects. This runs
+    # once per topology change, so the closure box per launch is irrelevant.
+    _parallel_for(number_of_entries) do entry_index
         destination = destinations[entry_index]
         b, i, j = destination.block, destination.i, destination.j
         block = blocks[b]

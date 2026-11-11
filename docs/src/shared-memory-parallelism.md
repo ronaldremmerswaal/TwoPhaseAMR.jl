@@ -51,9 +51,13 @@ See [AMReX's box and tiling model](https://amrex-codes.github.io/amrex/docs_html
 Kernels remain serial below a work of 1,024 cell updates. Above it, Polyester
 splits the index range into at most one contiguous batch per thread, each with
 at least a quarter of the grain. Block-level operations, such as block
-transfer or height-cache copies, pass the block size as `work`, so they thread
-from 16 blocks of 8×8 cells. The grain is a `Ref` so tests can set it to one
-and run the threaded path on small meshes.
+transfer, height-cache copies or refinement indicators, count one block as a
+quarter of the grain, so they thread from four blocks of any size. The loop
+form `@_parallel` expands its body into a plain serial loop and into the
+`Polyester.@batch` loop: Polyester boxes a closure argument for its workers
+(32 B per launch), whereas a `@batch` body captures its arrays as pointers and
+does not allocate. The grain is a `Ref` so tests can set it to one and run the
+threaded path on small meshes.
 
 ## AMR and load balance
 

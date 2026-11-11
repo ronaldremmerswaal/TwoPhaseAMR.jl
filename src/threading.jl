@@ -10,6 +10,21 @@ const _BATCHES_PER_THREAD = 4
 @inline _compute_threads() = Threads.nthreads(:default)
 
 """
+    _parallel_batch(number_of_items, work)
+
+Return the Polyester `minbatch` of a threaded launch over `number_of_items`
+items of `work` cell updates each, or `0` when the loop runs serially: on one
+compute thread, or when `number_of_items * work` is below `_PARALLEL_GRAIN[]`.
+"""
+@inline function _parallel_batch(number_of_items::Integer, work::Integer)
+    number_of_items >= 0 || throw(ArgumentError("number_of_items must be nonnegative"))
+    work >= 1 || throw(ArgumentError("work must be positive"))
+    grain = _PARALLEL_GRAIN[]
+    (_compute_threads() == 1 || number_of_items * work < grain) && return 0
+    return max(1, cld(grain, _BATCHES_PER_THREAD * work))
+end
+
+"""
     _parallel_for(f, number_of_items; work = 1)
 
 Call `f(index)` for `index in 1:number_of_items`, split into contiguous
@@ -25,17 +40,18 @@ identical. Reductions use fixed chunk schedules instead. `f` must not throw;
 record failures in owned outputs and throw after the launch. Polyester runs
 `f` on its worker threads, so any user callback reached from `f` must be
 thread-safe.
+
+Polyester passes a closure that captures arrays to its workers in a heap box
+(a few dozen bytes per threaded launch); per-cell loops therefore use
+`@_parallel`, whose threaded path launches the loop body itself.
 """
-function _parallel_for(f::F, number_of_items::Integer; work::Integer = 1) where {F}
-    number_of_items >= 0 || throw(ArgumentError("number_of_items must be nonnegative"))
-    work >= 1 || throw(ArgumentError("work must be positive"))
-    grain = _PARALLEL_GRAIN[]
-    if _compute_threads() == 1 || number_of_items * work < grain
+@inline function _parallel_for(f::F, number_of_items::Integer; work::Integer = 1) where {F}
+    minimum_batch = _parallel_batch(number_of_items, work)
+    if iszero(minimum_batch)
         for index in 1:number_of_items
             f(index)
         end
     else
-        minimum_batch = max(1, cld(grain, _BATCHES_PER_THREAD * work))
         Polyester.@batch minbatch = minimum_batch for index in 1:number_of_items
             f(index)
         end
@@ -45,33 +61,33 @@ end
 
 const _NESTED_SCOPE_HEADS = (:function, :->, :quote, :generator, :comprehension)
 
-# Rewrite a loop body into a closure body: a `continue` that belongs to the
-# parallel loop becomes `return nothing`. `break` cannot be expressed per
-# iteration and a `return` would leave only the closure; both are rejected.
-_closure_loop_body(expression, in_nested_loop = false) = expression
-function _closure_loop_body(expression::Expr, in_nested_loop = false)
+# A loop body runs once per element on either path: `continue` skips the
+# element, while `break` and `return` have no per-element meaning on the
+# threaded path and are rejected.
+_check_parallel_body(expression, in_nested_loop = false) = nothing
+function _check_parallel_body(expression::Expr, in_nested_loop = false)
     head = expression.head
-    head in _NESTED_SCOPE_HEADS && return expression
+    head in _NESTED_SCOPE_HEADS && return nothing
     head === :return &&
         throw(ArgumentError("@_parallel loop bodies cannot return"))
-    if !in_nested_loop
-        head === :continue && return :(return nothing)
-        head === :break &&
-            throw(ArgumentError("@_parallel loop bodies cannot break"))
-    end
+    !in_nested_loop && head === :break &&
+        throw(ArgumentError("@_parallel loop bodies cannot break"))
     nested = in_nested_loop || head in (:for, :while)
-    return Expr(head, (_closure_loop_body(argument, nested) for argument in expression.args)...)
+    foreach(argument -> _check_parallel_body(argument, nested), expression.args)
+    return nothing
 end
 
 """
     @_parallel [work = expression] for index in range ... end
 
-Loop form of `_parallel_for`: the body becomes one closure called per
-element of `range` (a 1-based `AbstractVector`, such as `1:n` or
-`eachindex(vector)`), with the same ownership rules. `continue` skips an
-element; `break` and `return` are rejected. As in any closure, assigning a
-variable of the enclosing function captures it: on the threaded path that is a
-race, and Julia boxes the variable, so bodies only write owned array entries.
+Loop form of `_parallel_for` for a 1-based `AbstractVector` `range` (such as
+`1:n` or `eachindex(vector)`), with the same ownership rules and serial
+cut-off. The body is expanded twice: a plain `for` loop for the serial path
+and the `Polyester.@batch` loop of the threaded path, which captures the
+body's arrays directly, so neither path allocates. `continue` skips an
+element; `break` and `return` are rejected. Assigning a variable of the
+enclosing function from the body is a race on the threaded path; bodies only
+write owned array entries.
 """
 macro _parallel(arguments...)
     isempty(arguments) && throw(ArgumentError("@_parallel requires a for loop"))
@@ -81,34 +97,58 @@ macro _parallel(arguments...)
     iterator = loop.args[1]
     iterator isa Expr && iterator.head in (:(=), :in) ||
         throw(ArgumentError("@_parallel requires one loop iterator"))
-    options = map(arguments[1:(end - 1)]) do option
+    work = 1
+    for option in arguments[1:(end - 1)]
         option isa Expr && option.head === :(=) && option.args[1] === :work ||
             throw(ArgumentError("@_parallel accepts only `work = expression`"))
-        Expr(:kw, :work, option.args[2])
+        work = option.args[2]
     end
     variable, range = iterator.args
     variable isa Symbol ||
         throw(ArgumentError("@_parallel requires a single loop variable"))
-    body = _closure_loop_body(loop.args[2])
+    body = loop.args[2]
+    _check_parallel_body(body)
     items = gensym(:parallel_items)
-    index = gensym(:parallel_index)
+    position = gensym(:parallel_position)
+    minimum_batch = gensym(:minimum_batch)
+    # The body is expanded twice on purpose. Polyester passes a closure
+    # argument to its workers in a heap box (measured 32 B per threaded launch
+    # for a closure over two vectors), while a `@batch` loop over the body
+    # itself captures the arrays as pointers and does not allocate.
+    # `@batch` is referenced through a GlobalRef so that call sites outside
+    # the package need not import Polyester.
+    threaded_loop = Expr(
+        :macrocall, GlobalRef(Polyester, Symbol("@batch")), __source__,
+        :(minbatch = $minimum_batch),
+        :(
+            for $position in 1:length($items)
+                local $variable = @inbounds $items[$position]
+                $body
+            end
+        ),
+    )
     expression = quote
         local $items = $range
-        $(_parallel_for)(length($items); $(options...)) do $index
-            local $variable = @inbounds $items[$index]
-            $body
-            return nothing
+        local $minimum_batch = $(_parallel_batch)(length($items), $work)
+        if iszero($minimum_batch)
+            for $variable in $items
+                $body
+            end
+        else
+            $threaded_loop
         end
+        nothing
     end
     return esc(expression)
 end
 
 """Traverse block-backed cell data with one dense column range per work item.
 
-Serial execution visits each block once, allowing callers to hoist its dense
-arrays outside the local `j, i` loops. With several threads and fewer than
-`_BATCHES_PER_THREAD` leaf blocks per thread, the columns of each block are
-split into tiles so that a one-block uniform mesh still uses all threads.
+Serial execution (one thread, or fewer cells than the grain) visits each
+block once, allowing callers to hoist its dense arrays outside the local
+`j, i` loops. With several threads and fewer than `_BATCHES_PER_THREAD` leaf
+blocks per thread, the columns of each block are split into tiles so that a
+one-block uniform mesh still uses all threads.
 
 `f(block, first_j, last_j)` must own every output in the supplied column range.
 """
@@ -116,8 +156,13 @@ function _parallel_block_columns(f::F, mesh) where {F}
     nx, ny = mesh.block_size
     number_of_blocks = nblocks(mesh)
     threads = _compute_threads()
-    requested_tiles = threads == 1 ? 1 :
-        max(1, cld(_BATCHES_PER_THREAD * threads, number_of_blocks))
+    if threads == 1 || number_of_blocks * nx * ny < _PARALLEL_GRAIN[]
+        for block in 1:number_of_blocks
+            f(block, 1, ny)
+        end
+        return nothing
+    end
+    requested_tiles = max(1, cld(_BATCHES_PER_THREAD * threads, number_of_blocks))
     columns_per_tile = max(1, cld(ny, requested_tiles))
     tiles_per_block = cld(ny, columns_per_tile)
     _parallel_for(
@@ -129,6 +174,11 @@ function _parallel_block_columns(f::F, mesh) where {F}
     end
     return nothing
 end
+
+"""Work estimate of one leaf block in block-level loops (block copies,
+refinement indicators, block transfer): four blocks reach the grain, the
+threshold these loops used before the launch layer was unified."""
+@inline _block_work() = max(1, cld(_PARALLEL_GRAIN[], 4))
 
 """Multiply a sparse matrix from a stored transpose, one output row per task."""
 function _parallel_csr_row_mul!(

@@ -114,7 +114,7 @@ function _fixed_interface_refinement_labels!(
     _refresh_conditional_fraction!(field)
     nx, ny = mesh.block_size
     h, r = mesh.halo, buffer_cells
-    _parallel_for(nblocks(mesh); work = prod(mesh.block_size)) do b
+    _parallel_for(nblocks(mesh); work = _block_work()) do b
         block = mesh.blocks[b]
         values = @view field.conditional_fraction.blocks[b][
             (h + 1 - r):(h + nx + r), (h + 1 - r):(h + ny + r),
@@ -302,7 +302,7 @@ function _vorticity_refinement_labels!(
     vorticity = _vorticity_values!(work, indicator.field, interface, geometry, phase)
     nx, ny = mesh.block_size
     block_cells = nx * ny
-    _parallel_for(nblocks(mesh); work = prod(mesh.block_size)) do b
+    _parallel_for(nblocks(mesh); work = _block_work()) do b
         block = mesh.blocks[b]
         offset = (b - 1) * block_cells
         error = zero(eltype(vorticity))
@@ -362,7 +362,7 @@ function refinement_labels!(
     reconstruct!(field)
     height_values = _fill_height_values!(field)
     nx, ny = mesh.block_size
-    _parallel_for(nblocks(mesh); work = prod(mesh.block_size)) do b
+    _parallel_for(nblocks(mesh); work = _block_work()) do b
         block = mesh.blocks[b]
         error = 0.0
         for j in 1:ny, i in 1:nx

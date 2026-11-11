@@ -104,7 +104,7 @@ function _transfer_cell_field!(
     h = workspace.mesh.halo
     _prepare_parallel_prolongation!(buffer.prolongation, workspace)
     _parallel_for(
-        nblocks(workspace.mesh); work = prod(workspace.mesh.block_size),
+        nblocks(workspace.mesh); work = _block_work(),
     ) do new_index
         block = workspace.mesh.blocks[new_index]
         haskey(workspace.old_indices, block.key) && return nothing

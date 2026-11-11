@@ -25,6 +25,13 @@ function parallel_loop_features(values)
     return values
 end
 
+function scaled_copy!(destination, source)
+    @_parallel for index in eachindex(destination)
+        @inbounds destination[index] = 2source[index]
+    end
+    return destination
+end
+
 expand_parallel(loop) = macroexpand(TwoPhaseAMR, :(@_parallel $loop))
 
 @testset "parallel loop launch" begin
@@ -62,6 +69,17 @@ expand_parallel(loop) = macroexpand(TwoPhaseAMR, :(@_parallel $loop))
     end
     @test visited == 1:100
     @test_throws ArgumentError _parallel_for(identity, -1)
+
+    # The loop form launches its body without a closure argument, so a warm
+    # launch allocates nothing on either path.
+    destination, source = zeros(4096), rand(4096)
+    for grain in (1, _PARALLEL_GRAIN[])
+        with_parallel_grain(grain) do
+            scaled_copy!(destination, source)
+            @test @allocated(scaled_copy!(destination, source)) == 0
+        end
+    end
+    @test destination == 2source
 
     for mesh in (BlockTreeMesh(block_size = (8, 6)), BlockTreeMesh(base_mesh = (32, 16), block_size = (8, 8)))
         nx, ny = mesh.block_size

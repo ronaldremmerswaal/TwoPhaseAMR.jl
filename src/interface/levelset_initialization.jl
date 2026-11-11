@@ -273,7 +273,7 @@ function initialize!(
             values[i + h, j + h] = fraction
         end
     end
-    _parallel_for(nblocks(mesh); work = prod(mesh.block_size)) do b
+    _parallel_for(nblocks(mesh); work = _block_work()) do b
         copyto!(field.fraction.blocks[b], result.blocks[b])
     end
     return reconstruct!(field)
