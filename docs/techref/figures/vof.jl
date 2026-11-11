@@ -219,8 +219,7 @@ function one_velocity_flux_check(field, velocity, dt)
     return (; worst, count, mixed, partition)
 end
 
-# Frozen phase subfaces (FrozenInterfaceFluxes): independent interval
-# placement and donating regions.
+# Frozen phase subfaces: independent interval placement and donating regions.
 function independent_subface(
         field, liquid_aperture, gas_aperture, index, face, donor, liquid_carrier,
         liquid_lower = nothing,
@@ -250,7 +249,7 @@ function independent_subface(
 end
 
 function frozen_flux_check(field, velocity::Tuple, dt)
-    work = WYAdvectionWorkspace(field, velocity; interface_transport = FrozenInterfaceFluxes())
+    work = WYAdvectionWorkspace(field, velocity)
     AMR._freeze_phase_apertures!(field, work)
     worst = 0.0; faces = 0; split = 0
     for axis in 1:2
@@ -290,7 +289,7 @@ end
 function equal_velocity_reduction_check(field, velocity, dt)
     one = WYAdvectionWorkspace(field)
     two_velocity = (velocity, copy(velocity))
-    two = WYAdvectionWorkspace(field, two_velocity; interface_transport = FrozenInterfaceFluxes())
+    two = WYAdvectionWorkspace(field, two_velocity)
     AMR._freeze_phase_apertures!(field, two)
     worst = 0.0
     for axis in 1:2
@@ -361,7 +360,7 @@ liquid_volume(field) = sum(
     cell_volume(field.mesh, ref) * AMR._get(field.fraction, ref) for ref in all_cells(field.mesh)
 )
 
-# Carrier specifications of the three transport paths.
+# Carrier specifications of the one-velocity and frozen transport paths.
 one_velocity_carrier(velocity) = (; kind = :one, velocity)
 function frozen_carrier(velocity, apertures, field)
     lower = if isnothing(field.geometry)
@@ -377,14 +376,13 @@ function frozen_carrier(velocity, apertures, field)
     end
     return (; kind = :frozen, velocity, apertures, lower)
 end
-projected_carrier(liquid, gas) = (; kind = :projected, velocity = liquid, gas)
 
 # Fluxes of one sweep, evaluated independently on the current reconstruction:
-# carrier volume, liquid volume and (projected method) auxiliary gas volume.
+# carrier volume and liquid volume.
 function replica_fluxes(field, carrier, dt, axis)
     mesh = field.mesh
     volumes = Dict{Int, Float64}(); liquids = Dict{Int, Float64}()
-    gases = Dict{Int, Float64}(); regions = Any[]
+    regions = Any[]
     for (index, face) in pairs(mesh.faces)
         face.axis == axis || continue
         if carrier.kind == :frozen
@@ -417,14 +415,8 @@ function replica_fluxes(field, carrier, dt, axis)
             liquids[index] = result.liquid
             push!(regions, (; index, phase = 1, result))
         end
-        if carrier.kind == :projected
-            ug = carrier.gas.interior[index]
-            Vg = dt * ug * face.area * aperture_of(field, index)
-            gases[index] = iszero(ug) ? 0.0 :
-                Vg - independent_donating_region(field, face, ug, dt, Vg).liquid
-        end
     end
-    return volumes, liquids, gases, regions
+    return volumes, liquids, regions
 end
 
 snapshot(field, cells, axis, regions, dilation) = (;
@@ -435,8 +427,7 @@ snapshot(field, cells, axis, regions, dilation) = (;
 
 # Independent sweep sequence: fluxes by clipping, the update of Chapter 5,
 # clamp and snap, then the package's reconstruction (Chapter 4). Records the
-# intermediate states, the dilation volume, the clamped/snapped volume and,
-# for the projected method, the auxiliary gas carrier and its reset.
+# intermediate states, the dilation volume and the clamped/snapped volume.
 function wy_replica(field, carrier, dt, order)
     mesh = field.mesh
     copyfield = copy(field)
@@ -448,19 +439,16 @@ function wy_replica(field, carrier, dt, order)
     states = Any[snapshot(copyfield, cells, 0, Any[], Dict{CellRef, Float64}())]
     dilation_total = snapped = 0.0
     snaps = 0
-    reset_signed = reset_absolute = 0.0
     for axis in order
-        volumes, liquids, gases, regions = replica_fluxes(copyfield, carrier, dt, axis)
+        volumes, liquids, regions = replica_fluxes(copyfield, carrier, dt, axis)
         dilation = Dict{CellRef, Float64}()
         new = Dict{CellRef, Float64}()
-        gas_carrier = Dict{CellRef, Float64}()
         for ref in cells
             open = open_volume_of(copyfield, ref)
-            V = L = G = 0.0
+            V = L = 0.0
             for (index, o) in get(incidence, ref, Tuple{Int, Int}[])
                 mesh.faces[index].axis == axis || continue
                 V += o * volumes[index]; L += o * liquids[index]
-                carrier.kind == :projected && (G += o * gases[index])
             end
             dilation[ref] = chi[ref] * V
             dilation_total += chi[ref] * V
@@ -473,30 +461,14 @@ function wy_replica(field, carrier, dt, order)
                 abs(s - c) > 256eps() && (snaps += 1)
             end
             new[ref] = s
-            if carrier.kind == :projected
-                g = open > 0 ? (1 - cond(copyfield, ref)) - G / open : 0.0
-                @assert g >= -128eps() "auxiliary gas out of bounds: $g"
-                g = max(g, 0.0)
-                g <= floor && (g = 0.0)
-                gas_carrier[ref] = g
-            end
         end
         for ref in cells
             AMR._set!(copyfield.fraction, open_fraction_of(copyfield, ref) * new[ref], ref)
         end
         reconstruct!(copyfield)
-        if carrier.kind == :projected
-            for ref in cells
-                d = open_volume_of(copyfield, ref) * (gas_carrier[ref] - (1 - cond(copyfield, ref)))
-                reset_signed += d; reset_absolute += abs(d)
-            end
-        end
         push!(states, snapshot(copyfield, cells, axis, regions, dilation))
     end
-    return (;
-        field = copyfield, states, dilation_total, snapped, snaps, chi,
-        reset_signed, reset_absolute,
-    )
+    return (; field = copyfield, states, dilation_total, snapped, snaps, chi)
 end
 
 fraction_difference(a, b) = maximum(
@@ -526,7 +498,7 @@ function step_balance_check(field, velocity; order = (1, 2))
 end
 
 function frozen_step_check(field, velocity::Tuple; order = (1, 2))
-    work = WYAdvectionWorkspace(field, velocity; interface_transport = FrozenInterfaceFluxes())
+    work = WYAdvectionWorkspace(field, velocity)
     dt = stable_timestep(velocity, work)
     apertures = (copy(work.liquid_aperture), copy(work.gas_aperture))
     before = liquid_volume(field)
@@ -544,42 +516,6 @@ function frozen_step_check(field, velocity::Tuple; order = (1, 2))
         residual = abs(after - before - replica.dilation_total - replica.snapped),
         difference = fraction_difference(field, replica.field), constants,
         partition = phase_flux_diagnostics(work).maximum_partition_defect,
-    )
-end
-
-function projected_step_check(field, velocity::Tuple; order = (1, 2), tolerance = 1.0e-12)
-    method = ProjectedLiquidVelocity(; tolerance, max_cycles = 1000)
-    work = WYAdvectionWorkspace(field, velocity; interface_transport = method)
-    dt = stable_timestep(velocity, work)
-    projected = copy(AMR._project_liquid_velocity!(work, velocity))
-    gas = copy(AMR._extend_projected_gas_velocity!(work, velocity))
-    residual_divergence = phase_flux_diagnostics(work).projection_final_divergence
-    before = liquid_volume(field)
-    replica = wy_replica(field, projected_carrier(projected, gas), dt, order)
-    # One-velocity WY with the projected carrier (reduction of the liquid update).
-    reduced = copy(field)
-    advect!(reduced, projected, dt, WYAdvectionWorkspace(reduced); sweep_order = order)
-    scalar = PhaseScalar(field; liquid = 3.0, gas = 7.0)
-    advect!(field, velocity, dt, work; scalars = (scalar,), sweep_order = order)
-    after = liquid_volume(field)
-    diagnostics = phase_flux_diagnostics(work)
-    constants = all(
-        AMR._get(scalar.liquid, ref) == 3.0 && AMR._get(scalar.gas, ref) == 7.0
-            for ref in all_cells(field.mesh)
-    )
-    chi_volume = sum(open_volume_of(field, ref) for ref in all_cells(field.mesh) if replica.chi[ref] == 1)
-    return (;
-        dt, change = after - before, dilation = replica.dilation_total,
-        snapped = replica.snapped, snaps = replica.snaps,
-        residual = abs(after - before - replica.dilation_total - replica.snapped),
-        difference = fraction_difference(field, replica.field),
-        reduction = fraction_difference(field, reduced), constants,
-        divergence = residual_divergence,
-        dilation_bound = dt * residual_divergence * chi_volume,
-        reset = diagnostics.gas_reset_discrepancy, reset_replica = replica.reset_signed,
-        reset_absolute = diagnostics.absolute_gas_reset_discrepancy,
-        reset_absolute_replica = replica.reset_absolute,
-        iterations = diagnostics.projection_iterations,
     )
 end
 
@@ -664,7 +600,7 @@ frozen_rates(velocity, work) = index -> (
 function accepts(field, velocity, dt)
     trial = copy(field)
     work = velocity isa Tuple ?
-        WYAdvectionWorkspace(trial, velocity; interface_transport = FrozenInterfaceFluxes()) :
+        WYAdvectionWorkspace(trial, velocity) :
         WYAdvectionWorkspace(trial)
     try
         advect!(trial, velocity, dt, work)
@@ -704,7 +640,7 @@ function cfl_check(field, velocity)
 end
 
 function frozen_cfl_check(field, velocity::Tuple)
-    work = WYAdvectionWorkspace(field, velocity; interface_transport = FrozenInterfaceFluxes())
+    work = WYAdvectionWorkspace(field, velocity)
     code = stable_timestep(velocity, work)
     indep = independent_wy_bound(field, frozen_rates(velocity, work); frozen = work)
     return (;
@@ -933,8 +869,8 @@ function sweeps_data()
     return String(take!(io)), (; dt, worst_sum, largest)
 end
 
-# Figure "frozen": frozen phase subfaces of FrozenInterfaceFluxes on one face,
-# without and with a solid; liquid moves in +x, gas in -x.
+# Figure "frozen": frozen phase subfaces on one face, without and with a
+# solid; liquid moves in +x, gas in -x.
 function vof_frozen_fixture(with_solid)
     mesh = BlockTreeMesh(;
         base_mesh = (4, 4), block_size = (4, 4), extent = (4.0, 4.0), periodic = (false, false),
@@ -964,7 +900,7 @@ function frozen_data()
     info = Dict{Int, Any}()
     for (panel, with_solid) in ((1, false), (2, true))
         field, velocity = vof_frozen_fixture(with_solid)
-        work = WYAdvectionWorkspace(field, velocity; interface_transport = FrozenInterfaceFluxes())
+        work = WYAdvectionWorkspace(field, velocity)
         dt = stable_timestep(velocity, work)
         apertures = (copy(work.liquid_aperture), copy(work.gas_aperture))
         replica = wy_replica(field, frozen_carrier(velocity, apertures, field), dt, (1, 2))
@@ -1023,11 +959,10 @@ function vof_outputs(write_output)
     mixed = Dict(:uniform => 0, :coarse_fine => 0, :cut => 0)
     partition = frozen_worst = frozen_cfl = equal = cfl_diff = 0.0
     frozen_faces = frozen_split = 0
-    replica = residual = reduction = reset = 0.0
+    replica = residual = 0.0
     constants = true
     steps = Dict{Symbol, Float64}()
     cut_info = nothing
-    projected_cut = nothing
     open_divergence = 0.0
     deepest = 0.0
     for kind in (:uniform, :amr, :cut, :film)
@@ -1070,7 +1005,7 @@ function vof_outputs(write_output)
         end
         kind == :film && continue
         two = (velocity, vof_gas_velocity(field, kind))
-        work = WYAdvectionWorkspace(copy(field), two; interface_transport = FrozenInterfaceFluxes())
+        work = WYAdvectionWorkspace(copy(field), two)
         fdt = stable_timestep(two, work)
         f = frozen_flux_check(copy(field), two, fdt)
         frozen_worst = max(frozen_worst, f.worst)
@@ -1081,25 +1016,18 @@ function vof_outputs(write_output)
         fs = frozen_step_check(copy(field), two)
         replica = max(replica, fs.difference); residual = max(residual, fs.residual)
         constants &= fs.constants
-        p = projected_step_check(copy(field), two)
-        replica = max(replica, p.difference); residual = max(residual, p.residual)
-        reduction = max(reduction, p.reduction); constants &= p.constants
-        reset = max(reset, abs(p.reset_absolute - p.reset_absolute_replica) / p.reset_absolute)
-        kind == :cut && (projected_cut = p)
         if kind in (:uniform, :amr)
             equal = max(equal, equal_velocity_reduction_check(copy(field), velocity, dt))
         end
     end
     @assert constants
     @assert max(worst[:uniform], worst[:coarse_fine], worst[:cut], frozen_worst) <= 1.0e-15
-    @assert replica <= 1.0e-15 && residual <= 1.0e-14 && reduction == 0
-    @assert abs(projected_cut.change) <= projected_cut.dilation_bound + 1.0e-14
+    @assert replica <= 1.0e-15 && residual <= 1.0e-14
     strip = strip_limitation_check()
     @assert strip.target <= strip.strip + 256eps()
     println("vof flux check:              ", (; worst, count, mixed, partition))
     println("vof frozen check:            ", (; frozen_worst, frozen_faces, frozen_split, frozen_cfl, equal))
-    println("vof balance:                 ", (; replica, residual, reduction, reset, steps, open_divergence))
-    println("vof projected (cut):         ", projected_cut)
+    println("vof balance:                 ", (; replica, residual, steps, open_divergence))
     println("vof cfl:                     ", (; cfl_diff, deepest, cut_info))
     println("vof cut strip bound:         ", strip)
     fix2(x) = @sprintf("%.2f", x)
@@ -1117,10 +1045,6 @@ function vof_outputs(write_output)
         ("chkVofStepUniform", sci(steps[:uniform])), ("chkVofStepAmr", sci(steps[:amr])),
         ("chkVofStepCut", sci(steps[:cut])), ("chkVofCutDilation", sci(steps[:cut_plain])),
         ("chkVofOpenDivergence", sci(open_divergence)),
-        ("chkVofProjectedReduction", sci(reduction)), ("chkVofResetDiff", sci(reset)),
-        ("chkVofProjectedDivergence", sci(projected_cut.divergence)),
-        ("chkVofProjectedChange", sci(abs(projected_cut.change))),
-        ("chkVofProjectedBound", sci(projected_cut.dilation_bound)),
         ("chkVofCflDiff", sci(cfl_diff)), ("chkVofCflDepth", @sprintf("%.3f", deepest)),
         ("chkVofCutSmallest", @sprintf("%.3f", cut_info.smallest)),
         ("chkVofCutDt", @sprintf("%.3f", cut_info.code)),

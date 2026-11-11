@@ -136,10 +136,7 @@ function stab_kelvin_helmholtz(;
     flow = stab_track!(
         FlowSimulation(
             mesh, physics;
-            velocity_model = TwoVelocityModel(
-                interface_transport = FrozenInterfaceFluxes(),
-                pressure_projection = CMDGFMProjection(),
-            ),
+            velocity_model = TwoVelocityModel(pressure_projection = CMDGFMProjection()),
             velocity = (liquid, gas), boundary = FreeSlip(),
         ),
     )
