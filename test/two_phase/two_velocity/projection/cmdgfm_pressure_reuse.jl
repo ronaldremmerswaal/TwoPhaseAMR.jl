@@ -1007,4 +1007,3 @@ end
         @test flow.pressure.blocks[block] == old_pressure.blocks[block]
     end
 end
-
