@@ -366,9 +366,9 @@ transitions).
   Cut-cell WY contact-line translation and reversal & symmetric difference & exact positions & $2.77$, $3.70$; reversal end $2.90$ & all $\ge1.8$; reversal end $\ge1.8$\\
   Vortex reversal $T=1$, one velocity, uniform (16--64) & symmetric difference; $L^1$ fraction; $L^1$ cell and staggered phase scalars & initial state & $2.16$, $2.24$; $2.21$, $2.16$; $1.89$, $1.63$; $1.59$, $2.12$ & end and fin $\ge1.5$\\
   \quad composite and adaptive (8--32) & as above & initial state & composite $1.87$, $2.29$; adaptive $3.20$, $2.55$ (symmetric difference) & end and fin $\ge1.5$\\
-  Vortex reversal, two velocities & symmetric difference; $L^1$ fraction; staggered liquid and gas scalars & initial state & uniform projected $2.17$, $2.28$; gas $1.96$, $1.29$ & end $\ge1.5$; fin $\ge1.5$ ($\ge1.2$ gas)\\
-  Split-WY reversal, two velocities (16, 24, 32) & $L^1$ fraction; phase scalars & initial state & projected $2.59$, $2.99$; $1.35$, $1.58$ & fin $\ge1.8$ (uniform), $\ge1.5$ (scalars)\\
-  Rotating disc, tangential jump & $L^1$ fraction after the rotation & initial state & projected end $2.50$; frozen $1.31$ & end $\ge2.0$ (projected), $\ge0.8$ (frozen)\\
+  Vortex reversal, two velocities & symmetric difference; $L^1$ fraction; staggered liquid and gas scalars & initial state & -- & end $\ge1.5$; fin $\ge1.5$\\
+  Split-WY reversal, two velocities (16, 24, 32) & $L^1$ fraction; phase scalars & initial state & -- & fin $\ge1.8$ (uniform), $\ge1.5$ (scalars)\\
+  Rotating disc, tangential jump & $L^1$ fraction after the rotation & initial state & end $1.31$ & end $\ge0.8$\\
   Rotating disc, CMDGFM projection (8--32) & $L^1$ fraction & initial state & end $1.40$ (CMDGFM) & end $\ge0.9$\\
   Phase-scalar AMR transfer & phase-weighted $L^1$ after one refinement & mm scalars & -- & all $\ge1.8$\\
   CMDGFM jump interpolant & mean jump error over resolved stencils & affine velocity with a constant jump & -- & end $\ge0.8$, decreasing\\
@@ -553,11 +553,11 @@ instability studies refine the step with the mesh through the bounds of
   \quad DR $1000$ & as above & as above & end $1.63$ & end $\ge1.5$\\
   \quad gravity wave, DR $1000$ & as above & as above & end $0.66$ & end $\ge0.4$\\
   \quad capillary--gravity, DR $1000$, uniform, composite, adaptive & as above & as above & end $1.63$ & end $\ge1.5$\\
-  \quad two velocities, frozen and projected & as above & as above & DR $1$: end $1.98$, $2.55$; DR $1000$: $1.67$, $1.58$ & as one velocity\\
+  \quad two velocities & as above & as above & DR $1$: end $1.98$; DR $1000$: $1.67$ & as one velocity\\
   \quad flat interface at rest & amplitude and speed & rest & $1.1\times10^{-14}$ & $\le10^{-9}$\\
   Floating droplet, mode 4, DR $1000$ (16, 32) & period of the kinetic energy; largest kinetic energy & Lamb period & -- & period error and energy fall by more than $4$; viscous peaks decay\\
   Sessile droplet, $90^\circ$, Bo $1.21$, La $550$ (12, 24, 48) & $L^1$ fraction at a quarter capillary time & Laplace--Young profile & $2.23$, $2.72$ & all $\ge1.2$, decreasing\\
-  Kelvin--Helmholtz, two velocities (8, 16, 32) & amplitude error & dispersion relation~\thesis{App.~7.B} & DR $1$, We $0.5$: end $1.56$ (frozen), $1.59$ (projected); DR $1000$: $0.91$, $0.51$; DR $1$, We $5$: $1.02$, $1.21$ & end $\ge0.8$; $\ge0.48$ (DR $1000$, projected); decreasing\\
+  Kelvin--Helmholtz, two velocities (8, 16, 32) & amplitude error & dispersion relation~\thesis{App.~7.B} & DR $1$, We $0.5$: end $1.56$; DR $1000$: $0.91$; DR $1$, We $5$: $1.02$ & end $\ge0.8$; decreasing\\
   Rayleigh--Taylor, frozen (8, 16, 32) & amplitude error & as above & DR $3$, Bo $0.5$: end $3.05$; DR $1000$: $1.78$; DR $3$, Bo $2$: $1.36$ & end $\ge1.7$; $\ge1.3$ (Bo $2$); decreasing\\
   Combined KH--RT, DR $3$, We $0.5$, Bo $0.75$ & as above & as above & end $0.95$ & end $\ge0.79$; decreasing\\
 \end{longtable}}
@@ -569,8 +569,7 @@ thesis~\thesis{App.~7.B}. Several bounds lie below the order of the scheme
 for a reason recorded in the test: the gravity wave (the gravity bound makes
 $\dt\propto\minwidth^{1/2}$, so that the first-order splitting limits the
 order to $\half$ until the advective bound is active,
-\cref{sec:stab:accuracy}), the projected liquid velocity at density ratio
-$1000$ (bound $0.48$; an earlier run recorded in the test gave $0.493$), the
+\cref{sec:stab:accuracy}), the
 Rayleigh--Taylor wave at Bond number $2$ ($1.3$) and the combined wave
 ($0.79$). The
 sessile droplet converges faster than the order of about $1.5$ that the

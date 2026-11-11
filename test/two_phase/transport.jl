@@ -75,8 +75,6 @@ end
             work = WYAdvectionWorkspace(interface)
             @test !hasproperty(work, :geometry)
             @test (@inferred _transport_test_interface(work)) === interface
-            @test fieldtype(typeof(work), :method_workspace) === Base.RefValue{Nothing}
-            @test (@inferred getindex(work.method_workspace)) === nothing
             @test (@inferred stable_timestep(velocity, work)) == Inf
             before = vof_values(interface)
             advect!(interface, velocity, 0.001, work)
@@ -944,14 +942,9 @@ end
         @test !TP._wy_fraction_in_bounds(T(2), zero(T))
         @test TP._wy_fraction_in_bounds(one(T) + tolerance / 2, one(T))
         @test !TP._wy_fraction_in_bounds(one(T) + 2tolerance, one(T))
-        @test !TP._wy_negative_fraction_out_of_bounds(-roundoff, open)
-        @test TP._wy_negative_fraction_out_of_bounds(-T(4) * tolerance / open, open)
-        @test !TP._wy_negative_fraction_out_of_bounds(T(2), open)
-        @test TP._wy_negative_fraction_out_of_bounds(-2tolerance, zero(T))
     end
     @test TP._wy_fraction_in_bounds(1.000000000000035, 4.7e-4)
     @test TP._wy_fraction_in_bounds(1.000000000000035, Float32(4.7e-4))
-    @test !TP._wy_negative_fraction_out_of_bounds(-4.79159355422365e-14, 4.7e-4)
 end
 
 @testset "WY cut hanging donor counterexamples (#56)" begin
