@@ -105,7 +105,6 @@ Select separate intrinsic phase velocities explicitly:
 two_velocity_flow = FlowSimulation(
     mesh, physics;
     velocity_model = TwoVelocityModel(
-        interface_transport = FrozenInterfaceFluxes(),
         pressure_projection = CMDGFMProjection(),
     ),
     boundary = FreeSlip(),

@@ -136,8 +136,9 @@ impulses; pass fresh zero pressure for an absolute velocity projection.
 
 [`TwoVelocityModel`](@ref) selects its pressure projection through the
 `pressure_projection` field; `CMDGFMProjection()` is the only supported
-choice and the default. The default interface carrier is
-`FrozenInterfaceFluxes()`; `ProjectedLiquidVelocity()` is a legacy carrier.
+choice and the default. Its interface transport uses the frozen liquid/gas
+subfaces described in
+[Two-velocity advection](two-velocity-advection.md).
 
 `CMDGFMProjection()` solves the nonsymmetric two-block system
 
@@ -399,7 +400,6 @@ same material-property API:
 flow = FlowSimulation(
     mesh, physics;
     velocity_model=TwoVelocityModel(
-        interface_transport=FrozenInterfaceFluxes(),
         pressure_projection=CMDGFMProjection(),
     ),
     velocity=(liquid_velocity, gas_velocity),

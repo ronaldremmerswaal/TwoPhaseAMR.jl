@@ -25,12 +25,10 @@ The curl stencil uses a local affine extrapolation from valid phase cells
 cells remains `NaN` and does not prevent coarsening. An unresolved active cell
 is not allowed to trigger coarsening.
 
-The two-velocity model supports two conservative interface-transport methods.
-In the projected method, the physical interface is advected by the liquid
-velocity and the gas update uses an auxiliary conservative carrier. In the
-frozen-subface method, liquid and gas portions of each face are transported by
-their corresponding intrinsic velocities. The underlying model and its
-mass/momentum-compatible transport are developed by
+The two-velocity model transports the physical interface with the frozen
+liquid and gas subfaces of each face, each extruded by its corresponding
+intrinsic velocity. The underlying model and its mass/momentum-compatible
+transport are developed by
 [Remmerswaal (2023)](https://doi.org/10.33612/diss.562133319) and
 [Remmerswaal and Veldman (2022)](https://arxiv.org/abs/2209.14934).
 
@@ -157,16 +155,11 @@ advect!(
 ```
 
 The workspace snapshots both old intrinsic velocity fields, so the source and
-destination tuple may be the same object. Under the projected-liquid policy,
-the physical liquid uses the projected carrier while momentum values come
-from the original liquid velocity. The gas velocity uses the same auxiliary
-gas carrier and per-sweep reset as centred gas scalars. Under the frozen-face
-policy, both staggered phase updates consume the complementary flux pair.
-Applying the update to a one-function reproduces the interpolated staggered
-phase-volume balance exactly. `phase_flux_diagnostics(workspace)` exposes the
-signed and absolute gas-momentum reset for both components as
-`gas_momentum_reset_discrepancy_x/y` and
-`absolute_gas_momentum_reset_discrepancy_x/y`.
+destination tuple may be the same object. Both staggered phase updates consume
+the complementary frozen-subface flux pair. Applying the update to a
+one-function reproduces the interpolated staggered phase-volume balance
+exactly. `phase_flux_diagnostics(workspace)` exposes the face-partition defect
+of the complementary phase fluxes.
 The tuple entry point always uses this separate phase-momentum update. Equal
 phase velocities are therefore a validation limit of the two-velocity
 discretization rather than a runtime dispatch to the one-velocity operator.
@@ -174,92 +167,37 @@ Callers that want the one-velocity model pass a `FaceVelocity` directly.
 
 ## Accuracy and conservation
 
-Both policies preserve constant intrinsic phase fields and staggered
-one-functions. They conserve integrated liquid/gas phase quantities because
-every transported field uses the same complementary phase-flux pair. The
+The frozen-subface transport preserves constant intrinsic phase fields and
+staggered one-functions. It conserves integrated liquid/gas phase quantities
+because every transported field uses the same complementary phase-flux pair. The
 higher-order staggered interpolant switches to CTU whenever either adjacent
 predicted phase fraction is below `ctu_threshold`. Smooth bulk fields can
 therefore retain higher-order behavior, while a field that remains
 discontinuous at a moving interface should be expected to converge at first
 order locally.
 
-## Method A: projected liquid velocity
+## Frozen phase subfaces
 
-`ProjectedLiquidVelocity()` is a legacy interface carrier. The projected
-method defines ``\widehat u_\ell`` by a Poisson projection. The
-pressure unknown exists in
-cells with positive liquid fraction and is fixed to zero in liquid-empty
-cells. A face receives the pressure correction exactly when its staggered
-liquid fraction is positive. Missing face velocities outside that set are
-filled by constant extrapolation far enough to construct every donating
-region used by the split sweep. Its discrete divergence must vanish in every
-cell with positive liquid volume. The physical liquid carrier and flux are
-
-```math
-\widehat Q_f=\Delta t\,A_f a_f^o\widehat u_{\ell,f},\qquad
-L_f=|D_f(\widehat u_\ell)\cap\Omega_\ell^{[k]}|_{\rm signed}. \tag{5}
-```
-
-Equation (1) uses ``\widehat Q`` for both the WY dilation and the PLIC swept
-volume. No gas velocity appears in the physical interface update. Since
-``\chi_\ell^n`` is zero in an empty liquid cell and
-``\nabla_h\!\cdot\widehat u_\ell=0`` in every nonempty liquid cell, the summed
-dilation vanishes and liquid volume is conservative.
-
-Gas transport uses a separate auxiliary carrier:
-
-```math
-C_g^*{}^{[k+1]}=C_g^*{}^{[k]}-{\cal D}^kG(u_g), \tag{6}
-```
-
-with no WY dilation. This is a conservative geometric carrier and may exceed
-one because ``u_g`` is not separately divergence free at the interface. The
-physical gas fraction is always ``1-C_\ell``. Intrinsic gas scalars use the
-same auxiliary carrier in numerator and denominator, so their constant-one
-identity is retained. The difference between ``C_g^*`` and ``1-C_\ell`` is an
-explicit diagnostic; it must never be silently folded into a stored
-phase-weighted field.
-
-The underlying balance is dimensionally unsplit, whereas this package uses
-directional splitting. Consequently, every one-dimensional gas substep starts
-from the current physical complement and discards its auxiliary carrier after
-recovering the intrinsic scalar. Carrying ``C_g^*`` into the perpendicular
-sweep would combine it with a PLIC reconstructed from ``1-C_\ell`` rather than
-from ``C_g^*``. That mismatch can make the supposedly lower-bounded carrier
-negative. The reported reset discrepancy is therefore accumulated over both
-directional substeps. This reset is a
-measurable additional approximation, not stored state.
-
-The constant-extrapolation band is recomputed far enough into the gas to cover
-the largest PLIC, scalar, staggered-CTU, coarse--fine, and cut-cell stencil used
-in that step. It is distinct from the pressure domain: extending the
-Dirichlet-pressure solve into gas cells would change the projection operator. At a
-fixed solid, the pressure correction uses the cut-cell gradient which is
-adjoint to the open-volume divergence.
-
-## Method B: frozen phase subfaces
-
-`FrozenInterfaceFluxes()` is the default interface carrier. At ``t^n``, it
-splits every geometry-open face into
+At ``t^n``, the transport splits every geometry-open face into
 liquid and gas subfaces with apertures
 ``a_f^{\ell,n}`` and ``a_f^{g,n}``. For each carrier phase ``\pi'``, extrude
 that subface with its own velocity. For either transported phase ``\pi``,
 
 ```math
 F_f^\pi=\sum_{\pi'\in\{\ell,g\}}
- |D_{f^{\pi'}}(u_{\pi'})\cap\Omega_\pi^{[k]}|_{\rm signed}, \tag{7}
+ |D_{f^{\pi'}}(u_{\pi'})\cap\Omega_\pi^{[k]}|_{\rm signed}, \tag{5}
 ```
 
 and
 
 ```math
 Q_f=\Delta t\,A_f
- (a_f^{\ell,n}u_{\ell,f}+a_f^{g,n}u_{g,f}). \tag{8}
+ (a_f^{\ell,n}u_{\ell,f}+a_f^{g,n}u_{g,f}). \tag{6}
 ```
 
 Each donating region is geometrically divided into liquid and gas, so (2)
 holds to roundoff even when the two carrier velocities have opposite signs.
-Equations (1), (3), and (4) therefore use the mixture carrier (8) in their WY
+Equations (1), (3), and (4) therefore use the mixture carrier (6) in their WY
 dilation. The PLIC geometry is reconstructed between directional sweeps, while
 the face-subdivision apertures ``a_f^{\pi,n}`` remain frozen for the complete
 step. With a solid, the subface ordering is frozen too, so the swept
@@ -274,20 +212,14 @@ fraction-bound failure rather than hiding them with fraction clipping.
 
 Fixed solid geometry is applied before the liquid/gas subdivision:
 ``a_f^\ell+a_f^g=a_f^o``. Both partial donating regions are clipped to the
-solid-open cell. At an AMR connection, equation (7) is evaluated on each owned
+solid-open cell. At an AMR connection, equation (5) is evaluated on each owned
 fine face segment. The same integrated value is shared by its two incident
 cells, so summing the segments is the reflux operation; a second coarse-face
 flux must not be constructed.
 
 ### When projection is refreshed
 
-Both methods use geometry from the current time level, but their projection
-requirements differ. The projected-liquid method recomputes its active cells,
-staggered liquid fractions, operator coefficients, extension, and auxiliary
-projection at the start of every `advect!` call. Reusing a projected field
-after the interface has changed would solve the wrong discrete problem.
-
-The frozen-subface method does not add an auxiliary projection. It assumes
+The frozen-subface transport does not add an auxiliary projection. It assumes
 that the supplied physical phase velocities already satisfy
 
 ```math
@@ -315,7 +247,7 @@ safe local condition is
 \frac{\Delta t}{V_c^o}\sum_{f\in\partial c}
  \sum_{\pi\in\{\ell,g\}}
  \max(-\sigma_{cf}A_fa_f^\pi u_f^\pi,0)\le C_{WY},
- \qquad C_{WY}\le\tfrac12. \tag{9}
+ \qquad C_{WY}\le\tfrac12. \tag{7}
 ```
 
 The implementation also checks the corresponding outgoing sum when the input
@@ -324,7 +256,7 @@ cell from being drained while keeping the intended condition unchanged for a
 discretely divergence-free field. Every active phase velocity additionally
 satisfies ``\Delta t|u_f^\pi|/h_{\rm donor}\le C_{WY}``; this protects a fine
 face segment whose adjacent donor is coarser. Counterflowing phase subfaces
-are counted separately in (9), since cancellation in their net mixture flux
+are counted separately in (7), since cancellation in their net mixture flux
 does not make either donating region disappear.
 
 For a cut donor, the volume behind an individual segment or phase subface can
@@ -345,13 +277,6 @@ constraints. A genuine flux whose donor strip has no open area, or one below
 the sweep's area tolerance, cannot be represented by any donating region: the
 bound raises an `ArgumentError` naming the face, its donor cell and the strip
 area instead of returning an unusable step.
-
-For Method A, the physical-interface restriction is (9) with the projected
-liquid carrier. The auxiliary gas carrier has its own incoming, outgoing,
-extrusion, and cut-donor strip bounds. The common time step is the minimum of
-both. Before the projection exists, taking the minimum of the two existing
-full-face WY bounds is conservative but is intentionally only a construction-time
-fallback.
 
 ## Physical pressure projection
 
