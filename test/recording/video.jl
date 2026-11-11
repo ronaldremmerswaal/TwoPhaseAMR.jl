@@ -3,7 +3,7 @@ using Test, TwoPhaseAMR
 # Simulation times of an AMR run: large steps early, clustered steps where the
 # adaptive time step shrank, a repeated time, and a late jump.
 const _IRREGULAR_TIMES = [
-    0.0, 0.004, 0.007, 0.019, 0.020, 0.021, 0.050, 0.310, 0.620, 1.0,
+    0.0, 0.004, 0.007, 0.019, 0.02, 0.021, 0.05, 0.31, 0.62, 1.0,
 ]
 
 function _local_half_gap(times, target)
