@@ -6,9 +6,12 @@ Numerical kernels use the ordinary Julia `:default` thread pool through
 `Polyester.@batch`. Polyester keeps a small persistent worker pool and uses a
 static loop schedule, avoiding the task-allocation cost that was measurable
 with a fresh `Threads.@threads` region inside every Krylov matrix-vector
-product. Pointer-rich tree searches use Julia's dynamic task scheduler instead;
-their larger work items amortize task launch, and avoid Polyester's dense-array
-lowering for heterogeneous captured topology.
+product. All threaded loops, including the pointer-rich tree searches of mesh
+construction, go through one launch function, `_parallel_for(f, n; work)`, and
+its loop form `@_parallel for i in range … end`; the block-column traversal of
+centred fields is a schedule on top of `_parallel_for`. A loop runs serially,
+in index order, on one thread or when `n * work` (`work` estimates one item's
+cost in cell updates) is below the grain `_PARALLEL_GRAIN[]`.
 
 The implementation does not index scratch storage by `Threads.threadid()`.
 Julia tasks may migrate between threads after a yield, so thread-indexed state
@@ -45,11 +48,16 @@ blocks. This is the same two-level idea used by patch AMR systems: schedule
 boxes when there are enough boxes and tile within a box when there are not.
 See [AMReX's box and tiling model](https://amrex-codes.github.io/amrex/docs_html/Basics.html#mfiter-with-tiling).
 
-Kernels remain serial below 1,024 flat iterations. Above that cutoff the batch
-size is chosen from the iteration count and thread count, targeting four
-batches per thread. Block-level operations use a four-block cutoff because a
-block transfer or height-cache operation is substantially more expensive than
-one scalar array iteration.
+Kernels remain serial below a work of 1,024 cell updates. Above it, Polyester
+splits the index range into at most one contiguous batch per thread, each with
+at least a quarter of the grain. Block-level operations, such as block
+transfer, height-cache copies or refinement indicators, count one block as a
+quarter of the grain, so they thread from four blocks of any size. The loop
+form `@_parallel` expands its body into a plain serial loop and into the
+`Polyester.@batch` loop: Polyester boxes a closure argument for its workers
+(32 B per launch), whereas a `@batch` body captures its arrays as pointers and
+does not allocate. The grain is a `Ref` so tests can set it to one and run the
+threaded path on small meshes.
 
 ## AMR and load balance
 

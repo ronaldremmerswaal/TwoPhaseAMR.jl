@@ -241,7 +241,7 @@ function _fill_height_values!(field)
     mesh, cache = field.mesh, _height_cache!(field)
     T = eltype(field)
     nx, ny = mesh.block_size
-    _parallel_for(nblocks(mesh); grain = 4) do b
+    _parallel_for(nblocks(mesh); work = _block_work()) do b
         if isnothing(field.geometry)
             cache.values[b][5:(nx + 4), 5:(ny + 4)] .= interior(field, b)
         else

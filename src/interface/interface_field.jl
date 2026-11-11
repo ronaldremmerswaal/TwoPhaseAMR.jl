@@ -561,7 +561,7 @@ function _reconstruct_interface!(field::InterfaceField)
                 (field.normal_y, field.previous_normal_y),
                 (field.intercept, field.previous_intercept),
             )
-            _parallel_for(nblocks(mesh); grain = 4) do block
+            _parallel_for(nblocks(mesh); work = _block_work()) do block
                 copyto!(previous.blocks[block], current.blocks[block])
             end
         end

@@ -1,0 +1,111 @@
+ 21:16:55  up 14:09,  0 users,  load average: 3.78, 3.67, 3.72
+case=cylinder threads=4 cells=2944 blocks=184->184 dt=6.4804e-04 steps=100 median_ms=2.296 min_ms=2.124 mean_ms=2.364 median_bytes=118928 checksum=9165022ca795d438
+step_ms=3.18,2.79,3.52,2.29,2.18,2.26,2.24,2.44,3.4,2.32,2.45,2.44,2.57,2.31,2.29,2.3,2.31,2.54,2.31,2.3,3.31,2.19,2.53,2.26,2.39,2.3,2.4,2.43,2.33,2.16,2.3,2.2,2.45,2.16,2.24,2.12,2.25,2.33,2.43,2.46,2.28,2.16,2.43,2.14,2.26,2.25,2.26,2.34,2.23,2.13,2.14,2.15,2.47,2.39,2.32,2.18,2.22,2.32,2.4,2.41,2.4,2.25,2.42,2.17,2.18,2.28,2.19,2.66,2.7,2.23,2.16,2.13,2.4,2.15,2.24,2.3,2.14,2.33,2.13,2.13,2.22,2.19,2.87,2.48,2.26,2.13,2.15,2.34,2.17,2.34,2.17,2.15,3.46,2.2,2.26,2.26,2.55,2.89,2.35,2.22
+main-thread samples=1619 serial=75.2% batch=24.8%
+serial self by function (innermost package frame), % of main-thread samples:
+   24.0%  diagnostic_value (interface.jl)
+    7.9%  _parallel_csr_row_mul! (threading.jl)
+    3.7%  _coarse_solve! (cycles.jl)
+    3.0%  _restrict! (hierarchy.jl)
+    2.8%  _prolongate! (hierarchy.jl)
+    2.7%  _vorticity_from_centered! (sampling.jl)
+    2.7%  _add! (variables.jl)
+    2.5%  _roundoff_residual_floor! (cycles.jl)
+    2.4%  _run_krylov! (elliptic_solver.jl)
+    2.3%  _cell_centered_velocity! (sampling.jl)
+    2.3%  _get (variables.jl)
+    2.1%  _true_residual! (elliptic_solver.jl)
+    1.9%  _protect_fixed_band_coarsening! (phase_criteria.jl)
+    1.4%  _apply_staggered_diffusion! (staggered_diffusion.jl)
+    1.1%  _local_plic_segment (geometry_utils.jl)
+    1.1%  divergence! (operators.jl)
+    0.9%  #_record_diagnostics!#710 (history.jl)
+    0.7%  _integrated_residual_norms (cycles.jl)
+    0.7%  macro expansion (cycles.jl)
+    0.6%  _apply_vcycle_preconditioner! (cycles.jl)
+    0.6%  _run_krylov_reliably! (elliptic_solver.jl)
+    0.6%  _lattice_box_intersects (mesh.jl)
+    0.4%  _copy_from_field! (elliptic.jl)
+    0.3%  _vcycle! (cycles.jl)
+    0.3%  _collect_leaf_blocks_in_window! (mesh.jl)
+    0.3%  _cell_index (mesh.jl)
+    0.3%  _convection! (staggered_fluxes.jl)
+    0.2%  copyto! (cell_advection.jl)
+    0.2%  _collect_leaf_nodes_in_window! (mesh.jl)
+    0.2%  #311 (implicit_diffusion.jl)
+    0.2%  #_protect_fixed_band_coarsening!##2 (phase_criteria.jl)
+    0.2%  _add_boundary_convection! (staggered_fluxes.jl)
+    0.2%  #advect!#182 (staggered_update.jl)
+    0.2%  _strong_maximum (stats.jl)
+    0.2%  #_project_prepared!#413 (operators.jl)
+    0.2%  macro expansion (threading.jl)
+    0.2%  _pressure_predictor! (stepping.jl)
+    0.2%  _apply_refinement_actions! (workspace.jl)
+    0.2%  _set! (variables.jl)
+    0.1%  _boundary_dual_flux (staggered_fluxes.jl)
+    0.1%  _copy_to_field! (elliptic.jl)
+    0.1%  _can_coarsen (workspace.jl)
+    0.1%  #_solve_krylov_with_stats!#283 (elliptic_solver.jl)
+    0.1%  _balance! (mesh.jl)
+    0.1%  _collect_active_nodes! (workspace.jl)
+    0.1%  #step!#832 (stepping.jl)
+    0.1%  _vorticity_values! (sampling.jl)
+    0.1%  _lattice_root_window (mesh.jl)
+    0.1%  #_local_plic_segment##0 (geometry_utils.jl)
+    0.1%  #309 (implicit_diffusion.jl)
+    0.1%  _tree_box_intersects (mesh.jl)
+    0.1%  _refactorize_coarse! (geometric_preconditioner.jl)
+    0.1%  _copy_velocity! (stages.jl)
+    0.1%  #_refresh_multigrid_level!#267 (geometric_preconditioner.jl)
+    0.1%  _add_wall_source! (implicit_diffusion.jl)
+    0.1%  _positive_finite_step (workspace.jl)
+    0.1%  _add_boundary_flux_divergence! (staggered_fluxes.jl)
+    0.1%  #refinement_labels!#447 (geometry_criteria.jl)
+    0.1%  _convection_schedule! (staggered_fluxes.jl)
+    0.1%  _directional_flux_divergence! (staggered_fluxes.jl)
+serial inclusive (package functions), % of main-thread samples:
+   75.1%  _simulate!
+   75.1%  simulate!
+   75.1%  #_simulate!#866
+   75.1%  #simulate!#861
+   75.0%  #step!#860
+   75.0%  step!
+   35.7%  #step!#832
+   29.6%  #_record_diagnostics!#710
+   29.6%  _record_diagnostics!
+   29.2%  solve!
+   29.2%  _solve_krylov_with_stats!
+   29.2%  #_solve_krylov_with_stats!#283
+   28.7%  _record_series!
+   28.7%  #_record_series!#708
+   28.7%  diagnostic_value
+   22.7%  _run_krylov_reliably!
+   22.1%  _run_krylov!
+   19.2%  _apply_vcycle_preconditioner!
+   19.2%  ldiv!
+   18.6%  _vcycle!
+   17.7%  #_diffusion_substep!#829
+   17.7%  _diffusion_substep!
+   17.6%  implicit_midpoint_diffusion!
+   17.6%  #implicit_midpoint_diffusion!#314
+   15.9%  _solve_staggered_component!
+   15.9%  #solve!#313
+   15.9%  #_solve_staggered_component!#306
+   15.2%  _project_prepared!
+   15.2%  #_project_prepared!#413
+   13.3%  #solve!#284
+    9.7%  #adapt!#120
+    9.7%  adapt!
+    8.1%  _adaptive_refinement_labels!
+    8.1%  refinement_labels!
+    8.1%  #refinement_labels!#100
+    7.9%  _multigrid_mul!
+    7.9%  _parallel_csr_row_mul!
+    7.0%  _smooth!
+    5.5%  _vorticity_values!
+    5.5%  _vorticity_refinement_labels!
+    5.5%  #refinement_labels!#440
+    4.5%  divergence!
+    3.7%  _coarse_solve!
+    3.0%  _restrict!
+    2.8%  _prolongate!
