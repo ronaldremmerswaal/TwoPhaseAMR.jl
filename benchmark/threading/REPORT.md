@@ -30,43 +30,64 @@ No topology change occurred in any timed window (block counts unchanged).
 
 ## Results (ms/step, median of the timed steps)
 
+Raw output of every point, including per-step times and the profiles, is in
+`logs/main/CASE_tN.log` (each starts with the `uptime` line read just before
+the run).
+
 | case | 1 thread | 2 threads | 4 threads | speed-up 2 / 4 | alloc/step 1 → 4 threads |
 |---|---:|---:|---:|---:|---:|
-| TG 128² hierarchical (40 steps) | 13.56 | 9.71 | 8.02 | 1.40× / **1.69×** | 6.4 KB → 39 KB |
-| capillary CMDGFM k = 4 (30 steps) | 51.05 | 38.79 | 32.76 | 1.32× / **1.56×** | 1.97 MB → 2.17 MB |
-| cylinder (100 steps) | 3.15 | 2.55 | 2.23 | 1.24× / **1.41×** | 81 KB → 119 KB |
+| TG 128² hierarchical (40 steps) | 13.53 | 9.81 | 8.43 | 1.38× / **1.60×** | 6.4 KB → 39 KB |
+| capillary CMDGFM k = 4 (30 steps) | 50.63 | 39.97 | 33.55 | 1.27× / **1.51×** | 1.97 MB → 2.17 MB |
+| cylinder (100 steps) | 3.14 | 2.54 | 2.30 | 1.24× / **1.37×** | 81 KB → 119 KB |
 
 Audit baseline (pre-4B–4E.3): TG hierarchical 1.53×, CMDGFM 1.16× at 4 threads.
-The capillary step alternates between cheap and expensive steps (min 40.7 ms,
-median 51.0 ms at 1 thread), so its median is the noisier number.
+A first, identical run of the same points an hour earlier gave TG 1.69×,
+capillary 1.56×, cylinder 1.41× (load 3.3–3.8 both times); the spread between
+the two runs is the noise of the shared host.
+
+The capillary steps are not uniform, but the pattern is the same at every
+thread count: steps 18, 25 and 29 of the timed window are about 20 % cheaper
+than the other 27 (40.4 vs ≈ 50.5 ms at 1 thread, 26.2 vs ≈ 33.5 ms at
+4 threads, see `step_ms` in the logs). The median is therefore the cost of a
+regular step at every thread count; the mean (49.9 / 39.2 / 33.2 ms) gives the
+same speed-ups (1.27× / 1.50×).
 
 **Determinism:** the checksum of the final state is identical at 1, 2 and 4
 threads for all three cases (`73b29d3e…`, `e67ec5aa…`, `9165022c…`): every
 current parallel loop owns its outputs and all sums are serial.
 
+The CI-runner confirmation of the brief is done once for the final numbers
+(after step 4), together with these baselines.
+
 ## Serial fraction
 
 Amdahl estimate from the 1- and 4-thread medians, s = (4/S₄ − 1)/3:
-TG 0.46, capillary 0.52, cylinder 0.61. The 4-thread profile (main thread,
-0.5 ms sampling, TG 150 steps, capillary 60, cylinder 400) agrees: the main
-thread is outside any Polyester batch for **59.7 %** (TG), **66.0 %**
-(capillary) and **76.5 %** (cylinder) of the wall time.
+TG 0.50, capillary 0.55, cylinder 0.64. The 4-thread profile (main thread,
+0.5 ms sampling; TG 150 steps, capillary 60, cylinder 400) agrees: the main
+thread is outside any Polyester batch for **60.6 %** (TG), **65.1 %**
+(capillary) and **75.2 %** (cylinder) of the wall time.
 
-Serial samples by cause, % of the 4-thread wall time (innermost package frame,
-grouped):
+Serial samples grouped by cause, % of the 4-thread main-thread samples. Each
+entry is the sum of the listed functions' "serial self by function" lines in
+`logs/main/CASE_t4.log` (innermost package frame of a serial sample; Krylov.jl
+vector operations are attributed to `_run_krylov!`, which calls them).
 
-| cause | TG | capillary | cylinder |
+| cause (functions) | TG | capillary | cylinder |
 |---|---:|---:|---:|
-| ordered sums: multigrid component means / RHS projection (`hierarchy.jl:102,121`), `_remove_component_volume_means!`, L2 residual norms, Krylov.jl vector ops (`_run_krylov!`) | ≈ 23 | ≈ 9 | ≈ 6 |
-| sparse transfer `mul!` (`_restrict!`, `_prolongate!`) | 4.2 | 4.5 | 6.3 |
-| other elementwise/scatter loops of the solvers: residual formation (`_true_residual!`), `_roundoff_residual_floor!`, `diffusion!`/`_apply_staggered_diffusion!`, `_add!`, field↔vector copies, `apply!` | ≈ 12 | ≈ 4 | ≈ 9 |
-| inlined projection/stepping loops (`step!` → `stepping.jl:254`, `divergence!`) | 7.7 | – | 6.7 |
-| two-phase loops: `_mark_inactive_phase_velocities!` | – | 12.2 | – |
-| two-phase loops: `_frozen_interface_stable_timestep` (max reduction) | – | 8.8 | – |
-| two-phase loops: `_refresh_multigrid_level!`, variable-diffusion refresh | – | ≈ 7 | – |
-| two-phase loops: `_staggered_liquid_fraction`, `_phase_face_average!`, `_projection_correct_phase_velocities!`, `_extend_phase_face_values!`, CMDGFM residual/`mul!` | – | ≈ 9 | – |
-| coarse direct solves / refactorization (UMFPACK, ILU) | 0.5 | 3.5 | 4.1 |
-| diagnostics (example callbacks `pressure_drag/lift`, vorticity) and AMR labels | – | – | ≈ 37 |
+| ordered sums: `_multigrid_remove_component_means!`, `_multigrid_project_component_rhs!`, `_remove_component_volume_means!`, `_project_component_rhs!`, `_integrated_residual_norms`, `_cmdgfm_scaled_residual_norm`, `_run_krylov!` | 24.4 | 8.7 | 3.1 |
+| multigrid transfer `mul!`: `_restrict!`, `_prolongate!` | 6.7 | 4.5 | 5.8 |
+| other solver loops: `_roundoff_residual_floor!`, `_true_residual!`, `_add!`, `_run_krylov_reliably!`, `_apply_staggered_diffusion!`, `_apply_vcycle_preconditioner!`, `ldiv!` (implicit diffusion), `_copy_to_field!`/`_copy_from_field!`, `_parallel_csr_row_mul!` below the grain | 16.2 | 0.4 | 18.2 |
+| stepping loops: `step!` (inlined), `copyto!`, `weighted_gradient!`, `divergence!`, `_copy_velocity!` | 9.3 | 0.3 | 1.4 |
+| two-phase loops: `_mark_inactive_phase_velocities!` 8.8, `_frozen_interface_stable_timestep` 7.0, `_staggered_liquid_fraction` 3.2, `_projection_correct_phase_velocities!` 2.5, `_phase_face_average!` 1.8, `_extend_phase_face_values!` 1.8 | – | 25.1 | – |
+| hierarchy refresh: `_refresh_multigrid_level!`, `_refresh_tree_variable_diffusion_preconditioner!`, `_refresh_elliptic_components!`, `_refresh_variable_diffusion_matrix_from_inertia!`, `_impose_inactive_constraints!`, `_jacobi_weight!` | 0.8 | 8.2 | – |
+| CMDGFM projection: `mul!`, `ldiv!`, `_project_cmdgfm_assembled!`, `_cmdgfm_matrix_asymmetry`, `_cmdgfm_initial_solution!` | – | 4.3 | – |
+| direct coarse solves / refactorization: `_coarse_solve!`, `_refactorize_coarse!`, ILU | 0.4 | 3.8 | 3.7 |
+| diagnostics and AMR labels: `diagnostic_value` (example `pressure_drag`/`lift` callbacks), `_record_diagnostics!`, `_local_plic_segment`, `_vorticity_from_centered!`, `_cell_centered_velocity!`, `_protect_fixed_band_coarsening!` | – | – | 33.1 |
+| sum of the rows | 57.8 | 55.3 | 65.3 |
+
+The remaining serial samples (TG 2.8, capillary 9.8, cylinder 9.9 points) are
+field accessors attributed to their callers' loops (`_get`: capillary 0.9,
+cylinder 2.3) and entries below 0.6 % each.
 
 ## Consequences for steps 2–5
 

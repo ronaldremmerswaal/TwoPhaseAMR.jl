@@ -108,7 +108,7 @@ function _is_parallel_frame(frame)
         occursin("PolyesterWeave", file)
 end
 
-_frame_name(frame) = string(frame.func, " ", basename(string(frame.file)), ":", frame.line)
+_frame_name(frame) = string(frame.func, " (", basename(string(frame.file)), ")")
 const PACKAGE_SOURCE = joinpath(pkgdir(TwoPhaseAMR), "src")
 _in_package(frame) = !frame.from_c && startswith(string(frame.file), PACKAGE_SOURCE)
 
@@ -169,6 +169,7 @@ function main()
         case, Threads.nthreads(:default), cells, blocks_before, length(flow.pressure.blocks), dt, steps,
         1.0e3median(times), 1.0e3minimum(times), 1.0e3mean(times), round(Int, median(bytes)), state_checksum(flow),
     )
+    println("step_ms=", join(round.(1.0e3 .* times; digits = 2), ","))
     profile_steps > 0 || return nothing
     Profile.init(n = 10^7, delay = 0.0005)
     main_thread = Threads.threadid()
@@ -178,8 +179,8 @@ function main()
     serial, parallel, self, inclusive = serial_profile(Profile.fetch(include_meta = true), main_thread)
     total = serial + parallel
     @printf("main-thread samples=%d serial=%.1f%% batch=%.1f%%\n", total, 100serial / total, 100parallel / total)
-    println("serial self (innermost package frame), % of main-thread samples:")
-    for (name, count) in first(sort!(collect(self); by = last, rev = true), 30)
+    println("serial self by function (innermost package frame), % of main-thread samples:")
+    for (name, count) in first(sort!(collect(self); by = last, rev = true), 60)
         @printf("  %5.1f%%  %s\n", 100count / total, name)
     end
     println("serial inclusive (package functions), % of main-thread samples:")
