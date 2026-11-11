@@ -204,14 +204,6 @@ end
     return -tolerance <= liquid <= open + tolerance
 end
 
-# The auxiliary gas carrier has no upper bound, but its lower-bound
-# round-off is measured in the same full-cell volume units as liquid.
-@inline function _wy_negative_fraction_out_of_bounds(c::T, open::Real) where {T}
-    volume = iszero(open) ? c : open * c
-    return volume < -T(128) * eps(T)
-end
-
-
 function _advect_wy!(
         field::InterfaceField{T}, velocity, dt,
         work::WYAdvectionWorkspace{T}; scalars = (), staggered_scalars = (),
@@ -270,7 +262,6 @@ function _advect_wy!(
     nx, ny = mesh.block_size
     halo = mesh.halo
     cells_per_block = nx * ny
-    auxiliary_gas = _uses_auxiliary_gas_carrier(velocity, work)
     _parallel_block_columns(mesh) do b, first_j, last_j
         fraction = @inbounds field.conditional_fraction.blocks[b]
         indicator = @inbounds work.indicator.blocks[b]
@@ -309,12 +300,6 @@ function _advect_wy!(
     fill!(work.open_flux, zero(T))
     fill!(work.liquid_flux, zero(T)); fill!(work.gas_flux, zero(T))
     for axis in sweep_order
-        # The thesis auxiliary gas balance is dimensionally unsplit. In the
-        # split method each one-dimensional conservative substep therefore
-        # starts from the current physical complement. Carrying the auxiliary
-        # result into a perpendicular geometric sweep would use a PLIC that no
-        # longer represents that carrier and can destroy its lower bound.
-        auxiliary_gas && _reset_auxiliary_gas_carrier!(field, work)
         for q in scalars
             fill_halo!(q.liquid)
             fill_halo!(q.gas)
@@ -349,9 +334,7 @@ function _advect_wy!(
                         indicator[i + halo, j + halo] * volume - liquid_flux
                     )
                     gas_fraction_increment += orientation * (
-                        auxiliary_gas ? -gas_flux :
-                            (1 - indicator[i + halo, j + halo]) * volume -
-                            gas_flux
+                        (1 - indicator[i + halo, j + halo]) * volume - gas_flux
                     )
                 end
                 open = isnothing(geometry) ? one(T) :
@@ -363,7 +346,6 @@ function _advect_wy!(
                 liquid_dilation[i + halo, j + halo] =
                     indicator[i + halo, j + halo] * divergence
                 gas_dilation[i + halo, j + halo] =
-                    auxiliary_gas ? zero(T) :
                     (1 - indicator[i + halo, j + halo]) * divergence
                 increment_values[i + halo, j + halo] =
                     effective_volume > zero(T) ?
@@ -448,14 +430,13 @@ function _advect_wy!(
                         )
                         intrinsic = values_block[ii, jj]
                         chi = liquid_phase ? indicator[ii, jj] :
-                            (auxiliary_gas ? zero(T) : 1 - indicator[ii, jj])
+                            1 - indicator[ii, jj]
                         open = isnothing(geometry) ? one(T) :
                             geometry.open_fraction.blocks[b][ii, jj]
                         effective_volume = cellvolume * open
                         effective_volume > zero(T) || continue
                         increment += orientation / effective_volume * (
-                            (source_block[ii, jj] - chi * intrinsic) *
-                                (auxiliary_gas && !liquid_phase ? zero(T) : volume) +
+                            (source_block[ii, jj] - chi * intrinsic) * volume +
                                 flux * (intrinsic - state)
                         )
                     end
@@ -467,12 +448,12 @@ function _advect_wy!(
             _advect_phase_faces!(
                 staggered_scalars[k], work, axis, face_sources[k],
                 work.ctu_threshold, scheme,
-                amr_interface_scheme; auxiliary_gas,
+                amr_interface_scheme,
             )
         end
         isnothing(momentum) || _advect_phase_momentum!(
             momentum_workspace, work, field, axis, momentum_sources,
-            density, scheme, amr_interface_scheme; auxiliary_gas,
+            density, scheme, amr_interface_scheme,
         )
         _parallel_block_columns(mesh) do b, first_j, last_j
             fraction = @inbounds field.fraction.blocks[b]
@@ -517,17 +498,7 @@ function _advect_wy!(
                 c = c <= snap ? zero(T) : c >= 1 - snap ? one(T) : c
                 fraction[ii, jj] = open * c
                 conditional[ii, jj] = c
-                gas_c = gas_carrier_values[ii, jj] +
-                    gas_fraction_increment[ii, jj]
-                if _wy_negative_fraction_out_of_bounds(gas_c, open)
-                    error(
-                        "WY auxiliary gas fraction out of bounds: $gas_c " *
-                            "in cell $(CellRef(b, i, j)); axis=$axis",
-                    )
-                end
-                gas_c = max(gas_c, zero(T))
-                gas_c <= field.fraction_floor && (gas_c = zero(T))
-                gas_carrier_values[ii, jj] = auxiliary_gas ? gas_c : one(T) - c
+                gas_carrier_values[ii, jj] = one(T) - c
                 # Algebraically conservative fluctuation form: outgoing
                 # upwind differences are exactly zero, including a completely
                 # drained cell.
@@ -538,7 +509,7 @@ function _advect_wy!(
                         q.liquid.blocks[b][ii, jj] +=
                             increments[k][1].blocks[b][ii, jj] / c
                     )
-                    gas_denominator = auxiliary_gas ? gas_c : one(T) - c
+                    gas_denominator = one(T) - c
                     gas_denominator > field.fraction_floor &&
                         (
                         q.gas.blocks[b][ii, jj] +=
@@ -549,9 +520,6 @@ function _advect_wy!(
             end
         end
         reconstruct!(field)
-        auxiliary_gas && _update_gas_reset_diagnostics!(
-            field, work; accumulate = true,
-        )
     end
     for q in staggered_scalars
         _phase_face_average!(

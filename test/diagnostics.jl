@@ -329,9 +329,7 @@ end
                 interface; density = (1000.0, 1.0),
                 dynamic_viscosity = (0.0, 0.0),
             );
-            geometry, velocity_model = TwoVelocityModel(
-                interface_transport = FrozenInterfaceFluxes(),
-            ),
+            geometry, velocity_model = TwoVelocityModel(),
             velocity = (liquid, gas), boundary = FreeSlip(),
             diagnostics = (DivergenceNorm(),),
         )

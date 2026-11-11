@@ -14,49 +14,20 @@ struct PhaseScalar{T, M <: BlockTreeMesh, G}
     gas::CellField{T, M}
 end
 
-"""Interface for selecting how a physical interface is transported."""
-abstract type AbstractInterfaceTransportMethod end
-
-"""Internal policy used by the established one-velocity WY path."""
-struct _OneVelocityInterfaceAdvection <: AbstractInterfaceTransportMethod end
-
-_interface_transport_workspace(field, ::_OneVelocityInterfaceAdvection) = nothing
-
-
 """Conservation diagnostics accumulated from the most recent complete step."""
 mutable struct PhaseFluxDiagnostics{T}
     maximum_partition_defect::T
     absolute_partition_defect::T
     signed_partition_defect::T
-    gas_reset_discrepancy::T
-    absolute_gas_reset_discrepancy::T
-    gas_momentum_reset_discrepancy_x::T
-    gas_momentum_reset_discrepancy_y::T
-    absolute_gas_momentum_reset_discrepancy_x::T
-    absolute_gas_momentum_reset_discrepancy_y::T
-    projection_initial_divergence::T
-    projection_final_divergence::T
-    projection_iterations::Int
 end
 
-PhaseFluxDiagnostics(::Type{T}) where {T} = PhaseFluxDiagnostics(
-    zero(T), zero(T), zero(T), zero(T), zero(T),
-    zero(T), zero(T), zero(T), zero(T), zero(T), zero(T), 0,
-)
+PhaseFluxDiagnostics(::Type{T}) where {T} =
+    PhaseFluxDiagnostics(zero(T), zero(T), zero(T))
 
 function _reset!(diagnostics::PhaseFluxDiagnostics{T}) where {T}
     diagnostics.maximum_partition_defect = zero(T)
     diagnostics.absolute_partition_defect = zero(T)
     diagnostics.signed_partition_defect = zero(T)
-    diagnostics.gas_reset_discrepancy = zero(T)
-    diagnostics.absolute_gas_reset_discrepancy = zero(T)
-    diagnostics.gas_momentum_reset_discrepancy_x = zero(T)
-    diagnostics.gas_momentum_reset_discrepancy_y = zero(T)
-    diagnostics.absolute_gas_momentum_reset_discrepancy_x = zero(T)
-    diagnostics.absolute_gas_momentum_reset_discrepancy_y = zero(T)
-    diagnostics.projection_initial_divergence = zero(T)
-    diagnostics.projection_final_divergence = zero(T)
-    diagnostics.projection_iterations = 0
     return diagnostics
 end
 
@@ -65,16 +36,10 @@ end
 
 Return the reusable diagnostics object for the most recent completed WY step.
 Partition defects have units of volume and compare
-`liquid_flux + gas_flux` with `open_flux`. Gas-reset diagnostics are used by
-the projected-liquid method to report the signed sum and sum of absolute
-differences between its directional auxiliary gas carriers and the physical
-complement of the liquid fraction. When separate phase momentum is advanced,
-the component-wise momentum-reset fields report the corresponding signed and
-absolute changes after multiplication by gas density and dual volume.
+`liquid_flux + gas_flux` with `open_flux`.
 """
 phase_flux_diagnostics(workspace) = workspace.diagnostics
 
-_uses_auxiliary_gas_carrier(velocity, workspace) = false
 function PhaseScalar(interface::InterfaceField{T}; liquid = 1, gas = 1) where {T}
     mesh = interface.mesh
     q = PhaseScalar(interface, CellField(mesh, T), CellField(mesh, T))

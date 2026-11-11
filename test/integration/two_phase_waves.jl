@@ -87,7 +87,6 @@ function wave_case(
         kind, resolution, density_ratio, mode;
         formulation = CSF(), periods = 0.25,
         velocity_model = :one_velocity,
-        interface_transport = FrozenInterfaceFluxes(),
         two_velocity_projection = CMDGFMProjection(),
         timestep_factor = 1.0,
         solver_tolerance = 1.0e-9,
@@ -148,7 +147,6 @@ function wave_case(
         velocity = initial_velocity,
         velocity_model = velocity_model === :one_velocity ? OneVelocityModel() :
             TwoVelocityModel(;
-                interface_transport,
                 pressure_projection = two_velocity_projection
             ),
         boundary = FreeSlip(),
@@ -208,11 +206,10 @@ function wave_case(
         _wave_volume_tolerance(interface, flow.steps)
     @test all(isfinite, amplitudes)
     error = _trapezoidal_l2(sample_times, errors)
-    method_name = velocity_model === :one_velocity ? :one_velocity :
-        interface_transport isa FrozenInterfaceFluxes ? :frozen : :projected
+    method_name = velocity_model === :one_velocity ? :one_velocity : :frozen
     println(
         "wave model=$velocity_model mesh=$kind n=$resolution ",
-        "interface_transport=$method_name DR=$density_ratio mode=$mode ",
+        "velocity_model=$method_name DR=$density_ratio mode=$mode ",
         "normalized_amplitude_L2_error=$error"
     )
     if velocity_model === :two_velocity
@@ -284,62 +281,56 @@ end
                 "errors=$one_velocity_time_errors",
             )
             @test all(diff(one_velocity_time_errors) .<= 0)
-            for interface_transport in (
-                    FrozenInterfaceFluxes(), ProjectedLiquidVelocity(),
+            two_velocity_results = [
+                wave_case(
+                    :uniform, n, density_ratio, mode;
+                    formulation = CGFM(), velocity_model = :two_velocity,
                 )
-                two_velocity_results = [
+                    for n in resolutions
+            ]
+            two_velocity_errors = getproperty.(
+                two_velocity_results, :error,
+            )
+            two_velocity_rates = log2.(
+                two_velocity_errors[1:(end - 1)] ./
+                    two_velocity_errors[2:end],
+            )
+            endpoint_rate = log2(
+                first(two_velocity_errors) / last(two_velocity_errors),
+            ) / (length(two_velocity_errors) - 1)
+            method_name = :frozen
+            println(
+                "two-velocity capillary convergence DR=$density_ratio ",
+                "method=$method_name n=$resolutions ",
+                "theory_errors=$two_velocity_errors ",
+                "theory_rates=$two_velocity_rates ",
+                "endpoint_rate=$endpoint_rate",
+            )
+            @test all(diff(two_velocity_errors) .< 0)
+            @test endpoint_rate >= minimum_rate
+            temporal_errors = vcat(
+                two_velocity_results[2].error,
+                [
                     wave_case(
-                        :uniform, n, density_ratio, mode;
-                        formulation = CGFM(), velocity_model = :two_velocity,
-                        interface_transport,
-                    )
-                        for n in resolutions
-                ]
-                two_velocity_errors = getproperty.(
-                    two_velocity_results, :error,
-                )
-                two_velocity_rates = log2.(
-                    two_velocity_errors[1:(end - 1)] ./
-                        two_velocity_errors[2:end],
-                )
-                endpoint_rate = log2(
-                    first(two_velocity_errors) / last(two_velocity_errors),
-                ) / (length(two_velocity_errors) - 1)
-                method_name = interface_transport isa FrozenInterfaceFluxes ?
-                    :frozen : :projected
-                println(
-                    "two-velocity capillary convergence DR=$density_ratio ",
-                    "method=$method_name n=$resolutions ",
-                    "theory_errors=$two_velocity_errors ",
-                    "theory_rates=$two_velocity_rates ",
-                    "endpoint_rate=$endpoint_rate",
-                )
-                @test all(diff(two_velocity_errors) .< 0)
-                @test endpoint_rate >= minimum_rate
-                temporal_errors = vcat(
-                    two_velocity_results[2].error,
-                    [
-                        wave_case(
-                            :uniform, 16, density_ratio, mode;
-                            formulation = CGFM(),
-                            velocity_model = :two_velocity,
-                            interface_transport, timestep_factor,
-                        ).error
-                            for timestep_factor in (0.5, 0.25)
-                    ],
-                )
-                println(
-                    "capillary temporal refinement DR=$density_ratio ",
-                    "model=$method_name factors=(1.0, 0.5, 0.25) ",
-                    "errors=$temporal_errors",
-                )
-                # At fixed spatial resolution temporal and spatial errors can
-                # cancel: DR=1 frozen gave 0.006525, 0.007361, 0.010889 as
-                # dt was halved twice (maximum/base = 1.67). Guard against
-                # more than a factor-two increase rather than monotonicity.
-                @test all(isfinite, temporal_errors)
-                @test maximum(temporal_errors) <= 2first(temporal_errors)
-            end
+                        :uniform, 16, density_ratio, mode;
+                        formulation = CGFM(),
+                        velocity_model = :two_velocity,
+                        timestep_factor,
+                    ).error
+                        for timestep_factor in (0.5, 0.25)
+                ],
+            )
+            println(
+                "capillary temporal refinement DR=$density_ratio ",
+                "model=$method_name factors=(1.0, 0.5, 0.25) ",
+                "errors=$temporal_errors",
+            )
+            # At fixed spatial resolution temporal and spatial errors can
+            # cancel: DR=1 frozen gave 0.006525, 0.007361, 0.010889 as
+            # dt was halved twice (maximum/base = 1.67). Guard against
+            # more than a factor-two increase rather than monotonicity.
+            @test all(isfinite, temporal_errors)
+            @test maximum(temporal_errors) <= 2first(temporal_errors)
         end
 
         # At density ratio one a gravity-only perturbation has zero frequency.

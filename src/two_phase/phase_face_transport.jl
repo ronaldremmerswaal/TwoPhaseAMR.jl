@@ -215,24 +215,19 @@ function _phase_face_sources(q)
 end
 function _advect_phase_faces!(
         q, work, axis, sources, ctu_threshold,
-        scheme, amr_interface_scheme;
-        auxiliary_gas = false,
-        gas_momentum_component = 0,
-        gas_density = one(eltype(q.liquid)),
+        scheme, amr_interface_scheme,
     )
     # Resolve the two-way schedule union once per sweep. The numerical loops
     # below then specialize on the actual concrete workspace and face type.
     return _advect_phase_faces_workspace!(
         q.workspace, q, work, axis, sources, ctu_threshold,
         scheme, amr_interface_scheme,
-        auxiliary_gas, gas_momentum_component, gas_density,
     )
 end
 
 function _advect_phase_faces_workspace!(
         workspace::W, q, work, axis, sources, ctu_threshold,
         scheme, amr_interface_scheme,
-        auxiliary_gas, gas_momentum_component, gas_density,
     ) where {W <: StaggeredAdvectionWorkspace}
     mesh = work.mesh
     _phase_face_average!(
@@ -263,37 +258,6 @@ function _advect_phase_faces_workspace!(
         q.scratch.predicted_liquid, workspace.rates,
     )
 
-    gas_fraction = predicted_gas = nothing
-    if auxiliary_gas
-        # Method A carries gas conservatively for one directional substep.
-        # Average that carrier itself; it is not the physical complement and
-        # may legitimately exceed one.
-        _phase_face_average!(
-            workspace.tendency, work.gas_carrier,
-            q.interface.geometry,
-        )
-        gas_fraction = _pack_phase_faces!(
-            q.scratch.gas_fraction, workspace.tendency,
-        )
-        _parallel_block_columns(mesh) do b, first_j, last_j
-            carrier = @inbounds work.gas_carrier.blocks[b]
-            increment = @inbounds work.gas_increment.blocks[b]
-            incoming = @inbounds work.incoming.blocks[b]
-            @inbounds for j in first_j:last_j, i in 1:nx
-                ii, jj = i + halo, j + halo
-                incoming[ii, jj] = max(
-                    carrier[ii, jj] + increment[ii, jj], zero(T),
-                )
-            end
-        end
-        _phase_face_average!(
-            workspace.rates, work.incoming, q.interface.geometry,
-        )
-        predicted_gas = _pack_phase_faces!(
-            q.scratch.predicted_gas, workspace.rates,
-        )
-    end
-
     for (field, flux, source, liquid) in (
             (q.liquid, work.liquid_flux, sources[1], true),
             (q.gas, work.gas_flux, sources[2], false),
@@ -311,13 +275,13 @@ function _advect_phase_faces_workspace!(
                 face.axis == axis || continue
                 m, p = face.minus, face.plus
                 cm = liquid ? liquid_fraction[m] :
-                    (auxiliary_gas ? gas_fraction[m] : one(T) - liquid_fraction[m])
+                    one(T) - liquid_fraction[m]
                 cp = liquid ? liquid_fraction[p] :
-                    (auxiliary_gas ? gas_fraction[p] : one(T) - liquid_fraction[p])
+                    one(T) - liquid_fraction[p]
                 nm = liquid ? predicted_liquid[m] :
-                    (auxiliary_gas ? predicted_gas[m] : one(T) - predicted_liquid[m])
+                    one(T) - predicted_liquid[m]
                 np = liquid ? predicted_liquid[p] :
-                    (auxiliary_gas ? predicted_gas[p] : one(T) - predicted_liquid[p])
+                    one(T) - predicted_liquid[p]
                 _, minus_difference, plus_difference = _phase_transport(
                     face, schedule, flux, mesh, values,
                     cm, cp, nm, np, ctu_threshold,
@@ -338,13 +302,9 @@ function _advect_phase_faces_workspace!(
             @inbounds for j in first_j:last_j, i in 1:nx
                 ii, jj = i + halo, j + halo
                 chi = indicator[ii, jj]
-                incoming[ii, jj] = if liquid
-                    chi * outgoing[ii, jj]
-                elseif auxiliary_gas
-                    zero(T)
-                else
+                incoming[ii, jj] = liquid ?
+                    chi * outgoing[ii, jj] :
                     (one(T) - chi) * outgoing[ii, jj]
-                end
             end
         end
         _phase_face_average!(workspace.rates, work.incoming, q.interface.geometry)
@@ -352,7 +312,7 @@ function _advect_phase_faces_workspace!(
         @_parallel for i in 1:length(inc)
             intrinsic = values[i]
             target = liquid ? predicted_liquid[i] :
-                (auxiliary_gas ? predicted_gas[i] : one(T) - predicted_liquid[i])
+                one(T) - predicted_liquid[i]
             if target > q.interface.fraction_floor
                 values[i] = intrinsic +
                     (inc[i] + (source[i] - intrinsic) * rates[i]) /
@@ -360,33 +320,6 @@ function _advect_phase_faces_workspace!(
             end
         end
         _unpack_phase_faces!(field, values)
-        if auxiliary_gas && !liquid && !iszero(gas_momentum_component)
-            signed = absolute = zero(T)
-            for index in eachindex(values)
-                physical_fraction = one(T) - predicted_liquid[index]
-                reset = gas_density *
-                    _phase_dual_volume(schedule, index) * values[index] *
-                    (physical_fraction - predicted_gas[index])
-                signed += reset
-                absolute += abs(reset)
-            end
-            diagnostics = work.diagnostics
-            if gas_momentum_component == 1
-                diagnostics.gas_momentum_reset_discrepancy_x += signed
-                diagnostics.absolute_gas_momentum_reset_discrepancy_x +=
-                    absolute
-            elseif gas_momentum_component == 2
-                diagnostics.gas_momentum_reset_discrepancy_y += signed
-                diagnostics.absolute_gas_momentum_reset_discrepancy_y +=
-                    absolute
-            else
-                throw(
-                    ArgumentError(
-                        "gas momentum component must be 1 or 2",
-                    )
-                )
-            end
-        end
     end
     return q
 end

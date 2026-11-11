@@ -298,7 +298,7 @@ end
     # open volume: a valid bound must not collapse to zero.
     for sweep_order in ((1, 2), (2, 1))
         field, velocity, donor = frozen_counterexample_fixture()
-        work = WYAdvectionWorkspace(field, velocity; interface_transport = FrozenInterfaceFluxes())
+        work = WYAdvectionWorkspace(field, velocity)
         limit = stable_timestep(velocity, work)
         @test isfinite(limit) && 0 < limit < 0.40359
         dt = 0.99 * limit
@@ -373,7 +373,7 @@ end
     field.phase_apertures_valid[] = false
     velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
     velocity[1].interior[index] = 1.0
-    work = WYAdvectionWorkspace(field, velocity; interface_transport = FrozenInterfaceFluxes())
+    work = WYAdvectionWorkspace(field, velocity)
     limit = stable_timestep(velocity, work)
     @test work.liquid_aperture[index] ≈ 0.4 atol = 512eps()
     lo, hi = TwoPhaseAMR._frozen_subface_interval(
@@ -402,7 +402,7 @@ end
     end
     blocked.phase_apertures_valid[] = false
     blocked_work = WYAdvectionWorkspace(
-        blocked, velocity; interface_transport = FrozenInterfaceFluxes(),
+        blocked, velocity,
     )
     # No positive timestep represents that prescribed carrier; the bound must
     # not invent open volume, and it reports the limiting face and cell.
@@ -436,7 +436,7 @@ end
     velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
     velocity[1].interior[left], velocity[1].interior[right] = -1.3, 1.0
     velocity[2].interior[left], velocity[2].interior[right] = -0.2, 2.0
-    work = WYAdvectionWorkspace(field, velocity; interface_transport = FrozenInterfaceFluxes())
+    work = WYAdvectionWorkspace(field, velocity)
     limit = stable_timestep(velocity, work)
     @test isfinite(limit) && limit > 0
     dt = 0.99 * limit
@@ -465,7 +465,7 @@ end
     @test !isnothing(index)
     velocity[1].interior[index] = 0.3
     velocity[2].interior[index] = -0.2
-    work = WYAdvectionWorkspace(field, velocity; interface_transport = FrozenInterfaceFluxes())
+    work = WYAdvectionWorkspace(field, velocity)
     limit = stable_timestep(velocity, work)
     @test isfinite(limit) && limit > 0
     dt = 0.99 * limit
@@ -509,7 +509,7 @@ end
     for order in ((1, 2), (2, 1)), factor in (0.99, 1.0)
         field = copy(interface)
         work = WYAdvectionWorkspace(
-            field, flow.velocity; interface_transport = FrozenInterfaceFluxes(),
+            field, flow.velocity,
         )
         limit = stable_timestep(flow.velocity, work)
         @test isfinite(limit) && limit > 0
@@ -530,7 +530,7 @@ end
         gas = FaceVelocity(mesh)
         fill!(gas.interior, T(NaN)) # The absent carrier must never be read.
         velocity = (liquid, gas)
-        work = WYAdvectionWorkspace(field, velocity; interface_transport = FrozenInterfaceFluxes())
+        work = WYAdvectionWorkspace(field, velocity)
         limit = stable_timestep(velocity, work)
         @test limit isa T
         @test limit ≈ T(2.5) rtol = 32eps(T)
@@ -543,7 +543,7 @@ end
     end
 end
 
-@testset "Phase aperture freezing across transport policies" begin
+@testset "Phase aperture freezing for both workspace constructors" begin
     mesh = BlockTreeMesh(;
         base_mesh = (4, 4), block_size = (4, 4), extent = (4.0, 4.0),
         periodic = (false, false),
@@ -553,7 +553,7 @@ end
     velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
     workspaces = (
         WYAdvectionWorkspace(field),
-        WYAdvectionWorkspace(field, velocity; interface_transport = ProjectedLiquidVelocity()),
+        WYAdvectionWorkspace(field, velocity),
     )
     for work in workspaces
         @test isempty(work.liquid_subface_lower)
@@ -568,7 +568,7 @@ end
 
     # Without a solid, subface ordering continues to follow the current PLIC
     # and requires no cut-geometry storage.
-    uncut = WYAdvectionWorkspace(field, velocity; interface_transport = FrozenInterfaceFluxes())
+    uncut = WYAdvectionWorkspace(field, velocity)
     TwoPhaseAMR._freeze_phase_apertures!(field, uncut)
     @test isempty(uncut.liquid_subface_lower)
     uncut.liquid_aperture[index] = 0.25
@@ -588,7 +588,7 @@ end
     geometry = GeometryField(mesh, (x, y) -> y - 0.25; lipschitz = 1)
     cut = InterfaceField(mesh; geometry)
     initialize!(cut, (0.0, 1.0), 1.5)
-    frozen = WYAdvectionWorkspace(cut, velocity; interface_transport = FrozenInterfaceFluxes())
+    frozen = WYAdvectionWorkspace(cut, velocity)
     TwoPhaseAMR._freeze_phase_apertures!(cut, frozen)
     for ref in (face.minus, face.plus)
         TwoPhaseAMR._set!(cut.normal_y, 1.0, ref)

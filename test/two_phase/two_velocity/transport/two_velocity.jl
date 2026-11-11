@@ -5,16 +5,13 @@ include("../helpers.jl")
 const TV = TwoPhaseAMR
 _velocity_test_interface(work) = work.interface
 
-@testset "Concrete WY method caches" begin
+@testset "WY workspace construction and retargeting" begin
     mesh = BlockTreeMesh(block_size = (4, 4), periodic = (false, false))
     geometry = GeometryField(mesh, (x, y) -> x - 0.25; lipschitz = 1)
     velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
     for solid in (nothing, geometry)
         interface = InterfaceField(mesh; init = 0.375, geometry = solid)
-        frozen = WYAdvectionWorkspace(
-            interface, velocity; interface_transport = FrozenInterfaceFluxes(),
-        )
-        @test fieldtype(typeof(frozen), :method_workspace) === Base.RefValue{Nothing}
+        frozen = WYAdvectionWorkspace(interface, velocity)
         @test frozen.interface.geometry === solid
         @test !hasproperty(frozen, :geometry)
         @test (@inferred stable_timestep(velocity, frozen)) == Inf
@@ -35,54 +32,7 @@ _velocity_test_interface(work) = work.interface
         momentum = MomentumAdvectionWorkspace(interface, velocity)
         @test fieldtype(typeof(momentum), :interface) === typeof(interface)
         @test (@inferred _velocity_test_interface(momentum)) === interface
-
-        projected = WYAdvectionWorkspace(
-            interface, velocity; interface_transport = ProjectedLiquidVelocity(),
-        )
-        @test isconcretetype(fieldtype(typeof(projected), :method_workspace))
-        state = @inferred getindex(projected.method_workspace)
-        @test state isa TV.ProjectedLiquidAdvectionWorkspace
-        @test fieldtype(typeof(projected), :method_workspace) === typeof(projected.method_workspace)
-        @test stable_timestep(velocity, projected) == Inf
-        @test projected.method_workspace[] === state
-        rebuilt = TV._reconfigure_wy_workspace!(projected, interface)
-        @test rebuilt !== projected
-        @test rebuilt.interface === interface
-        @test typeof(rebuilt.method_workspace[]) === typeof(state)
     end
-
-    # Activity and singularity changes refresh the existing projected
-    # operator and solver without rebuilding the transport workspace.
-    interface = InterfaceField(mesh; init = 1)
-    work = WYAdvectionWorkspace(
-        interface, velocity; interface_transport = ProjectedLiquidVelocity(),
-    )
-    full = work.method_workspace[]
-    @test full.operator.singular
-    fill!(interior(interface.fraction, 1), 0)
-    @test all(iszero, TV._project_liquid_velocity!(work, velocity).interior)
-    empty = @inferred getindex(work.method_workspace)
-    @test empty === full
-    @test typeof(empty) === typeof(full)
-    @test !empty.operator.singular
-    fill!(interior(interface.fraction, 1), 1)
-    @test all(iszero, TV._project_liquid_velocity!(work, velocity).interior)
-    restored = @inferred getindex(work.method_workspace)
-    @test restored === empty
-    @test typeof(restored) === typeof(full)
-    @test restored.operator.singular
-
-    # Covered cells do not anchor a fully liquid component when their
-    # intervening face apertures vanish.
-    cut_interface = InterfaceField(mesh; init = 1, geometry)
-    cut_work = WYAdvectionWorkspace(
-        cut_interface, velocity; interface_transport = ProjectedLiquidVelocity(),
-    )
-    cut_state = cut_work.method_workspace[]
-    @test any(iszero, cut_state.cell_volumes)
-    @test cut_state.operator.singular
-    @test all(iszero, TV._project_liquid_velocity!(cut_work, velocity).interior)
-    @test cut_work.method_workspace[] === cut_state
 end
 
 @testset "Float32 cut-cell CFL avoids per-face boxing" begin
@@ -96,10 +46,7 @@ end
         geometry, lipschitz = 1
     )
     velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
-    work = WYAdvectionWorkspace(
-        interface, velocity;
-        interface_transport = FrozenInterfaceFluxes()
-    )
+    work = WYAdvectionWorkspace(interface, velocity)
     stable_timestep(velocity, work; cfl = 0.35)
     stable_timestep(velocity, work; cfl = 0.35)
     @test test_allocated_call(() -> stable_timestep(velocity, work; cfl = 0.35)) == 0
@@ -116,9 +63,7 @@ end
         FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? 0.1 : 0.0),
         FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? 0.1 : 0.0),
     )
-    work = WYAdvectionWorkspace(
-        interface, velocity; interface_transport = FrozenInterfaceFluxes(),
-    )
+    work = WYAdvectionWorkspace(interface, velocity)
     @test interface.phase_aperture_updates[] == 0
     stable_timestep(velocity, work)
     @test interface.phase_aperture_updates[] == 1
@@ -178,24 +123,7 @@ end
     enforce_no_permeation!(velocity)
 
     workspace = WYAdvectionWorkspace(interface, velocity)
-    @test workspace.interface_transport isa FrozenInterfaceFluxes
-    @test WYAdvectionWorkspace(
-        interface, velocity; interface_transport = FrozenInterfaceFluxes(),
-    ).interface_transport isa FrozenInterfaceFluxes
-    @test_throws ArgumentError WYAdvectionWorkspace(
-        interface, velocity; interface_transport = :projected,
-    )
-    projected_workspace = WYAdvectionWorkspace(
-        interface, velocity; interface_transport = ProjectedLiquidVelocity(),
-    )
-    projected = TV._project_liquid_velocity!(projected_workspace, velocity)
-    expected = min(
-        stable_timestep(projected, projected_workspace; cfl = 0.3),
-        stable_timestep(gas, projected_workspace; cfl = 0.3),
-    )
-    @test stable_timestep(
-        velocity, projected_workspace; cfl = 0.3,
-    ) == expected
+    @test workspace.interface === interface
 
     set_velocities!(
         velocity,
@@ -245,8 +173,7 @@ end
     common_copy = copy(common)
     direct_work = WYAdvectionWorkspace(direct_interface)
     tuple_work = WYAdvectionWorkspace(
-        tuple_interface, (common, common_copy);
-        interface_transport = FrozenInterfaceFluxes(),
+        tuple_interface, (common, common_copy),
     )
     dt = stable_timestep(common, direct_work; cfl = 0.2)
     advect!(
@@ -272,7 +199,6 @@ end
     @test diagnostics.maximum_partition_defect <= eps()
     @test diagnostics.absolute_partition_defect <=
         length(mesh.faces) * eps()
-    @test diagnostics.gas_reset_discrepancy == 0
 
     unequal = (common, copy(common))
     unequal[2].interior[1] += 0.01
@@ -282,7 +208,7 @@ end
     )
 end
 
-@testset "Two-velocity policy dispatch validation" begin
+@testset "Two-velocity tuple validation" begin
     mesh = BlockTreeMesh(
         block_size = (8, 8), periodic = (true, false),
     )
@@ -292,68 +218,46 @@ end
         FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? -0.2 : 0.0),
     )
     enforce_no_permeation!(velocity)
+    work = WYAdvectionWorkspace(interface, velocity)
 
-    one_velocity_work = WYAdvectionWorkspace(interface)
-    expected = min(
-        stable_timestep(velocity[1], one_velocity_work; cfl = 0.3),
-        stable_timestep(velocity[2], one_velocity_work; cfl = 0.3),
-    )
-    @test stable_timestep(velocity, one_velocity_work; cfl = 0.3) == expected
-    @test_throws ArgumentError TV._project_liquid_velocity!(
-        one_velocity_work, velocity,
-    )
-    unsupported = try
+    bad_momentum = try
+        advect!(interface, velocity, -1.0, work; momentum = velocity[1])
+        nothing
+    catch err
+        err
+    end
+    @test bad_momentum isa ArgumentError
+    @test sprint(showerror, bad_momentum) ==
+        "ArgumentError: two-phase velocities require a liquid/gas momentum destination tuple"
+
+    limit = stable_timestep(velocity, work)
+    @test isfinite(limit) && limit > 0
+    bad_step = try
         advect!(
-            interface, velocity, -1.0, one_velocity_work;
-            momentum = velocity[1]
+            interface, velocity, 2limit, work;
+            check_timestep = false, sweep_order = (1, 1),
         )
         nothing
     catch err
         err
     end
-    @test unsupported isa ErrorException
-    @test sprint(showerror, unsupported) ==
-        "unsupported two-velocity interface-advection policy"
+    @test bad_step isa ArgumentError
+    @test sprint(showerror, bad_step) ==
+        "ArgumentError: sweep_order must be (1,2) or (2,1)"
 
-    for (method, expected_message) in (
-            (
-                FrozenInterfaceFluxes(),
-                "ArgumentError: sweep_order must be (1,2) or (2,1)",
-            ),
-            (
-                ProjectedLiquidVelocity(),
-                "ArgumentError: time step exceeds the projected two-velocity WY CFL limit",
-            ),
-        )
-        work = WYAdvectionWorkspace(interface, velocity; interface_transport = method)
-        bad_momentum = try
-            advect!(interface, velocity, -1.0, work; momentum = velocity[1])
-            nothing
-        catch err
-            err
-        end
-        @test bad_momentum isa ArgumentError
-        @test sprint(showerror, bad_momentum) ==
-            "ArgumentError: two-phase velocities require a liquid/gas momentum destination tuple"
-
-        limit = stable_timestep(velocity, work)
-        @test isfinite(limit) && limit > 0
-        bad_step = try
-            advect!(
-                interface, velocity, 2limit, work;
-                check_timestep = false, sweep_order = (1, 1),
-            )
-            nothing
-        catch err
-            err
-        end
-        @test bad_step isa ArgumentError
-        @test sprint(showerror, bad_step) == expected_message
+    overshoot = try
+        advect!(interface, velocity, 2limit, work)
+        nothing
+    catch err
+        err
     end
+    @test overshoot isa ArgumentError
+    @test sprint(showerror, overshoot) ==
+        "ArgumentError: time step exceeds the WY CFL limit"
 end
 
 @testset "Prepared transport dispatch matches public advection" begin
-    for method in (FrozenInterfaceFluxes(), ProjectedLiquidVelocity())
+    let
         mesh = BlockTreeMesh(
             block_size = (8, 8), periodic = (true, false),
         )
@@ -367,7 +271,7 @@ end
         )
         enforce_no_permeation!(velocity)
         works = map(fields) do field
-            WYAdvectionWorkspace(field, velocity; interface_transport = method)
+            WYAdvectionWorkspace(field, velocity)
         end
         scalars = map(fields) do field
             PhaseScalar(
@@ -390,7 +294,7 @@ end
             momentum_workspace = momentum_workspaces[1],
         )
         TV._advect_transport_substep!(
-            method, fields[2], velocity, dt, works[2];
+            fields[2], velocity, dt, works[2];
             scalars = (scalars[2],), sweep_order = (2, 1),
             momentum = destinations[2], density = (1000.0, 1.0),
             momentum_workspace = momentum_workspaces[2],
@@ -421,200 +325,9 @@ end
     end
 end
 
-@testset "Projected liquid-velocity extension" begin
-    mesh = BlockTreeMesh(
-        block_size = (12, 12), periodic = (false, false),
-    )
-    interface = InterfaceField(
-        mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.25;
-        lipschitz = 1,
-    )
-    velocity = (
-        FaceVelocity(
-            mesh,
-            (x, y, time, axis) -> axis == 1 ? x - 0.5 : y - 0.5,
-        ),
-        FaceVelocity(mesh),
-    )
-    enforce_no_permeation!(velocity)
-    work = WYAdvectionWorkspace(
-        interface, velocity;
-        interface_transport = ProjectedLiquidVelocity(
-            tolerance = 1.0e-10, max_cycles = 500,
-        ),
-    )
-    projected = TV._project_liquid_velocity!(work, velocity)
-    diagnostics = phase_flux_diagnostics(work)
-    @test diagnostics.projection_initial_divergence > 1
-    @test diagnostics.projection_final_divergence <= 1.0e-10
-    @test 0 < diagnostics.projection_iterations < 500
-    @test all(isfinite, projected.interior)
-
-    # An unequal tangential jump leaves a planar interface stationary, also
-    # when the phase is clipped by a fixed solid.
-    tangent_mesh = BlockTreeMesh(
-        block_size = (8, 8), periodic = (true, false),
-    )
-    geometry = GeometryField(
-        tangent_mesh, (x, y) -> 0.1 - y; lipschitz = 1,
-    )
-    tangent_interface = InterfaceField(
-        tangent_mesh, (x, y) -> y - 0.47; geometry, lipschitz = 1,
-    )
-    tangent_velocity = (
-        FaceVelocity(
-            tangent_mesh,
-            (x, y, time, axis) -> axis == 1 ? 0.15 : 0.0,
-        ),
-        FaceVelocity(
-            tangent_mesh,
-            (x, y, time, axis) -> axis == 1 ? -0.08 : 0.0,
-        ),
-    )
-    enforce_no_permeation!(tangent_velocity)
-    tangent_work = WYAdvectionWorkspace(
-        tangent_interface, tangent_velocity;
-        interface_transport = ProjectedLiquidVelocity(),
-    )
-    constants = PhaseScalar(
-        tangent_interface; liquid = 3.0, gas = 7.0,
-    )
-    tracer = PhaseScalar(
-        tangent_interface;
-        liquid = (x, y) -> 1 + 0.1sinpi(2x),
-        gas = (x, y) -> 2 + 0.2cospi(2x),
-    )
-    initial = copy(tangent_interface.fraction)
-    initial_mass = (
-        integrate(tracer, :liquid), integrate(tracer, :gas),
-    )
-    dt = stable_timestep(tangent_velocity, tangent_work; cfl = 0.2)
-    advect!(
-        tangent_interface, tangent_velocity, dt, tangent_work;
-        scalars = (constants, tracer),
-    )
-    for block in eachindex(tangent_mesh.blocks)
-        @test interior(tangent_interface.fraction, block) ==
-            interior(initial, block)
-        @test interior(constants.liquid, block) ≈
-            fill(3.0, tangent_mesh.block_size)
-        @test interior(constants.gas, block) ≈
-            fill(7.0, tangent_mesh.block_size)
-    end
-    @test integrate(tracer, :liquid) ≈ initial_mass[1]
-    @test integrate(tracer, :gas) ≈ initial_mass[2]
-    @test phase_flux_diagnostics(tangent_work).gas_reset_discrepancy ≈ 0
-
-    # The gas carrier is deliberately compressible here. The physical
-    # interface remains fixed, while the auxiliary carrier records the local
-    # discrepancy and still transports a constant intrinsic scalar exactly.
-    reset_mesh = BlockTreeMesh(
-        block_size = (12, 12), periodic = (false, false),
-    )
-    reset_interface = InterfaceField(
-        reset_mesh, (x, y) -> x - 0.5; lipschitz = 1,
-    )
-    reset_velocity = (
-        FaceVelocity(reset_mesh),
-        FaceVelocity(
-            reset_mesh,
-            (x, y, time, axis) -> axis == 1 ? 0.1sinpi(2x) : 0.0,
-        ),
-    )
-    enforce_no_permeation!(reset_velocity)
-    reset_scalar = PhaseScalar(
-        reset_interface; liquid = 2.0, gas = 5.0,
-    )
-    reset_work = WYAdvectionWorkspace(
-        reset_interface, reset_velocity;
-        interface_transport = ProjectedLiquidVelocity(),
-    )
-    reset_destination = (
-        FaceVelocity(reset_mesh), FaceVelocity(reset_mesh),
-    )
-    reset_momentum = MomentumAdvectionWorkspace(
-        reset_interface, reset_velocity,
-    )
-    reset_initial = copy(reset_interface.fraction)
-    reset_dt = stable_timestep(
-        reset_velocity, reset_work; cfl = 0.2,
-    )
-    advect!(
-        reset_interface, reset_velocity, reset_dt, reset_work;
-        scalars = (reset_scalar,),
-        momentum = reset_destination, density = (1000.0, 1.0),
-        momentum_workspace = reset_momentum,
-    )
-    for block in eachindex(reset_mesh.blocks)
-        @test interior(reset_interface.fraction, block) ==
-            interior(reset_initial, block)
-        @test interior(reset_scalar.liquid, block) ≈
-            fill(2.0, reset_mesh.block_size)
-        @test interior(reset_scalar.gas, block) ≈
-            fill(5.0, reset_mesh.block_size)
-    end
-    reset_diagnostics = phase_flux_diagnostics(reset_work)
-    @test reset_diagnostics.absolute_gas_reset_discrepancy > 0
-    @test abs(reset_diagnostics.gas_reset_discrepancy) <=
-        reset_diagnostics.absolute_gas_reset_discrepancy
-    @test reset_diagnostics.absolute_gas_momentum_reset_discrepancy_x > 0
-    @test reset_diagnostics.absolute_gas_momentum_reset_discrepancy_y == 0
-
-    # The projected correction must use the cut-cell gradient paired with the
-    # open-volume divergence. This case exercises partial solid apertures and
-    # the zero-pressure condition in phase-empty cells.
-    cut_mesh = BlockTreeMesh(
-        block_size = (8, 8), periodic = (false, false),
-    )
-    cut_geometry = GeometryField(
-        cut_mesh, (x, y) -> 0.18 + 0.08x - y; lipschitz = 1,
-    )
-    cut_interface = InterfaceField(
-        cut_mesh, (x, y) -> hypot(x - 0.5, y - 0.38) - 0.27;
-        geometry = cut_geometry, lipschitz = 1,
-    )
-    cut_velocity = (
-        FaceVelocity(
-            cut_mesh,
-            (x, y, time, axis) -> axis == 1 ? x - 0.5 : y - 0.38,
-        ),
-        FaceVelocity(cut_mesh),
-    )
-    enforce_no_permeation!(cut_velocity)
-    cut_work = WYAdvectionWorkspace(
-        cut_interface, cut_velocity;
-        interface_transport = ProjectedLiquidVelocity(
-            tolerance = 1.0e-10, max_cycles = 500,
-        ),
-    )
-    TV._project_liquid_velocity!(cut_work, cut_velocity)
-    cut_diagnostics = phase_flux_diagnostics(cut_work)
-    @test cut_diagnostics.projection_initial_divergence > 1
-    @test cut_diagnostics.projection_final_divergence <= 1.0e-10
-
-    # A vanished liquid phase has no auxiliary Poisson unknowns and is a
-    # valid limiting state, rather than a failed solve with empty statistics.
-    empty_liquid = InterfaceField(
-        cut_mesh, (x, y) -> one(x); geometry = cut_geometry,
-        lipschitz = 1,
-    )
-    empty_velocity = (FaceVelocity(cut_mesh), FaceVelocity(cut_mesh))
-    empty_velocity[2].interior .= cut_velocity[1].interior
-    empty_work = WYAdvectionWorkspace(
-        empty_liquid, empty_velocity;
-        interface_transport = ProjectedLiquidVelocity(),
-    )
-    projected_empty = TV._project_liquid_velocity!(
-        empty_work, empty_velocity,
-    )
-    @test all(iszero, projected_empty.interior)
-    @test phase_flux_diagnostics(empty_work).projection_iterations == 0
-end
-
 @testset "Compatible separate phase-momentum transport" begin
     schemes = (LaxWendroff(), MonotonizedCentral())
-    methods = (ProjectedLiquidVelocity(), FrozenInterfaceFluxes())
-    for mixed in (false, true), method in methods, scheme in schemes
+    for mixed in (false, true), scheme in schemes
         mesh = mixed ? BlockTreeMesh(
                 block_size = (8, 8), max_level = 2,
                 periodic = (true, false),
@@ -641,9 +354,7 @@ end
         )
         enforce_no_permeation!(velocity)
         destination = (FaceVelocity(mesh), FaceVelocity(mesh))
-        work = WYAdvectionWorkspace(
-            interface, velocity; interface_transport = method,
-        )
+        work = WYAdvectionWorkspace(interface, velocity)
         momentum = MomentumAdvectionWorkspace(interface, velocity)
         dt = stable_timestep(velocity, work; cfl = 0.2)
         advect!(
@@ -687,10 +398,7 @@ end
             destination = (
                 FaceVelocity(smoke_mesh), FaceVelocity(smoke_mesh),
             )
-            work = WYAdvectionWorkspace(
-                smoke_interface, smoke_velocity;
-                interface_transport = FrozenInterfaceFluxes(),
-            )
+            work = WYAdvectionWorkspace(smoke_interface, smoke_velocity)
             momentum = MomentumAdvectionWorkspace(
                 smoke_interface, smoke_velocity,
             )
@@ -722,9 +430,7 @@ end
     )
     enforce_no_permeation!(velocity)
     initial = map(copy, velocity)
-    work = WYAdvectionWorkspace(
-        interface, velocity; interface_transport = FrozenInterfaceFluxes(),
-    )
+    work = WYAdvectionWorkspace(interface, velocity)
     momentum = MomentumAdvectionWorkspace(interface, velocity)
     advect!(
         interface, velocity,
@@ -885,10 +591,7 @@ end
         initial_mass = (
             integrate(tracer, :liquid), integrate(tracer, :gas),
         )
-        work = WYAdvectionWorkspace(
-            interface, velocity;
-            interface_transport = FrozenInterfaceFluxes(),
-        )
+        work = WYAdvectionWorkspace(interface, velocity)
         dt = stable_timestep(velocity, work; cfl = 0.25)
         # `advect!` owns the time-level aperture refresh.  A preceding CFL
         # query is optional and must not be the source of its frozen geometry.
@@ -944,10 +647,7 @@ end
             ),
         )
         constants = PhaseScalar(interface; liquid = 2.0, gas = 5.0)
-        work = WYAdvectionWorkspace(
-            interface, velocity;
-            interface_transport = FrozenInterfaceFluxes(),
-        )
+        work = WYAdvectionWorkspace(interface, velocity)
         dt = stable_timestep(velocity, work; cfl = 0.2)
         advect!(interface, velocity, dt, work; scalars = (constants,))
         reference = InterfaceField(
@@ -991,14 +691,11 @@ end
         FaceVelocity(mesh, liquid_function),
         FaceVelocity(mesh, gas_function),
     )
-    wy = WYAdvectionWorkspace(
-        interface, velocity; interface_transport = FrozenInterfaceFluxes(),
-    )
+    wy = WYAdvectionWorkspace(interface, velocity)
     workspace = AMRWorkspace(mesh, interface, geometry, velocity)
     @test adapt!(workspace, [:refine]; step = 1, force = true).changed
     reconstruct!(interface)
     @test TV._reconfigure_wy_workspace!(wy, interface) === wy
-    @test wy.interface_transport isa FrozenInterfaceFluxes
     @test length(wy.open_flux) == length(mesh.faces)
     @test length(wy.liquid_flux) == length(mesh.faces)
     @test length(wy.gas_flux) == length(mesh.faces)
@@ -1032,7 +729,7 @@ end
 end
 
 @testset "Two-velocity interface advection after dynamic cut-cell AMR" begin
-    for method in (ProjectedLiquidVelocity(), FrozenInterfaceFluxes())
+    let
         mesh = BlockTreeMesh(
             block_size = (8, 8), max_level = 2,
             periodic = (true, false),
@@ -1068,9 +765,7 @@ end
         @test all(isconcretetype, Base.uniontypes(eltype(registry)))
         @test all(q -> q isa eltype(registry), staggered)
         @test all(q -> fieldtype(typeof(q), :interface) === typeof(interface), staggered)
-        work = WYAdvectionWorkspace(
-            interface, velocity; interface_transport = method,
-        )
+        work = WYAdvectionWorkspace(interface, velocity)
         momentum = MomentumAdvectionWorkspace(interface, velocity)
         old_work = work
         labels = [
@@ -1086,11 +781,7 @@ end
         momentum = TV._reconfigure_momentum_workspace!(
             momentum, interface,
         )
-        if method isa ProjectedLiquidVelocity
-            @test work !== old_work
-        else
-            @test work === old_work
-        end
+        @test work === old_work
         initial = copy(interface.fraction)
         destination = (FaceVelocity(mesh), FaceVelocity(mesh))
         dt = stable_timestep(velocity, work; cfl = 0.2)
@@ -1209,9 +900,7 @@ end
                 interface; density = (2.0, 1.0),
                 dynamic_viscosity = (0.0, 0.0),
             );
-            velocity_model = TwoVelocityModel(
-                interface_transport = FrozenInterfaceFluxes(),
-            ),
+            velocity_model = TwoVelocityModel(),
             velocity = (liquid_velocity, gas_velocity), boundary = FreeSlip(),
             dt = step_size, adaptivity = Adaptivity(criteria = (indicator,)),
         )
@@ -1225,9 +914,7 @@ end
         # Local for the same reason as the other helpers (see above).
         local mesh = field.mesh
         nx, ny = mesh.block_size
-        work = WYAdvectionWorkspace(
-            field, velocity; interface_transport = FrozenInterfaceFluxes(),
-        )
+        work = WYAdvectionWorkspace(field, velocity)
         TV._freeze_phase_apertures!(field, work)
         diagnostic_dt = 1.0e-4
         for axis in (1, 2)
@@ -1622,9 +1309,7 @@ end
                 interface; density = (2.0, 1.0),
                 dynamic_viscosity = (0.0, 0.0),
             );
-            velocity_model = TwoVelocityModel(
-                interface_transport = FrozenInterfaceFluxes(),
-            ),
+            velocity_model = TwoVelocityModel(),
             velocity = (liquid, gas),
             pressure = (x, y) -> 2.5 + 0.05sinpi(2x) * cospi(y),
             boundary = FreeSlip(),

@@ -8,11 +8,12 @@ Intrinsic phase values are recovered with the interface's
 `fraction_floor`; the same threshold removes small VOF fragments.
 The modified staggered flux interpolant switches to CTU when either adjacent
 predicted phase fraction is below `ctu_threshold`. The workspace uses its
-interface's fixed geometry; method-specific state can be rebuilt when needed.
+interface's fixed geometry and, for a geometry field, freezes the liquid/gas
+subface ordering there.
 Cell-scalar source and increment buffers grow on demand and are reused across
 steps and resized when the workspace is retargeted after mesh adaptation.
 """
-mutable struct WYAdvectionWorkspace{T, M <: BlockTreeMesh, P, F, W}
+mutable struct WYAdvectionWorkspace{T, M <: BlockTreeMesh, F}
     # Reference identity avoids boxing this large, concretely typed workspace
     # when an AMR-retargetable parent stores it behind a partial type.
     const mesh::M
@@ -38,25 +39,13 @@ mutable struct WYAdvectionWorkspace{T, M <: BlockTreeMesh, P, F, W}
     const cell_face_orientations::Vector{Int8}
     const topology::Vector{BlockKey}
     const ctu_threshold::T
-    const interface_transport::P
     const diagnostics::PhaseFluxDiagnostics{T}
-    const method_workspace::Base.RefValue{W}
 end
 function WYAdvectionWorkspace(
         field::InterfaceField{T, M};
         ctu_threshold = 0.5,
-        interface_transport = nothing,
     ) where {T, M}
     mesh = field.mesh
-    transport = _select_interface_transport(
-        interface_transport, _OneVelocityInterfaceAdvection(),
-    )
-    transport isa AbstractInterfaceTransportMethod || throw(
-        ArgumentError(
-            "interface_transport must implement " *
-                "AbstractInterfaceTransportMethod",
-        )
-    )
     threshold = T(ctu_threshold)
     isfinite(threshold) && zero(T) < threshold <= one(T) || throw(
         ArgumentError(
@@ -75,11 +64,10 @@ function WYAdvectionWorkspace(
         zeros(T, number_of_faces),
         zeros(T, number_of_faces), zeros(T, number_of_faces),
         zeros(T, number_of_faces), zeros(T, number_of_faces),
-        fill(false, transport isa FrozenInterfaceFluxes && !isnothing(field.geometry) ? number_of_faces : 0),
+        fill(false, isnothing(field.geometry) ? 0 : number_of_faces),
         offsets, faces, Int8.(-signs),
         [block.key for block in mesh.blocks], threshold,
-        transport, PhaseFluxDiagnostics(T),
-        Ref(_interface_transport_workspace(field, transport)),
+        PhaseFluxDiagnostics(T),
     )
 end
 
@@ -106,15 +94,9 @@ function _reconfigure_wy_workspace!(
     ) where {T}
     workspace.interface === field || return WYAdvectionWorkspace(
         field; ctu_threshold = workspace.ctu_threshold,
-        interface_transport = workspace.interface_transport,
     )
     workspace.mesh === field.mesh || return WYAdvectionWorkspace(
         field; ctu_threshold = workspace.ctu_threshold,
-        interface_transport = workspace.interface_transport,
-    )
-    isnothing(workspace.method_workspace[]) || return WYAdvectionWorkspace(
-        field; ctu_threshold = workspace.ctu_threshold,
-        interface_transport = workspace.interface_transport,
     )
     for cell_field in (
             workspace.indicator, workspace.increment,
@@ -136,7 +118,7 @@ function _reconfigure_wy_workspace!(
         resize!(flux, length(field.mesh.faces))
         fill!(flux, zero(T))
     end
-    if workspace.interface_transport isa FrozenInterfaceFluxes && !isnothing(field.geometry)
+    if !isnothing(field.geometry)
         resize!(workspace.liquid_subface_lower, length(field.mesh.faces))
         fill!(workspace.liquid_subface_lower, false)
     end
@@ -171,56 +153,6 @@ function _update_phase_flux_diagnostics!(workspace::WYAdvectionWorkspace{T}) whe
     return diagnostics
 end
 
-function _update_gas_reset_diagnostics!(
-        field::InterfaceField{T}, workspace::WYAdvectionWorkspace{T};
-        accumulate = false,
-    ) where {T}
-    signed = zero(T)
-    absolute = zero(T)
-    mesh = field.mesh
-    nx, ny = mesh.block_size
-    halo = mesh.halo
-    geometry = field.geometry
-    for (block, leaf) in pairs(mesh.blocks)
-        conditional = @inbounds field.conditional_fraction.blocks[block]
-        carrier = @inbounds workspace.gas_carrier.blocks[block]
-        open = isnothing(geometry) ? nothing :
-            @inbounds(geometry.open_fraction.blocks[block])
-        @inbounds for j in 1:ny, i in 1:nx
-            ii, jj = i + halo, j + halo
-            open_fraction = isnothing(open) ? one(T) : open[ii, jj]
-            discrepancy = leaf.volume * open_fraction *
-                (carrier[ii, jj] - (one(T) - conditional[ii, jj]))
-            signed += discrepancy
-            absolute += abs(discrepancy)
-        end
-    end
-    if accumulate
-        workspace.diagnostics.gas_reset_discrepancy += signed
-        workspace.diagnostics.absolute_gas_reset_discrepancy += absolute
-    else
-        workspace.diagnostics.gas_reset_discrepancy = signed
-        workspace.diagnostics.absolute_gas_reset_discrepancy = absolute
-    end
-    return workspace.diagnostics
-end
-
-function _reset_auxiliary_gas_carrier!(
-        field::InterfaceField{T}, workspace::WYAdvectionWorkspace{T},
-    ) where {T}
-    mesh = field.mesh
-    nx, ny = mesh.block_size
-    halo = mesh.halo
-    _parallel_block_columns(mesh) do block, first_j, last_j
-        liquid = @inbounds field.conditional_fraction.blocks[block]
-        gas = @inbounds workspace.gas_carrier.blocks[block]
-        @inbounds for j in first_j:last_j, i in 1:nx
-            ii, jj = i + halo, j + halo
-            gas[ii, jj] = one(T) - liquid[ii, jj]
-        end
-    end
-    return workspace.gas_carrier
-end
 function _check_wy_topology(velocity, work)
     velocity.mesh === work.mesh || throw(ArgumentError("velocity and workspace must share a mesh"))
     length(work.topology) == nblocks(work.mesh) &&

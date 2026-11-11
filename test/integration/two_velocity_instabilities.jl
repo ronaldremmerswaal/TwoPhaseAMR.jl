@@ -16,13 +16,6 @@ const COMBINED_PARAMETERS = (
     liquid_above = true,
 )
 
-const INSTABILITY_INTERFACE_TRANSPORTS = (
-    FrozenInterfaceFluxes(), ProjectedLiquidVelocity(),
-)
-
-_instability_transport_name(method) =
-    method isa FrozenInterfaceFluxes ? :frozen : :projected
-
 function _test_instability_diagnostics(result)
     # A diagnostic history contains its initial sample and every completed
     # time step. If the final step lands within roundoff of the requested
@@ -38,7 +31,6 @@ end
 
 function _instability_refinement(
         parameters;
-        interface_transport = FrozenInterfaceFluxes(),
         pressure_projection = CMDGFMProjection(),
         timestep_factor = 1.0,
     )
@@ -47,7 +39,7 @@ function _instability_refinement(
         result = interfacial_instability(
             ; cells_per_wavelength = resolution, parameters...,
             tolerance = 1.0e-7, max_cycles = 3000,
-            interface_transport, pressure_projection, timestep_factor,
+            pressure_projection, timestep_factor,
         )
         stable = abs(imag(result.dispersion.offset)) <= sqrt(eps())
         expected_ratio = stable ? 1.0 : 2.0
@@ -59,7 +51,6 @@ function _instability_refinement(
         )
         @test isfinite(error)
         @test result.flow.steps > 0
-        @test typeof(result.interface_transport) === typeof(interface_transport)
         _test_instability_diagnostics(result)
         (; result, error)
     end
@@ -76,7 +67,6 @@ end
 
 function _instability_temporal_refinement(
         parameters, spatial_result;
-        interface_transport = FrozenInterfaceFluxes(),
         pressure_projection = CMDGFMProjection(),
     )
     factors = (1.0, 0.5, 0.25)
@@ -86,7 +76,7 @@ function _instability_temporal_refinement(
         result = interfacial_instability(
             ; cells_per_wavelength = 16, parameters...,
             timestep_factor, tolerance = 1.0e-7, max_cycles = 3000,
-            interface_transport, pressure_projection,
+            pressure_projection,
         )
         _test_instability_diagnostics(result)
         normalized_amplitude_error(
@@ -176,65 +166,45 @@ end
             _kh_parameters(1000.0, 0.5),
             _kh_parameters(1.0, 5.0),
         )
-        for interface_transport in INSTABILITY_INTERFACE_TRANSPORTS
-            method_name = _instability_transport_name(interface_transport)
-            # NUMERICS CONCERN: high-density frozen KH has substantial
-            # temporal error at the original CFL. Reducing the CFL by four
-            # restores the original rate gate; halving it again changes the
-            # middle-grid error by 21%, so this is a coupled space-time
-            # convergence check, not a pure spatial-order measurement.
-            timestep_factor = parameters.density_ratio == 1000.0 &&
-                parameters.weber == 0.5 &&
-                interface_transport isa FrozenInterfaceFluxes ? 0.25 : 1.0
-            result = _instability_refinement(
-                parameters; interface_transport, timestep_factor,
-            )
-            println(
-                "two_velocity_KH parameters=$parameters " *
-                    "method=$method_name timestep_factor=$timestep_factor " *
-                    "n=$(result.resolutions) " *
-                    "errors=$(result.errors) rates=$(result.rates) " *
-                    "endpoint_rate=$(result.endpoint_rate)",
-            )
-            @test all(<(0), diff(collect(result.errors)))
-            # NUMERICS CONCERN: DR=1000, We=0.5 projected gave 0.492982
-            # in CI and 0.521353 here, below the expected near-first-order
-            # rate. Preserve the 0.8 gate for all other cases.
-            minimum_rate = parameters.density_ratio == 1000.0 &&
-                parameters.weber == 0.5 &&
-                interface_transport isa ProjectedLiquidVelocity ? 0.48 : 0.8
-            @test result.endpoint_rate >= minimum_rate
+        # NUMERICS CONCERN: high-density frozen KH has substantial
+        # temporal error at the original CFL. Reducing the CFL by four
+        # restores the original rate gate; halving it again changes the
+        # middle-grid error by 21%, so this is a coupled space-time
+        # convergence check, not a pure spatial-order measurement.
+        timestep_factor = parameters.density_ratio == 1000.0 &&
+            parameters.weber == 0.5 ? 0.25 : 1.0
+        result = _instability_refinement(
+            parameters; timestep_factor,
+        )
+        println(
+            "two_velocity_KH parameters=$parameters " *
+                "method=frozen timestep_factor=$timestep_factor " *
+                "n=$(result.resolutions) " *
+                "errors=$(result.errors) rates=$(result.rates) " *
+                "endpoint_rate=$(result.endpoint_rate)",
+        )
+        @test all(<(0), diff(collect(result.errors)))
+        minimum_rate = 0.8
+        @test result.endpoint_rate >= minimum_rate
 
-            # As in the capillary-wave study, refine time independently on
-            # the middle grid for the two density ratios. These inviscid
-            # cases isolate interface transport and pressure projection from
-            # the two-velocity diffusion update.
-            parameters.weber == 0.5 || continue
-            temporal = _instability_temporal_refinement(
-                parameters, result; interface_transport,
-            )
-            println(
-                "two_velocity_KH temporal parameters=$parameters " *
-                    "method=$method_name factors=$(temporal.factors) " *
-                    "errors=$(temporal.errors)",
-            )
-            # Fixed-grid spatial error can mask or cancel temporal error.
-            # At DR=1000 archived frozen errors were (0.464936, 0.505470,
-            # 0.496933) and projected (0.673779, 0.640250, 0.650715).
-            @test all(isfinite, temporal.errors)
-            if parameters.density_ratio == 1000.0 &&
-                    interface_transport isa ProjectedLiquidVelocity
-                # NUMERICS CONCERN: projected LW gives (0.667306, 1.275956,
-                # 0.644677); at factor 0.5 Upwind gives 0.719271. Near the
-                # extrapolated interface-velocity jump, sampled late liquid
-                # |u| is 0.323 for LW versus 0.051 for Upwind. The mechanism
-                # is not established; bound the spike and both endpoints.
-                @test maximum(temporal.errors) <= 2.1first(temporal.errors)
-                @test max(temporal.errors[1], temporal.errors[3]) <= 0.9
-            else
-                @test maximum(temporal.errors) <= 1.5first(temporal.errors)
-            end
-        end
+        # As in the capillary-wave study, refine time independently on
+        # the middle grid for the two density ratios. These inviscid
+        # cases isolate interface transport and pressure projection from
+        # the two-velocity diffusion update.
+        parameters.weber == 0.5 || continue
+        temporal = _instability_temporal_refinement(
+            parameters, result,
+        )
+        println(
+            "two_velocity_KH temporal parameters=$parameters " *
+                "method=frozen factors=$(temporal.factors) " *
+                "errors=$(temporal.errors)",
+        )
+        # Fixed-grid spatial error can mask or cancel temporal error.
+        # At DR=1000 the archived frozen errors were (0.464936, 0.505470,
+        # 0.496933).
+        @test all(isfinite, temporal.errors)
+        @test maximum(temporal.errors) <= 1.5first(temporal.errors)
     end
 end
 

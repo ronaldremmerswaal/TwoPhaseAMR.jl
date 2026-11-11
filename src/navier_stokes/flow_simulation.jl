@@ -379,13 +379,11 @@ function FlowSimulation(
     initial_velocity = velocity_model isa TwoVelocityModel ?
         _two_velocity_initializer(velocity) :
         _one_velocity_initializer(velocity)
-    interface_transport = velocity_model isa TwoVelocityModel ?
-        velocity_model.interface_transport : FrozenInterfaceFluxes()
     pressure_projection = velocity_model isa TwoVelocityModel ?
         velocity_model.pressure_projection : CMDGFMProjection()
     return _flow_simulation(
         mesh, physics; numerics, adaptivity,
-        interface_transport, two_velocity_projection = pressure_projection,
+        two_velocity_projection = pressure_projection,
         velocity = initial_velocity, pressure, time, dt, T,
         geometry, boundary, diagnostics, force,
     )
