@@ -549,26 +549,9 @@
 \DefineNotation[2]{\stagfrac}{\stagger{C}^{#1}_{#2}}{\stagfrac{\phase}{f}}
   {Staggered conditional fraction, open-volume weighted (\cref{eq:vof:staggered-fraction})}
   {\code{_phase_face_average!}}{(2.36)}
-\DefineNotation[2]{\auxgas}{C^{\gas,*#1}_{#2}}{\auxgas{}{c},\ \auxgas{,\splitlevel{j}}{c}}
-  {Auxiliary gas carrier of the projected-liquid method (\cref{eq:vof:aux-gas})}
-  {\code{gas_carrier}}{(6.23)}
-\DefineNotation{\gasreset}{E^{\gas}}{\gasreset,\ \abs{\gasreset}}
-  {Signed and absolute gas-reset discrepancy (\cref{eq:vof:reset})}
-  {\code{gas_reset_discrepancy}}{new}
-\DefineNotation[1]{\extvelo}{\velo^{\mathrm{e},#1}}{\extvelo{\phase}_f}
-  {Phase velocity extended to faces without the phase (\cref{eq:vof:extension})}
-  {\code{_extend_projected_component!}}{\S6.3.2}
-\DefineNotation{\extlayers}{N_{\mathrm{e}}}{\extlayers}
-  {Number of extension layers}{\code{extension_layers}}{new}
-\DefineNotation{\projvelo}{\widehat{\velo}}{\projvelo^{\liq}_f}
-  {Projected liquid velocity (\cref{eq:vof:projection})}{\code{projected}}{\S6.3.2}
-\DefineNotation{\projpres}{\widehat{p}}{\projpres_c}
-  {Potential of the liquid-velocity projection}{\code{state.pressure}}{\S6.3.2}
-\DefineNotation{\projtol}{\varepsilon^{\widehat{p}}}{\projtol}
-  {Absolute tolerance of the liquid-velocity projection}{\code{tolerance}}{new}
 \DefineNotation{\roundfloor}{\epsilon_{\mathrm{fl}}}{\roundfloor}
   {Round-off floor of the solver's residual target, at least $128\,\machineeps$
-   (\cref{eq:vof:projected-dilation-bound})}{\code{_roundoff_residual_floor!}}{new}
+   (\cref{eq:solvers:floor})}{\code{_roundoff_residual_floor!}}{new}
 \DefineNotation{\fluxinterp}{\mathfrak{F}}{(\fluxinterp\avar^{\phase})_f}
   {Face state (flux interpolant) of a cell quantity (\cref{eq:vof:face-state})}
   {\code{_phase_flux_state}}{(6.18)}
@@ -701,9 +684,6 @@
 \DefineNotation[1]{\extstag}{\avarstag^{\mathrm{e},#1}}{\extstag{\phase}_f}
   {Working extension of an absent intrinsic staggered value (\cref{eq:momentum:extension})}
   {\code{_extend_phase_face_values!}}{new}
-\DefineNotation[1]{\gasmomreset}{E^{\gas}_{\velo,#1}}{\gasmomreset{k}}
-  {Gas-momentum reset discrepancy of component $k$ (\cref{eq:momentum:gas-reset})}
-  {\code{gas_momentum_reset_discrepancy_x}}{new}
 \DefineNotation{\dtcell}{\dt_{\mathrm{cell}}}{\dtcell}
   {Largest step of the cell-scalar upwind bound (\cref{eq:momentum:cell-cfl})}
   {\apifun{stable_timestep}}{new}

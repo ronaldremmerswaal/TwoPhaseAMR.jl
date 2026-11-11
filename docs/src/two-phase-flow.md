@@ -48,15 +48,14 @@ independent numerical choices are explicit:
 
 ```julia
 velocity_model = TwoVelocityModel(
-    interface_transport=FrozenInterfaceFluxes(),
     pressure_projection=CMDGFMProjection(),
 )
 flow = FlowSimulation(mesh, physics; velocity_model)
 ```
 
-The alternative interface carrier is [`ProjectedLiquidVelocity`](@ref). It is
-the only choice besides the default carrier; see
-[Two-velocity advection](two-velocity-advection.md) for its discrete
+The two-velocity model transports the physical interface through the frozen
+liquid and gas subfaces; see
+[Two-velocity advection](two-velocity-advection.md) for the discrete
 definition. A shared velocity initializer works with either model. To start
 the phases differently, pass a liquid/gas pair of fields or callables together
 with `TwoVelocityModel()`.
@@ -129,12 +128,11 @@ opposing swept open regions. This includes hanging faces on adaptive meshes.
 [`PhaseScalar`](@ref) and phase momentum reuse the same phase fluxes rather
 than reconstructing a separate carrier.
 
-The sweep checks liquid volume against the open cell volume and gas volume
-against zero before clamping and snapping. Its round-off allowance is scaled
+The sweep checks liquid volume against the open cell volume before clamping
+and snapping. Its round-off allowance is scaled
 by the full cell volume, so division by a small open fraction does not turn a
 round-off-sized volume error into a false bound violation. Volume violations
-larger than the allowance still raise an error; the auxiliary gas carrier has
-no upper bound.
+larger than the allowance still raise an error.
 
 For one-velocity momentum on embedded AMR meshes, the primal-to-dual phase
 fluxes use the open strip volume behind each face segment. This keeps the

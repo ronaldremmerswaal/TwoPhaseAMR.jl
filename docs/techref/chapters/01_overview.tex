@@ -233,9 +233,8 @@ moving the liquid volumes cut from the current reconstruction through the
 owned faces, with a dilation term weighted by a phase indicator frozen for
 the step, and with clamping and snapping to the bounds. Intrinsic phase
 scalars move with the same phase volumes. With two velocities the carrier is
-either the frozen interface fluxes, which extrude each phase subface of the
-start-of-step reconstruction with its own phase velocity, or the legacy
-projected liquid velocity with an auxiliary gas carrier.
+the frozen interface flux: each phase subface of the start-of-step
+reconstruction is extruded with its own phase velocity.
 
 \emph{Momentum transport} (\cref{ch:momentum-transport}). The velocity
 components are transported over staggered control volumes whose dual-face
@@ -282,12 +281,12 @@ projection solves for the increment, so that a shortened step removes only
 its share of the divergence left by the previous step. After a regrid the
 phase velocities are projected once more.
 
-\emph{Linear solvers} (\cref{ch:solvers}). The projections, the viscous step
-and the projected liquid carrier are sparse linear systems, solved by Krylov
+\emph{Linear solvers} (\cref{ch:solvers}). The projections and the viscous
+step are sparse linear systems, solved by Krylov
 methods with a stopping rule and a round-off floor: CG for the Poisson
-projection, the liquid carrier and the two-phase viscous step, CG or
+projection and the two-phase viscous step, CG or
 BiCGSTAB after a symmetry test for the one-phase viscous step, and BiCGSTAB
-for the CMDGFM. Except for the liquid carrier they are preconditioned by
+for the CMDGFM. They are preconditioned by
 V-cycles of a tree geometric multigrid built from the forest
 (\cref{tab:solvers:systems}).
 
@@ -467,8 +466,8 @@ where their phase has no staggered volume.
   \apifun{simulate!} has just evaluated them for this state (automatic step,
   frozen interface fluxes); that evaluation also reconstructs the interface and
   freezes the phase apertures of the step start (\cref{sec:vof:frozen}). The
-  WY sweeps with the selected carrier~\cref{eq:vof:frozen-flux}
-  or~\cref{eq:vof:projection} advance the fraction, the phase scalars, the
+  WY sweeps with the frozen carrier~\cref{eq:vof:frozen-flux} advance the
+  fraction, the phase scalars, the
   staggered phase scalars and the phase velocities
   (\cref{sec:momentum:two-velocity}), in alternating order, to
   $\velo^{\phase,\stage{1}}$.
@@ -607,9 +606,6 @@ events \apifun{observe!} with \apitype{SimulationState} and
     velocity formulation (\code{velocity_model} of \apitype{FlowSimulation})
       & \apitype{OneVelocityModel}, \apitype{TwoVelocityModel}
       & \cref{sec:overview:models}\\
-    two-velocity carrier (\code{interface_transport} of \apitype{TwoVelocityModel})
-      & \apitype{FrozenInterfaceFluxes}; \apitype{ProjectedLiquidVelocity} (legacy)
-      & \cref{sec:vof:two-velocity}\\
     two-velocity projection (\code{pressure_projection} of \apitype{TwoVelocityModel})
       & \apitype{CMDGFMProjection}
       & \cref{sec:projection:cmdgfm}\\
@@ -629,7 +625,7 @@ events \apifun{observe!} with \apitype{SimulationState} and
       & \code{:lhf}, \code{:lhf_ghf}, \code{:wy}
       & \cref{sec:interface:normals}\\
     Krylov method and preconditioner (\apitype{LinearSolverOptions} and \apitype{MultigridOptions})
-      & pressure projection and viscous steps: CG, or BiCGSTAB after a symmetry test for the one-phase viscous step (CG on uniform and composite meshes), with the tree geometric multigrid (\code{:auto}); the CMDGFM system (BiCGSTAB) has its own preconditioner, the liquid carrier (CG) none (\cref{tab:solvers:systems})
+      & pressure projection and viscous steps: CG, or BiCGSTAB after a symmetry test for the one-phase viscous step (CG on uniform and composite meshes), with the tree geometric multigrid (\code{:auto}); the CMDGFM system (BiCGSTAB) has its own preconditioner (\cref{tab:solvers:systems})
       & \cref{ch:solvers}\\
     time step (\code{dt} and \code{cfl} of \apifun{simulate!})
       & automatic with CFL number $0.45$; a prescribed step
@@ -641,29 +637,29 @@ events \apifun{observe!} with \apitype{SimulationState} and
   \end{tabular}
 \end{table}
 
-\Cref{tab:overview:options} lists the choices that select a method. The main
+\Cref{tab:overview:options} lists the choices that select a method. The
 two-velocity method is the frozen interface fluxes with the CMDGFM
-projection. The projected liquid velocity is the carrier of the
-thesis~\thesis{\S6.3.2}; the frozen interface fluxes, which the thesis
-derives but does not pursue~\thesis{\S6.3.4}, replace it as the default
-(\cref{sec:vof:frozen}). The projected liquid velocity is a legacy carrier,
-kept for comparison. Every
-combination of carrier and surface-tension method can be configured; the
-carrier applies to the two-velocity model only. \Cref{tab:overview:api} maps the public types to the chapters that
+projection: the frozen interface fluxes, which the thesis
+derives but does not pursue~\thesis{\S6.3.4}, replace the projected
+liquid velocity of the thesis~\thesis{\S6.3.2}
+(\cref{sec:vof:frozen}). Every
+combination of velocity model and surface-tension method can be configured;
+the two-velocity transport applies to the two-velocity model only.
+\Cref{tab:overview:api} maps the public types to the chapters that
 state what they compute; the implementation boxes give them in context.
 
 \begin{implnote}
 \srcsym{src/two_phase/two_velocity/model.jl}{TwoVelocityModel},
 \srcsym{src/two_phase/one_velocity.jl}{OneVelocityModel},
 \srcsym{src/navier_stokes/flow_simulation.jl}{FlowSimulation} (which
-passes the carrier and the projection of the velocity model to the system),
+passes the projection of the velocity model to the system),
 \srcsym{src/navier_stokes/options.jl}{AdvectionOptions},
 \srcsym{src/navier_stokes/options.jl}{NavierStokesOptions},
 \srcsym{src/two_phase/projection/methods.jl}{CMDGFMProjection}. Tests:
 \testsym{test/navier_stokes/configuration.jl}{explicit one- and two-velocity models}
 (the defaults),
 \testsym{test/navier_stokes/configuration.jl}{typed two-phase choice matrix constructs}
-(every carrier, projection and surface-tension method),
+(every projection and surface-tension method),
 \testsym{test/navier_stokes/configuration.jl}{typed Navier--Stokes configuration},
 \testsym{test/navier_stokes/high_level_api.jl}{high-level FlowSimulation API}
 (the default interface scheme and multigrid preconditioner).
@@ -691,8 +687,7 @@ passes the carrier and the projection of the velocity model to the system),
       \apitype{EllipticOperator}, \apitype{EllipticWorkspace}\\
     \ref{ch:interface}, interface & \apitype{InterfaceField}, \apitype{PolygonIndicator}\\
     \ref{ch:vof-transport}, VOF & \apitype{WYAdvectionWorkspace},
-      \apitype{PhaseScalar}, \apitype{FrozenInterfaceFluxes},
-      \apitype{ProjectedLiquidVelocity}\\
+      \apitype{PhaseScalar}\\
     \ref{ch:momentum-transport}, momentum & \apitype{AdvectionOptions},
       \apitype{StaggeredAdvectionWorkspace},
       \apitype{StaggeredVelocityAdvectionWorkspace},
@@ -744,8 +739,7 @@ in time is claimed for the split step, and the orders in space that the
 tests assert, with their known first-order spots, are those of
 \cref{tab:stab:orders}. Small cut cells are not merged and reduce the step
 (\cref{sec:vof:cfl}), and a step that fails a run-time check is not retried
-(\cref{sec:stab:gaps}). The projected liquid velocity is a legacy option
-(\cref{sec:overview:options}).
+(\cref{sec:stab:gaps}).
 \Cref{tab:overview:limitations} groups the defects and open questions that
 the chapters state and that are tracked by issues open at the audited commit;
 \cref{sec:verif:gaps} adds the gaps of the verification itself.

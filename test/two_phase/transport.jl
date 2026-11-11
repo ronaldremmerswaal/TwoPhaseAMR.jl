@@ -75,8 +75,6 @@ end
             work = WYAdvectionWorkspace(interface)
             @test !hasproperty(work, :geometry)
             @test (@inferred _transport_test_interface(work)) === interface
-            @test fieldtype(typeof(work), :method_workspace) === Base.RefValue{Nothing}
-            @test (@inferred getindex(work.method_workspace)) === nothing
             @test (@inferred stable_timestep(velocity, work)) == Inf
             before = vof_values(interface)
             advect!(interface, velocity, 0.001, work)
@@ -375,7 +373,7 @@ end
             end
             velocity = (liquid_velocity, gas_velocity)
             work = WYAdvectionWorkspace(
-                interface, velocity; interface_transport = FrozenInterfaceFluxes(),
+                interface, velocity,
             )
             dt = stable_timestep(velocity, work; cfl = 0.2)
             reference = FaceField{1}(mesh, initial)
@@ -433,7 +431,7 @@ end
         references = (FaceField{1}(mesh, liquid), FaceField{1}(mesh, gas))
         reference_work = map(StaggeredAdvectionWorkspace, references)
         work = WYAdvectionWorkspace(
-            interface, velocity; interface_transport = FrozenInterfaceFluxes(),
+            interface, velocity,
         )
         dt = stable_timestep(velocity, work; cfl = 0.2)
         for step in 1:8
@@ -497,7 +495,7 @@ end
         lower, upper = extrema(scalar.liquid.interior)
         initial_cut_values = scalar.liquid.interior[cut_faces]
         work = WYAdvectionWorkspace(
-            interface, velocity; interface_transport = FrozenInterfaceFluxes(),
+            interface, velocity,
         )
         dt = stable_timestep(velocity, work; cfl = 0.2)
         @test isfinite(dt) && dt > 0
@@ -944,14 +942,9 @@ end
         @test !TP._wy_fraction_in_bounds(T(2), zero(T))
         @test TP._wy_fraction_in_bounds(one(T) + tolerance / 2, one(T))
         @test !TP._wy_fraction_in_bounds(one(T) + 2tolerance, one(T))
-        @test !TP._wy_negative_fraction_out_of_bounds(-roundoff, open)
-        @test TP._wy_negative_fraction_out_of_bounds(-T(4) * tolerance / open, open)
-        @test !TP._wy_negative_fraction_out_of_bounds(T(2), open)
-        @test TP._wy_negative_fraction_out_of_bounds(-2tolerance, zero(T))
     end
     @test TP._wy_fraction_in_bounds(1.000000000000035, 4.7e-4)
     @test TP._wy_fraction_in_bounds(1.000000000000035, Float32(4.7e-4))
-    @test !TP._wy_negative_fraction_out_of_bounds(-4.79159355422365e-14, 4.7e-4)
 end
 
 @testset "WY cut hanging donor counterexamples (#56)" begin
@@ -978,7 +971,7 @@ end
             gas.interior[right[1]] = -0.10848167605356168
             gas.interior[right[2]] = 0.179524103894174
             velocity = (liquid, gas)
-            work = WYAdvectionWorkspace(field, velocity; interface_transport = FrozenInterfaceFluxes())
+            work = WYAdvectionWorkspace(field, velocity)
         else
             liquid.interior[right[2]] = 0.9368430659316056
             liquid.interior[left[1]] = -0.35686834133268
@@ -1123,7 +1116,7 @@ end
                 field = copy(initial)
                 velocity = frozen ? (carrier, copy(carrier)) : carrier
                 work = frozen ?
-                    WYAdvectionWorkspace(field, velocity; interface_transport = FrozenInterfaceFluxes()) :
+                    WYAdvectionWorkspace(field, velocity) :
                     WYAdvectionWorkspace(field)
                 before = vof_values(field)
                 mass = integrate(field)
@@ -1304,10 +1297,7 @@ end
             carrier = wy_cut_carrier(mesh, geometry, wall)
             velocity = (carrier, copy(carrier))
             field = copy(initial)
-            work = WYAdvectionWorkspace(
-                field, velocity;
-                interface_transport = FrozenInterfaceFluxes(),
-            )
+            work = WYAdvectionWorkspace(field, velocity)
             @test wy_phase_apertures_snapped(work, geometry, T)
             dt = stable_timestep(velocity, work)
             @test isfinite(dt) && dt > zero(T)
@@ -1318,10 +1308,7 @@ end
                 # The largest step the check accepts must survive the sweep,
                 # also where a cut-donor strip is the binding constraint.
                 limit_field = copy(initial)
-                limit_work = WYAdvectionWorkspace(
-                    limit_field, velocity;
-                    interface_transport = FrozenInterfaceFluxes(),
-                )
+                limit_work = WYAdvectionWorkspace(limit_field, velocity)
                 limit = stable_timestep(velocity, limit_work)
                 accepted = limit * (one(T) + TP._wy_step_slack(T))
                 advect!(limit_field, velocity, accepted, limit_work)
@@ -1393,7 +1380,7 @@ end
         gas = FaceVelocity(field.mesh)
         pair = (liquid, gas)
         pair_work = WYAdvectionWorkspace(
-            field, pair; interface_transport = FrozenInterfaceFluxes(),
+            field, pair,
         )
         pair_work.liquid_aperture[face] = one(T)
         error = try

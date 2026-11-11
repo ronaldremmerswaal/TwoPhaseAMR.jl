@@ -29,7 +29,6 @@ flow = FlowSimulation(
     mesh,
     TwoPhase(interface; density = (2.0, 1.0), dynamic_viscosity = (0.0, 0.0));
     velocity_model = TwoVelocityModel(
-        interface_transport = FrozenInterfaceFluxes(),
         pressure_projection = CMDGFMProjection(),
     ),
     velocity = (liquid_velocity, gas_velocity), boundary = FreeSlip(), dt = 0.01,

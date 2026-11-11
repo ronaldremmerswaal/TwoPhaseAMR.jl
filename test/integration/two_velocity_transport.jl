@@ -7,7 +7,7 @@ function _periodic_distance(value, centre)
     return mod(value - centre + 0.5, 1) - 0.5
 end
 
-function _band_case(kind, resolution, method)
+function _band_case(kind, resolution)
     mesh = kind === :uniform ? BlockTreeMesh(
             block_size = (resolution, resolution), periodic = (true, true),
         ) : BlockTreeMesh(
@@ -39,9 +39,7 @@ function _band_case(kind, resolution, method)
         PhaseFaceScalar{1}(interface), PhaseFaceScalar{2}(interface),
     )
     velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
-    workspace = WYAdvectionWorkspace(
-        interface, velocity; interface_transport = method,
-    )
+    workspace = WYAdvectionWorkspace(interface, velocity)
     projection_solver = EllipticSolver(
         PoissonOperator(mesh); coarse_size = 8,
     )
@@ -125,8 +123,7 @@ function _project_band_mixture!(case)
 end
 
 function _band_errors(
-        case, maximum_reset, maximum_partition, cycles,
-        projection_count, steps,
+        case, maximum_partition, projection_count, steps,
     )
     fraction_error = scalar_error = one_error = 0.0
     for (block, leaf) in pairs(case.mesh.blocks)
@@ -219,27 +216,20 @@ function _band_errors(
                     case.initial.staggered_amount[component].gas
             ) for component in 1:2
         ),
-        reset = maximum_reset, partition = maximum_partition,
-        projection_cycles = cycles, projection_count, steps,
+        partition = maximum_partition, projection_count, steps,
     )
 end
 
 function _advance_band!(case, maximum_dt)
     time = 0.0
     step = 0
-    maximum_reset = 0.0
     maximum_partition = 0.0
-    maximum_projection_cycles = 0
     projection_count = 0
     while time < 1 - 16eps()
         dt = min(maximum_dt, 1 - time)
         _set_band_velocity!(case, cospi(time + dt / 2))
-        projection_cycles = if case.workspace.interface_transport isa FrozenInterfaceFluxes
-            projection_count += 1
-            _project_band_mixture!(case)
-        else
-            0
-        end
+        projection_count += 1
+        _project_band_mixture!(case)
         advect!(
             case.interface, case.velocity, dt, case.workspace;
             scalars = (case.scalar, case.one_function),
@@ -250,24 +240,13 @@ function _advance_band!(case, maximum_dt)
             scheme = Fromm(),
         )
         diagnostics = phase_flux_diagnostics(case.workspace)
-        maximum_reset = max(
-            maximum_reset,
-            diagnostics.absolute_gas_reset_discrepancy,
-        )
         maximum_partition = max(
             maximum_partition, diagnostics.maximum_partition_defect,
-        )
-        maximum_projection_cycles = max(
-            maximum_projection_cycles, diagnostics.projection_iterations,
-            projection_cycles,
         )
         time += dt
         step += 1
     end
-    return _band_errors(
-        case, maximum_reset, maximum_partition,
-        maximum_projection_cycles, projection_count, step,
-    )
+    return _band_errors(case, maximum_partition, projection_count, step)
 end
 
 function _observed_rates(values, resolutions)
@@ -279,121 +258,80 @@ function _observed_rates(values, resolutions)
 end
 
 @testset "Two-velocity split-WY reversal convergence" begin
-    methods = (
-        projected = ProjectedLiquidVelocity(
-            tolerance = 1.0e-12, max_cycles = 500,
-        ),
-        frozen = FrozenInterfaceFluxes(),
-    )
     for kind in (:uniform, :mixed)
         resolutions = kind === :uniform ? (16, 24, 32) : (8, 12, 16)
-        results = Dict{Symbol, Vector{NamedTuple}}(
-            name => NamedTuple[] for name in keys(methods)
-        )
-
+        results = NamedTuple[]
         for resolution in resolutions
-            cases = map(method -> _band_case(kind, resolution, method), methods)
-            limits = map(cases) do case
-                _set_band_velocity!(case, 1.0)
-                stable_timestep(case.velocity, case.workspace; cfl = 0.35)
-            end
-            common_dt = minimum(limits)
-            for name in keys(methods)
-                result = _advance_band!(cases[name], common_dt)
-                push!(results[name], result)
-                println(
-                    "two_velocity_reversal mesh=$kind method=$name " *
-                        "n=$resolution " *
-                        join(("$key=$(getproperty(result, key))" for key in keys(result)), " "),
-                )
-            end
-            @test last(results[:projected]).steps ==
-                last(results[:frozen]).steps
-        end
-
-        for name in keys(methods)
-            method_results = results[name]
-            fraction_errors = getproperty.(method_results, :fraction)
-            scalar_errors = getproperty.(method_results, :scalar)
-            staggered_liquid_errors = getproperty.(
-                method_results, :staggered_liquid,
+            case = _band_case(kind, resolution)
+            _set_band_velocity!(case, 1.0)
+            common_dt = stable_timestep(
+                case.velocity, case.workspace; cfl = 0.35,
             )
-            staggered_gas_errors = getproperty.(
-                method_results, :staggered_gas,
-            )
-            fraction_rates = _observed_rates(fraction_errors, resolutions)
-            scalar_rates = _observed_rates(scalar_errors, resolutions)
-            staggered_liquid_rates = _observed_rates(
-                staggered_liquid_errors, resolutions,
-            )
-            staggered_gas_rates = _observed_rates(
-                staggered_gas_errors, resolutions,
-            )
+            result = _advance_band!(case, common_dt)
+            push!(results, result)
             println(
-                "two_velocity_convergence mesh=$kind method=$name " *
-                    "n=$resolutions " *
-                    "fraction=$fraction_errors fraction_rates=$fraction_rates " *
-                    "scalar=$scalar_errors scalar_rates=$scalar_rates " *
-                    "staggered_liquid=$staggered_liquid_errors " *
-                    "staggered_liquid_rates=$staggered_liquid_rates " *
-                    "staggered_gas=$staggered_gas_errors " *
-                    "staggered_gas_rates=$staggered_gas_rates",
+                "two_velocity_reversal mesh=$kind n=$resolution " *
+                    join(
+                    (
+                        "$key=$(getproperty(result, key))"
+                            for key in keys(result)
+                    ), " ",
+                ),
             )
-            # The classical vortex study validates interface convergence for both
-            # methods on all mesh families. This band isolates scalar transport;
-            # its frozen mixed-grid interface error is small but grid-alignment
-            # dominated, so only the uniform interface series is gated here.
-            kind === :uniform && @test all(diff(fraction_errors) .< 0)
-            @test all(diff(scalar_errors) .< 0)
-            kind === :uniform && @test fraction_rates[end] >= 1.8
-            @test scalar_rates[end] >= 1.5
-            @test all(diff(staggered_liquid_errors) .< 0)
-            @test all(diff(staggered_gas_errors) .< 0)
-            # Physical liquid transport with the projected policy follows the
-            # thesis two-fluid scheme and is close to second order. The
-            # frozen-subface velocity replacement is only first-order here. On a
-            # mixed tree, the projected policy's auxiliary gas reset intersects a
-            # persistent coarse-fine stencil and likewise approaches about order
-            # 1.2; it is not the conservative physical-interface carrier.
-            minimum_liquid_rate = name === :projected ? 1.5 : 1.1
-            minimum_gas_rate = name === :projected && kind === :uniform ? 1.5 : 1.1
-            @test staggered_liquid_rates[end] >= minimum_liquid_rate
-            @test staggered_gas_rates[end] >= minimum_gas_rate
-            @test all(iszero, getproperty.(method_results, :one))
-            @test all(iszero, getproperty.(method_results, :staggered_one))
-            @test all(method_results) do result
-                tolerance = 16 * result.steps *
-                    max(MIXTURE_PROJECTION_TOLERANCE, eps())
-                result.staggered_liquid_amount <= tolerance
-            end
-            if name === :frozen
-                @test all(method_results) do result
-                    tolerance = 16 * result.steps *
-                        max(MIXTURE_PROJECTION_TOLERANCE, eps())
-                    result.staggered_gas_amount <= tolerance
-                end
-            end
-            @test all(method_results) do result
-                tolerance = 16 * result.steps *
-                    max(MIXTURE_PROJECTION_TOLERANCE, eps())
-                result.volume <= tolerance
-            end
         end
 
-        projected = results[:projected]
-        reset = getproperty.(projected, :reset)
-        partition = getproperty.(projected, :partition)
-        @test all(diff(reset) .< 0)
-        @test all(diff(partition) .< 0)
-        @test _observed_rates(reset, resolutions)[end] >= 0.8
-        @test _observed_rates(partition, resolutions)[end] >= 1.8
-        @test all(result -> result.projection_cycles == 0, projected)
-        @test all(result -> result.projection_count == 0, projected)
-
-        frozen = results[:frozen]
-        @test all(result -> result.partition <= eps(), frozen)
-        @test all(
-            result -> result.projection_count == result.steps, frozen,
+        fraction_errors = getproperty.(results, :fraction)
+        scalar_errors = getproperty.(results, :scalar)
+        staggered_liquid_errors = getproperty.(results, :staggered_liquid)
+        staggered_gas_errors = getproperty.(results, :staggered_gas)
+        fraction_rates = _observed_rates(fraction_errors, resolutions)
+        scalar_rates = _observed_rates(scalar_errors, resolutions)
+        staggered_liquid_rates = _observed_rates(
+            staggered_liquid_errors, resolutions,
         )
+        staggered_gas_rates = _observed_rates(
+            staggered_gas_errors, resolutions,
+        )
+        println(
+            "two_velocity_convergence mesh=$kind n=$resolutions " *
+                "fraction=$fraction_errors fraction_rates=$fraction_rates " *
+                "scalar=$scalar_errors scalar_rates=$scalar_rates " *
+                "staggered_liquid=$staggered_liquid_errors " *
+                "staggered_liquid_rates=$staggered_liquid_rates " *
+                "staggered_gas=$staggered_gas_errors " *
+                "staggered_gas_rates=$staggered_gas_rates",
+        )
+        # The classical vortex study validates interface convergence on all
+        # mesh families. This band isolates scalar transport; its mixed-grid
+        # interface error is small but grid-alignment dominated, so only the
+        # uniform interface series is gated here.
+        kind === :uniform && @test all(diff(fraction_errors) .< 0)
+        @test all(diff(scalar_errors) .< 0)
+        kind === :uniform && @test fraction_rates[end] >= 1.8
+        @test scalar_rates[end] >= 1.5
+        @test all(diff(staggered_liquid_errors) .< 0)
+        @test all(diff(staggered_gas_errors) .< 0)
+        # The frozen-subface velocity replacement is only first-order here.
+        @test staggered_liquid_rates[end] >= 1.1
+        @test staggered_gas_rates[end] >= 1.1
+        @test all(iszero, getproperty.(results, :one))
+        @test all(iszero, getproperty.(results, :staggered_one))
+        @test all(results) do result
+            tolerance = 16 * result.steps *
+                max(MIXTURE_PROJECTION_TOLERANCE, eps())
+            result.staggered_liquid_amount <= tolerance
+        end
+        @test all(results) do result
+            tolerance = 16 * result.steps *
+                max(MIXTURE_PROJECTION_TOLERANCE, eps())
+            result.staggered_gas_amount <= tolerance
+        end
+        @test all(results) do result
+            tolerance = 16 * result.steps *
+                max(MIXTURE_PROJECTION_TOLERANCE, eps())
+            result.volume <= tolerance
+        end
+        @test all(result -> result.partition <= eps(), results)
+        @test all(result -> result.projection_count == result.steps, results)
     end
 end

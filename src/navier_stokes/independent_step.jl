@@ -39,8 +39,8 @@ function _independent_solver(
     return NavierStokesSystem(
         solver.mesh, physics; options = solver.options,
         geometry = solver.geometry, boundary = solver.boundary,
-        interface_transport = isnothing(model) ? FrozenInterfaceFluxes() : model.interface_transport,
-        two_velocity_projection = isnothing(model) ? CMDGFMProjection() : model.pressure_projection,
+        two_velocity_projection = isnothing(model) ?
+            CMDGFMProjection() : model.pressure_projection,
         T,
     )
 end

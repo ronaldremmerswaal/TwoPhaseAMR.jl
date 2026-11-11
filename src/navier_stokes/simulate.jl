@@ -155,8 +155,7 @@ function _simulate!(
                 end
                 if velocity isa TwoPhaseVelocity
                     # Reuse the frozen apertures prepared by this CFL query.
-                    workspace.transport_geometry_prepared =
-                        solver.two_phase.interface_transport isa FrozenInterfaceFluxes
+                    workspace.transport_geometry_prepared = true
                 end
             end
             remaining = target_time - current_time

@@ -232,7 +232,7 @@ _phase_momentum_sources(::MomentumAdvectionWorkspace) = nothing
 
 function _advect_phase_momentum!(
         workspace::MomentumAdvectionWorkspace, work, field, axis, sources,
-        density, scheme, amr_interface_scheme; auxiliary_gas,
+        density, scheme, amr_interface_scheme,
     )
     _advect_momentum_component!(
         workspace.x, work, field, axis, density, work.ctu_threshold,

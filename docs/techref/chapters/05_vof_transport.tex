@@ -7,11 +7,12 @@ direction, each moving time-integrated phase volumes through the owned faces,
 with a dilation term weighted by a phase indicator that is frozen for the time
 step, and a reconstruction of the interface between the sweeps. Intrinsic
 phase scalars are carried by the same phase volumes. For the two-velocity
-model the phase volumes come from one of two carriers: frozen phase subfaces,
-each extruded with its own phase velocity, or a projected liquid velocity
-with an auxiliary gas carrier. This chapter states the continuous balance,
+model the phase volumes come from frozen phase subfaces,
+each extruded with its own phase velocity. This chapter states the continuous
+balance,
 the discrete balance and the geometric fluxes, the update of a sweep, the
-bounds, snapping and time-step restriction, the phase scalars, both carriers,
+bounds, snapping and time-step restriction, the phase scalars, the frozen
+carrier,
 and the time-integrated balances with the exact conditions under which they
 conserve volume. The transport is a nonlinear map of the reconstruction
 (\cref{ch:interface}) and is not derived from a method-of-lines
@@ -516,8 +517,7 @@ otherwise. Without snapping~\cref{eq:vof:fluctuation} equals~\cref{eq:vof:scalar
 rearrangement. Let $\delta\condfrac{\phase,\splitlevel{j}}{c}\defeq
 \condfrac{\phase,\splitlevel{j}}{c}-\preclamp{\phase,\splitlevel{j}}{c}$ be the change of the
 phase fraction by clamping and snapping; it is $\snapchange{j}{c}$ for the liquid, $-\snapchange{j}{c}$
-for the gas (the complement of the liquid), and for the auxiliary gas carrier
-of \cref{sec:vof:projected} the change by the clamp and the snap to zero. If the snapped fraction
+for the gas (the complement of the liquid). If the snapped fraction
 exceeds $\ffloor$, the amount after the sweep exceeds~\cref{eq:vof:scalar} by
 $\meas{\opencell{c}}\,\delta\condfrac{\phase,\splitlevel{j}}{c}\,\avar^{\phase,\splitlevel{j-1}}_c$,
 so a snap to a positive fraction leaves the snapped volume with the value
@@ -544,8 +544,7 @@ $\min\{\condfrac{\phase,\splitlevel{j-1}}{c},\preclamp{\phase,\splitlevel{j}}{c}
   \end{cases}
 \end{equation}
 where $\preclamp{\phase,\splitlevel{j}}{c}$ is the fraction after the sweep before
-clamping~\cref{eq:vof:snap} (for the auxiliary gas carrier of
-\cref{sec:vof:projected}, $\auxgas{}{c}$ before and after the sweep),
+clamping~\cref{eq:vof:snap},
 $\mathcfl_f=\abs{\dt\meas{f}\volumeflux^{\phase}_f}/\min_{c\in\cellset{f}}\meas{\opencell{c}}$
 and
 \begin{equation}\label{eq:vof:limiter}
@@ -615,15 +614,18 @@ Tests:
 \section{Two-velocity carriers}\label{sec:vof:two-velocity}
 \begin{sloppypar}
 With intrinsic phase velocities $\velo^{\liq}_f$, $\velo^{\gas}_f$, absent
-(\code{NaN}) where a phase has no staggered volume, the keyword
-\code{interface_transport} of \apitype{TwoVelocityModel} and of
-\apitype{WYAdvectionWorkspace} selects the carrier of the sweeps, either
-\apitype{FrozenInterfaceFluxes} (the default) or
-\apitype{ProjectedLiquidVelocity}; both use the update~\cref{eq:vof:sweep} for
-the physical liquid fraction. The projected carrier
-(\cref{sec:vof:projected}) is a legacy option, kept for comparison: the frozen
-interface fluxes with the CMDGFM projection of \cref{ch:projection} are the
-main two-velocity method.
+(\code{NaN}) where a phase has no staggered volume, the two-velocity
+transport uses the update~\cref{eq:vof:sweep} for the physical liquid
+fraction with the frozen interface fluxes of \cref{sec:vof:frozen} and the
+CMDGFM projection of \cref{ch:projection}. A face is
+\emph{known} for a phase if its staggered conditional fraction
+\begin{equation}\label{eq:vof:staggered-fraction}
+  \stagfrac{\liq}{f}=\frac{\sum_{c\in\cellset{f}}\meas{\stripset{c}{f}\cap\opencell{c}}\condfrac{\liq}{c}}
+    {\sum_{c\in\cellset{f}}\meas{\stripset{c}{f}\cap\opencell{c}}}
+  \quad\roundpar{=\frac{\cellwidth{\cminus{f}}{k}\condfrac{\liq}{\cminus{f}}+\cellwidth{\cplus{f}}{k}\condfrac{\liq}{\cplus{f}}}{\cellwidth{\cminus{f}}{k}+\cellwidth{\cplus{f}}{k}}\text{ without solid}},
+\end{equation}
+zero if the open staggered volume vanishes~\cref{eq:cutcells:dual}
+(\thesis{eq.~(2.36)}), and if $\stagfrac{\liq}{f}>0$ or $<1$ respectively.
 \end{sloppypar}
 
 \subsection{Frozen interface fluxes}\label{sec:vof:frozen}
@@ -717,13 +719,12 @@ regions for an unsplit method without dilation term~\thesis{eqs.~(6.34)--(6.38)}
 places the cut face with the interpolated interface normal projected on the
 face~\thesis{\S6.3.4}, and does not pursue the method because a
 Kelvin--Helmholtz instability at density ratio $10^{-3}$ did not converge under
-refinement. The code uses it as the default carrier, in WY sweeps with the
+refinement. The code uses it, in WY sweeps with the
 dilation term~\cref{eq:vof:sweep} of the open carrier~\cref{eq:vof:frozen-flux},
 and orders the subfaces by the sign of the averaged stored normals.
 \end{deviation}
 
 \begin{implnote}
-\apitype{FrozenInterfaceFluxes} (default of \apitype{TwoVelocityModel});
 \srcsym{src/two_phase/two_velocity/interface_transport.jl}{_freeze_phase_apertures!},
 \srcsym{src/two_phase/two_velocity/interface_transport.jl}{_frozen_subface_interval}~\cref{eq:vof:subface},
 \srcsym{src/two_phase/two_velocity/interface_transport.jl}{_frozen_subface_swept_fraction}
@@ -741,119 +742,6 @@ without solid, uniform and AMR),
 \testsym{test/integration/two_velocity_transport.jl}{Two-velocity split-WY reversal convergence}.
 \end{implnote}
 
-\subsection{Projected liquid velocity and auxiliary gas carrier}\label{sec:vof:projected}
-Once per step the liquid velocity is extended and projected. A face is
-\emph{known} for the liquid if its staggered conditional fraction is positive,
-\begin{equation}\label{eq:vof:staggered-fraction}
-  \stagfrac{\liq}{f}=\frac{\sum_{c\in\cellset{f}}\meas{\stripset{c}{f}\cap\opencell{c}}\condfrac{\liq}{c}}
-    {\sum_{c\in\cellset{f}}\meas{\stripset{c}{f}\cap\opencell{c}}}
-  \quad\roundpar{=\frac{\cellwidth{\cminus{f}}{k}\condfrac{\liq}{\cminus{f}}+\cellwidth{\cplus{f}}{k}\condfrac{\liq}{\cplus{f}}}{\cellwidth{\cminus{f}}{k}+\cellwidth{\cplus{f}}{k}}\text{ without solid}},
-\end{equation}
-zero if the open staggered volume vanishes~\cref{eq:cutcells:dual}
-(\thesis{eq.~(2.36)}), and for the gas if $\stagfrac{\liq}{f}<1$. In
-$\extlayers$ passes (default 3) every unknown face of an axis that is
-connected to known faces of that axis by the staggered transport schedule
-(\cref{ch:momentum-transport}) receives the mean of their values and becomes
-known; the faces still unknown get zero,
-\begin{equation}\label{eq:vof:extension}
-  \extvelo{\phase}_f=\begin{cases}
-    \velo^{\phase}_f, & f\text{ known},\\
-    \frac{1}{\#N(f)}\sum_{g\in N(f)}\extvelo{\phase}_g, & N(f)\neq\emptyset\text{ in one of the passes},\\
-    0, & \text{otherwise},
-  \end{cases}
-\end{equation}
-with $N(f)$ the known neighbours at the start of the pass, and boundary values
-zero. With the face coefficient $\facecoef_f=(\aperture{f})^2$ where
-$\stagfrac{\liq}{f}>0$ and $\facecoef_f=0$ elsewhere, and the cells with
-$\condfrac{\liq}{c}>0$ active, the projected liquid velocity is
-\begin{equation}\label{eq:vof:projection}
-  \projvelo^{\liq}=\extvelo{\liq}-\gradopen_{\facecoef}\projpres,\qquad
-  -\roundpar{\divopen\gradopen_{\facecoef}\projpres}_c=-(\divopen\extvelo{\liq})_c\ \ (\condfrac{\liq}{c}>0),\qquad
-  \projpres_c=0\ \ (\condfrac{\liq}{c}=0),
-\end{equation}
-with the cut-cell operators of \cref{sec:setting:elliptic} ($\divh$ and
-$\gradw{\facecoef}$ without solid). The elliptic solve
-(\cref{ch:solvers}) stops when
-$\max_{c:\,\condfrac{\liq}{c}>0}\abs{(\divopen\projvelo^{\liq})_c}\le\max(\projtol,\cdot)$,
-the largest strong residual, with $\projtol=\sqrt{\machineeps}$ by default,
-a round-off floor and at most 200 cycles; failure is an error, and without
-active cells $\projvelo^{\liq}=\extvelo{\liq}$. The faces with
-$\facecoef_f=0$ keep their extended value.
-
-The sweeps then run with two carriers. The liquid uses \cref{sec:vof:donating}
-with $\velo_f=\projvelo^{\liq}_f$: carrier
-$\dt\meas{f}\volumeflux^{\open}_f=\dt\meas{f}\aperture{f}\projvelo^{\liq}_f$,
-liquid volume from the rectangle of $\projvelo^{\liq}_f$, fraction
-update~\cref{eq:vof:sweep}. The gas volume is cut independently from the
-rectangle of $\extvelo{\gas}_f$,
-$\dt\meas{f}\volumeflux^{\gas}_f=(1-\sweptfrac{f}[\extvelo{\gas}])\,\dt\meas{f}\aperture{f}\extvelo{\gas}_f$,
-so~\cref{eq:vof:partition} does not hold, and it moves an auxiliary carrier
-that is reset to the physical complement at the start of every sweep and has
-no dilation term,
-\begin{equation}\label{eq:vof:aux-gas}
-  \auxgas{}{c}\leftarrow1-\condfrac{\liq,\splitlevel{j-1}}{c},\qquad
-  \meas{\opencell{c}}\auxgas{,\splitlevel{j}}{c}=\meas{\opencell{c}}\auxgas{}{c}
-  -\sum_{f\in\faceset{c}\cap\facesaxis{\sweepaxis{j}}}\orient{c}{f}\,\dt\meas{f}\volumeflux^{\gas,\splitlevel{j}}_f ,
-\end{equation}
-with an error if its volume $\meas{\opencell{c}}\auxgas{,\splitlevel{j}}{c}$ is
-below $-128\machineeps\meas{c}$ (\srcsym{src/vof/fluxes.jl}{_wy_negative_fraction_out_of_bounds};
-it has no upper bound); it is then clamped at zero and set to zero at or
-below $\ffloor$. The gas scalars use~\cref{eq:vof:scalar,eq:vof:fluctuation}
-with $\condfrac{\gas}{c}$ replaced by $\auxgas{}{c}$ and
-$\indicator{\gas}_c$ by zero. At each reset the gas amount changes by
-$\meas{\opencell{c}}(1-\condfrac{\liq,\splitlevel{j}}{c}-\auxgas{,\splitlevel{j}}{c})\avar^{\gas,\splitlevel{j}}_c$;
-\apifun{phase_flux_diagnostics} reports the accumulated discrepancies
-\begin{equation}\label{eq:vof:reset}
-  \gasreset=\sum_{j=1}^{2}\sum_{c}\meas{\opencell{c}}\roundpar{\auxgas{,\splitlevel{j}}{c}-1+\condfrac{\liq,\splitlevel{j}}{c}},\qquad
-  \abs{\gasreset}=\sum_{j=1}^{2}\sum_{c}\meas{\opencell{c}}\abs{\auxgas{,\splitlevel{j}}{c}-1+\condfrac{\liq,\splitlevel{j}}{c}},
-\end{equation}
-together with the initial and final divergence and the cycles of the
-projection. The time step is bounded by
-$\min\{\dtwy(\projvelo^{\liq}),\dtwy(\extvelo{\gas})\}$; this check is always
-made.
-
-\emph{Checks} (\code{projected_step_check}). The liquid fractions after a step
-equal those of a one-velocity step with carrier $\projvelo^{\liq}$ to
-$\chkVofProjectedReduction$; an independent evaluation
-of~\cref{eq:vof:aux-gas,eq:vof:reset} reproduces $\abs{\gasreset}$ to
-$\chkVofResetDiff$ (relative); on the cut fixture with tolerance $10^{-12}$
-the projection leaves
-$\max\abs{\divopen\projvelo^{\liq}}=\chkVofProjectedDivergence$ and the liquid
-volume changes by $\chkVofProjectedChange$, within the bound
-$\dt\chkVofProjectedDivergence\sum_{\indicator{\liq}_c=1}\meas{\opencell{c}}=\chkVofProjectedBound$
-of \cref{sec:vof:conservation}.
-
-\begin{deviation}{Projected-liquid carrier}
-The thesis proposes this carrier: a Poisson problem projects the liquid
-velocity on the faces with $\stagfrac{\liq}{f}>0$ with $\projpres=0$ in
-liquid-free cells, missing velocities are extrapolated as
-constants~\thesis{\S6.3.2}, and the gas is transported with its own donating
-regions into an auxiliary mass that is consistent but not bounded above,
-while the gas volume is the complement~\thesis{\S6.3.3, eq.~(6.23)}. The code
-differs in that it uses WY sweeps with a dilation term instead of the
-unsplit method~\thesis{eq.~(6.20)}, extends by $\extlayers$ averaging passes
-and zero beyond, solves the projection to a tolerance, and resets the
-auxiliary gas carrier to the complement before every sweep instead of carrying
-it through the step; the reset is not conservative for the gas scalars and
-is reported by~\cref{eq:vof:reset}.
-\end{deviation}
-
-\begin{implnote}
-\apitype{ProjectedLiquidVelocity}\code{(; extension_layers=3, tolerance=sqrt(eps()), max_cycles=200)};
-extension \srcsym{src/two_phase/two_velocity/transport_workspace.jl}{_extend_projected_component!}~\cref{eq:vof:extension},
-projection \srcsym{src/two_phase/two_velocity/transport_workspace.jl}{_project_liquid_velocity!}~\cref{eq:vof:projection};
-staggered fractions \srcsym{src/two_phase/phase_face_fields.jl}{_phase_face_average!}~\cref{eq:vof:staggered-fraction};
-carriers \srcsym{src/two_phase/two_velocity/interface_transport.jl}{_compute_directional_wy_fluxes!};
-reset and diagnostics \srcsym{src/vof/workspace.jl}{_reset_auxiliary_gas_carrier!},
-\srcsym{src/vof/workspace.jl}{_update_gas_reset_diagnostics!}~\cref{eq:vof:reset}
-and \apifun{phase_flux_diagnostics}; gas update in
-\srcsym{src/vof/fluxes.jl}{_advect_wy!}. Tests:
-\testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Projected liquid-velocity extension}
-(divergence to $10^{-10}$ with and without solid; a tangential jump leaves the
-interface unchanged; a compressible gas carrier leaves the liquid fixed and
-reports a positive $\abs{\gasreset}$; no liquid gives no unknowns).
-\end{implnote}
-
 \section{Time-integrated balances}\label{sec:vof:conservation}
 Summing~\cref{eq:vof:step} over all cells, the liquid volume
 $\phasevol{\liq}=\sum_c\meas{\opencell{c}}\condfrac{\liq}{c}=\sum_c\meas{c}\phasefrac{\liq}{c}$
@@ -865,32 +753,19 @@ of a step changes by
 \end{equation}
 because the liquid volumes of the interior faces cancel and the boundary faces
 carry none; the gas volume, the complement, changes by the opposite amount.
-This identity holds for all three carriers, with $\volumeflux^{\open}$ the
+This identity holds for both carriers, with $\volumeflux^{\open}$ the
 respective carrier, up to rounding. Each phase volume is therefore conserved
 to rounding if, besides impermeable or periodic boundaries,
 \begin{itemize}
 \item the carrier is discretely divergence free in every cell with
   $\indicator{\liq}_c=1$: $(\divopen\velo)_c=0$ for one velocity,
   $\sum_f\orient{c}{f}\meas{f}(\phaseaperture{\liq}{f}\velo^{\liq}_f+\phaseaperture{\gas}{f}\velo^{\gas}_f)=0$
-  on the frozen apertures, $(\divopen\projvelo^{\liq})_c=0$ for the projected
-  carrier; and
+  on the frozen apertures; and
 \item no fraction is clamped or snapped ($\snapchange{j}{c}=0$).
 \end{itemize}
 A velocity produced by a projection is divergence free only to its solver
 tolerance, so in a simulation the volume changes per step by the dilation of
-that residual. For the projected carrier every cell with $\indicator{\liq}_c=1$
-is active, so by the stopping rule of \cref{sec:vof:projected} the dilation is
-bounded,
-\begin{equation}\label{eq:vof:projected-dilation-bound}
-  \begin{aligned}
-  \abs{\dt\sum_c\indicator{\liq}_c\meas{c}(\divh\volumeflux^{\open})_c}
-  &\le\dt\,\max_{c:\,\condfrac{\liq}{c}>0}\abs{(\divopen\projvelo^{\liq})_c}\sum_{\indicator{\liq}_c=1}\meas{\opencell{c}}\\
-  &\le\dt\,\max(\projtol,\roundfloor)\sum_{\indicator{\liq}_c=1}\meas{\opencell{c}},
-  \end{aligned}
-\end{equation}
-with $\roundfloor$ the round-off floor of the solver (at least
-$128\machineeps$). For $\projtol$ above the floor, in particular for the
-default, the bound is $\dt\projtol\sum_{\indicator{\liq}_c=1}\meas{\opencell{c}}$. For a phase
+that residual. For a phase
 scalar, summing~\cref{eq:vof:scalar} over the cells and the two sweeps gives,
 if no fraction is clamped or snapped,
 \begin{equation}\label{eq:vof:scalar-balance}
@@ -902,23 +777,16 @@ so the frozen dilation values make the dilation of a scalar vanish together
 with that of the volume. A snap to a positive fraction adds
 $\meas{\opencell{c}}\,\delta\condfrac{\phase,\splitlevel{j}}{c}\,\avar^{\phase,\splitlevel{j-1}}_c$
 with $\delta\condfrac{\liq,\splitlevel{j}}{c}=\snapchange{j}{c}$ and
-$\delta\condfrac{\gas,\splitlevel{j}}{c}=-\snapchange{j}{c}$, a snap to zero removes the
-cell's amount, and the projected carrier adds, for the gas, the resets of the
-auxiliary carrier (\cref{sec:vof:projected}),
-\begin{equation*}
-  \sum_{j=1}^{2}\sum_c\meas{\opencell{c}}\roundpar{1-\condfrac{\liq,\splitlevel{j}}{c}-\auxgas{,\splitlevel{j}}{c}}\avar^{\gas,\splitlevel{j}}_c
-\end{equation*}
-(the second term of the sum is the reset implied by reading the amount
-through the physical complement at the end of the step). The intrinsic values are
+$\delta\condfrac{\gas,\splitlevel{j}}{c}=-\snapchange{j}{c}$, and a snap to zero removes the
+cell's amount. The intrinsic values are
 not bounded by these identities; near-empty cells are excluded by the floor
 in~\cref{eq:vof:fluctuation}.
 
-\emph{Checks} (\code{step_balance_check} for one velocity,
-\code{frozen_step_check} and \code{projected_step_check} for the two
-carriers of two velocities). An independent sweep
+\emph{Checks} (\code{step_balance_check} for one velocity and
+\code{frozen_step_check} for two velocities). An independent sweep
 sequence (fluxes, update~\cref{eq:vof:sweep}, clamp and snap, then the code's
 reconstruction) reproduces the fractions of \apifun{advect!} after a full step
-to $\chkVofReplicaDiff$ for all carriers and fixtures, and the
+to $\chkVofReplicaDiff$ for all fixtures, and the
 identity~\cref{eq:vof:volume-balance} holds to $\chkVofBalanceResidual$ in
 volume. With face velocities from a streamfunction, which are exactly
 divergence free on the composite mesh (on the cut fixture the open volumes are

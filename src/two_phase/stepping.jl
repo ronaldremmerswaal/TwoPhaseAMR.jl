@@ -8,25 +8,18 @@ function _minimum_mesh_spacing(mesh::BlockTreeMesh{T}) where {T}
 end
 
 # AMR may replace the enclosing phase workspace with a different concrete
-# type. Frozen transport has no method cache, so its WY type is determined by
-# the model and can be recovered without boxing the large immutable workspace.
+# type. Its WY type follows from the model's interface, so it can be recovered
+# without boxing the large immutable workspace.
 @inline function _timestep_wy_workspace(
-        workspace, ::TwoPhaseModel{T, M, F, FrozenInterfaceFluxes, P, G},
+        workspace, ::TwoPhaseModel{T, M, F, P, G},
     ) where {T, M, F, P, G}
-    return workspace.two_phase.advection::
-    WYAdvectionWorkspace{T, M, FrozenInterfaceFluxes, G, Nothing}
-end
-
-@inline function _timestep_wy_workspace(
-        workspace, ::TwoPhaseModel{T, M, F, I, P, G},
-    ) where {T, M, F, I, P, G}
-    return workspace.two_phase.advection::WYAdvectionWorkspace{T, M, I, G}
+    return workspace.two_phase.advection::WYAdvectionWorkspace{T, M, G}
 end
 
 function _timestep_bound(
         velocity::Union{FaceVelocity, TwoPhaseVelocity}, solver, workspace,
-        model::TwoPhaseModel{T, M, F, I}; cfl = 0.45
-    ) where {T, M, F, I}
+        model::TwoPhaseModel; cfl = 0.45,
+    )
     advection = _timestep_wy_workspace(workspace, model)
     return _two_phase_timestep_bound(
         velocity, solver, advection, model, cfl,

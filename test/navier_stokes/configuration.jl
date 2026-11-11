@@ -122,9 +122,6 @@ end
     @test model.density == density
     @test model.dynamic_viscosity == viscosity
     @test_throws ArgumentError TwoPhaseAMR.TwoPhaseModel(
-        with_scalar; interface_transport = :invalid,
-    )
-    @test_throws ArgumentError TwoPhaseAMR.TwoPhaseModel(
         with_scalar; pressure_projection = :invalid,
     )
     periodic_interface = InterfaceField(BlockTreeMesh(block_size = (4, 4)))
@@ -138,13 +135,8 @@ end
     @test_throws ArgumentError NavierStokesOptions(
         :bogus, LinearSolverOptions(), LinearSolverOptions(), MultigridOptions(),
     )
-    @test_throws ArgumentError TwoVelocityModel(
-        TwoPhaseAMR._OneVelocityInterfaceAdvection(), CMDGFMProjection(),
-    )
-    @test_throws ArgumentError TwoVelocityModel(FrozenInterfaceFluxes(), CSF())
-    @test_throws ArgumentError ProjectedLiquidVelocity(0, 1.0e-8, 10)
-    @test_throws ArgumentError ProjectedLiquidVelocity(1, 0.0, 10)
-    @test_throws ArgumentError ProjectedLiquidVelocity(1, 1.0e-8, 0)
+    @test_throws ArgumentError TwoVelocityModel(CSF())
+    @test_throws ArgumentError TwoVelocityModel(:cmdgfm)
 end
 
 @testset "typed two-phase choice matrix constructs" begin
@@ -161,16 +153,10 @@ end
         )
         @test shared.system.two_phase.formulation == surface_method
 
-        for transport in (FrozenInterfaceFluxes(), ProjectedLiquidVelocity())
-            flow = FlowSimulation(
-                mesh, physics;
-                velocity_model = TwoVelocityModel(
-                    interface_transport = transport,
-                ),
-            )
-            @test flow.system.two_phase.formulation == surface_method
-            @test flow.system.two_phase.interface_transport == transport
-        end
+        flow = FlowSimulation(
+            mesh, physics; velocity_model = TwoVelocityModel(),
+        )
+        @test flow.system.two_phase.formulation == surface_method
     end
 end
 
@@ -191,10 +177,7 @@ end
     @test SurfaceTension().method == CGFM()
     @test CSF() isa AbstractSurfaceTensionMethod
     @test CGFM() isa AbstractSurfaceTensionMethod
-    @test FrozenInterfaceFluxes() isa AbstractInterfaceTransportMethod
-    @test ProjectedLiquidVelocity() isa AbstractInterfaceTransportMethod
     @test CMDGFMProjection() isa AbstractTwoVelocityProjection
-    @test TwoVelocityModel().interface_transport isa FrozenInterfaceFluxes
     @test TwoVelocityModel().pressure_projection isa CMDGFMProjection
 
     numeric_tension = TwoPhase(
@@ -217,16 +200,14 @@ end
     @test one.system.two_phase.formulation isa CGFM
 
     two = FlowSimulation(
-        mesh, physics; velocity_model = TwoVelocityModel(
-            interface_transport = ProjectedLiquidVelocity(),
-        ), velocity = shared, numerics,
+        mesh, physics; velocity_model = TwoVelocityModel(),
+        velocity = shared, numerics,
     )
     @test two.velocity isa TwoPhaseVelocity
     @test two.system.physics === physics
     @test two.system.options === numerics
     @test length(typeof(two.system).parameters) <= 8
     @test two.velocity[1] !== two.velocity[2]
-    @test two.system.two_phase.interface_transport isa ProjectedLiquidVelocity
     @test two.system.two_phase.pressure_projection isa CMDGFMProjection
     # Equal phase initializers agree where both phases are present. Inactive
     # values are deliberately NaN, rather than a dormant shared extension.
@@ -241,17 +222,14 @@ end
         surface_tension = physics.surface_tension.coefficient,
         surface_tension_formulation = physics.surface_tension.method,
         gravity = physics.gravity,
-        interface_transport = ProjectedLiquidVelocity(),
     )
-    @test canonical_system.two_phase.interface_transport isa
-        ProjectedLiquidVelocity
+    @test canonical_system.two_phase.pressure_projection isa CMDGFMProjection
 
     phase_initializer = (shared, shared)
     @test_throws ArgumentError FlowSimulation(
         mesh, physics; velocity_model = OneVelocityModel(),
         velocity = phase_initializer, numerics,
     )
-    @test_throws ArgumentError TwoVelocityModel(interface_transport = CSF())
     @test_throws ArgumentError TwoVelocityModel(pressure_projection = CGFM())
     @test_throws ArgumentError SurfaceTension(1.0; method = CMDGFMProjection())
     @test_throws ArgumentError SurfaceTension(-1.0)

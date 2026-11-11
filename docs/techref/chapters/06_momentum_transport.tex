@@ -989,65 +989,41 @@ and $\avarstag^{\phase,\splitlevel{j}}_f=\avarstag^{\phase,\splitlevel{j-1}}_f$
 otherwise, with the modified interpolant~\cref{eq:momentum:ctu}. There is no
 density: for constant $\dens^{\phase}$ it cancels, and the conserved amount
 of phase $\phase$ is $\dens^{\phase}\sum_f\stagvol{f}\stagfrac{\phase}{f}\avarstag^{\phase}_f$
-(\apifun{integrate}\code{(q, phase)} for a phase scalar). The two carriers
-differ as follows.
-\begin{itemize}
-\item \apitype{FrozenInterfaceFluxes}: the phase volumes of~\cref{eq:vof:frozen-flux}
-  partition the carrier, $\stagpred{\gas,\splitlevel{j}}{}=1-\stagpred{\liq,\splitlevel{j}}{}$,
-  and both phases follow~\cref{eq:momentum:two-velocity} with their indicator.
-\item \apitype{ProjectedLiquidVelocity}, a legacy carrier kept for comparison
-  (\cref{sec:vof:two-velocity}): the liquid volumes come from the
-  projected carrier $\projvelo^{\liq}$, the transported liquid values from the
-  unprojected liquid velocity. The gas uses the auxiliary carrier
-  of~\cref{eq:vof:aux-gas}: its predicted fraction is
-  $\stagpred{\gas,\splitlevel{j}}{f}=(\interpolantsbp\max(\auxgas{}{}-\Delta_{\gas},0))_f$,
-  $\Delta_{\gas}$ the auxiliary-carrier update of the sweep, its fraction is
-  reset to the complement at the start of every sweep, and its dilation term
-  is zero. The reset changes the gas momentum; the code accumulates, for
-  each component $k$,
-  \begin{equation}\label{eq:momentum:gas-reset}
-    \gasmomreset{k}=\sum_{j=1}^{2}\sum_f\dens^{\gas}\stagvol{f}\,\avarstag^{\gas,\splitlevel{j}}_f
-      \roundpar{1-\stagpred{\liq,\splitlevel{j}}{f}-\stagpred{\gas,\splitlevel{j}}{f}},
-  \end{equation}
-  reported by \apifun{phase_flux_diagnostics} with the absolute values
-  likewise.
-\end{itemize}
+(\apifun{integrate}\code{(q, phase)} for a phase scalar). The phase volumes
+of~\cref{eq:vof:frozen-flux}
+partition the carrier, $\stagpred{\gas,\splitlevel{j}}{}=1-\stagpred{\liq,\splitlevel{j}}{}$,
+and both phases follow~\cref{eq:momentum:two-velocity} with their indicator.
 After the step the velocities of phases without open staggered volume in the
-final state are stored as \code{NaN}~\cref{eq:vof:extension}. As
+final state are stored as \code{NaN}~\cref{eq:momentum:extension}. As
 for~\cref{eq:momentum:conservative}, the update conserves the phase amount up
 to the frozen dilation,
 \begin{equation}\label{eq:momentum:two-velocity-balance}
   \sum_f\stagvol{f}\stagfrac{\phase}{f}\avarstag^{\phase}_f\Big|^{\timelevel{n+1}}_{\timelevel{n}}
   =\sum_{j=1}^{2}\sum_f\stagvol{f}\roundpar{\interpolantsbp\big[\indicator{\phase}\sweepdiv{\splitlevel{j}}{}\big]}_f\avarstag^{\phase,\timelevel{n}}_f
-  \ \ \roundpar{+\,\gasmomreset{}/\dens^{\gas}\text{ for the auxiliary gas}},
 \end{equation}
 under condition (a) of \cref{sec:momentum:one-velocity} and, because this
 schedule keeps the side fractions, condition (b) (\issue{71}), without snapping and with
 every updated unknown above the floor; the dilation sum vanishes for a
 carrier that is solenoidal in every cell (the mixture constraint on the
-frozen apertures, or the projected liquid carrier).
+frozen apertures).
 
 \emph{Checks} (\code{two_velocity_momentum_check}). An independent replica
-of~\cref{eq:momentum:extension,eq:momentum:two-velocity,eq:momentum:ctu,eq:momentum:gas-reset}
+of~\cref{eq:momentum:extension,eq:momentum:two-velocity,eq:momentum:ctu}
 reproduces both phase velocities after \apifun{advect!} to $\chkMomTwoReplica$
-(relative) for both carriers on the uniform, composite and walled fixtures
+(relative) on the uniform, composite and walled fixtures
 and the \code{NaN} pattern exactly; the balance~\cref{eq:momentum:two-velocity-balance}
 holds to $\chkMomTwoBalance$ (relative), where the second streamfunction
 used as gas velocity makes the frozen carrier non-solenoidal in mixed cells
-and the dilation sum non-zero; for the projected carrier the liquid amount
-changes by at most $\chkMomTwoProjectedLiquid$ and the reported reset equals
-the replica's to $\chkMomTwoReset$ (relative).
+and the dilation sum non-zero.
 
 \begin{deviation}{Two-velocity momentum}
 The thesis transports the liquid momentum with the liquid mass fluxes of the
 projected-liquid method and the gas momentum with the gas mass fluxes of its
 auxiliary carrier, divided by the auxiliary gas mass and reset to the
-complement after every time step~\thesis{eqs.~(6.54)--(6.55)}. The code
-resets after every directional sweep and reports the
-discrepancy~\cref{eq:momentum:gas-reset}, transports the unprojected liquid
-velocity with the projected-carrier volumes, and also offers the frozen
-carrier (\cref{sec:vof:frozen}), with which both phase amounts are
-balanced by~\cref{eq:momentum:two-velocity-balance}.
+complement after every time step~\thesis{eqs.~(6.54)--(6.55)}. The code uses
+the frozen carrier (\cref{sec:vof:frozen}) instead, with which both phase
+amounts are balanced by~\cref{eq:momentum:two-velocity-balance}; the
+projected carrier of the thesis is not implemented.
 \end{deviation}
 
 \begin{implnote}
@@ -1060,10 +1036,10 @@ balanced by~\cref{eq:momentum:two-velocity-balance}.
 (side fractions); preparation
 \srcsym{src/two_phase/two_velocity/momentum_workspace.jl}{_prepare_phase_momentum_values!}
 with \srcsym{src/two_phase/two_velocity/velocity_fields.jl}{_extend_phase_face_values!}~\cref{eq:momentum:extension};
-update \srcsym{src/two_phase/phase_face_transport.jl}{_advect_phase_faces_workspace!}~\cref{eq:momentum:two-velocity,eq:momentum:gas-reset};
+update \srcsym{src/two_phase/phase_face_transport.jl}{_advect_phase_faces_workspace!}~\cref{eq:momentum:two-velocity};
 marking \srcsym{src/two_phase/two_velocity/velocity_fields.jl}{_mark_inactive_phase_velocities!}.
 Tests: \testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Compatible separate phase-momentum transport}
-(constant phase velocities for both carriers, with solid and composite mesh),
+(constant phase velocities, with solid and composite mesh),
 \testsym{test/two_phase/transport.jl}{Compatible staggered phase constants},
 \testsym{test/two_phase/transport.jl}{bounded two-velocity staggered schemes}
 and \testsym{test/two_phase/transport.jl}{bounded staggered schemes with both phases present}

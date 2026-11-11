@@ -159,9 +159,6 @@ function _print_physics_summary(io::IO, flow::FlowSimulation)
     _summary_property(io, "gravity", model.gravity)
     if flow.velocity isa TwoPhaseVelocity
         _summary_property(
-            io, "interface transport", nameof(typeof(model.interface_transport)),
-        )
-        _summary_property(
             io, "pressure formulation", nameof(typeof(model.pressure_projection)),
         )
     end

@@ -103,7 +103,7 @@ function momentum_workspace_overhead(kind)
     return interface_bytes, momentum_bytes
 end
 
-function two_velocity_momentum_allocations(kind, n, method)
+function two_velocity_momentum_allocations(kind, n)
     mesh = BlockTreeMesh(
         block_size = (n, n), max_level = 2,
         periodic = (true, false),
@@ -138,9 +138,7 @@ function two_velocity_momentum_allocations(kind, n, method)
         ),
     )
     destination = (FaceVelocity(mesh), FaceVelocity(mesh))
-    advection = WYAdvectionWorkspace(
-        interface, velocity; interface_transport = method,
-    )
+    advection = WYAdvectionWorkspace(interface, velocity)
     momentum = MomentumAdvectionWorkspace(interface, velocity)
     dt = stable_timestep(velocity, advection; cfl = 0.1)
     advance!() = advect!(
@@ -225,13 +223,11 @@ end
 end
 
 @testset "Two-velocity staggered transport allocation scaling" begin
-    for kind in (:uniform, :mixed), method in (
-                ProjectedLiquidVelocity(), FrozenInterfaceFluxes(),
-            )
-        small = two_velocity_momentum_allocations(kind, 4, method)
-        large = two_velocity_momentum_allocations(kind, 8, method)
+    for kind in (:uniform, :mixed)
+        small = two_velocity_momentum_allocations(kind, 4)
+        large = two_velocity_momentum_allocations(kind, 8)
         growth = large.dofs / small.dofs
-        @info "two-velocity staggered allocations" kind method small large growth
+        @info "two-velocity staggered allocations" kind small large growth
         @test large.bytes <= 1.5growth * small.bytes
     end
 end

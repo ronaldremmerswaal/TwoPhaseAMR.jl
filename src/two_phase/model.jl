@@ -1,6 +1,5 @@
 struct TwoPhaseModel{
         T, M, F <: AbstractSurfaceTensionMethod,
-        I <: AbstractInterfaceTransportMethod,
         P <: AbstractTwoVelocityProjection, G <: InterfaceField{T, M}, Q <: Tuple,
     }
     interface::G
@@ -10,21 +9,13 @@ struct TwoPhaseModel{
     gravity::NTuple{2, T}
     formulation::F
     scalars::Q
-    interface_transport::I
     pressure_projection::P
 end
 function TwoPhaseModel(
         physics::TwoPhase{<:InterfaceField{T, M}};
-        interface_transport = FrozenInterfaceFluxes(),
         pressure_projection = CMDGFMProjection(),
     ) where {T, M}
     interface = physics.interface
-    interface_transport isa _TwoVelocityInterfaceAdvection || throw(
-        ArgumentError(
-            "interface_transport must be ProjectedLiquidVelocity() or " *
-                "FrozenInterfaceFluxes()",
-        ),
-    )
     pressure_projection isa AbstractTwoVelocityProjection || throw(
         ArgumentError(
             "pressure_projection must be a CMDGFMProjection()",
@@ -34,12 +25,12 @@ function TwoPhaseModel(
         throw(ArgumentError("gravity requires nonperiodic boundaries in its direction"))
     tension = physics.surface_tension
     return TwoPhaseModel{
-        T, M, typeof(tension.method), typeof(interface_transport),
-        typeof(pressure_projection), typeof(interface), typeof(physics.scalars),
+        T, M, typeof(tension.method), typeof(pressure_projection),
+        typeof(interface), typeof(physics.scalars),
     }(
         interface, T.(physics.density), T.(physics.dynamic_viscosity),
         T(tension.coefficient), T.(physics.gravity), tension.method,
-        physics.scalars, interface_transport, pressure_projection,
+        physics.scalars, pressure_projection,
     )
 end
 
@@ -134,11 +125,9 @@ function TwoPhaseFlowWorkspace(
         )
     end
     # The same WY scratch serves the shared- and intrinsic-velocity paths.
-    # Its policy is relevant only to the intrinsic path; a single-velocity
-    # `advect!` dispatches directly to the ordinary WY sweep.
-    advection = isnothing(reuse_workspace) ? WYAdvectionWorkspace(
-            field; interface_transport = model.interface_transport,
-        ) :
+    # A single-velocity `advect!` dispatches directly to the ordinary WY
+    # sweep; the tuple path extrudes the frozen phase subfaces.
+    advection = isnothing(reuse_workspace) ? WYAdvectionWorkspace(field) :
         _reconfigure_wy_workspace!(reuse_workspace.advection, field)
     momentum = isnothing(reuse_workspace) ? MomentumAdvectionWorkspace(field) :
         _reconfigure_momentum_workspace!(reuse_workspace.momentum, field)

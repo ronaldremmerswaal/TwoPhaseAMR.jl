@@ -17,7 +17,6 @@ end
         max_level = 2, final_time = 0.2, refinement_ymin = -Inf,
     )
     @test run.flow.velocity isa TwoPhaseVelocity
-    @test run.flow.system.two_phase.interface_transport isa FrozenInterfaceFluxes
     @test run.flow.system.two_phase.pressure_projection isa CMDGFMProjection
     @test run.flow.system.adaptivity.criteria[2].field === run.flow.velocity[1]
     @test run.result.time ≈ 0.2

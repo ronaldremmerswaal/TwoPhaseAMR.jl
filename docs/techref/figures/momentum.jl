@@ -755,13 +755,12 @@ function phase_increment(mesh, schedule, q, volumes, kappa, predicted, threshold
 end
 
 # Cell quantities of one sweep from the code's time-integrated primal volumes:
-# open-carrier dilation D_c, liquid increment of the fraction update, gas
-# increment of the auxiliary carrier (projected method).
+# open-carrier dilation D_c and liquid increment of the fraction update.
 function sweep_cell_terms(field, work, kappa, chi)
     mesh = field.mesh
-    D = Dict{CellRef, Float64}(); dC = Dict{CellRef, Float64}(); dG = Dict{CellRef, Float64}()
+    D = Dict{CellRef, Float64}(); dC = Dict{CellRef, Float64}()
     for ref in all_cells(mesh)
-        D[ref] = dC[ref] = dG[ref] = 0.0
+        D[ref] = dC[ref] = 0.0
     end
     for (index, face) in pairs(mesh.faces)
         face.axis == kappa || continue
@@ -770,10 +769,9 @@ function sweep_cell_terms(field, work, kappa, chi)
             open > 0 || continue
             D[cell] += o * work.open_flux[index] / open
             dC[cell] += o * (chi[cell] * work.open_flux[index] - work.liquid_flux[index]) / open
-            dG[cell] -= o * work.gas_flux[index] / open
         end
     end
-    return D, dC, dG
+    return D, dC
 end
 
 component_values(velocity, dofs) = [
@@ -819,7 +817,7 @@ function one_velocity_momentum_check(kind; scheme = LaxWendroff(), order = (1, 2
     mass_defect = mass_defect_partial = scalar_defect_partial = 0.0
     snaps = partial_dofs = 0
     for kappa in order
-        D, dC, _ = sweep_cell_terms(field, work, kappa, chi)
+        D, dC = sweep_cell_terms(field, work, kappa, chi)
         predicted = Dict(ref => clamp(C[ref] + dC[ref], 0.0, 1.0) for ref in cells)
         dilation = Dict(ref => (rho_l * chi[ref] + rho_g * (1 - chi[ref])) * D[ref] for ref in cells)
         for k in (1, 2)
@@ -926,10 +924,9 @@ function prepared_phase_values(field, s, velocity, liquid)
 end
 
 # Two velocities: replica of the intrinsic fluctuation update of both phases
-# (PhaseFaceScalar) for both components and both carriers, against the code;
-# phase amounts sum_f V_f C_f^phase u_f^phase before and after; for the
-# projected carrier the gas change against the reported reset discrepancy.
-function two_velocity_momentum_check(kind, method; scheme = LaxWendroff(), order = (1, 2), density = (1000.0, 1.0))
+# (PhaseFaceScalar) for both components, against the code; phase amounts
+# sum_f V_f C_f^phase u_f^phase before and after.
+function two_velocity_momentum_check(kind; scheme = LaxWendroff(), order = (1, 2), density = (1000.0, 1.0))
     field, liquid_velocity = two_phase_fixture(kind)
     gas_velocity = kind in (:uniform, :amr) ? vof_gas_velocity(field, kind) :
         kind == :walls ? streamfunction_velocity(field.mesh, vof_psi2_walls) :
@@ -939,10 +936,9 @@ function two_velocity_momentum_check(kind, method; scheme = LaxWendroff(), order
     isnothing(field.geometry) || foreach(v -> enforce_geometry_no_slip!(v, field.geometry), velocity)
     reconstruct!(field)
     mesh, geometry = field.mesh, field.geometry
-    work = WYAdvectionWorkspace(field, velocity; interface_transport = method)
+    work = WYAdvectionWorkspace(field, velocity)
     dt = stable_timestep(velocity, work)
     interface_scheme = default_amr_interface_scheme(scheme)
-    auxiliary = method isa ProjectedLiquidVelocity
     cells = all_cells(mesh)
     C0 = Dict(ref => cond(field, ref) for ref in cells)
     chi = Dict(ref => C0[ref] > 0.5 ? 1.0 : 0.0 for ref in cells)
@@ -965,28 +961,24 @@ function two_velocity_momentum_check(kind, method; scheme = LaxWendroff(), order
         scheme, amr_interface_scheme = interface_scheme,
     )
     C = copy(C0)
-    reset = 0.0
     dilation = [0.0, 0.0]
     snaps = 0
     for kappa in order
-        D, dC, dG = sweep_cell_terms(field, work, kappa, chi)
+        D, dC = sweep_cell_terms(field, work, kappa, chi)
         for k in (1, 2)
             s = schedules[k]
             liquid_new = independent_interpolation(s.interpolation, r -> clamp(C[r] + dC[r], 0.0, 1.0))
-            gas_new = auxiliary ?
-                independent_interpolation(s.interpolation, r -> max(1 - C[r] + dG[r], 0.0)) : 1 .- liquid_new
+            gas_new = 1 .- liquid_new
             for (p, flux, target) in ((1, work.liquid_flux, liquid_new), (2, work.gas_flux, gas_new))
-                rates = p == 2 && auxiliary ? zeros(s.dofs.n) :
-                    independent_interpolation(s.interpolation, r -> (p == 1 ? chi[r] : 1 - chi[r]) * D[r])
+                rates = independent_interpolation(
+                    s.interpolation, r -> (p == 1 ? chi[r] : 1 - chi[r]) * D[r],
+                )
                 q = values[p][k]
                 increment = phase_increment(mesh, s, q, flux, kappa, target, work.ctu_threshold, scheme, interface_scheme)
                 for i in eachindex(q)
                     target[i] > floor && (q[i] += (increment[i] + (sources[p][k][i] - q[i]) * rates[i]) / target[i])
                 end
                 dilation[p] += sum(s.V .* rates .* sources[p][k])
-                if p == 2 && auxiliary
-                    reset += density[2] * sum(s.V .* q .* (1 .- liquid_new .- gas_new))
-                end
             end
         end
         for ref in cells
@@ -1013,18 +1005,15 @@ function two_velocity_momentum_check(kind, method; scheme = LaxWendroff(), order
         sum(amount(Cn, component_values(destination[p], schedules[k].dofs), schedules[k], p == 1) for k in (1, 2))
             for p in 1:2
     ]
-    diagnostics = phase_flux_diagnostics(work)
-    reported = diagnostics.gas_momentum_reset_discrepancy_x + diagnostics.gas_momentum_reset_discrepancy_y
-    # Balance: change of the phase amount = frozen dilation (+ gas resets).
+    # Balance: change of the phase amount = frozen dilation.
     balance = [
         abs(after[1] - before[1] - dilation[1]) / scale[1],
-        abs(density[2] * (after[2] - before[2] - dilation[2]) - reported) / (density[2] * scale[2]),
+        abs(density[2] * (after[2] - before[2] - dilation[2])) / (density[2] * scale[2]),
     ]
     return (;
         dt, replica, nan_pattern, snaps,
         liquid = abs(after[1] - before[1]) / scale[1], gas = abs(after[2] - before[2]) / scale[2],
-        balance, dilation, reset_reported = reported, reset_replica = reset,
-        gas_change = density[2] * (after[2] - before[2]),
+        balance, dilation, gas_change = density[2] * (after[2] - before[2]),
     )
 end
 
@@ -1407,7 +1396,7 @@ end
 
 # Constant transported velocities stay constant: one velocity with a constant
 # momentum source and the fixture's carrier; two velocities with equal constant
-# phase velocities (both carriers). Largest deviation over all stored values.
+# phase velocities. Largest deviation over all stored values.
 function constant_velocity_check()
     worst = 0.0
     U = (x, y, t, axis) -> axis == 1 ? 0.3 : -0.2
@@ -1427,11 +1416,11 @@ function constant_velocity_check()
             maximum(abs, destination.boundary .- constant.boundary),
         )
     end
-    for kind in (:uniform, :amr), method in (FrozenInterfaceFluxes(), ProjectedLiquidVelocity())
+    for kind in (:uniform, :amr)
         field, _ = two_phase_fixture(kind)
         mesh = field.mesh
         velocity = (FaceVelocity(mesh, U), FaceVelocity(mesh, U))
-        work = WYAdvectionWorkspace(field, velocity; interface_transport = method)
+        work = WYAdvectionWorkspace(field, velocity)
         destination = (FaceVelocity(mesh), FaceVelocity(mesh))
         advect!(
             field, velocity, stable_timestep(velocity, work), work; momentum = destination,
@@ -1484,18 +1473,10 @@ function momentum_outputs(write_output)
     one_momentum = maximum(o.momentum for o in exact)
     one_mass = maximum(max(o.mass_defect, o.mass_defect_partial) for o in exact)
 
-    projected = ProjectedLiquidVelocity(; tolerance = 1.0e-12, max_cycles = 1000)
-    two = [
-        two_velocity_momentum_check(kind, method)
-            for kind in (:uniform, :amr, :walls), method in (FrozenInterfaceFluxes(), projected)
-    ]
-    two_mc = two_velocity_momentum_check(:amr, FrozenInterfaceFluxes(); scheme = MonotonizedCentral(), order = (2, 1))
+    two = [two_velocity_momentum_check(kind) for kind in (:uniform, :amr, :walls)]
+    two_mc = two_velocity_momentum_check(:amr; scheme = MonotonizedCentral(), order = (2, 1))
     two_replica = maximum(t.replica for t in (two..., two_mc))
     two_balance = maximum(maximum(t.balance) for t in (two..., two_mc))
-    two_reset = maximum(
-        abs(t.reset_reported - t.reset_replica) / abs(t.reset_reported) for t in two if t.reset_reported != 0
-    )
-    projected_liquid = maximum(t.liquid for t in two[:, 2])
     constant = constant_velocity_check()
 
     println("momentum flux check:         ", (; worst, count, schedule, identity))
@@ -1516,7 +1497,7 @@ function momentum_outputs(write_output)
     @assert one_replica <= 1.0e-14 && one_momentum <= 1.0e-15 && one_mass <= 1.0e-14
     @assert all(o.snaps == 0 for o in values(one)) && one[:cut].partial_dofs > 0 &&
         one[:cut].scalar_defect_partial > 1.0e-3
-    @assert two_replica <= 1.0e-14 && two_balance <= 1.0e-15 && two_reset <= 1.0e-12
+    @assert two_replica <= 1.0e-14 && two_balance <= 1.0e-15
     @assert all(t.nan_pattern for t in two) && all(t.snaps == 0 for t in two)
     @assert constant == 0
     fix2(x) = @sprintf("%.2f", x)
@@ -1539,7 +1520,6 @@ function momentum_outputs(write_output)
         ("chkMomOneMass", sci(one_mass)), ("chkMomOneCutDofs", one[:cut].partial_dofs),
         ("chkMomOneCutScalarMass", fix3(one[:cut].scalar_defect_partial)),
         ("chkMomTwoReplica", sci(two_replica)), ("chkMomTwoBalance", sci(two_balance)),
-        ("chkMomTwoReset", sci(two_reset)), ("chkMomTwoProjectedLiquid", sci(projected_liquid)),
         ("chkMomCoarseVolume", frac(dual_info[:coarse_volume])), ("chkMomCoarseLinks", dual_info[:coarse_links]),
         ("chkMomCutAperture", fix2(dual_info[:cut_aperture])),
         ("chkMomCutOpenDual", fix3(dual_info[:cut_open_dual])),

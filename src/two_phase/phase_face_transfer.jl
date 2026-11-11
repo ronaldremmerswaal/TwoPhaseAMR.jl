@@ -42,7 +42,6 @@ function _finish_phase_face_transfer!(q::PhaseFaceScalar{Axis, T}) where {Axis, 
     for values in (
             q.scratch.source_liquid, q.scratch.source_gas,
             q.scratch.liquid_fraction, q.scratch.predicted_liquid,
-            q.scratch.gas_fraction, q.scratch.predicted_gas,
             q.scratch.values, q.scratch.increment, q.scratch.rates,
         )
         resize!(values, count)

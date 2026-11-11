@@ -64,13 +64,12 @@ diagnostics, or observer events.
 | --- | --- | --- | --- |
 | velocity formulation | `FlowSimulation` | `OneVelocityModel()`, `TwoVelocityModel(...)` | one velocity |
 | surface-tension force | `SurfaceTension` | `CGFM()`, `CSF()` | CGFM |
-| two-velocity interface carrier | `TwoVelocityModel` | `FrozenInterfaceFluxes()`, `ProjectedLiquidVelocity()` | frozen |
 | two-velocity projection | `TwoVelocityModel` | `CMDGFMProjection()` | CMDGFM |
 
-Interface transport and two-velocity projection are meaningful only for
-`TwoVelocityModel`. Surface-tension force selection applies to either velocity
-model. A liquid/gas velocity tuple is rejected by `OneVelocityModel` instead
-of silently changing the formulation.
+The two-velocity projection is meaningful only for `TwoVelocityModel`.
+Surface-tension force selection applies to either velocity model. A liquid/gas
+velocity tuple is rejected by `OneVelocityModel` instead of silently changing
+the formulation.
 
 A nonnegative number is shorthand for the default conservative ghost-fluid
 choice: `surface_tension=0.05` is equivalent to

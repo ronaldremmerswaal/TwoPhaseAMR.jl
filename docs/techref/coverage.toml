@@ -267,9 +267,7 @@ sources = [
   { file = "src/two_phase/physics.jl", symbol = "SurfaceTension" },
   { file = "src/navier_stokes/options.jl", symbol = "AdvectionOptions" },
   { file = "src/navier_stokes/options.jl", symbol = "NavierStokesOptions" },
-  { file = "src/two_phase/projection/methods.jl", symbol = "CMDGFMProjection" },
-  { file = "src/vof/transport_methods.jl", symbol = "FrozenInterfaceFluxes" },
-  { file = "src/vof/transport_methods.jl", symbol = "ProjectedLiquidVelocity" }
+  { file = "src/two_phase/projection/methods.jl", symbol = "CMDGFMProjection" }
 ]
 tests = [
   { file = "test/navier_stokes/configuration.jl", testset = "explicit one- and two-velocity models" },
@@ -688,43 +686,6 @@ tests = [
   { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Two-phase cell, staggered and face geometry partitions" }
 ]
 [[claims]]
-label = "eq:vof:extension"
-sources = [
-  { file = "src/two_phase/two_velocity/transport_workspace.jl", symbol = "_extend_projected_component!" }
-]
-tests = [
-  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Projected liquid-velocity extension" }
-]
-[[claims]]
-label = "eq:vof:projection"
-sources = [
-  { file = "src/two_phase/two_velocity/transport_workspace.jl", symbol = "_project_liquid_velocity!" }
-]
-tests = [
-  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Projected liquid-velocity extension" }
-]
-check = "projected_step_check"
-[[claims]]
-label = "eq:vof:aux-gas"
-sources = [
-  { file = "src/vof/workspace.jl", symbol = "_reset_auxiliary_gas_carrier!" },
-  { file = "src/two_phase/two_velocity/interface_transport.jl", symbol = "_compute_directional_wy_fluxes!" }
-]
-tests = [
-  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Projected liquid-velocity extension" }
-]
-check = "projected_step_check"
-[[claims]]
-label = "eq:vof:reset"
-sources = [
-  { file = "src/vof/workspace.jl", symbol = "_update_gas_reset_diagnostics!" },
-  { file = "src/vof/scalars.jl", symbol = "phase_flux_diagnostics" }
-]
-tests = [
-  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Projected liquid-velocity extension" }
-]
-check = "projected_step_check"
-[[claims]]
 label = "eq:vof:volume-balance"
 sources = [
   { file = "src/vof/fluxes.jl", symbol = "_advect_wy!" }
@@ -919,14 +880,6 @@ tests = [
   { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Compatible separate phase-momentum transport" },
   { file = "test/two_phase/transport.jl", testset = "Compatible staggered phase constants" }
 ]
-check = "two_velocity_momentum_check"
-[[claims]]
-label = "eq:momentum:gas-reset"
-sources = [
-  { file = "src/two_phase/phase_face_transport.jl", symbol = "_advect_phase_faces_workspace!" },
-  { file = "src/vof/scalars.jl", symbol = "phase_flux_diagnostics" }
-]
-tests = []
 check = "two_velocity_momentum_check"
 [[claims]]
 label = "eq:momentum:cell-scalar"
@@ -2482,7 +2435,6 @@ check = "solv_cmdgfm_cases"
 "src/two_phase/two_velocity/momentum_workspace.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
 "src/two_phase/two_velocity/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport", "ch:forces", "ch:viscosity", "ch:projection", "ch:stability-accuracy"] }
 "src/two_phase/two_velocity/transport_geometry.jl" = { class = "equation", chapters = ["ch:interface", "ch:vof-transport", "ch:forces", "ch:stability-accuracy"] }
-"src/two_phase/two_velocity/transport_workspace.jl" = { class = "equation", chapters = ["ch:vof-transport"] }
 "src/two_phase/two_velocity/velocity_fields.jl" = { class = "equation", chapters = ["ch:overview", "ch:momentum-transport", "ch:projection", "ch:amr-criteria-transfer"] }
 "src/navier_stokes/flow_diagnostics.jl" = { class = "storage", chapters = ["ch:forces", "ch:verification"] }
 "src/navier_stokes/flow_simulation.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:mesh-amr", "ch:forces", "ch:projection", "ch:solvers", "ch:amr-criteria-transfer", "ch:stability-accuracy"] }

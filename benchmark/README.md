@@ -13,7 +13,7 @@ The flat suite has five user-oriented groups:
   representative diagnostics configuration;
 - `mesh and interface` / `adaptivity`: topology construction, level-set/PLIC
   work, interface-height evaluation, and refinement with field transfer;
-- `interface transport`: one-velocity WY and both typed two-velocity transport
+- `interface transport`: one-velocity WY and the typed two-velocity transport
   choices on uniform and mixed meshes;
 - `linear solvers` / `two-velocity projection`: Poisson application/solve and
   the CMDGFM projection.

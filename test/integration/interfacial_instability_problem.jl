@@ -382,7 +382,6 @@ function two_velocity_instability_setup(;
         mixed_level = false,
         block_size = (8, 8), adaptation_interval = 5,
         reconstruction_method = :lhf,
-        interface_transport = FrozenInterfaceFluxes(),
         pressure_projection = CMDGFMProjection(),
         scheme = LaxWendroff(),
         velocity_model = nothing,
@@ -444,7 +443,6 @@ function two_velocity_instability_setup(;
         interface_height, k,
     )
     selected_velocity_model = isnothing(velocity_model) ? TwoVelocityModel(
-            interface_transport = interface_transport,
             pressure_projection = pressure_projection,
         ) : velocity_model
     selected_velocity_model isa AbstractVelocityModel || throw(
@@ -476,14 +474,11 @@ function two_velocity_instability_setup(;
     )
     add_diagnostic!(flow, :amplitude_real, state -> real(amplitude()))
     add_diagnostic!(flow, :amplitude_imaginary, state -> imag(amplitude()))
-    active_interface_transport = selected_velocity_model isa TwoVelocityModel ?
-        selected_velocity_model.interface_transport : nothing
     return (;
         mesh, interface, interface_indicator, flow, dispersion,
         interface_levelset,
         initial_amplitude = float(initial_amplitude),
         initial_numerical_amplitude,
-        interface_transport = active_interface_transport,
         velocity_model = selected_velocity_model,
         default_final_time = _default_instability_final_time(dispersion),
     )

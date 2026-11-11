@@ -62,9 +62,6 @@ construction and explains its derivation and validation.
 
 ## Two-velocity model
 
-- **TODO:** Reference or derive the split-sweep auxiliary-gas reset used by
-  `ProjectedLiquidVelocity`; the cited transport paper develops the underlying
-  unsplit balance, not this directional implementation.
 - **TODO:** Add a direct reference for the complete CMDGFM pressure projection,
   including its bounded multidimensional jump interpolation and two-block
   preconditioner.

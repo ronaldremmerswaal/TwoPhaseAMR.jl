@@ -3,7 +3,7 @@ using Test, TwoPhaseAMR
 const TV_ROTATION = TwoPhaseAMR
 const ROTATION_PROJECTION_TOLERANCE = sqrt(eps())
 
-function _rotation_case(resolution, method)
+function _rotation_case(resolution)
     mesh = BlockTreeMesh(
         block_size = (resolution, resolution), periodic = (false, false),
     )
@@ -17,9 +17,7 @@ function _rotation_case(resolution, method)
     )
     velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
     analytical_velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
-    workspace = WYAdvectionWorkspace(
-        interface, velocity; interface_transport = method,
-    )
+    workspace = WYAdvectionWorkspace(interface, velocity)
     liquid_scalar(x, y) =
         1 + 0.2(x - centre[1]) + 0.1(y - centre[2])
     gas_scalar(x, y) =
@@ -82,6 +80,7 @@ function _advance_rotation!(case; final_time = 0.03125)
         liquid_normal = 0.0, liquid_tangential = 0.0,
         gas_normal = 0.0, gas_tangential = 0.0,
     )
+    maximum_preprojection_error = zero_phase_errors
     maximum_postprojection_error = zero_phase_errors
     maximum_projection_components = zero_components
     maximum_initial_residual = 0.0
@@ -90,6 +89,10 @@ function _advance_rotation!(case; final_time = 0.03125)
     maximum_normal_velocity_defect = 0.0
     while time < final_time - 16eps()
         _set_stationary_rotation!(case)
+        maximum_preprojection_error = _maximum_projection_error(
+            maximum_preprojection_error,
+            _face_velocity_linf(case, case.velocity),
+        )
         projection = _project_rotation!(case)
         stats = projection.stats
         converged &= stats.converged
@@ -129,7 +132,7 @@ function _advance_rotation!(case; final_time = 0.03125)
         maximum_mixture_divergence, maximum_normal_velocity_defect,
     )
     return _rotation_error(
-        case, step, metrics, 0.0, converged, zero_phase_errors,
+        case, step, metrics, 0.0, converged, maximum_preprojection_error,
         maximum_postprojection_error, maximum_projection_components, step, time,
     )
 end
@@ -325,157 +328,6 @@ function _rotation_error(
     )
 end
 
-function _advance_rotation_pair!(projected, frozen; final_time = 0.125)
-    time = 0.0
-    step = 0
-    projection_count = 0
-    maximum_initial_residual = 0.0
-    maximum_final_residual = 0.0
-    maximum_mixture_divergence = 0.0
-    maximum_normal_velocity_defect = 0.0
-    maximum_aperture_defect = 0.0
-    zero_phase_errors = (liquid = 0.0, gas = 0.0)
-    zero_components = (
-        liquid_normal = 0.0, liquid_tangential = 0.0,
-        gas_normal = 0.0, gas_tangential = 0.0,
-    )
-    projected_preprojection_error = zero_phase_errors
-    projected_postprojection_error = zero_phase_errors
-    projected_projection_components = zero_components
-    frozen_preprojection_error = zero_phase_errors
-    frozen_postprojection_error = zero_phase_errors
-    frozen_projection_components = zero_components
-    projected_projection_count = 0
-    projected_maximum_raw_divergence = 0.0
-    projected_maximum_final_divergence = 0.0
-    projected_projection_converged = true
-    projection_converged = true
-    while time < final_time - 16eps()
-        _set_stationary_rotation!(projected)
-        _set_stationary_rotation!(frozen)
-        projected_preprojection_error = _maximum_projection_error(
-            projected_preprojection_error,
-            _face_velocity_linf(projected, projected.velocity),
-        )
-        frozen_preprojection_error = _maximum_projection_error(
-            frozen_preprojection_error,
-            _face_velocity_linf(frozen, frozen.velocity),
-        )
-        projection = _project_rotation!(frozen)
-        statistics = projection.stats
-        projection_count += 1
-        maximum_initial_residual = max(maximum_initial_residual, statistics.initial_residual)
-        maximum_final_residual = max(maximum_final_residual, statistics.final_residual)
-        maximum_mixture_divergence = max(maximum_mixture_divergence, statistics.mixture_divergence)
-        maximum_normal_velocity_defect = max(
-            maximum_normal_velocity_defect, statistics.normal_velocity_defect,
-        )
-        projection_converged &= statistics.converged
-
-        frozen_postprojection_error = _maximum_projection_error(
-            frozen_postprojection_error,
-            _face_velocity_linf(frozen, frozen.velocity),
-        )
-        frozen_projection_components = _maximum_projection_error(
-            frozen_projection_components,
-            _interface_projection_components(frozen, projection.corrections),
-        )
-
-        # Project exactly once from the freshly initialized analytical field.
-        # The returned carrier is separate storage; neither analytical phase
-        # field is overwritten by the projected-liquid policy.
-        TV_ROTATION._reset!(projected.workspace.diagnostics)
-        projected_liquid = TV_ROTATION._project_liquid_velocity!(
-            projected.workspace, projected.velocity,
-        )
-        projected_projection_count += 1
-        projected_diagnostics = phase_flux_diagnostics(projected.workspace)
-        projected_maximum_raw_divergence = max(
-            projected_maximum_raw_divergence,
-            projected_diagnostics.projection_initial_divergence,
-        )
-        projected_maximum_final_divergence = max(
-            projected_maximum_final_divergence,
-            projected_diagnostics.projection_final_divergence,
-        )
-        projected_state = projected.workspace.method_workspace[]
-        projected_advecting_velocity =
-            (projected_liquid, projected.velocity[2])
-        projected_postprojection_error = _maximum_projection_error(
-            projected_postprojection_error,
-            _face_velocity_linf(
-                projected,
-                projected_advecting_velocity,
-            ),
-        )
-        projected_limit = min(
-            stable_timestep(
-                projected_liquid, projected.workspace; cfl = 0.25,
-            ),
-            stable_timestep(
-                projected.velocity[2], projected.workspace; cfl = 0.25,
-            ),
-        )
-        projected_projection_components = _maximum_projection_error(
-            projected_projection_components,
-            _interface_projection_components(
-                projected, (projected_state.correction, nothing),
-            ),
-        )
-        dt = min(
-            final_time - time, projected_limit,
-            stable_timestep(
-                frozen.velocity, frozen.workspace; cfl = 0.25,
-            ),
-        )
-        order = iseven(step) ? (1, 2) : (2, 1)
-        TV_ROTATION._advect_wy!(
-            projected.interface, projected_advecting_velocity, dt,
-            projected.workspace;
-            staggered_scalars = (
-                projected.staggered..., projected.one_functions...,
-            ),
-            sweep_order = order, reset_diagnostics = false,
-            check_timestep = false,
-        )
-        advect!(
-            frozen.interface, frozen.velocity, dt,
-            frozen.workspace;
-            staggered_scalars = (
-                frozen.staggered..., frozen.one_functions...,
-            ),
-            sweep_order = order,
-        )
-        time += dt
-        step += 1
-    end
-    return (
-        projected = _rotation_error(
-            projected, projected_projection_count,
-            (;
-                maximum_raw_divergence = projected_maximum_raw_divergence,
-                maximum_projected_divergence = projected_maximum_final_divergence,
-            ),
-            0.0,
-            projected_projection_converged,
-            projected_preprojection_error,
-            projected_postprojection_error,
-            projected_projection_components, step, time,
-        ),
-        frozen = _rotation_error(
-            frozen, projection_count,
-            (;
-                maximum_initial_residual, maximum_final_residual,
-                maximum_mixture_divergence, maximum_normal_velocity_defect,
-            ),
-            maximum_aperture_defect,
-            projection_converged, frozen_preprojection_error,
-            frozen_postprojection_error, frozen_projection_components,
-            step, time,
-        ),
-    )
-end
-
 function _rotation_rates(values, resolutions)
     return [
         log(values[index] / values[index + 1]) /
@@ -509,25 +361,6 @@ end
 function _initial_projection_snapshot(case)
     _set_stationary_rotation!(case)
     before = _face_velocity_linf(case, case.velocity)
-    if case.workspace.interface_transport isa ProjectedLiquidVelocity
-        projected = TV_ROTATION._project_liquid_velocity!(
-            case.workspace, case.velocity,
-        )
-        state = case.workspace.method_workspace[]
-        diagnostics = phase_flux_diagnostics(case.workspace)
-        return (;
-            before,
-            after = _face_velocity_linf(
-                case, (projected, case.velocity[2]),
-            ),
-            components = _interface_projection_components(
-                case, (state.correction, nothing),
-            ),
-            initial_divergence = diagnostics.projection_initial_divergence,
-            final_divergence = diagnostics.projection_final_divergence,
-            converged = true,
-        )
-    end
     projection = _project_rotation!(case)
     statistics = projection.stats
     return (;
@@ -547,48 +380,30 @@ end
 @testset "Initial tangential-jump projection accuracy" begin
     resolutions = (16, 32, 64)
     snapshots = map(resolutions) do resolution
-        projected = _initial_projection_snapshot(
-            _rotation_case(
-                resolution,
-                ProjectedLiquidVelocity(
-                    tolerance = 1.0e-12, max_cycles = 500,
-                ),
-            ),
-        )
-        frozen = _initial_projection_snapshot(
-            _rotation_case(resolution, FrozenInterfaceFluxes()),
-        )
+        frozen = _initial_projection_snapshot(_rotation_case(resolution))
         println(
             "two_velocity_rotation_initial_projection n=$resolution " *
-                "projected=$projected frozen=$frozen",
+                "frozen=$frozen",
         )
-        for snapshot in (projected, frozen)
-            @test snapshot.converged
-            @test all(value -> value <= 16eps(), snapshot.before)
-            @test all(isfinite, snapshot.after)
-            @test all(isfinite, snapshot.components)
-        end
-        @test projected.final_divergence <= ROTATION_PROJECTION_TOLERANCE
+        @test frozen.converged
+        @test all(value -> value <= 16eps(), frozen.before)
+        @test all(isfinite, frozen.after)
+        @test all(isfinite, frozen.components)
         @test frozen.final_residual <= frozen.initial_residual
         @test frozen.mixture_divergence <= ROTATION_PROJECTION_TOLERANCE
         @test frozen.normal_velocity_defect <= ROTATION_PROJECTION_TOLERANCE
-        @test projected.after.liquid == 0
-        @test projected.components.liquid_normal == 0
-        @test projected.components.liquid_tangential == 0
         @test frozen.after.liquid > 0
         @test frozen.after.gas > 0
-        (; projected, frozen)
+        frozen
     end
-    for method in (:projected, :frozen), phase in (:liquid, :gas)
+    for phase in (:liquid, :gas)
         values = [
-            getproperty(getproperty(snapshot, method).after, phase)
-                for snapshot in snapshots
+            getproperty(snapshot.after, phase) for snapshot in snapshots
         ]
         rates = _reported_rotation_rates(values, resolutions)
         println(
             "two_velocity_rotation_initial_projection_convergence " *
-                "method=$method phase=$phase n=$resolutions " *
-                "errors=$values rates=$rates",
+                "phase=$phase n=$resolutions errors=$values rates=$rates",
         )
     end
 end
@@ -596,170 +411,115 @@ end
 @testset "Tangentially discontinuous circular-disc rotation" begin
     resolutions = (16, 32, 64)
     results = map(resolutions) do resolution
-        projected = _rotation_case(
-            resolution,
-            ProjectedLiquidVelocity(tolerance = 1.0e-12, max_cycles = 500),
+        case = _rotation_case(resolution)
+        result = _advance_rotation!(case; final_time = 0.125)
+        println("two_velocity_rotation n=$resolution frozen=$result")
+        @test result.projection_count == result.steps
+        @test result.projection_converged
+        @test result.maximum_initial_residual >
+            result.maximum_final_residual
+        @test result.maximum_mixture_divergence <=
+            ROTATION_PROJECTION_TOLERANCE
+        @test result.maximum_normal_velocity_defect <=
+            ROTATION_PROJECTION_TOLERANCE
+        @test result.maximum_aperture_defect <= eps()
+        @test result.volume_error <=
+            _rotation_volume_tolerance(case, result.steps)
+        @test result.one_error <= 512eps()
+        @test all(isfinite, result.maximum_preprojection_error)
+        @test all(isfinite, result.maximum_postprojection_error)
+        @test all(isfinite, result.maximum_projection_components)
+        @test all(
+            value -> value <= 16eps(),
+            result.maximum_preprojection_error,
         )
-        frozen = _rotation_case(resolution, FrozenInterfaceFluxes())
-        result = _advance_rotation_pair!(projected, frozen)
-        println(
-            "two_velocity_rotation n=$resolution " *
-                "projected=$(result.projected) frozen=$(result.frozen)",
-        )
-        @test result.projected.steps == result.frozen.steps
-        @test result.projected.projection_count == result.projected.steps
-        @test result.frozen.projection_count == result.frozen.steps
-        @test result.frozen.projection_converged
-        @test result.frozen.maximum_initial_residual >
-            result.frozen.maximum_final_residual
-        @test result.frozen.maximum_mixture_divergence <=
-            ROTATION_PROJECTION_TOLERANCE
-        @test result.frozen.maximum_normal_velocity_defect <=
-            ROTATION_PROJECTION_TOLERANCE
-        @test result.frozen.maximum_aperture_defect <= eps()
-        for (case, method_result) in zip((projected, frozen), result)
-            @test method_result.volume_error <=
-                _rotation_volume_tolerance(case, method_result.steps)
-            @test method_result.one_error <= 512eps()
-            @test all(isfinite, method_result.maximum_preprojection_error)
-            @test all(isfinite, method_result.maximum_postprojection_error)
-            @test all(isfinite, method_result.maximum_projection_components)
-            @test all(
-                value -> value <= 16eps(),
-                method_result.maximum_preprojection_error,
-            )
-        end
-        @test result.projected.projection_converged
-        @test result.projected.maximum_raw_divergence == 0
-        @test result.projected.maximum_projected_divergence == 0
-        @test result.projected.maximum_projected_divergence <=
-            ROTATION_PROJECTION_TOLERANCE
-        @test result.projected.maximum_postprojection_error.liquid == 0
-        @test result.projected.maximum_postprojection_error.gas == 0
-        @test result.projected.maximum_projection_components.liquid_normal == 0
-        @test result.projected.maximum_projection_components.liquid_tangential == 0
-        @test result.frozen.maximum_postprojection_error.liquid > 0
-        @test result.frozen.maximum_postprojection_error.gas > 0
+        @test result.maximum_postprojection_error.liquid > 0
+        @test result.maximum_postprojection_error.gas > 0
         result
     end
 
-    for method in (:projected, :frozen)
-        errors = [getproperty(result, method).error for result in results]
-        rates = _rotation_rates(errors, resolutions)
-        aggregate_rate = _aggregate_rotation_rate(errors, resolutions)
-        minimum_aggregate_rate = method === :projected ? 2.0 : 0.8
-        println(
-            "two_velocity_rotation_convergence method=$method " *
-                "n=$resolutions errors=$errors rates=$rates " *
-                "aggregate_rate=$aggregate_rate",
-        )
-        # With absent phase values excluded, both policies satisfy these
-        # integral convergence gates; they are no longer expected failures.
-        @test all(diff(errors) .< 0)
-        @test aggregate_rate >= minimum_aggregate_rate
+    errors = [result.error for result in results]
+    rates = _rotation_rates(errors, resolutions)
+    aggregate_rate = _aggregate_rotation_rate(errors, resolutions)
+    println(
+        "two_velocity_rotation_convergence " *
+            "n=$resolutions errors=$errors rates=$rates " *
+            "aggregate_rate=$aggregate_rate",
+    )
+    @test all(diff(errors) .< 0)
+    @test aggregate_rate >= 0.8
 
-        maximum_errors = [
-            getproperty(result, method).maximum_error for result in results
-        ]
-        maximum_rates = _reported_rotation_rates(
-            maximum_errors, resolutions,
-        )
-        println(
-            "two_velocity_rotation_linf_convergence method=$method " *
-                "n=$resolutions errors=$maximum_errors " *
-                "rates=$maximum_rates",
-        )
+    maximum_errors = [result.maximum_error for result in results]
+    maximum_rates = _reported_rotation_rates(maximum_errors, resolutions)
+    println(
+        "two_velocity_rotation_linf_convergence " *
+            "n=$resolutions errors=$maximum_errors rates=$maximum_rates",
+    )
 
-        staggered_errors = [
-            getproperty(result, method).staggered_error
+    staggered_errors = [result.staggered_error for result in results]
+    staggered_rates = _rotation_rates(staggered_errors, resolutions)
+    println(
+        "two_velocity_rotation_staggered_convergence " *
+            "n=$resolutions errors=$staggered_errors " *
+            "rates=$staggered_rates",
+    )
+    @test all(diff(staggered_errors) .< 0)
+    # This continuously rotating shear layer remains on the phase interface,
+    # so the thesis CTU fallback is exercised for O(1/h) successive steps.
+    # Its phase-weighted L1 error is therefore first order. The
+    # vortex-reversal test separately verifies the thesis's
+    # close-to-second-order integral rate for smooth reversible transport.
+    @test staggered_rates[end] >= 1.0
+    for (phase, metric) in (
+            (:liquid, :staggered_liquid_error),
+            (:gas, :staggered_gas_error),
+        )
+        phase_errors = [getproperty(result, metric) for result in results]
+        phase_rates = _reported_rotation_rates(phase_errors, resolutions)
+        println(
+            "two_velocity_rotation_staggered_phase " *
+                "phase=$phase n=$resolutions errors=$phase_errors " *
+                "rates=$phase_rates",
+        )
+    end
+
+    for phase in (:liquid, :gas)
+        before = [
+            getproperty(result.maximum_preprojection_error, phase)
                 for result in results
         ]
-        staggered_rates = _rotation_rates(
-            staggered_errors, resolutions,
-        )
+        after = [
+            getproperty(result.maximum_postprojection_error, phase)
+                for result in results
+        ]
+        after_rates = _reported_rotation_rates(after, resolutions)
         println(
-            "two_velocity_rotation_staggered_convergence method=$method " *
-                "n=$resolutions errors=$staggered_errors " *
-                "rates=$staggered_rates",
+            "two_velocity_rotation_projection_linf " *
+                "phase=$phase n=$resolutions before=$before " *
+                "after=$after after_rates=$after_rates",
         )
-        @test all(diff(staggered_errors) .< 0)
-        # This continuously rotating shear layer remains on the phase
-        # interface, so the thesis CTU fallback is exercised for O(1/h)
-        # successive steps. Its phase-weighted L1 error is therefore first
-        # order. The vortex-reversal test separately verifies the thesis's
-        # close-to-second-order integral rate for smooth reversible transport.
-        minimum_staggered_rate = method === :projected ? 0.9 : 1.0
-        @test staggered_rates[end] >= minimum_staggered_rate
-        for (phase, metric) in (
-                (:liquid, :staggered_liquid_error),
-                (:gas, :staggered_gas_error),
-            )
-            phase_errors = [
-                getproperty(getproperty(result, method), metric)
-                    for result in results
-            ]
-            phase_rates = _reported_rotation_rates(
-                phase_errors, resolutions,
-            )
-            println(
-                "two_velocity_rotation_staggered_phase method=$method " *
-                    "phase=$phase n=$resolutions errors=$phase_errors " *
-                    "rates=$phase_rates",
-            )
-        end
-        if method === :projected
-            @test all(
-                iszero,
-                getproperty.(
-                    getproperty.(results, method), :staggered_gas_error,
-                ),
-            )
-        end
-
-        for phase in (:liquid, :gas)
-            before = [
-                getproperty(
-                    getproperty(result, method).maximum_preprojection_error,
-                    phase,
-                ) for result in results
-            ]
-            after = [
-                getproperty(
-                    getproperty(result, method).maximum_postprojection_error,
-                    phase,
-                ) for result in results
-            ]
-            after_rates = _reported_rotation_rates(after, resolutions)
-            println(
-                "two_velocity_rotation_projection_linf method=$method " *
-                    "phase=$phase n=$resolutions before=$before " *
-                    "after=$after after_rates=$after_rates",
-            )
-        end
-        for component in (
-                :liquid_normal, :liquid_tangential,
-                :gas_normal, :gas_tangential,
-            )
-            values = [
-                getproperty(
-                    getproperty(result, method).maximum_projection_components,
-                    component,
-                ) for result in results
-            ]
-            rates = _reported_rotation_rates(values, resolutions)
-            println(
-                "two_velocity_rotation_projection_component method=$method " *
-                    "component=$component n=$resolutions values=$values " *
-                    "rates=$rates",
-            )
-        end
+    end
+    for component in (
+            :liquid_normal, :liquid_tangential,
+            :gas_normal, :gas_tangential,
+        )
+        values = [
+            getproperty(result.maximum_projection_components, component)
+                for result in results
+        ]
+        rates = _reported_rotation_rates(values, resolutions)
+        println(
+            "two_velocity_rotation_projection_component " *
+                "component=$component n=$resolutions values=$values " *
+                "rates=$rates",
+        )
     end
 end
 
 @testset "Rotating disc with the CMDGFM projection" begin
     resolutions = (8, 16, 32)
     results = map(resolutions) do resolution
-        case = _rotation_case(resolution, FrozenInterfaceFluxes())
+        case = _rotation_case(resolution)
         result = _advance_rotation!(case)
         println(
             "two_velocity_CMDGFM_rotation method=frozen " *
