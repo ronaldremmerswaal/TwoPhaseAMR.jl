@@ -98,7 +98,7 @@ export run_state, pause!, wait_paused, resume!, request_stop!
 export request_keyframe!, pause_when!
 export SnapshotStore, snapshot_store, frames, keyframes, frame_at, newest_frame
 export frame_stats, store_usage, step_log, run_events, subscribe
-export VideoSchedule, video_frame_count, video_frame_schedule
+export VideoSchedule, video_frame_count, video_frame_schedule, MAX_VIDEO_FRAMES
 export LiveVideoSampler, push_live_frame!, flush_live_frames!
 export Frame, FrameInfo, FieldStats, TopologySnapshot, FrameSubscription
 export StepLog, RunEvent, DiagnosticColumns

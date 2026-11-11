@@ -64,6 +64,16 @@ export function decodeField(buffer: ArrayBuffer, expectedRequest: number, expect
   return { request, encoding, scale, offset, values };
 }
 
+/** A live recording reports one finite simulation time per encoded frame. */
+function checkRecordingTimes(value: unknown): void {
+  const times = (value as Record<string, unknown>).times;
+  if (times === undefined || times === null) return;
+  if (!Array.isArray(times) ||
+      !times.every(time => typeof time === 'number' && Number.isFinite(time))) {
+    throw new Error('Invalid recording frame times');
+  }
+}
+
 /** Parse the supported JSON messages and reject incompatible handshakes. */
 export function parseServerMessage(text: string): ServerMessage {
   let value: unknown;
@@ -74,9 +84,11 @@ export function parseServerMessage(text: string): ServerMessage {
     case 'hello':
       if (message.protocol !== PROTOCOL_VERSION) throw new Error(`Unsupported Studio protocol version: ${String(message.protocol)}`);
       if (!Array.isArray(message.runs) || !Array.isArray(message.frames) || !message.recording) throw new Error('Invalid hello message');
+      checkRecordingTimes(message.recording);
       break;
     case 'state':
       if (typeof message.run_state !== 'string' || !message.recording) throw new Error('Invalid state message');
+      checkRecordingTimes(message.recording);
       if (message.resumable !== undefined && typeof message.resumable !== 'boolean') throw new Error('Invalid resumable flag');
       if (message.suggested_final_time !== undefined && message.suggested_final_time !== null &&
           (typeof message.suggested_final_time !== 'number' || !Number.isFinite(message.suggested_final_time))) {

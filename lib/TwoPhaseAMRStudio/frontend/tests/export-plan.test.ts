@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  frameSelection, formatSimTime, liveSpacing, liveSummary, parseTimeWindow,
-  scheduleAttributes, scheduleSummary,
+  durationLimit, frameSelection, formatSimTime, liveSpacing, liveSummary, MAX_EXPORT_FRAMES,
+  parseTimeWindow, scheduleAttributes, scheduleKey, scheduleSummary, ScheduleRequests,
 } from '../src/export-plan';
 import type { RecordingSchedule } from '../src/types';
 
@@ -56,5 +56,56 @@ describe('export plan', () => {
     expect(frameSelection('all')).toBe('all');
     expect(frameSelection('keyframes')).toBe('keyframes');
     expect(frameSelection('every')).toBe('keyframes');
+  });
+
+  it('bounds the duration input by the server frame cap', () => {
+    expect(MAX_EXPORT_FRAMES).toBe(100_000);
+    expect(durationLimit(20)).toBeCloseTo((MAX_EXPORT_FRAMES - 1) / 20);
+    // Invalid frame rates keep a usable bound instead of an infinite input.
+    expect(durationLimit(0)).toBe(1);
+    expect(durationLimit(Number.NaN)).toBe(1);
+  });
+});
+
+describe('export schedule requests', () => {
+  const command = { field: 'pressure', fps: 10, duration: 1 };
+  const frames = [{ id: 1, time: 0 }, { id: 2, time: 0.5 }];
+
+  it('keys a preflight on its command and on the stored frames it saw', () => {
+    const key = scheduleKey(command, frames);
+    expect(scheduleKey(command, frames)).toBe(key);
+    // A newly stored frame makes the previous summary stale.
+    expect(scheduleKey(command, [...frames, { id: 3, time: 1 }])).not.toBe(key);
+    expect(scheduleKey(command, frames.slice(0, 1))).not.toBe(key);
+    expect(scheduleKey({ ...command, fps: 20 }, frames)).not.toBe(key);
+  });
+
+  it('asks once per key and applies only the newest answer', () => {
+    const requests = new ScheduleRequests();
+    expect(requests.needs('a')).toBe(true);
+    requests.arm('a');
+    expect(requests.needs('a')).toBe(false);
+    const first = requests.start('a');
+    expect(requests.needs('a')).toBe(false);
+    const second = requests.start('b');
+    expect(requests.settle(first, 'a')).toBe(false);
+    expect(requests.needs('b')).toBe(false);
+    expect(requests.settle(second, 'b')).toBe(true);
+    expect(requests.needs('b')).toBe(false);
+    expect(requests.needs('c')).toBe(true);
+  });
+
+  it('frees a discarded response and retries only a changed plan after an error', () => {
+    const requests = new ScheduleRequests();
+    // A response dropped because the dialog switched to a live source must not
+    // leave its key pending, which blocked every later stored preflight.
+    requests.cancel(requests.start('stored'));
+    expect(requests.needs('stored')).toBe(true);
+    expect(requests.fail(requests.start('bad'), 'bad')).toBe(true);
+    expect(requests.needs('bad')).toBe(false);
+    expect(requests.needs('edited')).toBe(true);
+    expect(requests.settle(requests.start('x'), 'x')).toBe(true);
+    requests.reset();
+    expect(requests.needs('x')).toBe(true);
   });
 });

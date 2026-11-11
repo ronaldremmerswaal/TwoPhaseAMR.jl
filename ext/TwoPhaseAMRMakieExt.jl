@@ -895,14 +895,21 @@ source = :live)`. `close` it after the run: it stops receiving frames, encodes
 the remaining output frames, writes the file, and reports the counts.
 `encoded` counts the frames written, `dropped` counts frames lost because the
 encoder fell behind, and `ids` and `times` list the ids and simulation times
-of the frames written, in output order.
+of the frames written, in output order. `ids`, `times`, and `stop_time` are
+snapshots taken under the recording's lock, so they are safe to read while the
+encoder appends; `stop_time` is the simulation time frozen by `close` before
+the queue drained, and `nothing` until then.
 """
 mutable struct LiveRecording
     const path::String
+    const store::TwoPhaseAMR.SnapshotStore
     const subscription::TwoPhaseAMR.FrameSubscription
+    const lock::ReentrantLock
     task::Union{Nothing, Task}
     const ids::Vector{Int}
     const times::Vector{Float64}
+    stop_captured::Bool
+    stop_time::Union{Nothing, Float64}
     @atomic encoded::Int
 end
 
@@ -910,12 +917,16 @@ function Base.getproperty(recording::LiveRecording, name::Symbol)
     if name === :dropped
         subscription = getfield(recording, :subscription)
         return Base.@lock subscription.condition subscription.dropped
+    elseif name === :ids || name === :times
+        # The encoder appends while the recording runs; hand out a copy so a
+        # reader never observes a partially written vector.
+        return Base.@lock getfield(recording, :lock) copy(getfield(recording, name))
     end
     return getfield(recording, name)
 end
 
 Base.propertynames(::LiveRecording, private::Bool = false) =
-    (:path, :encoded, :dropped, :ids, :times)
+    (:path, :encoded, :dropped, :ids, :times, :stop_time)
 
 Base.isopen(recording::LiveRecording) = isopen(getfield(recording, :subscription))
 
@@ -926,7 +937,33 @@ function Base.show(io::IO, recording::LiveRecording)
     )
 end
 
+# Freeze the simulation time at which the recording stops. Reading it after the
+# queue drains would also include steps the run takes while the encoder
+# finishes, and the output would extend past the stop time.
+function _freeze_stop_time!(recording::LiveRecording)
+    Base.@lock getfield(recording, :lock) begin
+        getfield(recording, :stop_captured) && return getfield(recording, :stop_time)
+        times = TwoPhaseAMR.step_log(getfield(recording, :store)).time
+        recording.stop_time = isempty(times) ? nothing : Float64(last(times))
+        recording.stop_captured = true
+        return recording.stop_time
+    end
+end
+
+# Simulation time the output covers: the time frozen at stop, or, when the
+# stream ended without an explicit stop (the run completed), the store's last
+# step at the flush.
+function _flush_time(recording::LiveRecording, sampler)
+    captured, stop = Base.@lock getfield(recording, :lock) (
+        getfield(recording, :stop_captured), getfield(recording, :stop_time),
+    )
+    captured && return isnothing(stop) ? sampler.left_time : stop
+    times = TwoPhaseAMR.step_log(getfield(recording, :store)).time
+    return isempty(times) ? sampler.left_time : Float64(last(times))
+end
+
 function Base.close(recording::LiveRecording)
+    _freeze_stop_time!(recording)
     close(getfield(recording, :subscription))
     wait(getfield(recording, :task)::Task)
     @info "Live recording wrote $(recording.encoded) frames to $(recording.path); " *
@@ -1012,8 +1049,10 @@ function _encode_live!(
             current[] = frame
         end
         Makie.recordframe!(stream)
-        push!(getfield(recording, :ids), frame.id)
-        push!(getfield(recording, :times), Float64(frame.time))
+        Base.@lock getfield(recording, :lock) begin
+            push!(getfield(recording, :ids), frame.id)
+            push!(getfield(recording, :times), Float64(frame.time))
+        end
         @atomic recording.encoded += 1
         return nothing
     end
@@ -1028,6 +1067,12 @@ function _encode_live!(
     end
 
     try
+        # Deferred mode shares the solver's only thread: wait until the run
+        # leaves the stepping states before rendering anything, including the
+        # seed frame.
+        while deferred && _solver_running(recorder) && isopen(subscription)
+            sleep(0.05)
+        end
         isnothing(seed) || decide!(push_live_frame!(sampler, seed, seed.time))
         while (frame = take!(subscription)) !== nothing
             # Without a thread of its own, the encoder waits for the run to end.
@@ -1043,10 +1088,10 @@ function _encode_live!(
         end
         if !isnothing(sampler)
             # Hold the last arrived frame through the simulation time at stop,
-            # so sparse streams still cover the elapsed time.
-            stop_times = TwoPhaseAMR.step_log(store).time
-            t_end = isempty(stop_times) ? sampler.left_time : last(stop_times)
-            decide!(flush_live_frames!(sampler, t_end))
+            # so sparse streams still cover the elapsed time. The stop time is
+            # frozen by `close` before the queue drains; reading the step log
+            # here would also take steps the run takes while it drains.
+            decide!(flush_live_frames!(sampler, _flush_time(recording, sampler)))
         end
         isnothing(stream) &&
             throw(ArgumentError("the live recording produced no output frames"))
@@ -1075,7 +1120,10 @@ function _record_live(
     t_start = isempty(step_times) ? (isnothing(seed) ? nothing : seed.time) :
         last(step_times)
     seed_id = isnothing(seed) ? 0 : seed.id
-    recording = LiveRecording(String(path), subscription, nothing, Int[], Float64[], 0)
+    recording = LiveRecording(
+        String(path), store, subscription, ReentrantLock(), nothing,
+        Int[], Float64[], false, nothing, 0,
+    )
     pool = _encoder_threadpool()
     deferred = isnothing(pool)
     deferred && @info "Live recording: no thread besides the solver's is available, so " *

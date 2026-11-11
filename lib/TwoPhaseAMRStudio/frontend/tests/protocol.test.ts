@@ -93,4 +93,16 @@ describe('Studio JSON messages', () => {
     expect(() => parseServerMessage(JSON.stringify({ ...state, suggested_final_time: '4' }))).toThrow();
     expect(() => parseServerMessage('{"type":"state","run_state":"completed","recording":{},"resumable":true,"suggested_final_time":1e999}')).toThrow();
   });
+
+  it('validates the live frame times a recording reports', () => {
+    const state = { type: 'state', run_state: 'completed', recording: { active: false, times: [0, 0.5, 1] } };
+    expect(parseServerMessage(JSON.stringify(state)).type).toBe('state');
+    // A recording without times, or with null, is the normal stored case.
+    expect(parseServerMessage(JSON.stringify({ ...state, recording: { active: true, times: null } })).type).toBe('state');
+    for (const times of [['0'], [0, Number.NaN], {}, 3, [0, null]]) {
+      expect(() => parseServerMessage(JSON.stringify({ ...state, recording: { active: true, times } }))).toThrow();
+    }
+    const hello = { type: 'hello', protocol: 1, runs: [], frames: [], recording: { active: true, times: [0, Infinity] } };
+    expect(() => parseServerMessage(JSON.stringify(hello))).toThrow();
+  });
 });

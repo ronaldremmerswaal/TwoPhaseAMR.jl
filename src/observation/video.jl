@@ -27,13 +27,33 @@ function Base.show(io::IO, schedule::VideoSchedule)
 end
 
 """
+    MAX_VIDEO_FRAMES
+
+Largest output frame count an export may plan. A plan holds a stored-frame
+index and a simulation time per output frame, and every frame is encoded, so a
+larger plan only exhausts memory and time; exports above it are rejected
+instead of attempted.
+"""
+const MAX_VIDEO_FRAMES = 100_000
+
+function _check_video_frame_count(count::Integer, what::String)
+    count <= MAX_VIDEO_FRAMES || throw(
+        ArgumentError(
+            "$what gives $count output frames; the limit is $MAX_VIDEO_FRAMES — " *
+            "lower `duration`, `nframes`, or `fps`",
+        ),
+    )
+    return Int(count)
+end
+
+"""
     video_frame_count(fps, duration)
 
 Number of output frames of a video that plays `duration` seconds at `fps`
 frames per second, including both the first and the last frame. With
 `n` output frames the spacing between displayed simulation times is
 `(t_end - t_start) / (n - 1)`, so the play time between the first and last
-frame is exactly `duration`.
+frame is exactly `duration`. The count is capped at [`MAX_VIDEO_FRAMES`](@ref).
 """
 function video_frame_count(fps::Real, duration::Real)
     _positive_finite(fps, "fps")
@@ -42,7 +62,7 @@ function video_frame_count(fps::Real, duration::Real)
     frames <= typemax(Int) - 1 || throw(
         ArgumentError("fps × duration is too large for a frame count, got $frames"),
     )
-    return max(2, round(Int, frames) + 1)
+    return _check_video_frame_count(max(2, round(Int, frames) + 1), "fps × duration")
 end
 
 function _positive_finite(value::Real, name::String)
@@ -106,7 +126,8 @@ function video_frame_schedule(
     isnothing(duration) == isnothing(nframes) && throw(
         ArgumentError("give exactly one of duration and nframes"),
     )
-    count = isnothing(nframes) ? video_frame_count(fps, duration) : nframes
+    count = isnothing(nframes) ? video_frame_count(fps, duration) :
+        _check_video_frame_count(nframes, "nframes")
     return video_frame_schedule(times, t_start, t_end, count)
 end
 

@@ -863,7 +863,12 @@ end
         simulate!(dropping.flow, 0.1; observer = dropping.recorder)
         close(dropping_recording)
         @test dropping_recording.encoded >= 1
-        @test dropping_recording.dropped >= 0
+        # Every output frame is accounted for once, and the accounting agrees
+        # with the video that was written.
+        @test dropping_recording.encoded ==
+            length(dropping_recording.ids) == length(dropping_recording.times)
+        @test issorted(dropping_recording.times)
+        @test last(dropping_recording.times) <= last(step_log(dropping.store).time) + 1e-12
     end
     @test_throws ArgumentError export_animation(
         "unused.gif", RUN.store; field = :speed,
@@ -897,6 +902,60 @@ end
         ],
     )
     @test isempty(fresh.store.subscriptions)
+end
+
+@testset "Live recording stops at its stop time" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), max_level = 1)
+    flow = FlowSimulation(
+        mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.01);
+        velocity = (x, y, t, axis) -> axis == 1 ? sinpi(2x) * cospi(2y) : -cospi(2x) * sinpi(2y),
+        dt = 0.002,
+    )
+    fields = VisualizationFieldRegistry()
+    register_field!(fields, :speed, flow.velocity, CentredMagnitude())
+    recorder = Recorder(
+        fields; preview = EveryStep(), max_capture_overhead = 1.0,
+        retention = Retention(preview = :all),
+    )
+    store = snapshot_store(recorder)
+    # Keep every step slow enough that the run is still advancing when the
+    # recording stops.
+    step_lock = ReentrantLock()
+    last_midpoint = Ref(-Inf)
+    function slow_force(x, y, midpoint, axis)
+        Base.@lock step_lock begin
+            if midpoint > last_midpoint[]
+                last_midpoint[] = midpoint
+                sleep(0.02)
+            end
+        end
+        return axis == 1 ? 0.1 * cospi(2y) : 0.0
+    end
+    mktempdir() do dir
+        path = joinpath(dir, "stop-time.gif")
+        simulation = Threads.@spawn simulate!(flow, 0.2; observer = recorder, force = slow_force)
+        recording = export_animation(
+            path, recorder; field = :speed, source = :live,
+            capacity = 1000, fps = 20, sim_per_second = 0.2,
+        )
+        timedwait(() -> length(frames(store)) >= 2, 120.0) === :ok ||
+            error("the run produced too few frames before the stop")
+        @test recording.stop_time === nothing
+        # Stop the recording while the run keeps stepping: the frozen stop time
+        # must bound the output, even though the encoder finalizes later.
+        close(recording)
+        stopped_at = recording.stop_time
+        @test stopped_at !== nothing
+        @test fetch(simulation).steps > 0
+        continued = last(step_log(store).time)
+        @test continued > stopped_at
+        @test recording.encoded == length(recording.ids) == length(recording.times)
+        @test issorted(recording.times)
+        @test maximum(recording.times) <= stopped_at + 1e-12
+        @test isfile(path) && filesize(path) > 0
+        @test !isempty(video_frames(path, gif_size(path)))
+    end
+    @test isempty(store.subscriptions)
 end
 
 png_size(path) = open(path) do io

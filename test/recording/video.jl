@@ -39,6 +39,10 @@ end
     @test_throws ArgumentError video_frame_count(20, 0.0)
     @test_throws ArgumentError video_frame_count(Inf, 1.0)
     @test_throws ArgumentError video_frame_count(2, NaN)
+    # A plan above the cap is rejected before any of it is allocated or encoded.
+    @test video_frame_count(1, MAX_VIDEO_FRAMES - 1) == MAX_VIDEO_FRAMES
+    @test_throws ArgumentError video_frame_count(1, MAX_VIDEO_FRAMES)
+    @test_throws ArgumentError video_frame_count(1000, 1000.0)
 end
 
 @testset "uniform output times on irregular stored frames" begin
@@ -125,6 +129,10 @@ end
         times, 0.0, 1.0; fps = 10, duration = 1.0, nframes = 11,
     )
     @test_throws ArgumentError video_frame_schedule(times, 0.0, 1.0; fps = 0, duration = 1.0)
+    # `nframes` is capped like `fps × duration`; the plan is never built.
+    @test_throws ArgumentError video_frame_schedule(
+        times, 0.0, 1.0; fps = 10, nframes = MAX_VIDEO_FRAMES + 1,
+    )
 end
 
 @testset "schedule validation" begin

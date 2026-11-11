@@ -1,7 +1,8 @@
 import type { StudioClient } from './client';
 import { groupDiagnostics, type DiagnosticMetadata } from './diagnostic-data';
 import {
-  frameSelection, liveSummary, parseTimeWindow, scheduleAttributes, scheduleSummary,
+  durationLimit, frameSelection, liveSummary, parseTimeWindow, scheduleAttributes, scheduleKey,
+  scheduleSummary, ScheduleRequests,
 } from './export-plan';
 import type { StudioState } from './state';
 import type {
@@ -91,11 +92,8 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
   let durationEdited = false;
   let simRateEdited = false;
   let lastSchedule: RecordingSchedule | null = null;
-  let scheduleKey = '';
-  let pendingKey = '';
-  let scheduledKey = '';
+  const requests = new ScheduleRequests();
   let scheduleTimer: number | undefined;
-  let scheduleGeneration = 0;
   const download = find<HTMLAnchorElement>('[data-testid="export-download"]');
   const diagnostics = find<HTMLElement>('.export-diagnostics');
   const note = find<HTMLElement>('.export-note');
@@ -269,18 +267,23 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
   }
 
   function requestSchedule(command: ScheduleCommand, key: string): void {
-    pendingKey = key;
-    const generation = ++scheduleGeneration;
+    const generation = requests.start(key);
     setScheduleText('Computing the time-linear schedule…');
     client.schedule(command).then(schedule => {
-      if (generation !== scheduleGeneration || isLive()) return;
+      // A superseded answer, or a switch to a live source, must not leave the
+      // request pending: that would block every later stored preflight.
+      if (!requests.settle(generation, key) || isLive()) {
+        requests.cancel(generation);
+        renderSchedule();
+        return;
+      }
       lastSchedule = schedule;
-      scheduleKey = key;
-      pendingKey = '';
       renderSchedule();
     }).catch(error => {
-      pendingKey = '';
-      if (generation !== scheduleGeneration) return;
+      if (!requests.fail(generation, key)) return;
+      // Show the reason and let the next frame or edit ask again instead of
+      // leaving a stale summary on screen.
+      lastSchedule = null;
       setScheduleText(error instanceof Error ? error.message : 'Could not compute the export schedule.');
     });
   }
@@ -289,11 +292,11 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
     if (!dialog.open || isLive() || state.recording.active) return;
     const command = scheduleCommand();
     if (!command) { renderSchedule(); return; }
-    const key = JSON.stringify(command);
-    // `update()` runs on every incoming frame; do not re-arm an unchanged
-    // request, or the timer would never fire during a running simulation.
-    if (key === scheduledKey || key === pendingKey) return;
-    scheduledKey = key;
+    // Include the stored frames: `update()` runs on every incoming frame, and a
+    // new frame changes the plan even when the form did not change.
+    const key = scheduleKey(command, state.timeline.frames);
+    if (!requests.needs(key)) return;
+    requests.arm(key);
     window.clearTimeout(scheduleTimer);
     scheduleTimer = window.setTimeout(() => requestSchedule(command, key), 120);
   }
@@ -311,6 +314,9 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
     to.disabled = recording.active || live;
     duration.disabled = recording.active || live;
     simPerSecond.disabled = recording.active || !live;
+    // Keep the duration input inside the server's frame-count cap; the browser
+    // then blocks a submission the preflight would reject.
+    duration.max = String(durationLimit(Number(fps.value)));
     theme.disabled = recording.active || live;
     if (live) {
       range.options[0].hidden = true;
@@ -360,13 +366,13 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
   panel.addEventListener('change', () => { if (!pathWasEdited) setDefaultPath(); update(); });
   window.addEventListener('studio-view-change', update);
   source.addEventListener('change', () => {
-    lastSchedule = null; scheduleKey = ''; scheduledKey = '';
+    lastSchedule = null; requests.reset();
     if (isLive()) applyLiveRateDefault(); else applyStoredDurationDefault();
     update();
   });
   for (const input of [from, to, fps, frames]) {
     input.addEventListener('input', () => {
-      lastSchedule = null; scheduleKey = ''; scheduledKey = '';
+      lastSchedule = null; requests.reset();
       applyStoredDurationDefault();
       applyLiveRateDefault();
       update();
@@ -374,7 +380,7 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
   }
   duration.addEventListener('input', () => {
     durationEdited = true;
-    lastSchedule = null; scheduleKey = ''; scheduledKey = '';
+    lastSchedule = null; requests.reset();
     update();
   });
   simPerSecond.addEventListener('input', () => {
@@ -402,8 +408,7 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
     setDefaultPath();
     previewImage.hidden = true;
     lastSchedule = null;
-    scheduleKey = '';
-    scheduledKey = '';
+    requests.reset();
     applyStoredDurationDefault();
     applyLiveRateDefault();
     const availableDiagnostics = diagnosticViews();

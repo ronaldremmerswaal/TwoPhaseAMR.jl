@@ -872,7 +872,13 @@ end
                     )["recording"]
                     @test stopped["status"] == "completed"
                     @test !stopped["active"] && stopped["source"] == "live"
-                    @test stopped["encoded"] > 0 && stopped["dropped"] >= 0
+                    @test stopped["encoded"] > 0
+                    # Every delivered frame is encoded or dropped, never both,
+                    # and the reported times match the written frames.
+                    @test stopped["encoded"] + stopped["dropped"] <= length(frames(store))
+                    @test length(stopped["times"]) == stopped["encoded"]
+                    @test issorted(stopped["times"])
+                    @test last(stopped["times"]) <= last(step_log(store).time) + 1e-12
                     @test _gif_envelope(live_path)
                     @test stopped["progress"] == 1.0 && stopped["error"] === nothing
                     @test occursin(r"^/download/[0-9a-f]{32}\?token=", stopped["url"])

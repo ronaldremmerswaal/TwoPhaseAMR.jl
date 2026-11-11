@@ -363,7 +363,7 @@ change together when the theme changes:
 
 | Purpose | CSS variables |
 |---|---|
-| Shell and dialogs | `--surface`, `--surface-raised`, `--text`, `--muted`, `--border`, `--focus`, `--shadow`, `--dialog-backdrop`, `--hover`, `--drop-overlay`, `--record`, `--error`, `--status-running`, `--status-pending` |
+| Shell and dialogs | `--surface`, `--surface-raised`, `--text`, `--muted`, `--border`, `--focus`, `--shadow`, `--dialog-backdrop`, `--hover`, `--drop-overlay`, `--error`, `--status-running`, `--status-pending` |
 | Timeline | `--timeline-keyframe`, `--timeline-regrid`, `--timeline-playhead`, `--timeline-live-head`, `--timeline-preview` |
 | Field panels and colourbars | `--field-background`, `--field-foreground`, `--colorbar-text` |
 | Field overlays and solid edges | `--overlay-interface`, `--overlay-blocks`, `--overlay-solid` |
@@ -600,7 +600,7 @@ to stored frames. The default `source=:stored` samples the store after (or
 during) the run. `frames=:keyframes` (default) or `:all` selects the
 candidates and `window=(t0, t1)` restricts them; without a window the whole
 recording is used. `fps` (default 20) and `duration` set the output count to
-`round(fps × duration) + 1`; without `duration` it is
+`round(fps × duration) + 1`, capped at 100 000 frames; without `duration` it is
 `clamp(candidate count / fps, 2, 20)` seconds. Give `nframes` instead to set
 the count directly. Output times are uniform over the window and each frame shows
 the candidate nearest to its target time, with ties going to the earlier
@@ -620,7 +620,9 @@ per second of video): output frame `k` shows the arrived frame nearest to
 (the last completed step, seeded with the newest stored frame). A frame that arrives decides every output time up to
 its own time, so only one frame of look-ahead is needed; sparse streams repeat
 frames and dense streams skip them. On `close`, the last arrived frame is held
-through the simulation time at stop. For example,
+through the simulation time at stop, which is frozen when the recording stops
+(before the queue drains) so steps taken while it drains are not covered;
+`recording.stop_time` reports it. For example,
 continue the flow to a later time with a fresh recorder:
 
 ```julia

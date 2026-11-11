@@ -1,5 +1,96 @@
 import type { RecordingSchedule } from './types';
 
+/**
+ * Largest output frame count the server plans (`MAX_VIDEO_FRAMES` in the core
+ * package). Keep in step with `src/observation/video.jl`.
+ */
+export const MAX_EXPORT_FRAMES = 100_000;
+
+/** Longest stored export duration whose frame count stays within the cap. */
+export function durationLimit(fps: number): number {
+  return Number.isFinite(fps) && fps > 0 ? (MAX_EXPORT_FRAMES - 1) / fps : 1;
+}
+
+/**
+ * Identity of a preflight request: its command plus the stored frames the
+ * dialog had when it asked, so newly stored frames make the summary stale.
+ */
+export function scheduleKey(
+  command: object, frames: readonly { id: number | string; time: number }[],
+): string {
+  const last = frames[frames.length - 1];
+  return JSON.stringify([command, frames.length, last ? [last.id, last.time] : null]);
+}
+
+/**
+ * Bookkeeping for the dialog's schedule preflight. A key is armed while its
+ * debounce timer runs, pending while its response is in flight, applied once a
+ * response was shown, and failed when the server rejected it; only a key in
+ * none of those states is requested again, so new frames or edited fields
+ * refresh the summary without re-asking for an unchanged plan.
+ */
+export class ScheduleRequests {
+  private armed = '';
+  private pending = '';
+  private applied = '';
+  private failed = '';
+  private generation = 0;
+
+  /** True when no armed, in-flight, applied, or failed request covers `key`. */
+  needs(key: string): boolean {
+    return key !== this.armed && key !== this.pending &&
+      key !== this.applied && key !== this.failed;
+  }
+
+  /** Remember the key whose debounce timer is pending. */
+  arm(key: string): void { this.armed = key; }
+
+  /** Forget an armed request, e.g. when the form changed again. */
+  disarm(): void { this.armed = ''; }
+
+  /** Mark `key` as in flight and return the generation of this request. */
+  start(key: string): number {
+    this.armed = '';
+    this.pending = key;
+    return ++this.generation;
+  }
+
+  /** Record a shown answer; false when a newer request superseded it. */
+  settle(generation: number, key: string): boolean {
+    if (generation !== this.generation) return false;
+    this.pending = '';
+    this.applied = key;
+    this.failed = '';
+    return true;
+  }
+
+  /** Record a rejected answer; false when a newer request superseded it. */
+  fail(generation: number, key: string): boolean {
+    if (generation !== this.generation) return false;
+    this.pending = '';
+    this.failed = key;
+    return true;
+  }
+
+  /**
+   * Drop the request in flight so a later pass can ask again. A response that
+   * was discarded because the dialog switched to a live source must not leave
+   * its key pending forever, which would stop every later stored request.
+   */
+  cancel(generation: number): void {
+    if (generation === this.generation) this.pending = '';
+  }
+
+  /** Forget every request, e.g. when the export source changes. */
+  reset(): void {
+    this.armed = '';
+    this.pending = '';
+    this.applied = '';
+    this.failed = '';
+    this.generation += 1;
+  }
+}
+
 /** Time-window form fields: an omitted side means the recording's edge. */
 export interface WindowSelection {
   window?: [number, number];

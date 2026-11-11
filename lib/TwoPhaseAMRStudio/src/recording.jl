@@ -620,6 +620,9 @@ end
 # open until the run finishes; closing it early would start encoding on the
 # solver's sole thread. The app reports :stopping until finalization finishes.
 function _stop_live_subscription!(app, handle)
+    # Freeze the simulation time at stop before the run takes further steps, so
+    # the finalized output never extends past the moment the recording stopped.
+    _freeze_live_stop_time!(handle)
     subscription = getfield(handle, :subscription)
     single = Threads.nthreads(:interactive) == 0 && Threads.nthreads(:default) == 1
     if single && TwoPhaseAMR.run_state(app.recorder) in (:running, :pause_requested, :paused, :stopping)
@@ -634,6 +637,14 @@ function _stop_live_subscription!(app, handle)
     else
         _unsubscribe(app.store, subscription)
     end
+    return nothing
+end
+
+# The stop time belongs to the handle, which the Makie extension owns; call its
+# capture through the extension so no Makie package is required by Studio.
+function _freeze_live_stop_time!(handle)
+    extension = Base.get_extension(TwoPhaseAMR, :TwoPhaseAMRMakieExt)
+    isnothing(extension) || Base.invokelatest(extension._freeze_stop_time!, handle)
     return nothing
 end
 
@@ -712,7 +723,7 @@ function _record_job!(app, job)
             _unsubscribe(app.store, getfield(handle, :subscription))
             encoded, dropped = _live_counts(handle)
             encoded > 0 || throw(ArgumentError("live recording produced no frames"))
-            shown = copy(getfield(handle, :times))
+            shown = handle.times
             Base.@lock(app.lock, job.times = shown)
             _complete_job!(app, job, encoded, dropped)
         end
