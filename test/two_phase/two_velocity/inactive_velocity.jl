@@ -75,8 +75,7 @@ end
 end
 
 @testset "NaN phase storage survives transport, diffusion and projection" begin
-    for projection in (CMDGFMProjection(), MimeticProjection()),
-            transport in (FrozenInterfaceFluxes(), ProjectedLiquidVelocity())
+    for transport in (FrozenInterfaceFluxes(), ProjectedLiquidVelocity())
         mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, false))
         interface = InterfaceField(mesh, (x, y) -> y - 0.47)
         flow = FlowSimulation(

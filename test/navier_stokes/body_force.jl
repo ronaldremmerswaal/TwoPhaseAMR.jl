@@ -87,7 +87,6 @@ end
     for model in (
             OneVelocityModel(),
             TwoVelocityModel(pressure_projection = CMDGFMProjection()),
-            TwoVelocityModel(pressure_projection = MimeticProjection()),
         )
         mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, false))
         interface = InterfaceField(mesh, (x, y) -> y - 0.47)

@@ -519,8 +519,7 @@ end
 
 function _cmdgfm_jump_stencils(
         solver::CMDGFMProjectionSolver{T}, data;
-        face_normal = nothing, incident_faces = nothing, vertex_patches = nothing,
-        storage = nothing,
+        incident_faces = nothing, vertex_patches = nothing, storage = nothing,
     ) where {T}
     interface = solver.interface
     mesh = interface.mesh
@@ -571,11 +570,7 @@ function _cmdgfm_jump_stencils(
                 continue
             end
         end
-        # The default remains CMDGFM's PLIC-based staggered normal. Mimetic
-        # comparisons may supply another face normal without changing the
-        # stencil geometry, beta rule, or CMDGFM itself.
-        normal = isnothing(face_normal) ?
-            _cmdgfm_face_normal(interface, face) : face_normal(face)
+        normal = _cmdgfm_face_normal(interface, face)
         if isnothing(normal) || abs(normal[face.axis]) <= sqrt(eps(T))
             push!(
                 stencils,
@@ -1164,7 +1159,7 @@ function _cmdgfm_residual_defects(residual, assembled, dt)
     np = length(assembled.pressure_indices)
     pressure = _projection_pressure_residual_maximum(
         residual, assembled.pressure_indices,
-        assembled.pressure_operator.volumes, Val(true),
+        assembled.pressure_operator.volumes,
     )
     mesh = assembled.pressure_operator.mesh
     # The jump row is an acceleration; dt²/h gives a fractional volume defect.

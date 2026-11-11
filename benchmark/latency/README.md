@@ -351,8 +351,8 @@ versions or cases; measure both image build/load cost and cold examples in CI.
 `src/precompile.jl` precompiles small Taylor–Green, Stokes-3-like (interface,
 curvature and vorticity AMR criteria, topology rebuild), and capillary
 one-velocity and CMDGFM two-velocity runs, including `stable_timestep`,
-diagnostics and the simulation summary. The mimetic projection is not part of
-the workload. Disable it with the standard PrecompileTools preference
+diagnostics and the simulation summary. Disable the workload with the
+standard PrecompileTools preference
 (`PrecompileTools.Preferences.set_preferences!(TwoPhaseAMR, "precompile_workload" => false; force=true)`).
 
 Single fresh-process samples, AMD Ryzen 9 5950X, one Julia and BLAS thread,

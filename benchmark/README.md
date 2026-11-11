@@ -16,7 +16,7 @@ The flat suite has five user-oriented groups:
 - `interface transport`: one-velocity WY and both typed two-velocity transport
   choices on uniform and mixed meshes;
 - `linear solvers` / `two-velocity projection`: Poisson application/solve and
-  CMDGFM versus mimetic projection.
+  the CMDGFM projection.
 
 A separate `latency.jl` probe reports package load, first flow construction,
 first-step, and warmed second-step time and allocations. It deliberately runs

@@ -1172,8 +1172,8 @@ end
 @testset "Moving two-velocity WY carrier after regridding (#84)" begin
     dt = 0.02
     tolerance = 1.0e-10
-    function make_flow(
-            projection; update_interval = 1, step_size = dt, speed_scale = 1.0,
+    function make_flow(;
+            update_interval = 1, step_size = dt, speed_scale = 1.0,
             t_init = 1.5step_size, t_end = 2.5step_size,
         )
         mesh = BlockTreeMesh(
@@ -1207,7 +1207,6 @@ end
             );
             velocity_model = TwoVelocityModel(
                 interface_transport = FrozenInterfaceFluxes(),
-                pressure_projection = projection,
             ),
             velocity = (liquid_velocity, gas_velocity), boundary = FreeSlip(),
             dt = step_size, adaptivity = Adaptivity(criteria = (indicator,)),
@@ -1326,19 +1325,11 @@ end
         TV._mark_inactive_phase_velocities!(reference.flow.velocity, reference.interface)
         state = TV._two_velocity_flow_workspace!(workspace.two_phase, solver.two_phase)
         work = state.projection_workspace
-        assembled = if work isa TV.CMDGFMProjectionWorkspace
-            TV._assemble_cmdgfm_system!(
-                state.projection_solver, work, step_size, reference.flow.velocity,
-            )
-        else
-            TV._assemble_mimetic_system!(
-                state.projection_solver, work, step_size, reference.flow.velocity,
-            )
-        end
+        assembled = TV._assemble_cmdgfm_system!(
+            state.projection_solver, work, step_size, reference.flow.velocity,
+        )
         rhs = copy(assembled.right_hand_side)
-        initial_defects = work isa TV.CMDGFMProjectionWorkspace ?
-            TV._cmdgfm_residual_defects(rhs, assembled, step_size) :
-            TV._local_mimetic_residual_defects(rhs, assembled, step_size)
+        initial_defects = TV._cmdgfm_residual_defects(rhs, assembled, step_size)
         actual_work = flow.workspace.two_phase.two_velocity[].projection_workspace
         @test length(actual_work.right_hand_side) == length(rhs)
         rhs_scale = maximum(abs, rhs; init = 0.0)
@@ -1358,132 +1349,128 @@ end
         return maximum(initial_defects)
     end
 
-    for projection in (CMDGFMProjection(), MimeticProjection())
-        @testset "$(typeof(projection))" begin
-            case = make_flow(projection)
-            (; flow, mesh, geometry, interface) = case
-            # A matching run skips its second adaptation. Its pressure after
-            # the physical step is then transferred independently, providing
-            # the pressure that regrid correction must leave untouched.
-            reference = make_flow(projection; update_interval = 3)
-            reference_volume = integrate(reference.interface)
-            @test project!(flow; dt, tolerance, max_cycles = 4000).converged
-            @test project!(reference.flow; dt, tolerance, max_cycles = 4000).converged
-            check_carrier(interface, flow.velocity, dt, tolerance)
-            @test any(
-                any(value -> 0 < value < 1, interior(geometry.open_fraction, block))
-                    for block in eachindex(mesh.blocks)
+    case = make_flow()
+    (; flow, mesh, geometry, interface) = case
+    # A matching run skips its second adaptation. Its pressure after
+    # the physical step is then transferred independently, providing
+    # the pressure that regrid correction must leave untouched.
+    reference = make_flow(; update_interval = 3)
+    reference_volume = integrate(reference.interface)
+    @test project!(flow; dt, tolerance, max_cycles = 4000).converged
+    @test project!(reference.flow; dt, tolerance, max_cycles = 4000).converged
+    check_carrier(interface, flow.velocity, dt, tolerance)
+    @test any(
+        any(value -> 0 < value < 1, interior(geometry.open_fraction, block))
+            for block in eachindex(mesh.blocks)
+    )
+    initial_volume = integrate(interface)
+    @test 0 < initial_volume < 1
+    initial_fraction = [
+        copy(interior(interface.fraction, block)) for block in eachindex(mesh.blocks)
+    ]
+    initial_blocks = nblocks(mesh)
+    previous_volume = initial_volume
+    baseline_step_drift = 0.0
+
+    # The time window gives one unrefined moving step, then a local
+    # refinement and a coarsening, followed by coarsened-mesh steps.
+    for step in 1:5
+        result = simulate!(
+            flow, step * dt; dt, tolerance, max_cycles = 4000,
+        )
+        @test result.steps == 1
+        @test result.pressure.converged
+        @test result.mesh_updates == (step in (2, 3) ? 1 : 0)
+        current_volume = integrate(interface)
+        if step <= 2
+            reference_result = simulate!(
+                reference.flow, step * dt; dt, tolerance, max_cycles = 4000,
             )
-            initial_volume = integrate(interface)
-            @test 0 < initial_volume < 1
-            initial_fraction = [
-                copy(interior(interface.fraction, block)) for block in eachindex(mesh.blocks)
-            ]
-            initial_blocks = nblocks(mesh)
-            previous_volume = initial_volume
-            baseline_step_drift = 0.0
+            @test reference_result.steps == 1
+            @test reference_result.pressure.converged
+            next_reference_volume = integrate(reference.interface)
+            baseline_step_drift = max(
+                baseline_step_drift,
+                abs(next_reference_volume - reference_volume) / initial_volume,
+            )
+            reference_volume = next_reference_volume
+            @test reference_result.mesh_updates == 0
+        end
+        # chi=1 occupies at most twice the liquid volume, so a
+        # projected step's relative WY dilation is at most 2*tolerance.
+        # Use twice that bound for transfer/snapping and compare with
+        # the measured no-regrid per-step drift; summation adds round-off.
+        drift_limit = max(8baseline_step_drift, 4tolerance) +
+            512eps() / initial_volume
+        @test abs(current_volume - previous_volume) / initial_volume <= drift_limit
+        @test abs(current_volume - initial_volume) / initial_volume <= step * drift_limit
+        previous_volume = current_volume
+        if step == 1
+            movement = maximum(
+                maximum(
+                    abs, interior(interface.fraction, block) .- initial_fraction[block],
+                ) for block in eachindex(mesh.blocks)
+            )
+            @test movement > 1.0e-7
+            check_carrier(interface, flow.velocity, dt, tolerance)
+        elseif step == 2
+            @test nblocks(mesh) > initial_blocks
+            @test any(block -> block.key.level == 1, mesh.blocks)
+            @test any(block -> block.key.level == 2, mesh.blocks)
+            metrics = check_carrier(interface, flow.velocity, dt, tolerance)
+            println(
+                "two_velocity_regrid " *
+                    "stage=refine max_mixture_divergence=$(metrics.max_divergence)",
+            )
 
-            # The time window gives one unrefined moving step, then a local
-            # refinement and a coarsening, followed by coarsened-mesh steps.
-            for step in 1:5
-                result = simulate!(
-                    flow, step * dt; dt, tolerance, max_cycles = 4000,
+            transfer_reference!(reference, step * dt, step)
+            # A raw AMR transfer is a negative control: it must
+            # expose the divergence fixed by the simulation path.
+            uncorrected = carrier_metrics(
+                reference.interface, reference.flow.velocity,
+            )
+            @test uncorrected.max_divergence > 1.0e-8
+            @test dt * uncorrected.max_divergence >
+                carrier_defect_limit(uncorrected, dt, tolerance)
+            println(
+                "two_velocity_regrid " *
+                    "stage=unprojected max_mixture_divergence=$(uncorrected.max_divergence)",
+            )
+            keys = [block.key for block in mesh.blocks]
+            reference_keys = [block.key for block in reference.mesh.blocks]
+            @test keys == reference_keys
+            if keys == reference_keys
+                # Pressure solve residual scales as tolerance / dt^2.
+                # Allow that absolute solve error plus round-off.
+                pressure_scale = max(
+                    1.0,
+                    maximum(
+                        maximum(abs, interior(reference.flow.pressure, block))
+                            for block in eachindex(reference.mesh.blocks)
+                    ),
                 )
-                @test result.steps == 1
-                @test result.pressure.converged
-                @test result.mesh_updates == (step in (2, 3) ? 1 : 0)
-                current_volume = integrate(interface)
-                if step <= 2
-                    reference_result = simulate!(
-                        reference.flow, step * dt; dt, tolerance, max_cycles = 4000,
-                    )
-                    @test reference_result.steps == 1
-                    @test reference_result.pressure.converged
-                    next_reference_volume = integrate(reference.interface)
-                    baseline_step_drift = max(
-                        baseline_step_drift,
-                        abs(next_reference_volume - reference_volume) / initial_volume,
-                    )
-                    reference_volume = next_reference_volume
-                    @test reference_result.mesh_updates == 0
-                end
-                # chi=1 occupies at most twice the liquid volume, so a
-                # projected step's relative WY dilation is at most 2*tolerance.
-                # Use twice that bound for transfer/snapping and compare with
-                # the measured no-regrid per-step drift; summation adds round-off.
-                drift_limit = max(8baseline_step_drift, 4tolerance) +
-                    512eps() / initial_volume
-                @test abs(current_volume - previous_volume) / initial_volume <= drift_limit
-                @test abs(current_volume - initial_volume) / initial_volume <= step * drift_limit
-                previous_volume = current_volume
-                if step == 1
-                    movement = maximum(
-                        maximum(
-                            abs, interior(interface.fraction, block) .- initial_fraction[block],
-                        ) for block in eachindex(mesh.blocks)
-                    )
-                    @test movement > 1.0e-7
-                    check_carrier(interface, flow.velocity, dt, tolerance)
-                elseif step == 2
-                    @test nblocks(mesh) > initial_blocks
-                    @test any(block -> block.key.level == 1, mesh.blocks)
-                    @test any(block -> block.key.level == 2, mesh.blocks)
-                    metrics = check_carrier(interface, flow.velocity, dt, tolerance)
-                    println(
-                        "two_velocity_regrid projection=$(nameof(typeof(projection))) " *
-                            "stage=refine max_mixture_divergence=$(metrics.max_divergence)",
-                    )
-
-                    transfer_reference!(reference, step * dt, step)
-                    # A raw AMR transfer is a negative control: it must
-                    # expose the divergence fixed by the simulation path.
-                    uncorrected = carrier_metrics(
-                        reference.interface, reference.flow.velocity,
-                    )
-                    @test uncorrected.max_divergence > 1.0e-8
-                    @test dt * uncorrected.max_divergence >
-                        carrier_defect_limit(uncorrected, dt, tolerance)
-                    println(
-                        "two_velocity_regrid projection=$(nameof(typeof(projection))) " *
-                            "stage=unprojected max_mixture_divergence=$(uncorrected.max_divergence)",
-                    )
-                    keys = [block.key for block in mesh.blocks]
-                    reference_keys = [block.key for block in reference.mesh.blocks]
-                    @test keys == reference_keys
-                    if keys == reference_keys
-                        # Pressure solve residual scales as tolerance / dt^2.
-                        # Allow that absolute solve error plus round-off.
-                        pressure_scale = max(
-                            1.0,
-                            maximum(
-                                maximum(abs, interior(reference.flow.pressure, block))
-                                    for block in eachindex(reference.mesh.blocks)
-                            ),
-                        )
-                        pressure_atol = 2tolerance / dt^2 * pressure_scale
-                        for block in eachindex(mesh.blocks)
-                            @test maximum(
-                                abs,
-                                interior(flow.pressure, block) .-
-                                    interior(reference.flow.pressure, block),
-                            ) <= pressure_atol
-                        end
-                    end
-                    check_regrid_projection(
-                        flow, reference, dt, tolerance; max_cycles = 4000,
-                    )
-                elseif step == 3
-                    @test nblocks(mesh) == initial_blocks
-                    @test all(block -> block.key.level == 1, mesh.blocks)
-                    metrics = check_carrier(interface, flow.velocity, dt, tolerance)
-                    println(
-                        "two_velocity_regrid projection=$(nameof(typeof(projection))) " *
-                            "stage=coarsen max_mixture_divergence=$(metrics.max_divergence)",
-                    )
-                else
-                    check_carrier(interface, flow.velocity, dt, tolerance)
+                pressure_atol = 2tolerance / dt^2 * pressure_scale
+                for block in eachindex(mesh.blocks)
+                    @test maximum(
+                        abs,
+                        interior(flow.pressure, block) .-
+                            interior(reference.flow.pressure, block),
+                    ) <= pressure_atol
                 end
             end
+            check_regrid_projection(
+                flow, reference, dt, tolerance; max_cycles = 4000,
+            )
+        elseif step == 3
+            @test nblocks(mesh) == initial_blocks
+            @test all(block -> block.key.level == 1, mesh.blocks)
+            metrics = check_carrier(interface, flow.velocity, dt, tolerance)
+            println(
+                "two_velocity_regrid " *
+                    "stage=coarsen max_mixture_divergence=$(metrics.max_divergence)",
+            )
+        else
+            check_carrier(interface, flow.velocity, dt, tolerance)
         end
     end
 
@@ -1539,9 +1526,9 @@ end
     @testset "Fast phase velocities at regrid" begin
         # Reciprocal speed and time-step scaling keeps transport comparable,
         # while exercising the ordinary, unnormalized projection at high speed.
-        for projection in (CMDGFMProjection(), MimeticProjection()), speed_scale in (100.0, 1000.0)
+        for speed_scale in (100.0, 1000.0)
             step_size = dt / speed_scale
-            case = make_flow(projection; step_size, speed_scale)
+            case = make_flow(; step_size, speed_scale)
             (; flow, interface) = case
             @test project!(flow; dt = step_size, tolerance, max_cycles = 500).converged
             initial_volume = integrate(interface)
@@ -1561,8 +1548,8 @@ end
                     (step + 1) * (4tolerance + 512eps() / initial_volume)
 
                 if step == 1 && speed_scale == 1000.0
-                    reference = make_flow(
-                        projection; update_interval = 3, step_size, speed_scale,
+                    reference = make_flow(;
+                        update_interval = 3, step_size, speed_scale,
                     )
                     @test project!(
                         reference.flow; dt = step_size, tolerance, max_cycles = 500,
@@ -1584,11 +1571,10 @@ end
 
     @testset "Ordinary regrid tolerance is not tightened" begin
         # This nonzero low-speed case has a regrid defect below the requested
-        # tolerance but above a round-off-tightened target. Mimetic MINRES
-        # must accept the zero correction just as for a physical projection.
-        projection = MimeticProjection()
-        case = make_flow(projection; speed_scale = 1.0e-10)
-        reference = make_flow(projection; update_interval = 3, speed_scale = 1.0e-10)
+        # tolerance but above a round-off-tightened target, so the projection
+        # must accept the zero correction.
+        case = make_flow(; speed_scale = 1.0e-10)
+        reference = make_flow(; update_interval = 3, speed_scale = 1.0e-10)
         @test project!(case.flow; dt, tolerance, max_cycles = 500).converged
         @test project!(reference.flow; dt, tolerance, max_cycles = 500).converged
         result = simulate!(case.flow, 2dt; dt, tolerance, max_cycles = 500)
@@ -1617,7 +1603,7 @@ end
     tolerance = 1.0e-9
     max_cycles = 3000
 
-    function reference_flux_case(projection)
+    function reference_flux_case()
         mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, false))
         interface = InterfaceField(
             mesh, (x, y) -> y - 0.43 - 0.04cospi(2x); lipschitz = 1.04,
@@ -1631,7 +1617,6 @@ end
             );
             velocity_model = TwoVelocityModel(
                 interface_transport = FrozenInterfaceFluxes(),
-                pressure_projection = projection,
             ),
             velocity = (liquid, gas),
             pressure = (x, y) -> 2.5 + 0.05sinpi(2x) * cospi(y),
@@ -1669,156 +1654,122 @@ end
         return result
     end
 
-    for projection in (CMDGFMProjection(), MimeticProjection())
-        @testset "$(typeof(projection))" begin
-            (; flow, mesh, interface) = reference_flux_case(projection)
-            previous_pressure = copy(flow.pressure)
-            initial_flux = reference_mixture_flux(interface, flow.velocity)
-            initial_liquid = copy(first(TV._current_phase_face_apertures!(interface)))
-            @test maximum(abs, initial_flux) > 1.0e-7
+    (; flow, mesh, interface) = reference_flux_case()
+    previous_pressure = copy(flow.pressure)
+    initial_flux = reference_mixture_flux(interface, flow.velocity)
+    initial_liquid = copy(first(TV._current_phase_face_apertures!(interface)))
+    @test maximum(abs, initial_flux) > 1.0e-7
 
-            # Snapshot the same old-geometry phase extension used by momentum
-            # transport; it remains finite if the moving interface activates a face.
-            state = TV._two_velocity_flow_workspace!(
-                flow.workspace.two_phase, flow.system.two_phase,
-            )
-            extended = (FaceVelocity(mesh), FaceVelocity(mesh))
-            TV._prepare_momentum_advection!(state.momentum, flow.velocity)
-            TV._copy_momentum_velocity!(extended, state.momentum)
+    # Snapshot the same old-geometry phase extension used by momentum
+    # transport; it remains finite if the moving interface activates a face.
+    state = TV._two_velocity_flow_workspace!(
+        flow.workspace.two_phase, flow.system.two_phase,
+    )
+    extended = (FaceVelocity(mesh), FaceVelocity(mesh))
+    TV._prepare_momentum_advection!(state.momentum, flow.velocity)
+    TV._copy_momentum_velocity!(extended, state.momentum)
 
-            stats = step!(
-                flow.velocity, flow.pressure, flow.system, dt, flow.workspace;
-                tolerance, max_cycles, _reference_dt = reference_dt,
-            )
-            @test stats.converged
-            @test _phase_storage_contract(flow.velocity, interface)
-            current_liquid = first(TV._current_phase_face_apertures!(interface))
-            @test maximum(abs, current_liquid .- initial_liquid) > 1.0e-7
-            current_old_flux = reference_mixture_flux(interface, extended)
-            @test maximum(abs, current_old_flux .- initial_flux) > 1.0e-9
+    stats = step!(
+        flow.velocity, flow.pressure, flow.system, dt, flow.workspace;
+        tolerance, max_cycles, _reference_dt = reference_dt,
+    )
+    @test stats.converged
+    @test _phase_storage_contract(flow.velocity, interface)
+    current_liquid = first(TV._current_phase_face_apertures!(interface))
+    @test maximum(abs, current_liquid .- initial_liquid) > 1.0e-7
+    current_old_flux = reference_mixture_flux(interface, extended)
+    @test maximum(abs, current_old_flux .- initial_flux) > 1.0e-9
 
-            references = flow.system.pressure_solver.operator.references
-            final_flux = reference_mixture_flux(interface, flow.velocity)
-            target_scale = stats isa CMDGFMProjectionStats ? 1 - dt / reference_dt : 0.0
-            if stats isa CMDGFMProjectionStats
-                stored_flux = [
-                    TV._get(flow.workspace.projection.inherited_divergence, ref)
-                        for ref in references
-                ]
-                @test stored_flux ≈ initial_flux atol = 512eps()
-            end
-            target_error = maximum(eachindex(final_flux)) do index
-                volume = mesh.blocks[references[index].block].volume
-                abs(final_flux[index] - target_scale * initial_flux[index]) / volume
-            end
-            @test dt * target_error <= tolerance + 1024eps()
-            if stats isa CMDGFMProjectionStats
-                @test maximum(abs, final_flux) >
-                    0.5 * target_scale * maximum(abs, initial_flux)
-            end
+    references = flow.system.pressure_solver.operator.references
+    final_flux = reference_mixture_flux(interface, flow.velocity)
+    target_scale = stats isa CMDGFMProjectionStats ? 1 - dt / reference_dt : 0.0
+    if stats isa CMDGFMProjectionStats
+        stored_flux = [
+            TV._get(flow.workspace.projection.inherited_divergence, ref)
+                for ref in references
+        ]
+        @test stored_flux ≈ initial_flux atol = 512eps()
+    end
+    target_error = maximum(eachindex(final_flux)) do index
+        volume = mesh.blocks[references[index].block].volume
+        abs(final_flux[index] - target_scale * initial_flux[index]) / volume
+    end
+    @test dt * target_error <= tolerance + 1024eps()
+    @test maximum(abs, final_flux) >
+        0.5 * target_scale * maximum(abs, initial_flux)
 
-            work = state.projection_workspace
-            if stats isa CMDGFMProjectionStats
-                for block in eachindex(mesh.blocks)
-                    @test interior(flow.pressure, block) ≈
-                        interior(previous_pressure, block) .+
-                        interior(work.pressure_increment, block) atol = 512eps()
-                end
-                # The old extension has a significant normal jump on the
-                # current stencils, but the new jump must still target zero.
-                old_jump = [
-                    dt * TV._cmdgfm_normal_velocity_row(extended, stencil) /
-                        TV._projection_face_spacing(mesh, stencil.face)
-                        for stencil in work.stencils
-                ]
-                final_jump = [
-                    dt * TV._cmdgfm_normal_velocity_row(flow.velocity, stencil) /
-                        TV._projection_face_spacing(mesh, stencil.face)
-                        for stencil in work.stencils
-                ]
-                @test !isempty(old_jump)
-                @test any(zip(old_jump, work.stencils)) do (jump, stencil)
-                    abs(jump) > 1.0e-6 * dt / TV._projection_face_spacing(mesh, stencil.face)
-                end
-                @test maximum(abs, final_jump; init = 0.0) <= tolerance + 1024eps()
-                @test stats.normal_velocity_defect <= tolerance + 1024eps()
-            else
-                # Mimetic replaces, rather than accumulates, physical pressure.
-                @test any(eachindex(mesh.blocks)) do block
-                    maximum(
-                        abs, interior(flow.pressure, block) .-
-                            interior(previous_pressure, block)
-                    ) > 1.0e-3
-                end
-            end
-            if stats isa MimeticProjectionStats
-                # The legacy mimetic diagnostic reports the raw pressure work.
-                data = work.cache.pressure.face_data
-                dual_volumes = work.cache.face_dual_volumes
-                cross = 0.0
-                for phase in 1:2
-                    masses = phase == 1 ? data.liquid_mass : data.gas_mass
-                    gradient = phase == 1 ? work.liquid_gradient : work.gas_gradient
-                    for index in eachindex(mesh.faces)
-                        value = flow.velocity[phase].interior[index]
-                        isnan(value) && continue
-                        cross += masses[index] * dual_volumes[index] *
-                            value * dt * gradient.interior[index]
-                    end
-                end
-                @test stats.energy_identity_error ≈ abs(2cross) atol = 4096eps()
-                @test stats.energy_identity_error < 1.0e-6
-            end
+    work = state.projection_workspace
+    for block in eachindex(mesh.blocks)
+        @test interior(flow.pressure, block) ≈
+            interior(previous_pressure, block) .+
+            interior(work.pressure_increment, block) atol = 512eps()
+    end
+    # The old extension has a significant normal jump on the
+    # current stencils, but the new jump must still target zero.
+    old_jump = [
+        dt * TV._cmdgfm_normal_velocity_row(extended, stencil) /
+            TV._projection_face_spacing(mesh, stencil.face)
+            for stencil in work.stencils
+    ]
+    final_jump = [
+        dt * TV._cmdgfm_normal_velocity_row(flow.velocity, stencil) /
+            TV._projection_face_spacing(mesh, stencil.face)
+            for stencil in work.stencils
+    ]
+    @test !isempty(old_jump)
+    @test any(zip(old_jump, work.stencils)) do (jump, stencil)
+        abs(jump) > 1.0e-6 * dt / TV._projection_face_spacing(mesh, stencil.face)
+    end
+    @test maximum(abs, final_jump; init = 0.0) <= tolerance + 1024eps()
+    @test stats.normal_velocity_defect <= tolerance + 1024eps()
 
-            # A truncated simulate! call follows the same projection path as
-            # an equivalent direct step with its reference proposal.
-            simulation_case = reference_flux_case(projection)
-            result = simulate!(
-                simulation_case.flow, dt;
-                dt = reference_dt, tolerance, max_cycles,
-            )
-            @test result.steps == 1
-            @test result.pressure.converged
-            for block in eachindex(mesh.blocks)
-                @test interior(simulation_case.interface.fraction, block) ≈
-                    interior(interface.fraction, block) atol = 512eps()
-                @test interior(simulation_case.flow.pressure, block) ≈
-                    interior(flow.pressure, block) atol = 1.0e-9 rtol = 1.0e-9
-            end
+    # A truncated simulate! call follows the same projection path as
+    # an equivalent direct step with its reference proposal.
+    simulation_case = reference_flux_case()
+    result = simulate!(
+        simulation_case.flow, dt;
+        dt = reference_dt, tolerance, max_cycles,
+    )
+    @test result.steps == 1
+    @test result.pressure.converged
+    for block in eachindex(mesh.blocks)
+        @test interior(simulation_case.interface.fraction, block) ≈
+            interior(interface.fraction, block) atol = 512eps()
+        @test interior(simulation_case.flow.pressure, block) ≈
+            interior(flow.pressure, block) atol = 1.0e-9 rtol = 1.0e-9
+    end
 
-            # The default reference and an explicit reference equal to dt
-            # must take the same ordinary projection path.
-            default_case = reference_flux_case(projection)
-            equal_case = reference_flux_case(projection)
-            @test_throws ArgumentError step!(
-                default_case.flow.velocity, default_case.flow.pressure,
-                default_case.flow.system, dt, default_case.flow.workspace;
-                tolerance, max_cycles, _reference_dt = dt / 2,
-            )
-            default_stats = step!(
-                default_case.flow.velocity, default_case.flow.pressure,
-                default_case.flow.system, dt, default_case.flow.workspace;
-                tolerance, max_cycles,
-            )
-            equal_stats = step!(
-                equal_case.flow.velocity, equal_case.flow.pressure,
-                equal_case.flow.system, dt, equal_case.flow.workspace;
-                tolerance, max_cycles, _reference_dt = dt,
-            )
-            @test default_stats.converged && equal_stats.converged
-            for phase in 1:2
-                a = default_case.flow.velocity[phase].interior
-                b = equal_case.flow.velocity[phase].interior
-                @test isnan.(a) == isnan.(b)
-                active = findall(isfinite, a)
-                @test a[active] ≈ b[active] atol = 1.0e-10 rtol = 1.0e-10
-            end
-            for block in eachindex(default_case.mesh.blocks)
-                @test interior(default_case.interface.fraction, block) ≈
-                    interior(equal_case.interface.fraction, block) atol = 512eps()
-                @test interior(default_case.flow.pressure, block) ≈
-                    interior(equal_case.flow.pressure, block) atol = 1.0e-10 rtol = 1.0e-10
-            end
-        end
+    # The default reference and an explicit reference equal to dt
+    # must take the same ordinary projection path.
+    default_case = reference_flux_case()
+    equal_case = reference_flux_case()
+    @test_throws ArgumentError step!(
+        default_case.flow.velocity, default_case.flow.pressure,
+        default_case.flow.system, dt, default_case.flow.workspace;
+        tolerance, max_cycles, _reference_dt = dt / 2,
+    )
+    default_stats = step!(
+        default_case.flow.velocity, default_case.flow.pressure,
+        default_case.flow.system, dt, default_case.flow.workspace;
+        tolerance, max_cycles,
+    )
+    equal_stats = step!(
+        equal_case.flow.velocity, equal_case.flow.pressure,
+        equal_case.flow.system, dt, equal_case.flow.workspace;
+        tolerance, max_cycles, _reference_dt = dt,
+    )
+    @test default_stats.converged && equal_stats.converged
+    for phase in 1:2
+        a = default_case.flow.velocity[phase].interior
+        b = equal_case.flow.velocity[phase].interior
+        @test isnan.(a) == isnan.(b)
+        active = findall(isfinite, a)
+        @test a[active] ≈ b[active] atol = 1.0e-10 rtol = 1.0e-10
+    end
+    for block in eachindex(default_case.mesh.blocks)
+        @test interior(default_case.interface.fraction, block) ≈
+            interior(equal_case.interface.fraction, block) atol = 512eps()
+        @test interior(default_case.flow.pressure, block) ≈
+            interior(equal_case.flow.pressure, block) atol = 1.0e-10 rtol = 1.0e-10
     end
 end
