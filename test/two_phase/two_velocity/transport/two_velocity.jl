@@ -1172,11 +1172,15 @@ end
 @testset "Moving two-velocity WY carrier after regridding (#84)" begin
     dt = 0.02
     tolerance = 1.0e-10
+    # These helpers assign locals whose names the testset body also binds
+    # (`(; flow, mesh, geometry, interface) = case`). A nested function shares
+    # such names with the enclosing local scope, so each helper declares them
+    # `local`; otherwise every call would rebind the testset's case objects.
     function make_flow(;
             update_interval = 1, step_size = dt, speed_scale = 1.0,
             t_init = 1.5step_size, t_end = 2.5step_size,
         )
-        mesh = BlockTreeMesh(
+        local mesh = BlockTreeMesh(
             block_size = (4, 4), max_level = 2,
             periodic = (true, false),
             adaptation = MeshAdaptationOptions(;
@@ -1184,8 +1188,8 @@ end
             ),
             refine = (key, origin, extent) -> key.level == 0,
         )
-        geometry = GeometryField(mesh, (x, y) -> y - 0.1; lipschitz = 1)
-        interface = InterfaceField(
+        local geometry = GeometryField(mesh, (x, y) -> y - 0.1; lipschitz = 1)
+        local interface = InterfaceField(
             mesh, (x, y) -> y - 0.34 - 0.03cospi(2x);
             geometry, lipschitz = 1.02,
         )
@@ -1199,7 +1203,7 @@ end
         gas_velocity = (x, y, time, axis) -> speed_scale * (
             axis == 1 ? -0.08 + 0.03cospi(2y) : 0.02sinpi(2x) * sinpi(y)
         )
-        flow = FlowSimulation(
+        local flow = FlowSimulation(
             mesh,
             TwoPhase(
                 interface; density = (2.0, 1.0),
@@ -1218,7 +1222,8 @@ end
     # divergence or a density-weighted average. Zero apertures must not read
     # absent-phase NaN storage. Walls are impermeable, as required by WY.
     function carrier_metrics(field, velocity)
-        mesh = field.mesh
+        # Local for the same reason as the other helpers (see above).
+        local mesh = field.mesh
         nx, ny = mesh.block_size
         work = WYAdvectionWorkspace(
             field, velocity; interface_transport = FrozenInterfaceFluxes(),
@@ -1603,14 +1608,16 @@ end
     tolerance = 1.0e-9
     max_cycles = 3000
 
+    # As in the regridding testset, `local` keeps these helper assignments off
+    # the testset variables `(; flow, mesh, interface)` that the body binds.
     function reference_flux_case()
-        mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, false))
-        interface = InterfaceField(
+        local mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, false))
+        local interface = InterfaceField(
             mesh, (x, y) -> y - 0.43 - 0.04cospi(2x); lipschitz = 1.04,
         )
         liquid = (x, y, t, axis) -> axis == 1 ? 0.14 : 0.0
         gas = (x, y, t, axis) -> axis == 1 ? -0.06 : 0.0
-        flow = FlowSimulation(
+        local flow = FlowSimulation(
             mesh, TwoPhase(
                 interface; density = (2.0, 1.0),
                 dynamic_viscosity = (0.0, 0.0),
@@ -1628,10 +1635,10 @@ end
     # Negative integrated outward mixture flux, with absent phases excluded
     # before multiplication. This is independent of projection assembly.
     function reference_mixture_flux(interface, velocity)
-        mesh = interface.mesh
+        local mesh = interface.mesh
         nx, ny = mesh.block_size
         liquid, gas = TV._current_phase_face_apertures!(interface)
-        result = zeros(ncells(mesh))
+        local result = zeros(ncells(mesh))
         phase_flux(weight, value) = iszero(weight) ? 0.0 : weight * value
         for (index, face) in pairs(mesh.faces)
             flux = face.area * (
