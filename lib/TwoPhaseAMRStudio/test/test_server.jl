@@ -878,7 +878,7 @@ end
                     @test stopped["encoded"] + stopped["dropped"] <= length(frames(store))
                     @test length(stopped["times"]) == stopped["encoded"]
                     @test issorted(stopped["times"])
-                    @test last(stopped["times"]) <= last(step_log(store).time) + 1e-12
+                    @test last(stopped["times"]) <= last(step_log(store).time) + 1.0e-12
                     @test _gif_envelope(live_path)
                     @test stopped["progress"] == 1.0 && stopped["error"] === nothing
                     @test occursin(r"^/download/[0-9a-f]{32}\?token=", stopped["url"])

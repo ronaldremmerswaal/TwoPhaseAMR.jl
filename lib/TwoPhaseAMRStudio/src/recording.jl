@@ -404,8 +404,10 @@ function _preview_image(snapshot, frame, job, directory)
     isnothing(extension) && throw(ArgumentError("the Makie export extension is not loaded"))
     options = _export_options(job)
     panels = (;
-        (key => value for (key, value) in pairs(options)
-         if !(key in (:fps, :duration, :sim_per_second, :capacity)))...
+        (
+            key => value for (key, value) in pairs(options)
+                if !(key in (:fps, :duration, :sim_per_second, :capacity))
+        )...,
     )
     render() = begin
         animation = Base.invokelatest(extension._animation_scene, snapshot, job.field; panels...)
@@ -467,13 +469,15 @@ function _recording_schedule(app, socket, message)
     count = length(schedule)
     distinct = length(unique(schedule.indices))
     spacing = count > 1 ? (t_end - t_start) / (count - 1) : 0.0
-    return _send(socket, (;
-        type = "recording_schedule", request, frames = count, distinct,
-        repeats = count - distinct, sparse = 2 * distinct < count,
-        window = [t_start, t_end], fps = options.fps, duration,
-        spacing, sim_per_second = spacing * options.fps,
-        first_frame = ids[first(schedule.indices)],
-    ))
+    return _send(
+        socket, (;
+            type = "recording_schedule", request, frames = count, distinct,
+            repeats = count - distinct, sparse = 2 * distinct < count,
+            window = [t_start, t_end], fps = options.fps, duration,
+            spacing, sim_per_second = spacing * options.fps,
+            first_frame = ids[first(schedule.indices)],
+        )
+    )
 end
 
 function _start_preview!(app, socket, message)

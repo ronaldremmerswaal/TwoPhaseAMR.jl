@@ -868,7 +868,7 @@ end
         @test dropping_recording.encoded ==
             length(dropping_recording.ids) == length(dropping_recording.times)
         @test issorted(dropping_recording.times)
-        @test last(dropping_recording.times) <= last(step_log(dropping.store).time) + 1e-12
+        @test last(dropping_recording.times) <= last(step_log(dropping.store).time) + 1.0e-12
     end
     @test_throws ArgumentError export_animation(
         "unused.gif", RUN.store; field = :speed,
@@ -951,7 +951,7 @@ end
         @test continued > stopped_at
         @test recording.encoded == length(recording.ids) == length(recording.times)
         @test issorted(recording.times)
-        @test maximum(recording.times) <= stopped_at + 1e-12
+        @test maximum(recording.times) <= stopped_at + 1.0e-12
         @test isfile(path) && filesize(path) > 0
         @test !isempty(video_frames(path, gif_size(path)))
     end

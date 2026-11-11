@@ -40,7 +40,7 @@ function _check_video_frame_count(count::Integer, what::String)
     count <= MAX_VIDEO_FRAMES || throw(
         ArgumentError(
             "$what gives $count output frames; the limit is $MAX_VIDEO_FRAMES — " *
-            "lower `duration`, `nframes`, or `fps`",
+                "lower `duration`, `nframes`, or `fps`",
         ),
     )
     return Int(count)
