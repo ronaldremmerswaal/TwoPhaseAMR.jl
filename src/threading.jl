@@ -165,9 +165,9 @@ function _parallel_block_columns(f::F, mesh) where {F}
     requested_tiles = max(1, cld(_BATCHES_PER_THREAD * threads, number_of_blocks))
     columns_per_tile = max(1, cld(ny, requested_tiles))
     tiles_per_block = cld(ny, columns_per_tile)
-    _parallel_for(
-        number_of_blocks * tiles_per_block; work = nx * columns_per_tile,
-    ) do tile
+    # A `@batch` body (not a closure argument) so that only `f` is boxed per
+    # launch, as before the launch layer was unified.
+    @_parallel work = nx * columns_per_tile for tile in 1:(number_of_blocks * tiles_per_block)
         block, local_tile = divrem(tile - 1, tiles_per_block)
         first_j = local_tile * columns_per_tile + 1
         f(block + 1, first_j, min(ny, first_j + columns_per_tile - 1))
