@@ -733,11 +733,13 @@ end
 end
 
 @testset "composite diffusion solution convergence (#80)" begin
-    function solution_errors(n)
+    function solution_errors(n, layout)
         mesh = BlockTreeMesh(
             base_mesh = (n, n), block_size = (4, 4), extent = (8.0, 8.0),
             periodic = (false, false), max_level = 1,
-            refine = (key, origin, extent) -> key.level == 0 && key.i >= div(n, 8),
+            refine = (key, origin, extent) ->
+            key.level == 0 && key.i >= div(n, 8) &&
+                (layout === :strip || key.j >= div(n, 8)),
         )
         operator = StaggeredDiffusionOperator(mesh; viscosity = 1.0)
         maximum_error, squared_error, total_volume = 0.0, 0.0, 0.0
@@ -758,13 +760,19 @@ end
         return (; maximum = maximum_error, l2 = sqrt(squared_error / total_volume))
     end
 
-    errors = solution_errors.((16, 32, 64))
-    for name in (:maximum, :l2)
-        values = collect(getproperty.(errors, name))
-        orders = log2.(values[1:2] ./ values[2:3])
-        println("issue80 composite $name errors=$values eoc=$orders")
-        @test all(diff(values) .< 0)
-        @test all(orders .>= 1.8)
+    for layout in (:strip, :corner)
+        errors = [solution_errors(n, layout) for n in (16, 32, 64)]
+        for name in (:maximum, :l2)
+            values = collect(getproperty.(errors, name))
+            orders = log2.(values[1:2] ./ values[2:3])
+            println("issue80 composite $layout $name errors=$values eoc=$orders")
+            @test all(diff(values) .< 0)
+            # Transition rows are not pointwise second order, so the observed
+            # slopes depend on where the transition crosses the solution: they
+            # approach two from below and are not uniformly above 1.8.
+            @test orders[1] >= 1.7
+            @test orders[2] >= 1.85
+        end
     end
     # Transition rows can have O(1) pointwise truncation error. The
     # manufactured Helmholtz solution above checks the resulting global
@@ -772,28 +780,8 @@ end
 end
 
 @testset "composite implicit diffusion is energy contractive (#80)" begin
-    maximum_backward_euler = 0.0
-    maximum_midpoint = 0.0
-    for periodic in ((true, true), (false, false), (true, false)),
-            pattern in (:strip, :corner, :nested), boundary in (NoSlip(), FreeSlip())
-        extent = pattern == :nested ? (16.0, 16.0) : (8.0, 8.0)
-        mesh = BlockTreeMesh(
-            base_mesh = (8, 8), block_size = (4, 4), extent = extent,
-            periodic = periodic, max_level = pattern == :nested ? 2 : 1,
-            refine = (key, origin, extent) ->
-            (
-                key.level == 0 &&
-                    (pattern == :strip ? key.i == 0 : key.i == 0 && key.j == 0)
-            ) ||
-                (pattern == :nested && key.level == 1 && key.i == 0 && key.j == 0),
-        )
-        diffusion = StaggeredDiffusionOperator(mesh; viscosity = 1.0, boundary)
-        solver = StaggeredEllipticSolver(
-            StaggeredEllipticOperator(diffusion; diffusion = 0.1);
-            preconditioner = nothing,
-        )
-        @test solver.x.krylov isa Krylov.CgWorkspace
-        @test solver.y.krylov isa Krylov.CgWorkspace
+    function energy_ratios(diffusion, periodic)
+        worst_backward_euler, worst_midpoint = 0.0, 0.0
         for component in (diffusion.x, diffusion.y)
             volumes = component.volumes
             stiffness = component.stiffness
@@ -818,11 +806,103 @@ end
                     (identity - dt * laplacian / 2) \
                         ((identity + dt * laplacian / 2) * volume_inverse_half)
                 )
-                maximum_backward_euler = max(maximum_backward_euler, opnorm(backward)^2)
-                maximum_midpoint = max(maximum_midpoint, opnorm(midpoint)^2)
+                worst_backward_euler = max(worst_backward_euler, opnorm(backward)^2)
+                worst_midpoint = max(worst_midpoint, opnorm(midpoint)^2)
             end
         end
+        return (; worst_backward_euler, worst_midpoint)
     end
+
+    function expect_cg(diffusion)
+        solver = StaggeredEllipticSolver(
+            StaggeredEllipticOperator(diffusion; diffusion = 0.1);
+            preconditioner = nothing,
+        )
+        @test solver.x.krylov isa Krylov.CgWorkspace
+        @test solver.y.krylov isa Krylov.CgWorkspace
+        return nothing
+    end
+
+    function composite_mesh(; periodic, pattern, extent, max_level)
+        return BlockTreeMesh(
+            base_mesh = (8, 8), block_size = (4, 4), extent = extent,
+            periodic = periodic, max_level = max_level,
+            refine = (key, origin, extent) ->
+            (
+                key.level == 0 &&
+                    (pattern == :strip ? key.i == 0 : key.i == 0 && key.j == 0)
+            ) ||
+                (pattern == :nested && key.level == 1 && key.i == 0 && key.j == 0),
+        )
+    end
+
+    function split_mesh(periodic)
+        return BlockTreeMesh(
+            base_mesh = (8, 8), block_size = (4, 4), extent = (8.0, 8.0),
+            periodic = periodic, max_level = 1,
+            refine = (key, origin, extent) -> key.level == 0 && key.i == 0,
+        )
+    end
+
+    maximum_backward_euler = 0.0
+    maximum_midpoint = 0.0
+    for periodic in ((true, true), (false, false), (true, false)),
+            pattern in (:strip, :corner, :nested), boundary in (NoSlip(), FreeSlip())
+        mesh = composite_mesh(
+            periodic = periodic, pattern = pattern,
+            extent = pattern == :nested ? (16.0, 16.0) : (8.0, 8.0),
+            max_level = pattern == :nested ? 2 : 1,
+        )
+        diffusion = StaggeredDiffusionOperator(mesh; viscosity = 1.0, boundary)
+        expect_cg(diffusion)
+        ratios = energy_ratios(diffusion, periodic)
+        maximum_backward_euler = max(maximum_backward_euler, ratios.worst_backward_euler)
+        maximum_midpoint = max(maximum_midpoint, ratios.worst_midpoint)
+    end
+
+    # An embedded disc straddling the refinement interface exercises the
+    # signed wall-contact corrections of _wall_contact_stencil!. A moving
+    # wall has the same stiffness; only its source term depends on the value.
+    for boundary in (
+            NoSlip(), FreeSlip(),
+            NoSlip((x, y, t, axis) -> axis == 1 ? 1 + t : 0.0),
+        )
+        geometry = GeometryField(
+            split_mesh((false, false)),
+            (x, y) -> hypot(x - 4.0, y - 4.0) - 2.0; lipschitz = 1,
+        )
+        diffusion = StaggeredDiffusionOperator(
+            geometry; viscosity = 1.0, boundary,
+        )
+        expect_cg(diffusion)
+        ratios = energy_ratios(diffusion, (false, false))
+        maximum_backward_euler = max(maximum_backward_euler, ratios.worst_backward_euler)
+        maximum_midpoint = max(maximum_midpoint, ratios.worst_midpoint)
+    end
+
+    # Mixed side conditions: the split boundary strips and the sides without
+    # a wall row must keep the stiffness positive semidefinite.
+    for sides in (
+            VelocityBoundaryConditions(
+                left = Inflow((x, y, t, axis) -> axis == 1 ? y : 0.0),
+                right = Outflow(), bottom = ZeroGradientVelocity(),
+                top = NoSlip((x, y, t, axis) -> axis == 1 ? 1 + t : 0.0),
+            ),
+            VelocityBoundaryConditions(
+                left = ZeroGradientVelocity(),
+                right = Inflow((x, y, t, axis) -> axis == 1 ? 1 + t : 0.0),
+                bottom = Outflow(), top = NoSlip(),
+            ),
+        )
+        diffusion = StaggeredDiffusionOperator(
+            split_mesh((false, false)); viscosity = 1.0, boundary = sides,
+        )
+        expect_cg(diffusion)
+        ratios = energy_ratios(diffusion, (false, false))
+        maximum_backward_euler = max(maximum_backward_euler, ratios.worst_backward_euler)
+        maximum_midpoint = max(maximum_midpoint, ratios.worst_midpoint)
+    end
+
     println(
         "issue80 worst energy ratio backward=$maximum_backward_euler ",
         "midpoint=$maximum_midpoint",
@@ -857,6 +937,22 @@ end
     stationary = StaggeredDiffusionOperator(mesh)
     diffusion!(tendency, constant_tangent, stationary)
     @test minimum(tendency.interior) < 0
+
+    # Couette flow between a stationary floor and a moving lid is reproduced
+    # on a composite mesh as well, including the split boundary strips of the
+    # level transition.
+    composite = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (4, 4), extent = (1.0, 1.0),
+        periodic = (true, false), max_level = 1,
+        refine = (key, origin, extent) -> key.level == 0 && key.i == 0,
+    )
+    composite_couette = FaceVelocity(
+        composite, (x, y, time, axis) -> axis == 1 ? y : 0.0
+    )
+    composite_tendency = FaceVelocity(composite, (x, y, time, axis) -> 0.0)
+    composite_operator = StaggeredDiffusionOperator(composite; boundary = moving_lid)
+    diffusion!(composite_tendency, composite_couette, composite_operator)
+    @test maximum(abs, composite_tendency.interior) <= 2.0e-12
 end
 
 @testset "moving domain walls do not move an embedded disc" begin

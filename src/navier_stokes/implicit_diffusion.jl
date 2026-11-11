@@ -92,26 +92,16 @@ function _staggered_conservative_laplacian(component::StaggeredDiffusionComponen
     return true
 end
 
-# Check all shifts, not just the present one: a zero shift can hide
-# asymmetry. The conservative relation certifies symmetry despite rounding in
-# V*L; otherwise accept only entrywise-exact weighted symmetry.
+# Check all shifts, not just the present one: a zero shift can hide a
+# perturbed matrix. Every operator the package builds has L = -V^-1 K with K
+# symmetric positive semidefinite by construction, so the shifted system is
+# symmetric for every shift. Checking that relation in the same arithmetic used
+# to assemble L certifies it without assuming adjacent dual volumes are equal,
+# and rejects a matrix that was replaced or perturbed after construction.
 function _staggered_shift_is_symmetric(component::StaggeredDiffusionComponent)
     volumes = component.volumes
     all(volume -> isfinite(volume) && volume > zero(volume), volumes) || return false
-    _staggered_conservative_laplacian(component) && return true
-    laplacian = component.laplacian
-    rows, values = rowvals(laplacian), nonzeros(laplacian)
-    for column in axes(laplacian, 2), pointer in nzrange(laplacian, column)
-        row = @inbounds rows[pointer]
-        @inbounds isfinite(values[pointer]) || return false
-        row == column && continue
-        @inbounds weighted = volumes[row] * values[pointer]
-        isfinite(weighted) && @inbounds(
-            weighted ==
-                volumes[column] * laplacian[column, row]
-        ) || return false
-    end
-    return true
+    return _staggered_conservative_laplacian(component)
 end
 
 # Verify that an externally supplied or modified matrix is still the shifted

@@ -134,9 +134,12 @@ residual~\cref{eq:viscosity:energy}. The single-phase geometric stiffness is
 also positive semidefinite: backward Euler is contractive for every $\dt$,
 as is midpoint when $\velo^{\timelevel{n}}=\velo^{\stage{1}}$. The actual
 single-phase split step evaluates its explicit half at
-$\velo^{\timelevel{n}}$ and has no such balance when this differs from the
-transported velocity (\cref{dev:viscosity:time-level}); the old
-transition-band energy growth is removed (\issue{80}). $\dtvisc$, the explicit
+$\velo^{\timelevel{n}}$ (\cref{dev:viscosity:time-level}), so, by
+\cref{eq:viscosity:split-bound}, its energy grows by at most
+$\big((\velo^{\stage{1}}-\velo^{\timelevel{n}})^{\transpose}\dualvolmat(\velo^{\stage{1}}-\velo^{\timelevel{n}})\big)^{1/2}$,
+the dual-volume distance between the transported and the old velocity, plus
+the work of moving walls; the old transition-band energy growth is removed
+(\issue{80}). $\dtvisc$, the explicit
 estimate of \apifun{stable_timestep}\code{(operator; cfl=0.9)} for a
 \apitype{StaggeredDiffusionOperator}, is used by no flow step. The body force
 is integrated with the midpoint rule and has no bound~\cref{eq:forces:body}.

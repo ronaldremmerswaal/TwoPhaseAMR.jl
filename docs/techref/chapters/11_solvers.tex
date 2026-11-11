@@ -686,7 +686,10 @@ with the explicit terms and wall sources of~\cref{eq:viscosity:single-midpoint}
 in $\mathsf{w}$. The matrix $\dualvolmat(\idmat-s\lapstag{k})$ is symmetric
 for every $s$ iff $\dualvolmat\lapstag{k}$ is. The automatic Krylov selection
 uses CG when this weighted symmetry is guaranteed for both components and
-BiCGSTAB otherwise. The unembedded and embedded geometric operators satisfy
+BiCGSTAB otherwise; it certifies it by checking
+$\dualvolmat\lapstag{k}=-\viscstiff{k}$ entrywise in the assembled
+arithmetic, and rejects an operator whose matrix was replaced or perturbed
+after construction. The unembedded and embedded geometric operators satisfy
 $\dualvolmat\lapstag{k}=-\viscstiff{k}$ with symmetric positive semidefinite
 stiffness, so their shifted systems select CG on composite as well as
 uniform meshes (\issue{80}, \issue{128}). The default
@@ -695,9 +698,9 @@ a tree multigrid with the coarsening of \cref{sec:solvers:hierarchy} (counted
 in faces of the axis), rediscretisation with the same viscosity, boundary
 conditions and shift on every coarse mesh, no Galerkin product, the
 smoother~\cref{eq:solvers:jacobi}, and a dense LU coarse solve for at most
-$256$ unknowns, a sparse LU otherwise. For a symmetric fine system the coarse
-matrices use the same conservative symmetric stiffness so that the V-cycle
-remains symmetric for CG even on composite coarse meshes. Its transfer
+$256$ unknowns, a sparse LU otherwise. The coarse matrices always use the
+conservative symmetric stiffness of their rediscretized operator, so the
+V-cycle remains symmetric for CG even on composite coarse meshes. Its transfer
 is the linear staggered interpolation from the coarser tree: a fine face on a
 coarse face line takes the length-weighted mean of the coarse faces that it
 overlaps, a new face interpolates linearly between the two neighbouring coarse

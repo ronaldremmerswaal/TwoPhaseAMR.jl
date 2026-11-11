@@ -97,14 +97,18 @@ increase energy by factors up to $1.1$ (walled) and $2.7$ (periodic) on the
 audit fixtures (\code{proof_review/eq-viscosity-laplacian/}). The shared
 geometric stiffness removes this growth for every step size (\issue{80}).
 Transition rows may have $O(1)$ pointwise truncation error, but the composite
-manufactured Helmholtz solution converges at least with order $1.8$ in the
-maximum and dual-volume $L^2$ norms.
-On the audit's walled half-refined mesh, with $16$, $32$ and $64$ base
-cells per direction and a sine--sine manufactured Helmholtz solution, the
-previous maximum-norm orders were $2.36$, $2.62$ and the dual-volume $L^2$
-orders were $2.61$, $2.67$. The geometric stiffness gives $1.84$, $1.92$
-and $1.99$, $2.00$, respectively. Thus the solution remains approximately
-second order but the old fixture's superconvergent orders are not retained.
+manufactured Helmholtz solution approaches second order, and the observed
+slopes depend on where the transition crosses the solution: they are no longer
+uniformly above $1.8$. On the audit's walled half-refined mesh, with $16$,
+$32$ and $64$ base cells per direction and a sine--sine manufactured
+Helmholtz solution, the previous maximum-norm orders were $2.36$, $2.62$ and
+the dual-volume $L^2$ orders were $2.61$, $2.67$. The geometric stiffness
+gives maximum-norm orders of $1.84$, $1.92$ on a half-refined strip and
+$1.78$, $1.88$ on a refined corner, and dual-volume $L^2$ orders of $1.99$,
+$2.00$ and $2.01$, $2.01$, respectively (base cells $16\to32\to64$;
+\code{test/operators/staggered_diffusion.jl}). Thus the solution remains
+approximately second order but the old fixture's superconvergent orders are
+not retained.
 For stationary walls or periodic boundaries, put
 $\mathsf{B}=\dualvolmat^{-1/2}\viscstiff{k}\dualvolmat^{-1/2}$.
 Its eigenvalues are non-negative, so for every $a=\dt\visc/\dens\ge0$,
@@ -113,8 +117,24 @@ Its eigenvalues are non-negative, so for every $a=\dt\visc/\dens\ge0$,
   =\norm{(\idmat+a\mathsf{B})^{-1}}_2\le1 .
 \]
 The midpoint amplification is likewise bounded by one when its explicit
-and implicit halves use the same velocity. Moving walls may do work, and
-the split-step caveat in \cref{sec:viscosity:time} still applies.
+and implicit halves use the same velocity. The split
+step~\cref{eq:viscosity:single-midpoint} solves for
+$\velo^{\stage{2}}$ from the transported velocity $\velo^{\stage{1}}$ and
+evaluates its explicit half at the old velocity $\velo^{\timelevel{n}}$: its
+right-hand side is $(\idmat+a\lapstag{k})\velo^{\timelevel{n}}
++(\velo^{\stage{1}}-\velo^{\timelevel{n}})$. With
+$\mathsf{M}=\dualvolmat^{1/2}(\idmat-a\lapstag{k})^{-1}(\idmat+a\lapstag{k})\dualvolmat^{-1/2}$,
+$\norm{\mathsf{M}}_2\le1$, and, before the wall source,
+\begin{equation}\label{eq:viscosity:split-bound}
+  \big((\velo^{\stage{2}})^{\transpose}\dualvolmat\,\velo^{\stage{2}}\big)^{1/2}
+  \le\big((\velo^{\timelevel{n}})^{\transpose}\dualvolmat\,\velo^{\timelevel{n}}\big)^{1/2}
+  +\big((\velo^{\stage{1}}-\velo^{\timelevel{n}})^{\transpose}\dualvolmat\,(\velo^{\stage{1}}-\velo^{\timelevel{n}})\big)^{1/2},
+\end{equation}
+because $\dualvolmat^{1/2}(\idmat-a\lapstag{k})^{-1}\dualvolmat^{-1/2}$
+has norm at most one as well. The step therefore grows the energy by at most
+the transported-to-old difference; moving walls may add their work through
+$\velo^{\physbnd}_w$, and the split-step caveat in \cref{sec:viscosity:time}
+still applies.
 
 \emph{Walls.} For a boundary face $b$ of the cell $c=\cbnd{b}$ and the
 unknowns $f$ of component $k$ on the sides of $c$ (side fractions
@@ -134,9 +154,11 @@ the line of $f$: \code{NoSlip(u)} includes both kinds, with the value of
 \apitype{VelocityBoundaryConditions} each side chooses, \apitype{Inflow}
 with its function on both kinds, \apitype{Outflow} and
 \apitype{ZeroGradientVelocity} with none, a homogeneous Neumann condition.
-Connections of zero distance are skipped. On a uniform mesh affine profiles,
-also between two moving walls, are reproduced exactly; a row next to a wall is not exact for
-quadratics: for $\velo_1=y(\domextent{2}-y)$ between no-slip walls it misses
+Connections of zero distance are skipped. Affine profiles, also between two
+moving walls, are reproduced exactly, including on composite meshes: the
+tendency of Couette flow between a stationary floor and a moving lid stays at
+or below $2\times10^{-12}$ of its velocity maximum across a level transition
+as well. A row next to a wall is not exact for quadratics: for $\velo_1=y(\domextent{2}-y)$ between no-slip walls it misses
 $\Delta\velo_1=-2$ by $0.5$, independently of the mesh width (derivation
 audit, \code{proof_review/eq-viscosity-walls/}).
 The operator returned by \apifun{diffusion!} is
