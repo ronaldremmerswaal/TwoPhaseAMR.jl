@@ -20,7 +20,7 @@ criterion = InterpolationErrorIndicator(
 )
 flow = FlowSimulation(
     mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.05);
-    boundary = FreeSlip(), dt = nothing, cfl = 0.25,
+    boundary = FreeSlip(), dt = nothing,
     diagnostics = (KineticEnergy(),),
     velocity = (x, y, t, axis) -> axis == 1 ? sinpi(2y) : 0.0,
     adaptivity = Adaptivity(criteria = criterion),
@@ -49,7 +49,7 @@ end
 
 pause!(recorder)
 task = Threads.@spawn simulate!(
-    flow, 100.0; observer = recorder, force = slow_force,
+    flow, 100.0; observer = recorder, force = slow_force, cfl = 0.25,
     tolerance = 1.0e-9, max_cycles = 1000,
 )
 store = snapshot_store(recorder)

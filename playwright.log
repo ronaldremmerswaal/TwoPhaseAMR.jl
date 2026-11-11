@@ -2,3 +2,44 @@
 > two-phase-amr-studio-frontend@0.1.0 test:time-linear
 > node smoke/time-linear.mjs
 
+file:///home/ronald/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/frontend/smoke/time-linear.mjs:32
+    const exited = (code, signal) => finish(new Error(`Julia fixture exited before readiness (${code ?? signal})`));
+                                            ^
+
+Error: Julia fixture exited before readiness (1)
+Julia stderr:
+Precompiling packages...
+   6776.0 ms  ✓ TwoPhaseAMRStudio
+  1 dependency successfully precompiled in 8 seconds. 332 already precompiled.
+  41 dependencies precompiled but different versions are currently loaded (ArrayInterface, ArrayInterface → ArrayInterfaceSparseArraysExt, ArrayInterface → ArrayInterfaceStaticArraysCoreExt, Base64, BitTwiddlingConvenienceFunctions, CPUSummary, CloseOpenIntervals, CommonWorldInvalidations, Compat, Compat → CompatLinearAlgebraExt, CpuId, Dates, IfElse, IncompleteLU, JuliaSyntaxHighlighting, Krylov, LayoutPointers, ManualMemory, Markdown, Polyester, PolyesterWeave, PrecompileTools, Preferences, Printf, RegionTrees, SIMDTypes, SciMLPublic, Serialization, SparseArrays, Static, StaticArrayInterface, StaticArrayInterface → StaticArrayInterfaceStaticArraysExt, StaticArrays, StaticArraysCore, StrideArraysCore, StyledStrings, SuiteSparse_jll, TOML, ThreadingUtilities, TwoPhaseAMR and UUIDs). Restart julia to access the new versions. Otherwise, 195 dependents of these packages may trigger further precompilation to work with the unexpected versions.
+ERROR: LoadError: MethodError: no method matching FlowSimulation(::BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, ::SinglePhase{Float64, Float64}; boundary::FreeSlip, dt::Nothing, cfl::Float64, diagnostics::Tuple{KineticEnergy}, velocity::var"#5#6", adaptivity::Adaptivity{Tuple{InterpolationErrorIndicator{Float64, CellField{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, ZeroGradient}}, Tuple{}})
+This method does not support all of the given keyword arguments (and may not support any).
+
+Closest candidates are:
+  FlowSimulation(::BlockTreeMesh, ::SinglePhase; velocity, pressure, time, dt, T, geometry, boundary, numerics, adaptivity, diagnostics, force) got unsupported keyword argument "cfl"
+   @ TwoPhaseAMR ~/Documents/wt-time-linear/src/navier_stokes/flow_simulation.jl:331
+  FlowSimulation(::V, !Matched::CellField{T, M}, !Matched::S, !Matched::W, !Matched::T, !Matched::Int64, !Matched::Int64, !Matched::Int64, !Matched::Union{Nothing, T}, !Matched::F, !Matched::D, !Matched::Union{Nothing, TwoPhaseAMR.FlowAMRCache}) where {T, M<:BlockTreeMesh, V, S, W, F, D} got unsupported keyword arguments "boundary", "dt", "cfl", "diagnostics", "velocity", "adaptivity"
+   @ TwoPhaseAMR ~/Documents/wt-time-linear/src/navier_stokes/flow_simulation.jl:49
+  FlowSimulation(::BlockTreeMesh, !Matched::TwoPhase; velocity_model, velocity, pressure, time, dt, T, geometry, boundary, numerics, adaptivity, diagnostics, force) got unsupported keyword argument "cfl"
+   @ TwoPhaseAMR ~/Documents/wt-time-linear/src/navier_stokes/flow_simulation.jl:361
+  ...
+
+Stacktrace:
+ [1] kwerr(::@NamedTuple{boundary::FreeSlip, dt::Nothing, cfl::Float64, diagnostics::Tuple{KineticEnergy}, velocity::var"#5#6", adaptivity::Adaptivity{Tuple{InterpolationErrorIndicator{Float64, CellField{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, ZeroGradient}}, Tuple{}}}, ::Type, ::BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, ::SinglePhase{Float64, Float64})
+   @ Base ./error.jl:175
+ [2] top-level scope
+   @ ~/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/frontend/smoke/time_linear.jl:21
+ [3] include(mod::Module, _path::String)
+   @ Base ./Base.jl:306
+ [4] exec_options(opts::Base.JLOptions)
+   @ Base ./client.jl:317
+ [5] _start()
+   @ Base ./client.jl:550
+in expression starting at /home/ronald/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/frontend/smoke/time_linear.jl:21
+
+    at ChildProcess.exited (file:///home/ronald/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/frontend/smoke/time-linear.mjs:32:45)
+    at Object.onceWrapper (node:events:623:26)
+    at ChildProcess.emit (node:events:508:28)
+    at ChildProcess._handle.onexit (node:internal/child_process:294:12)
+
+Node.js v24.13.0
