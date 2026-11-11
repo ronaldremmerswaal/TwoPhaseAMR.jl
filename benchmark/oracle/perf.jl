@@ -60,7 +60,6 @@ function main()
     for (name, model) in (
             ("warm_capillary_one", OneVelocityModel()),
             ("warm_capillary_cmdgfm", TwoVelocityModel(pressure_projection = CMDGFMProjection())),
-            ("warm_capillary_mimetic", TwoVelocityModel(pressure_projection = MimeticProjection())),
         )
         flow = Capillary.run_example(max_level = 1, final_time = 0.001, dt = 0.001, velocity_model = model).flow
         results[name] = warm_steps(flow)

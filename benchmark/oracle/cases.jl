@@ -35,7 +35,6 @@ const CASES = [
     "cavity" => (() -> Cavity.run_example(max_level = 1, final_time = 0.02, dt = 0.002)),
     "capillary_one" => (() -> Capillary.run_example(max_level = 1, final_time = 0.02, dt = 0.001, velocity_model = OneVelocityModel())),
     "capillary_cmdgfm" => (() -> Capillary.run_example(max_level = 1, final_time = 0.02, dt = 0.001, velocity_model = TwoVelocityModel(pressure_projection = CMDGFMProjection()))),
-    "capillary_mimetic" => (() -> Capillary.run_example(max_level = 1, final_time = 0.02, dt = 0.001, velocity_model = TwoVelocityModel(pressure_projection = MimeticProjection()))),
     "sessile" => (() -> Sessile.run_example(max_level = 1, final_time = 0.01, dt = 0.001)),
     "sloped" => (() -> Sloped.run_example(max_level = 1, final_time = 0.01, dt = 0.001)),
     "vortex_reverse" => (() -> Vortex.run_example(max_level = 2, final_time = 0.05)),

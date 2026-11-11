@@ -56,7 +56,7 @@ objects. The tuple never selects the velocity model implicitly.
 | velocity formulation | `OneVelocityModel()`, `TwoVelocityModel(...)` | one velocity | two-phase flow |
 | surface-tension force | `CGFM()`, `CSF()` | CGFM | either two-phase velocity model |
 | interface carrier | `FrozenInterfaceFluxes()`, `ProjectedLiquidVelocity()` | frozen | two velocity only |
-| pressure projection | `CMDGFMProjection()`, `MimeticProjection()`, `MimeticProjection(variant=:joint_face)` | CMDGFM | two velocity only |
+| pressure projection | `CMDGFMProjection()` | CMDGFM | two velocity only |
 
 Surface tension is configured by [`SurfaceTension`](@ref), while the carrier
 and projection are fields of [`TwoVelocityModel`](@ref). This ownership makes

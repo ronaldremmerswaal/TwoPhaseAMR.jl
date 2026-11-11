@@ -95,6 +95,34 @@ function _instability_wave_amplitude(
     return liquid_above ? -result : result
 end
 
+"""Integrated liquid-aperture vectors of every cell, from open faces."""
+function _integrated_aperture_vectors(interface, data)
+    T = eltype(interface)
+    mesh = interface.mesh
+    nx, ny = mesh.block_size
+    x = zeros(T, ncells(mesh))
+    y = zeros(T, ncells(mesh))
+    for (index, face) in pairs(mesh.faces)
+        minus = TwoPhaseAMR._cell_index(face.minus, nx, ny)
+        plus = TwoPhaseAMR._cell_index(face.plus, nx, ny)
+        component = face.axis == 1 ? x : y
+        contribution = T(face.area) * data.liquid_aperture[index]
+        @inbounds begin
+            component[minus] += contribution
+            component[plus] -= contribution
+        end
+    end
+    for (index, face) in pairs(mesh.boundary_faces)
+        liquid_aperture, = TwoPhaseAMR._phase_boundary_face_apertures(
+            interface, index,
+        )
+        component = face.axis == 1 ? x : y
+        @inbounds component[TwoPhaseAMR._cell_index(face.cell, nx, ny)] +=
+            T(face.side) * T(face.area) * liquid_aperture
+    end
+    return x, y
+end
+
 """Aperture-based circulation and renormalised enstrophy of the vortex sheet.
 
 The diagnostic jump is reconstructed at every cut cell with `c(1-c)` weights
@@ -112,11 +140,10 @@ function _instability_vortex_sheet_diagnostics(
             "interpolation_weights must be :c1mc or :geometric",
         ),
     )
-    solver = MimeticProjectionSolver(interface)
-    workspace = MimeticProjectionWorkspace(solver)
+    solver = CMDGFMProjectionSolver(interface; density = (1.0, 1.0))
+    workspace = CMDGFMProjectionWorkspace(solver)
     data = TwoPhaseAMR._projection_face_data(solver, workspace)
-    aperture_x, aperture_y =
-        TwoPhaseAMR._local_integrated_aperture_vectors(interface, data)
+    aperture_x, aperture_y = _integrated_aperture_vectors(interface, data)
     incident = TwoPhaseAMR._cmdgfm_incident_faces(interface.mesh)
     references = TwoPhaseAMR._cell_references(interface.mesh)
     T = eltype(interface)
@@ -467,7 +494,6 @@ function _run_instability!(
         progress_interval = 0,
     )
     flow = case.flow
-    projection_diagnostics = NamedTuple[]
     isfinite(timestep_factor) && 0 < timestep_factor <= 1 || throw(
         ArgumentError("timestep_factor must be finite and in (0, 1]"),
     )
@@ -497,27 +523,6 @@ function _run_instability!(
                     "max_cycles=$max_cycles",
             )
         )
-        if stats isa MimeticProjectionStats
-            push!(
-                projection_diagnostics, (;
-                    time = flow.time + dt,
-                    candidate_rows = stats.candidate_constraint_rows,
-                    commuting_rows = stats.commuting_constraint_rows,
-                    fallback_rows = stats.fallback_constraint_rows,
-                    commuting_residual = stats.commuting_residual,
-                    pressure_commuting_rows =
-                        stats.pressure_commuting_constraint_rows,
-                    pressure_fallback_rows =
-                        stats.pressure_fallback_constraint_rows,
-                    pressure_commuting_residual =
-                        stats.pressure_commuting_residual,
-                    variant = stats.variant,
-                    energy_identity_error = stats.energy_identity_error,
-                    normal_velocity_defect = stats.normal_velocity_defect,
-                    momentum_error = stats.momentum_error,
-                )
-            )
-        end
         flow.time = min(final_time, flow.time + dt)
         flow.steps += 1
         if progress_interval > 0 && iszero(flow.steps % progress_interval)
@@ -537,10 +542,7 @@ function _run_instability!(
     amplitudes = ComplexF64.(
         real_history.values .+ im .* imaginary_history.values,
     )
-    return (;
-        times, amplitudes, flow, diagnostics = flow.diagnostics,
-        projection_diagnostics,
-    )
+    return (; times, amplitudes, flow, diagnostics = flow.diagnostics)
 end
 
 """Run the general interfacial-wave simulation (two velocity by default).

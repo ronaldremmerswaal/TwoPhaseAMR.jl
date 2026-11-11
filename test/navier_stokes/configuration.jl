@@ -65,7 +65,7 @@ using Test, TwoPhaseAMR
             diffusion = LinearSolverOptions(nothing, (;), :bogus, (;)),
         ),
     )
-    @test_throws ArgumentError MimeticProjection(preconditioner = :bogus)
+    @test_throws ArgumentError CMDGFMProjection(preconditioner = :bogus)
     @test_throws ArgumentError NavierStokesSystem(
         mesh; density = 1.0, dynamic_viscosity = 0.1,
         diffusion_preconditioner = :bogus,
@@ -161,22 +161,15 @@ end
         )
         @test shared.system.two_phase.formulation == surface_method
 
-        for transport in (
-                    FrozenInterfaceFluxes(), ProjectedLiquidVelocity(),
-                ), projection in (
-                    CMDGFMProjection(), MimeticProjection(),
-                    MimeticProjection(variant = :joint_face),
-                )
+        for transport in (FrozenInterfaceFluxes(), ProjectedLiquidVelocity())
             flow = FlowSimulation(
                 mesh, physics;
                 velocity_model = TwoVelocityModel(
                     interface_transport = transport,
-                    pressure_projection = projection,
                 ),
             )
             @test flow.system.two_phase.formulation == surface_method
             @test flow.system.two_phase.interface_transport == transport
-            @test flow.system.two_phase.pressure_projection == projection
         end
     end
 end
@@ -201,7 +194,6 @@ end
     @test FrozenInterfaceFluxes() isa AbstractInterfaceTransportMethod
     @test ProjectedLiquidVelocity() isa AbstractInterfaceTransportMethod
     @test CMDGFMProjection() isa AbstractTwoVelocityProjection
-    @test MimeticProjection() isa AbstractTwoVelocityProjection
     @test TwoVelocityModel().interface_transport isa FrozenInterfaceFluxes
     @test TwoVelocityModel().pressure_projection isa CMDGFMProjection
 
@@ -227,7 +219,6 @@ end
     two = FlowSimulation(
         mesh, physics; velocity_model = TwoVelocityModel(
             interface_transport = ProjectedLiquidVelocity(),
-            pressure_projection = MimeticProjection(),
         ), velocity = shared, numerics,
     )
     @test two.velocity isa TwoPhaseVelocity
@@ -236,7 +227,7 @@ end
     @test length(typeof(two.system).parameters) <= 8
     @test two.velocity[1] !== two.velocity[2]
     @test two.system.two_phase.interface_transport isa ProjectedLiquidVelocity
-    @test two.system.two_phase.pressure_projection isa MimeticProjection
+    @test two.system.two_phase.pressure_projection isa CMDGFMProjection
     # Equal phase initializers agree where both phases are present. Inactive
     # values are deliberately NaN, rather than a dormant shared extension.
     for index in eachindex(two.velocity[1].interior)
@@ -262,6 +253,6 @@ end
     )
     @test_throws ArgumentError TwoVelocityModel(interface_transport = CSF())
     @test_throws ArgumentError TwoVelocityModel(pressure_projection = CGFM())
-    @test_throws ArgumentError SurfaceTension(1.0; method = MimeticProjection())
+    @test_throws ArgumentError SurfaceTension(1.0; method = CMDGFMProjection())
     @test_throws ArgumentError SurfaceTension(-1.0)
 end

@@ -21,8 +21,7 @@ struct TwoVelocityModel{
         )
         pressure_projection isa AbstractTwoVelocityProjection || throw(
             ArgumentError(
-                "pressure_projection must be CMDGFMProjection() or " *
-                    "MimeticProjection()",
+                "pressure_projection must be a CMDGFMProjection()",
             ),
         )
         return new{typeof(interface_transport), typeof(pressure_projection)}(

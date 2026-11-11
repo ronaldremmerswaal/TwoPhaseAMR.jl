@@ -337,18 +337,16 @@ is conservative but is intentionally only a construction-time fallback.
 
 The complete inviscid model passes the same velocity tuple to
 `NavierStokesSystem`. After compatible interface and momentum
-advection, it selects the symmetric ``(p, \xi, \lambda)`` mimetic system or
-the nonsymmetric ``(\phi, \xi)`` CMDGFM system described in
+advection, it assembles the nonsymmetric ``(\phi, \xi)`` CMDGFM system
+described in
 [Incompressible Navier--Stokes solver](navier-stokes.md#two-velocity-projection).
 CMDGFM subtracts the old physical pressure gradient in the predictor and adds
-the solved increment ``\phi`` after correcting both phases. The legacy
-mimetic method instead solves directly for the absolute physical pressure and
-its complete phase gradient without subtracting the old pressure in its
-predictor. Both enforce the mixture-divergence target and normal-velocity
-continuity while retaining tangential slip. The rotating-disc integration
-study reinitializes the analytical discontinuous velocity before each
-projection so its measured error belongs to the pressure model rather than
-accumulated velocity transport.
+the solved increment ``\phi`` after correcting both phases. It enforces the
+mixture-divergence target and normal-velocity continuity while retaining
+tangential slip. The rotating-disc integration study reinitializes the
+analytical discontinuous velocity before each projection so its measured
+error belongs to the pressure model rather than accumulated velocity
+transport.
 
 ## References
 

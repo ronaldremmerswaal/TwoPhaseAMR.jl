@@ -163,7 +163,7 @@ function wave_case(
     initial_volume = integrate(interface)
 
     # Equal-density gravity is the zero-frequency limit. Its body force is a
-    # pressure gradient and the mimetic model must preserve the initial state.
+    # pressure gradient and the projection must preserve the initial state.
     final_time = iszero(omega0) ? 1.0 : periods * 2pi / omega0
     cycle_limit = velocity_model === :two_velocity ? 1000 : 300
     add_diagnostic!(
@@ -235,8 +235,8 @@ end
 
         # Uniform-grid order studies cover both requested density ratios and
         # gravity with and without surface tension. The thesis reports second
-        # order for finite-La capillary waves and first order for its mimetic
-        # gravity-wave discretization.
+        # order for finite-La capillary waves and first order for its
+        # structure-preserving gravity-wave discretization.
         studies = (
             (1.0, :capillary, 1.8),
             (1.0e3, :capillary, 1.5),

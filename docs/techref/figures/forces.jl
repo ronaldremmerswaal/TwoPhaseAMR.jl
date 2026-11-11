@@ -448,7 +448,6 @@ function force_outputs(write_output)
     models = (
         :one => OneVelocityModel(),
         :cmdgfm => TwoVelocityModel(pressure_projection = CMDGFMProjection()),
-        :mimetic => TwoVelocityModel(pressure_projection = MimeticProjection()),
     )
     steps = Dict(
         (kind, solid, name) => hydrostatic_step(kind, model; solid)
@@ -490,10 +489,7 @@ function force_outputs(write_output)
             for kind in (:uniform, :amr)
     )
     @assert maximum(values(cmdgfm_solid)) <= 1.0e-8 && tension_two[(:cut, :cmdgfm)] <= 1.0e-8
-    mimetic_solid = maximum(steps[(:amr, solid, :mimetic)] for solid in (:gas, :liquid))
 
-    fixed_point(x) = @sprintf("%.2f", x)
-    fixed_three(x) = @sprintf("%.3f", x)
     return Any[
         ("chkForceCurvDiff", sci(curvature_worst)),
         ("chkForceNeighbourFaces", curvature[:amr].counts[:neighbours]),
@@ -520,9 +516,6 @@ function force_outputs(write_output)
         ("chkStepCmdgfm", sci(max(steps[(:uniform, :none, :cmdgfm)], steps[(:amr, :none, :cmdgfm)]))),
         ("chkStepCmdgfmSolidUniform", sci(cmdgfm_solid[:uniform])),
         ("chkStepCmdgfmSolidAmr", sci(cmdgfm_solid[:amr])),
-        ("chkStepMimeticUniform", fixed_three(steps[(:uniform, :none, :mimetic)])),
-        ("chkStepMimeticAmr", fixed_point(steps[(:amr, :none, :mimetic)])),
-        ("chkStepMimeticSolidAmr", fixed_point(mimetic_solid)),
         ("chkTensionTwoOne", sci(maximum(tension_two[(k, :one)] for k in (:uniform, :amr, :cut)))),
         ("chkTensionTwoCmdgfm", sci(max(tension_two[(:uniform, :cmdgfm)], tension_two[(:amr, :cmdgfm)]))),
         ("chkTensionTwoCmdgfmCut", sci(tension_two[(:cut, :cmdgfm)])),

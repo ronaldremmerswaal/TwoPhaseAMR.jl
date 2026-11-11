@@ -98,35 +98,25 @@ An `IO` may be supplied first when the report should be captured in a file or
 buffer.
 
 The report uses the latest pressure solver statistics. For two-velocity
-projections, `CMDGFMProjectionStats` and `MimeticProjectionStats` report the
-dimensionless `mixture_volume_defect = dt * max(abs(div(u_mix)))` and
+projections, `CMDGFMProjectionStats` reports the dimensionless
+`mixture_volume_defect = dt * max(abs(div(u_mix)))` and
 `normal_velocity_defect = max(dt * abs(normal_jump) / h)`. The latter is not
 a divergence: it measures the normal-jump row of the projected state. A
 face row uses the smallest edge of either adjacent cell, which is the fine
-cell's smallest edge at a coarse–fine face; a mimetic cell row uses the
-smallest edge of its cell. The mimetic diagnostic also includes homogenised
-inactive faces and reports a dimensionless `tangential_defect`, independent
-constraint-row count, and momentum and energy identity errors.
+cell's smallest edge at a coarse–fine face.
 
 The CMDGFM jump-row algebraic residual has acceleration units, so its
 dimensionless convergence defect is `max(dt^2 * abs(r_jump) / h)`. The
-mimetic multiplier residual is scaled the same way after dividing by its
-row measure. Its jump-stationarity residual is divided by the total phase
-mass, dual-face volume, and the same local defect length, then multiplied by
-`dt^2`. The pressure-row volume residual remains
-`dt^2 * max(abs(r_pressure) / volume)`. Mimetic convergence requires the
-pressure- and normal-row residual defects, as well as the reported velocity
-and tangential defects, to meet the tolerance. These defects and the
-projection tolerance are dimensionless; the raw algebraic residual norms
-below are not.
+pressure-row volume residual is
+`dt^2 * max(abs(r_pressure) / volume)`. These defects and the projection
+tolerance are dimensionless; the raw algebraic residual norms below are
+not.
 
 The iterative systems are nondimensionalized as well. With `L` the largest
 domain extent and `rho` the larger density, pressure and gradient-jump
 unknowns use scales `rho * (L / dt)^2` and `L / dt^2`. This prevents the
 Krylov residual norm, warm-start choice, and built-in preconditioner drop
 thresholds from changing simply because the length, time, or mass units change.
-Mimetic MINRES uses a symmetric congruence scaling of its three-block system;
-the reported algebraic residual norms still use the original unscaled system.
 The stopping tests are unit-free; floating-point roundoff can still change
 the iteration count of an unpreconditioned Krylov solve near convergence.
 
@@ -134,23 +124,17 @@ For one-velocity and CMDGFM projections, a step smaller than the reference
 step deliberately retains part of the incoming mixture-divergence defect.
 The reported CMDGFM defects remain those of the actual projected state;
 convergence is assessed against the retained mixture target, while the normal-jump
-constraint still targets zero. The legacy mimetic projection uses the
-absolute-pressure solve without this adjustment. Its `energy_identity_error`
-is twice the time step times the raw pressure-work inner product
-(`orthogonality_error`); physical boundary pressure work can make it nonzero.
+constraint still targets zero.
 
 The internal functions `TwoPhaseAMR.converged(stats)`,
 `TwoPhaseAMR.iterations(stats)`, and `TwoPhaseAMR.final_residual(stats)` give
-the common convergence status, iteration count, and final residual for linear,
-CMDGFM, and mimetic statistics. They are not exported. The residual uses the
+the common convergence status, iteration count, and final residual for linear
+and CMDGFM statistics. They are not exported. The residual uses the
 linear solver's infinity norm and the two-velocity solvers' algebraic system
 residual 2-norm, respectively, so its magnitude is not directly comparable
 between solver types; the reported physical defects have their own meanings.
 
-The mimetic block-Cholesky preconditioner applies sparse factors in place on
-Julia 1.12 and later. Julia 1.11's CHOLMOD interface lacks an in-place solve,
-so the same factorization uses an allocating solve on that supported version.
-The mimetic projection caches topology- and solid-geometry-dependent pressure
+The CMDGFM projection caches topology- and solid-geometry-dependent pressure
 data across solves. Moving-interface coefficients and active jump faces are
 updated each solve, while mesh adaptation or a change of solid-geometry
 instance or revision invalidates the affected cached structures. The embedded
