@@ -34,10 +34,10 @@ orchestrator without further owner approval once the prerequisites below are met
 `audit/audit-twophase.md`, `audit/audit-perf.md`, `audit/AUDIT.md`)
 
 1. **Re-measure first** on current `main`: 1/2/4/8 threads on Taylor–Green 128²
-   (hierarchical), the cylinder, and the Stokes-3 wave (`examples/10_stokes3_wave`)
-   with both `OneVelocityModel()` and the two-velocity model, at the default resolution
-   and one level finer (the capillary wave is dropped as a target case: owner, 2026-11-12,
-   its functionality is covered by Stokes-3);
+   (hierarchical), the cylinder, the capillary wave with CMDGFM (k = 4; static
+   interface, no regridding) and the Stokes-3 wave (`examples/10_stokes3_wave`; moving
+   interface with regridding) with both `OneVelocityModel()` and the two-velocity
+   model, at the default resolution and one level finer;
    profile the serial fraction of a step. Audit baseline (pre-4B–4E.3): 4 threads gave
    TG 1.17× (uniform), 1.53× (hierarchical), CMDGFM 1.16×. Order step 4 by the
    profile, not by the audit's guesses.
@@ -64,8 +64,9 @@ orchestrator without further owner approval once the prerequisites below are met
 ## Acceptance
 
 - Owner decision (2026-11-12):
-  - **Hard acceptance:** 4 threads ≥ 2× on TG 128² (hierarchical), the cylinder and
-    the Stokes-3 wave with the one- and the two-velocity model, results bitwise
+  - **Hard acceptance:** 4 threads ≥ 2× on TG 128² (hierarchical), the cylinder, the
+    capillary wave (CMDGFM, k = 4) and the Stokes-3 wave with the one- and the
+    two-velocity model, results bitwise
     identical for every thread count. Owner (2026-11-12): the hard target may be met
     one level finer than the default/benchmark resolution when the default problem is
     too small; always report both resolutions.
