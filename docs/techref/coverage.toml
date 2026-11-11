@@ -581,7 +581,7 @@ sources = [
   { file = "src/vof/workspace.jl", symbol = "stable_timestep" },
 ]
 tests = [
-  { file = "test/two_phase/transport.jl", testset = "WY cut half-strip at a level transition (#52)" },
+  { file = "test/two_phase/transport.jl", testset = "WY cut donor strip at a level transition (#52)" },
 ]
 check = "strip_limitation_check"
 [[claims]]
@@ -2034,7 +2034,7 @@ sources = [
   { file = "src/vof/workspace.jl", symbol = "stable_timestep" },
 ]
 tests = [
-  { file = "test/two_phase/transport.jl", testset = "WY cut half-strip at a level transition (#52)" },
+  { file = "test/two_phase/transport.jl", testset = "WY cut donor strip at a level transition (#52)" },
 ]
 check = "strip_limitation_check"
 [[claims]]

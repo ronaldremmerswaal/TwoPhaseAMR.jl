@@ -428,8 +428,9 @@ within their common support and thereby restores the geometric argument
 The bound uses each frozen phase subface's own tangential interval and
 donor open volume, rather than the whole-cell volume. Its ordering and
 aperture are frozen together for both sweeps. A nonzero shared-aperture
-flux with no open volume behind its subface admits no positive geometric
-step; otherwise the strip condition accounts for the volume the sweep cuts
+flux with no open volume behind its subface admits no usable step, which the
+bound reports as an error naming the face and donor cell; otherwise the strip
+condition accounts for the volume the sweep cuts
 (\issue{56}, \cref{sec:vof:frozen}).
 \end{deviation}
 

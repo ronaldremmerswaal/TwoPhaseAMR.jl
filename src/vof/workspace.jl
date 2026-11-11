@@ -310,13 +310,56 @@ end
 end
 
 """
+Relative slack between a bound and the step accepted by the checks.
+
+`advect!` and `step!` accept a step up to `1 + _wy_step_slack(T)` times the
+returned bound. The frozen subface sweep widens its area tolerance by twice
+that slack, so a step the checks accept is not rejected there.
+"""
+@inline _wy_step_slack(::Type{T}) where {T} = T(1.0e-6) + T(32) * eps(T)
+
+"""
+Error for an outgoing face whose open donor strip cannot hold its flux.
+
+A positive flux through a strip with no open area, or with an open area below
+the sweep's round-off area tolerance, cannot be represented by any donating
+region: no usable time step exists. A strip that is merely small, but
+resolvable, slows the step proportionally and is bounded normally.
+"""
+@inline function _wy_strip_error(face_index, face, donor, phase::Int, area, floor)
+    carrier = phase == 1 ? ", liquid subface" : phase == 2 ? ", gas subface" : ""
+    return ArgumentError(
+        "cut-donor strip on face $face_index (axis $(face.axis)$carrier) is empty: " *
+            "the open area of the strip behind this face in cell " *
+            "(block $(donor.block), i $(donor.i), j $(donor.j)) is $area, at most " *
+            "the sweep's resolvable $floor, so no positive WY time step can " *
+            "represent its flux",
+    )
+end
+
+"""
+Cut-donor strip rate for one outgoing face, validated against the sweep.
+
+The strip's open area must exceed the sweep's area tolerance, scaled by the
+face aperture; otherwise the prescribed flux has no donating region.
+"""
+@inline function _wy_cut_strip_rate(
+        rate::T, area::T, aperture, volume, face_index, face, donor, phase::Int,
+    ) where {T}
+    floor = T(256) * eps(T) * aperture
+    area > floor || throw(_wy_strip_error(face_index, face, donor, phase, area, floor))
+    return _wy_strip_rate(rate, area, volume)
+end
+
+"""
     stable_timestep(velocity, work::WYAdvectionWorkspace; cfl=0.5)
 
 WY incoming-volume CFL: `dt*sum(max(-outward_volume_rate,0))/cell_volume`.
 Also constrain outgoing volume and each face extrusion. With an embedded
 solid, limit each outgoing flux by its donor's open strip and constrain pairs
-of opposing strips to disjoint open regions, including hanging faces.
-`0 < cfl <= 0.5`.
+of opposing strips to disjoint open regions, including hanging faces; a
+positive flux whose strip has no resolvable open area raises an
+`ArgumentError` naming the face and donor cell. `0 < cfl <= 0.5`.
 """
 function stable_timestep(
         velocity::FaceVelocity, work::WYAdvectionWorkspace{T, M};
@@ -376,7 +419,10 @@ function stable_timestep(
                 volume = mesh.blocks[donor.block].volume
                 rate = abs(u) * face.area * aperture
                 area = _wy_open_strip_area(solid, donor, face.axis, lo, hi, -0.5, 0.5)
-                maxrate = max(maxrate, _wy_strip_rate(rate, area, volume))
+                maxrate = max(
+                    maxrate,
+                    _wy_cut_strip_rate(rate, area, aperture, volume, i, face, donor, 0),
+                )
 
                 # Visit each pair once, from the positive (right/top) face.
                 # Both rectangles use the same open solid half-plane, so
@@ -399,8 +445,14 @@ function stable_timestep(
                         left_area, right_area = areas
                         other_rate = abs(other_u) * other.area * other_aperture
                         maxrate = max(
-                            maxrate, _wy_strip_rate(other_rate, left_area, volume),
-                            _wy_strip_rate(rate, right_area, volume),
+                            maxrate,
+                            _wy_cut_strip_rate(
+                                other_rate, left_area, other_aperture, volume,
+                                other_index, other, donor, 0,
+                            ),
+                            _wy_cut_strip_rate(
+                                rate, right_area, aperture, volume, i, face, donor, 0,
+                            ),
                         )
                     end
                 end

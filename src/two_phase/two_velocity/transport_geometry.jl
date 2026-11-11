@@ -68,16 +68,27 @@ function _frozen_interface_stable_timestep(
         )
         rate = abs(u) * face.area * aperture
         if isnothing(geometry)
-            # Normally this reproduces |u|/h exactly. Also account for a
-            # subface whose represented width is smaller due to round-off.
-            area = T(0.5) * T(hi - lo)
+            # The subface spans its aperture, so its width is exactly the
+            # aperture times the full interval; differencing the clipped
+            # interval endpoints would shrink it by round-off.
+            width = _frozen_subface_width(
+                work.interface, work, face, face_index, donor, phase == 1,
+                geometry,
+            )
+            area = T(0.5) * width
             maxrate = max(maxrate, _wy_strip_rate(rate, area, block.volume))
         else
             solid = geometry.solid
             area = _wy_open_strip_area(
                 solid, donor, face.axis, lo, hi, -T(0.5), T(0.5),
             )
-            maxrate = max(maxrate, _wy_strip_rate(rate, area, block.volume))
+            maxrate = max(
+                maxrate,
+                _wy_cut_strip_rate(
+                    rate, area, aperture, block.volume, face_index, face, donor,
+                    phase,
+                ),
+            )
 
             # Opposing cut-cell subfaces can overlap even when each swept
             # volume fits its own strip. Split their common open support and
@@ -112,8 +123,15 @@ function _frozen_interface_stable_timestep(
                         other_rate = abs(other_u) * other_face.area * other_aperture
                         maxrate = max(
                             maxrate,
-                            _wy_strip_rate(other_rate, left_area, block.volume),
-                            _wy_strip_rate(rate, right_area, block.volume),
+                            _wy_cut_strip_rate(
+                                other_rate, left_area, other_aperture,
+                                block.volume, other_index, other_face, donor,
+                                other_phase,
+                            ),
+                            _wy_cut_strip_rate(
+                                rate, right_area, aperture, block.volume,
+                                face_index, face, donor, phase,
+                            ),
                         )
                     end
                 end
@@ -237,6 +255,33 @@ end
     )
 end
 
+"""
+Phase aperture below which a face is treated as single-phase.
+
+The two adjacent face traces are clipped independently, so their average can
+miss the shared open aperture by a few ulp and leave a residue on a phase
+that does not reach the face. Such a residue is not a physical opening: its
+subface has essentially zero width and no open strip, which would make the
+cut-donor bound infinite.
+"""
+@inline _phase_aperture_residue(::Type{T}, open) where {T} =
+    T(64) * eps(T) * open
+
+"""
+    _snap_phase_apertures(liquid, open)
+
+Split `open` into liquid and gas apertures, collapsing a round-off residue on
+either phase to exactly zero.
+"""
+@inline function _snap_phase_apertures(liquid::T, open::T) where {T}
+    liquid = clamp(liquid, zero(T), open)
+    gas = open - liquid
+    residue = _phase_aperture_residue(T, open)
+    liquid <= residue && return zero(T), open
+    gas <= residue && return open, zero(T)
+    return liquid, gas
+end
+
 """Physical phase apertures on one owned interior face."""
 @inline function _phase_face_apertures(
         field::InterfaceField{T}, geometry, index,
@@ -260,8 +305,7 @@ end
         _face_aperture(field, geometry, face, face.minus) +
             _face_aperture(field, geometry, face, face.plus)
     ) / 2
-    liquid = clamp(liquid, zero(T), open)
-    return liquid, open - liquid
+    return _snap_phase_apertures(T(liquid), open)
 end
 
 @inline _phase_face_apertures(field::InterfaceField, index) =

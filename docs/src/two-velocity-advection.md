@@ -334,9 +334,15 @@ its open strip volume is ``V_{\rm strip}``, the bound requires
 splits their common open support and bounds each flux by the open part of
 its own strip on its side of the split. With
 ``C_{WY}\le 1/2``, these constraints make the open donating regions
-disjoint, including at hanging faces. If a nonzero prescribed subface flux
-has no open donor strip, no positive geometric timestep can represent it and
-the returned bound is zero.
+disjoint, including at hanging faces.
+
+The two face traces of a cut cell are clipped independently, so a phase that
+does not reach a face can be left with an aperture of a few machine epsilons.
+That residue is snapped to exactly zero, since it would describe a subface of
+zero width with no open strip. A genuine flux whose donor strip has no open
+area, or one below the sweep's area tolerance, cannot be represented by any
+donating region: the bound raises an `ArgumentError` naming the face, its
+donor cell and the strip area instead of returning an unusable step.
 
 For Method A, the physical-interface restriction is (9) with the projected
 liquid carrier. The auxiliary gas carrier has its own incoming, outgoing,

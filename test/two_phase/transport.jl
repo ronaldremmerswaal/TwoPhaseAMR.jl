@@ -995,7 +995,7 @@ end
     end
 end
 
-@testset "WY cut half-strip at a level transition (#52)" begin
+@testset "WY cut donor strip at a level transition (#52)" begin
     mesh = BlockTreeMesh(
         base_mesh = (12, 12), block_size = (4, 4), extent = (12.0, 12.0),
         periodic = (false, false), max_level = 1,
@@ -1142,5 +1142,250 @@ end
                 )
             end
         end
+    end
+end
+
+@testset "WY phase apertures snap round-off residues" begin
+    for T in (Float32, Float64)
+        open = T(0.5)
+        residue = T(32) * eps(T) * open
+        @test TP._snap_phase_apertures(open - residue, open) == (open, zero(T))
+        @test TP._snap_phase_apertures(residue, open) == (zero(T), open)
+        @test TP._snap_phase_apertures(zero(T), open) == (zero(T), open)
+        @test TP._snap_phase_apertures(open, open) == (open, zero(T))
+        @test TP._snap_phase_apertures(open, zero(T)) == (zero(T), zero(T))
+        # A resolvable opening survives, and the pair still sums to the face.
+        keep = T(256) * eps(T) * open
+        liquid, gas = TP._snap_phase_apertures(open - keep, open)
+        @test liquid == open - keep
+        @test gas > zero(T) && liquid + gas == open
+        liquid, gas = TP._snap_phase_apertures(keep, open)
+        @test liquid == keep && liquid + gas == open
+    end
+end
+
+# T-generic planar-cut fixtures, so the randomized regression also covers
+# Float32 meshes.
+function wy_cut_regression_mesh(T; hanging)
+    builder = (
+        base_mesh = (4, 4), block_size = (2, 2),
+        origin = (zero(T), zero(T)), extent = (T(4), T(4)),
+        periodic = (false, false),
+    )
+    return hanging ?
+        BlockTreeMesh(
+            ; builder..., max_level = 1,
+            refine = (key, origin, extent) -> key == BlockKey(0, 1, 1),
+        ) : BlockTreeMesh(; builder..., max_level = 0)
+end
+
+function wy_cut_planar_geometry(mesh, wall, slope)
+    T = eltype(mesh.origin)
+    refs = TP._cell_references(mesh)
+    fractions = CellField(mesh)
+    for ref in refs
+        x, y = cellcenter(mesh, ref.block, ref.i, ref.j)
+        dx, dy = mesh.blocks[ref.block].spacing
+        TP._set!(
+            fractions,
+            TP._plane_fraction(-T(slope) * dx, dy, -wall(x, y)), ref,
+        )
+    end
+    solid = InterfaceField(fractions; fraction_floor = eps(T))
+    for ref in refs
+        x, y = cellcenter(mesh, ref.block, ref.i, ref.j)
+        dx, dy = mesh.blocks[ref.block].spacing
+        TP._set!(solid.normal_x, -T(slope) * dx, ref)
+        TP._set!(solid.normal_y, dy, ref)
+        TP._set!(solid.intercept, -wall(x, y), ref)
+    end
+    return GeometryField(solid)
+end
+
+function wy_cut_planar_interface(mesh, geometry, donor, phase_slope)
+    T = eltype(mesh.origin)
+    polygon = TP._open_cell_polygon(geometry, donor)
+    x, y = cellcenter(mesh, donor.block, donor.i, donor.j)
+    dx, dy = mesh.blocks[donor.block].spacing
+    x0 = x + dx * sum(first, polygon) / length(polygon)
+    y0 = y + dy * sum(last, polygon) / length(polygon)
+    fractions = CellField(mesh)
+    for ref in TP._cell_references(mesh)
+        x, y = cellcenter(mesh, ref.block, ref.i, ref.j)
+        dx, dy = mesh.blocks[ref.block].spacing
+        open = TP._open_cell_polygon(geometry, ref)
+        liquid = TP._clip_polygon(
+            open, dx, T(phase_slope) * dy,
+            x0 - x - T(phase_slope) * (y - y0),
+        )
+        area = clamp(
+            TP._polygon_area(liquid), zero(T),
+            TP._get(geometry.open_fraction, ref),
+        )
+        TP._set!(fractions, area, ref)
+    end
+    return InterfaceField(fractions; geometry, fraction_floor = eps(T))
+end
+
+function wy_cut_carrier(mesh, geometry, wall)
+    T = eltype(mesh.origin)
+    psi(x, y) = max(wall(x, y), zero(T)) * sinpi(x / 4)^2 * sinpi(y / 4)^2
+    velocity = FaceVelocity(mesh)
+    for (index, face) in pairs(mesh.faces)
+        x, y = face.center
+        h = face.area / 2
+        flux = face.axis == 1 ? psi(x, y + h) - psi(x, y - h) :
+            -(psi(x + h, y) - psi(x - h, y))
+        aperture = geometry.aperture[index]
+        iszero(aperture) && continue
+        velocity.interior[index] = flux / (face.area * aperture)
+    end
+    return velocity
+end
+
+"""Whether every frozen phase aperture is negligible or resolvable."""
+function wy_phase_apertures_snapped(work, geometry, T)
+    snapped = true
+    for (index, face) in pairs(work.mesh.faces)
+        open = @inbounds geometry.aperture[index]
+        residue = T(64) * eps(T) * open
+        for value in (
+                @inbounds(work.liquid_aperture[index]),
+                @inbounds(work.gas_aperture[index]),
+            )
+            snapped &= iszero(value) || value > residue
+        end
+    end
+    return snapped
+end
+
+@testset "WY randomized frozen cut bounds stay positive" begin
+    total = 0
+    checked = 0
+    slack_checked = 0
+    for T in (Float64, Float32), hanging in (false, true)
+        mesh = wy_cut_regression_mesh(T; hanging)
+        centre = (T(1.5), T(2.5))
+        donor = only(
+            ref for ref in TP._cell_references(mesh)
+                if cellcenter(mesh, ref.block, ref.i, ref.j) == centre
+        )
+        @test hanging == any(
+            face -> mesh.blocks[face.plus.block].key.level !=
+                mesh.blocks[face.minus.block].key.level, mesh.faces,
+        )
+        rng = MersenneTwister(hanging ? 0x52_61 : 0x52_62)
+        for sample in 1:30
+            height = T(2.25) + T(0.5) * rand(rng)
+            slope = T(0.8) * rand(rng) - T(0.4)
+            phase_slope = T(0.8) * rand(rng) - T(0.4)
+            wall(x, y) = y - height - slope * (x - centre[1])
+            geometry = wy_cut_planar_geometry(mesh, wall, slope)
+            initial = wy_cut_planar_interface(
+                mesh, geometry, donor, phase_slope,
+            )
+            carrier = wy_cut_carrier(mesh, geometry, wall)
+            velocity = (carrier, copy(carrier))
+            field = copy(initial)
+            work = WYAdvectionWorkspace(
+                field, velocity;
+                interface_transport = FrozenInterfaceFluxes(),
+            )
+            @test wy_phase_apertures_snapped(work, geometry, T)
+            dt = stable_timestep(velocity, work)
+            @test isfinite(dt) && dt > zero(T)
+            advect!(field, velocity, dt, work)
+            check_wy_cut_fractions(field)
+            total += 1
+            if sample == 1
+                # The largest step the check accepts must survive the sweep,
+                # also where a cut-donor strip is the binding constraint.
+                limit_field = copy(initial)
+                limit_work = WYAdvectionWorkspace(
+                    limit_field, velocity;
+                    interface_transport = FrozenInterfaceFluxes(),
+                )
+                limit = stable_timestep(velocity, limit_work)
+                accepted = limit * (one(T) + TP._wy_step_slack(T))
+                advect!(limit_field, velocity, accepted, limit_work)
+                check_wy_cut_fractions(limit_field)
+                slack_checked += 1
+            end
+            checked += 1
+        end
+    end
+    @test total == 120
+    @test checked == 120
+    @test slack_checked == 4
+end
+
+"""A cut donor whose open strip vanished: the face aperture is open while the
+solid PLIC covers the donor completely."""
+function wy_empty_cut_strip_field(T)
+    mesh = wy_cut_regression_mesh(T; hanging = false)
+    donor = only(
+        ref for ref in TP._cell_references(mesh)
+            if cellcenter(mesh, ref.block, ref.i, ref.j) == (T(1.5), T(2.5))
+    )
+    geometry = GeometryField(
+        mesh, (x, y) -> y - T(100); lipschitz = T(1),
+    )
+    TP._set!(geometry.solid.fraction, one(T) - eps(T), donor)
+    TP._set!(geometry.solid.normal_x, one(T), donor)
+    TP._set!(geometry.solid.normal_y, zero(T), donor)
+    TP._set!(geometry.solid.intercept, T(10), donor)
+    TP._set!(geometry.open_fraction, eps(T), donor)
+    fractions = CellField(mesh)
+    for ref in TP._cell_references(mesh)
+        TP._set!(fractions, TP._get(geometry.open_fraction, ref), ref)
+    end
+    field = InterfaceField(fractions; geometry)
+    face = only(
+        index for (index, candidate) in pairs(mesh.faces)
+            if candidate.axis == 1 && candidate.minus == donor
+    )
+    geometry.aperture[face] = one(T)
+    return field, geometry, donor, face
+end
+
+@testset "WY empty cut-donor strip is reported" begin
+    for T in (Float64, Float32)
+        field, geometry, donor, face = wy_empty_cut_strip_field(T)
+        @test iszero(
+            TP._wy_open_strip_area(
+                geometry.solid, donor, 1, -T(0.5), T(0.5), -T(0.5), T(0.5),
+            ),
+        )
+        velocity = FaceVelocity(field.mesh)
+        velocity.interior[face] = T(0.5)
+        work = WYAdvectionWorkspace(field)
+        error = try
+            stable_timestep(velocity, work)
+            nothing
+        catch exception
+            exception
+        end
+        @test error isa ArgumentError
+        @test occursin("cut-donor strip on face $face", error.msg)
+        @test occursin("block $(donor.block), i $(donor.i), j $(donor.j)", error.msg)
+        @test occursin("no positive WY time step", error.msg)
+        # The frozen phase-subface bound reports the same condition, naming
+        # the phase carrier whose subface has no open strip.
+        liquid = FaceVelocity(field.mesh)
+        liquid.interior[face] = T(0.5)
+        gas = FaceVelocity(field.mesh)
+        pair = (liquid, gas)
+        pair_work = WYAdvectionWorkspace(
+            field, pair; interface_transport = FrozenInterfaceFluxes(),
+        )
+        pair_work.liquid_aperture[face] = one(T)
+        error = try
+            stable_timestep(pair, pair_work)
+            nothing
+        catch exception
+            exception
+        end
+        @test error isa ArgumentError
+        @test occursin("liquid subface", error.msg)
     end
 end

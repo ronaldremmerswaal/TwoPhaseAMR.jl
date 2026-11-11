@@ -404,7 +404,17 @@ end
     blocked_work = WYAdvectionWorkspace(
         blocked, velocity; interface_transport = FrozenInterfaceFluxes(),
     )
-    @test stable_timestep(velocity, blocked_work) == 0.0
+    # No positive timestep represents that prescribed carrier; the bound must
+    # not invent open volume, and it reports the limiting face and cell.
+    error = try
+        stable_timestep(velocity, blocked_work)
+        nothing
+    catch exception
+        exception
+    end
+    @test error isa ArgumentError
+    @test occursin("liquid subface", error.msg)
+    @test occursin("(block 1, i 2, j 2)", error.msg)
     @test blocked_work.liquid_aperture[index] > 0
     lo, hi = TwoPhaseAMR._frozen_subface_interval(
         blocked, blocked_work, face, index, donor, true, geometry,

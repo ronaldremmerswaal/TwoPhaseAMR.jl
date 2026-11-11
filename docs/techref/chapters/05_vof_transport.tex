@@ -398,8 +398,14 @@ such full-strip and pairwise areas define constraints
   \nu^{\mathrm{geom}}=\frac{\dt q_f}{2A}\le\wycflval .
 \end{equation}
 If the common open part is empty, no pairwise restriction is needed. A
-positive rate with zero full-strip area gives a zero bound: the prescribed
-shared aperture cannot be represented by a donating region in that donor.
+positive rate through a strip whose open area is zero, or below the sweep's
+area tolerance $256\machineeps\aperture{f}$, cannot be represented by a
+donating region in that donor: the bound raises an \code{ArgumentError}
+naming the face, the donor cell and the strip area instead of returning an
+unusable step. Residues of the phase apertures themselves are snapped to
+zero, and the sweep's area tolerance is widened by the slack of the step
+check (\cref{eq:stab:check}), so a step that passes the check is not rejected
+by the sweep.
 Otherwise \apifun{stable_timestep} returns
 \begin{equation}\label{eq:vof:dtwy}
   \begin{split}
