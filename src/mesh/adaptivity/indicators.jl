@@ -159,7 +159,7 @@ function refinement_labels!(
     fill_halo!(field, indicator.boundary)
     nx, ny = field.mesh.block_size
     h = field.mesh.halo
-    _parallel_for(length(field.blocks); grain = 4) do block_index
+    _parallel_for(length(field.blocks); work = nx * ny) do block_index
         values = field.blocks[block_index]
         maximum_error = zero(typeof(indicator.E_refine))
         for j in 1:ny, i in 1:nx

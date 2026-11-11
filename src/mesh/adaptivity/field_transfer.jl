@@ -103,7 +103,9 @@ function _transfer_cell_field!(
 
     h = workspace.mesh.halo
     _prepare_parallel_prolongation!(buffer.prolongation, workspace)
-    _parallel_for(nblocks(workspace.mesh); grain = 4) do new_index
+    _parallel_for(
+        nblocks(workspace.mesh); work = prod(workspace.mesh.block_size),
+    ) do new_index
         block = workspace.mesh.blocks[new_index]
         haskey(workspace.old_indices, block.key) && return nothing
         if block.key.level > 0
@@ -487,7 +489,7 @@ function _transfer_face_field!(
         workspace.interior_face_local_indices[global_index] =
             local_indices[axis]
     end
-    _parallel_for(length(mesh.faces); grain = 512) do global_index
+    _parallel_for(length(mesh.faces); work = 2) do global_index
         face = mesh.faces[global_index]
         face.axis in _field_axes(field) || return nothing
         value = _face_transfer_value(workspace, buffer, face)
@@ -506,7 +508,7 @@ function _transfer_face_field!(
         workspace.boundary_face_local_indices[global_index] =
             local_indices[axis]
     end
-    _parallel_for(length(mesh.boundary_faces); grain = 512) do global_index
+    _parallel_for(length(mesh.boundary_faces); work = 2) do global_index
         face = mesh.boundary_faces[global_index]
         face.axis in _field_axes(field) || return nothing
         value = _face_transfer_value(workspace, buffer, face)

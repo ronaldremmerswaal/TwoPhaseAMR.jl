@@ -929,7 +929,7 @@ function _build_halo_schedule(root, nodes, blocks, block_size, halo, periodic)
     donor_counts = Vector{Int}(undef, number_of_entries)
     candidate_donors = Vector{CellRef}(undef, 4number_of_entries)
     candidate_weights = Vector{T}(undef, 4number_of_entries)
-    @_parallel_tasks for entry_index in 1:number_of_entries
+    @_parallel for entry_index in 1:number_of_entries
         destination = destinations[entry_index]
         b, i, j = destination.block, destination.i, destination.j
         block = blocks[b]

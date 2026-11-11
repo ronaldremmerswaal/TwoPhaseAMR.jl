@@ -213,7 +213,7 @@ function initialize!(
             )
         end
     end
-    _parallel_for(nblocks(mesh); grain = 4) do block
+    _parallel_for(nblocks(mesh); work = prod(mesh.block_size)) do block
         copyto!(field.fraction.blocks[block], result.blocks[block])
     end
     return reconstruct!(field)
