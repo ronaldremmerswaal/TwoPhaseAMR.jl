@@ -1,172 +1,50 @@
-TwoPhaseAMR Studio: http://127.0.0.1:43397/?token=09bab7d420d4a034ddf146c5b06a082e
-SSH tunnel: ssh -N -L 43397:127.0.0.1:43397 <remote-host>
-TwoPhaseAMR Studio: http://127.0.0.1:36457/?token=cf69c78f46d5910606c3829fd4a24dc6
-SSH tunnel: ssh -N -L 36457:127.0.0.1:36457 <remote-host>
-Test Summary:                       | Pass  Total   Time
-Ephemeral server and authentication |   47     47  19.3s
-TwoPhaseAMR Studio: http://127.0.0.1:41453/?token=57ea22c47897a216cce5bd561e67db1d
-SSH tunnel: ssh -N -L 41453:127.0.0.1:41453 <remote-host>
-Test Summary:                              | Pass  Total  Time
-Natural completion is not a requested stop |    4      4  8.7s
-TwoPhaseAMR Studio: http://127.0.0.1:35003/?token=d955e7325ffa5af5deaf2e53dec08352
-SSH tunnel: ssh -N -L 35003:127.0.0.1:35003 <remote-host>
-TwoPhaseAMR Studio: http://127.0.0.1:37717/?token=b2cc18ef8e4017373aaf91d466d218f8
-SSH tunnel: ssh -N -L 37717:127.0.0.1:37717 <remote-host>
-Test Summary:                        | Pass  Total  Time
-Recording diagnostic option protocol |   58     58  2.4s
-TwoPhaseAMR Studio: http://127.0.0.1:44909/?token=8aa9395cba6ef350a4a4c0c7876224e8
-SSH tunnel: ssh -N -L 44909:127.0.0.1:44909 <remote-host>
-Real simulation, WebSocket controls, history and recording: Test Failed at /home/ronald/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/test/test_server.jl:601
-  Expression: started["status"] != "error"
-   Evaluated: "error" != "error"
-
-Stacktrace:
-  [1] macro expansion
-    @ ~/.julia/juliaup/julia-1.12.7+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
-  [2] (::var"#157#158"{HTTP.WebSockets.WebSocket{Reseau.TCP.Conn, HTTP.WebSockets.var"#21#22"{HTTP.Conn, Bool, HTTP.Client{Nothing}}}, TwoPhaseAMRStudio.StudioClient, String, String, String, Task, Channel{Nothing}, Channel{Float64}, SnapshotStore, Recorder, FlowSimulation{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, FaceVelocity{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, NavierStokesSystem{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, NavierStokesOptions{AdvectionOptions{LaxWendroff, MonotonizedCentral}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, MultigridOptions}, Adaptivity{Tuple{}, Tuple{}}, StaggeredDiffusionOperator{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, TwoPhaseAMR.StaggeredDiffusionComponent{1, Float64}, TwoPhaseAMR.StaggeredDiffusionComponent{2, Float64}, FreeSlip}, FreeSlip, Nothing, Nothing}, NavierStokesWorkspace{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, Nothing, DiagnosticCollection{Float64}}, @NamedTuple{base::SubString{String}, token::SubString{String}, address::String}})(ws::HTTP.WebSockets.WebSocket{Reseau.TCP.Conn, HTTP.WebSockets.var"#21#22"{HTTP.Conn, Bool, HTTP.Client{Nothing}}})
-    @ Main ~/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/test/test_server.jl:601
-  [3] open(f::var"#157#158"{HTTP.WebSockets.WebSocket{Reseau.TCP.Conn, HTTP.WebSockets.var"#21#22"{HTTP.Conn, Bool, HTTP.Client{Nothing}}}, TwoPhaseAMRStudio.StudioClient, String, String, String, Task, Channel{Nothing}, Channel{Float64}, SnapshotStore, Recorder, FlowSimulation{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, FaceVelocity{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, NavierStokesSystem{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, NavierStokesOptions{AdvectionOptions{LaxWendroff, MonotonizedCentral}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, MultigridOptions}, Adaptivity{Tuple{}, Tuple{}}, StaggeredDiffusionOperator{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, TwoPhaseAMR.StaggeredDiffusionComponent{1, Float64}, TwoPhaseAMR.StaggeredDiffusionComponent{2, Float64}, FreeSlip}, FreeSlip, Nothing, Nothing}, NavierStokesWorkspace{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, Nothing, DiagnosticCollection{Float64}}, @NamedTuple{base::SubString{String}, token::SubString{String}, address::String}}, url::String; suppress_close_error::Bool, kwargs::@Kwargs{})
-    @ HTTP.WebSockets ~/.julia/packages/HTTP/k5UeH/src/http_websockets.jl:1191
-  [4] open(f::Function, url::String)
-    @ HTTP.WebSockets ~/.julia/packages/HTTP/k5UeH/src/http_websockets.jl:1183
-  [5] (::var"#153#154"{String, String, String, Task, Channel{Nothing}, Channel{Float64}, SnapshotStore, Recorder, FlowSimulation{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, FaceVelocity{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, NavierStokesSystem{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, NavierStokesOptions{AdvectionOptions{LaxWendroff, MonotonizedCentral}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, MultigridOptions}, Adaptivity{Tuple{}, Tuple{}}, StaggeredDiffusionOperator{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, TwoPhaseAMR.StaggeredDiffusionComponent{1, Float64}, TwoPhaseAMR.StaggeredDiffusionComponent{2, Float64}, FreeSlip}, FreeSlip, Nothing, Nothing}, NavierStokesWorkspace{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, Nothing, DiagnosticCollection{Float64}}, @NamedTuple{base::SubString{String}, token::SubString{String}, address::String}})(slow::HTTP.WebSockets.WebSocket{Reseau.TCP.Conn, HTTP.WebSockets.var"#21#22"{HTTP.Conn, Bool, HTTP.Client{Nothing}}})
-    @ Main ~/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/test/test_server.jl:444
-  [6] open(f::var"#153#154"{String, String, String, Task, Channel{Nothing}, Channel{Float64}, SnapshotStore, Recorder, FlowSimulation{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, FaceVelocity{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, NavierStokesSystem{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, NavierStokesOptions{AdvectionOptions{LaxWendroff, MonotonizedCentral}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, MultigridOptions}, Adaptivity{Tuple{}, Tuple{}}, StaggeredDiffusionOperator{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, TwoPhaseAMR.StaggeredDiffusionComponent{1, Float64}, TwoPhaseAMR.StaggeredDiffusionComponent{2, Float64}, FreeSlip}, FreeSlip, Nothing, Nothing}, NavierStokesWorkspace{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, Nothing, DiagnosticCollection{Float64}}, @NamedTuple{base::SubString{String}, token::SubString{String}, address::String}}, url::String; suppress_close_error::Bool, kwargs::@Kwargs{})
-    @ HTTP.WebSockets ~/.julia/packages/HTTP/k5UeH/src/http_websockets.jl:1191
-  [7] open
-    @ ~/.julia/packages/HTTP/k5UeH/src/http_websockets.jl:1183 [inlined]
-  [8] (::var"#151#152"{Task, Channel{Nothing}, Channel{Float64}, SnapshotStore, Recorder, FlowSimulation{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, FaceVelocity{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, NavierStokesSystem{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, NavierStokesOptions{AdvectionOptions{LaxWendroff, MonotonizedCentral}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, MultigridOptions}, Adaptivity{Tuple{}, Tuple{}}, StaggeredDiffusionOperator{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, TwoPhaseAMR.StaggeredDiffusionComponent{1, Float64}, TwoPhaseAMR.StaggeredDiffusionComponent{2, Float64}, FreeSlip}, FreeSlip, Nothing, Nothing}, NavierStokesWorkspace{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, Nothing, DiagnosticCollection{Float64}}, @NamedTuple{base::SubString{String}, token::SubString{String}, address::String}})(directory::String)
-    @ Main ~/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/test/test_server.jl:438
-  [9] mktempdir(fn::var"#151#152"{Task, Channel{Nothing}, Channel{Float64}, SnapshotStore, Recorder, FlowSimulation{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, FaceVelocity{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, NavierStokesSystem{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, NavierStokesOptions{AdvectionOptions{LaxWendroff, MonotonizedCentral}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, MultigridOptions}, Adaptivity{Tuple{}, Tuple{}}, StaggeredDiffusionOperator{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, TwoPhaseAMR.StaggeredDiffusionComponent{1, Float64}, TwoPhaseAMR.StaggeredDiffusionComponent{2, Float64}, FreeSlip}, FreeSlip, Nothing, Nothing}, NavierStokesWorkspace{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, Nothing, DiagnosticCollection{Float64}}, @NamedTuple{base::SubString{String}, token::SubString{String}, address::String}}, parent::String; prefix::String)
-    @ Base.Filesystem ./file.jl:941
- [10] mktempdir(fn::Function, parent::String)
-    @ Base.Filesystem ./file.jl:937
- [11] top-level scope
-    @ ~/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/test/test_server.jl:412
- [12] macro expansion
-    @ ~/.julia/juliaup/julia-1.12.7+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
- [13] macro expansion
-    @ ~/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/test/test_server.jl:434 [inlined]
-Real simulation, WebSocket controls, history and recording: Test Failed at /home/ronald/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/test/test_server.jl:602
-  Expression: started["active"] && started["source"] == "live"
-
-Stacktrace:
-  [1] macro expansion
-    @ ~/.julia/juliaup/julia-1.12.7+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:680 [inlined]
-  [2] (::var"#157#158"{HTTP.WebSockets.WebSocket{Reseau.TCP.Conn, HTTP.WebSockets.var"#21#22"{HTTP.Conn, Bool, HTTP.Client{Nothing}}}, TwoPhaseAMRStudio.StudioClient, String, String, String, Task, Channel{Nothing}, Channel{Float64}, SnapshotStore, Recorder, FlowSimulation{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, FaceVelocity{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, NavierStokesSystem{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, NavierStokesOptions{AdvectionOptions{LaxWendroff, MonotonizedCentral}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, MultigridOptions}, Adaptivity{Tuple{}, Tuple{}}, StaggeredDiffusionOperator{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, TwoPhaseAMR.StaggeredDiffusionComponent{1, Float64}, TwoPhaseAMR.StaggeredDiffusionComponent{2, Float64}, FreeSlip}, FreeSlip, Nothing, Nothing}, NavierStokesWorkspace{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, Nothing, DiagnosticCollection{Float64}}, @NamedTuple{base::SubString{String}, token::SubString{String}, address::String}})(ws::HTTP.WebSockets.WebSocket{Reseau.TCP.Conn, HTTP.WebSockets.var"#21#22"{HTTP.Conn, Bool, HTTP.Client{Nothing}}})
-    @ Main ~/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/test/test_server.jl:602
-  [3] open(f::var"#157#158"{HTTP.WebSockets.WebSocket{Reseau.TCP.Conn, HTTP.WebSockets.var"#21#22"{HTTP.Conn, Bool, HTTP.Client{Nothing}}}, TwoPhaseAMRStudio.StudioClient, String, String, String, Task, Channel{Nothing}, Channel{Float64}, SnapshotStore, Recorder, FlowSimulation{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, FaceVelocity{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, NavierStokesSystem{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, NavierStokesOptions{AdvectionOptions{LaxWendroff, MonotonizedCentral}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, MultigridOptions}, Adaptivity{Tuple{}, Tuple{}}, StaggeredDiffusionOperator{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, TwoPhaseAMR.StaggeredDiffusionComponent{1, Float64}, TwoPhaseAMR.StaggeredDiffusionComponent{2, Float64}, FreeSlip}, FreeSlip, Nothing, Nothing}, NavierStokesWorkspace{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, Nothing, DiagnosticCollection{Float64}}, @NamedTuple{base::SubString{String}, token::SubString{String}, address::String}}, url::String; suppress_close_error::Bool, kwargs::@Kwargs{})
-    @ HTTP.WebSockets ~/.julia/packages/HTTP/k5UeH/src/http_websockets.jl:1191
-  [4] open(f::Function, url::String)
-    @ HTTP.WebSockets ~/.julia/packages/HTTP/k5UeH/src/http_websockets.jl:1183
-  [5] (::var"#153#154"{String, String, String, Task, Channel{Nothing}, Channel{Float64}, SnapshotStore, Recorder, FlowSimulation{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, FaceVelocity{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, NavierStokesSystem{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, NavierStokesOptions{AdvectionOptions{LaxWendroff, MonotonizedCentral}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, MultigridOptions}, Adaptivity{Tuple{}, Tuple{}}, StaggeredDiffusionOperator{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, TwoPhaseAMR.StaggeredDiffusionComponent{1, Float64}, TwoPhaseAMR.StaggeredDiffusionComponent{2, Float64}, FreeSlip}, FreeSlip, Nothing, Nothing}, NavierStokesWorkspace{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, Nothing, DiagnosticCollection{Float64}}, @NamedTuple{base::SubString{String}, token::SubString{String}, address::String}})(slow::HTTP.WebSockets.WebSocket{Reseau.TCP.Conn, HTTP.WebSockets.var"#21#22"{HTTP.Conn, Bool, HTTP.Client{Nothing}}})
-    @ Main ~/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/test/test_server.jl:444
-  [6] open(f::var"#153#154"{String, String, String, Task, Channel{Nothing}, Channel{Float64}, SnapshotStore, Recorder, FlowSimulation{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, FaceVelocity{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, NavierStokesSystem{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, NavierStokesOptions{AdvectionOptions{LaxWendroff, MonotonizedCentral}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, MultigridOptions}, Adaptivity{Tuple{}, Tuple{}}, StaggeredDiffusionOperator{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, TwoPhaseAMR.StaggeredDiffusionComponent{1, Float64}, TwoPhaseAMR.StaggeredDiffusionComponent{2, Float64}, FreeSlip}, FreeSlip, Nothing, Nothing}, NavierStokesWorkspace{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, Nothing, DiagnosticCollection{Float64}}, @NamedTuple{base::SubString{String}, token::SubString{String}, address::String}}, url::String; suppress_close_error::Bool, kwargs::@Kwargs{})
-    @ HTTP.WebSockets ~/.julia/packages/HTTP/k5UeH/src/http_websockets.jl:1191
-  [7] open
-    @ ~/.julia/packages/HTTP/k5UeH/src/http_websockets.jl:1183 [inlined]
-  [8] (::var"#151#152"{Task, Channel{Nothing}, Channel{Float64}, SnapshotStore, Recorder, FlowSimulation{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, FaceVelocity{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, NavierStokesSystem{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, NavierStokesOptions{AdvectionOptions{LaxWendroff, MonotonizedCentral}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, MultigridOptions}, Adaptivity{Tuple{}, Tuple{}}, StaggeredDiffusionOperator{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, TwoPhaseAMR.StaggeredDiffusionComponent{1, Float64}, TwoPhaseAMR.StaggeredDiffusionComponent{2, Float64}, FreeSlip}, FreeSlip, Nothing, Nothing}, NavierStokesWorkspace{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, Nothing, DiagnosticCollection{Float64}}, @NamedTuple{base::SubString{String}, token::SubString{String}, address::String}})(directory::String)
-    @ Main ~/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/test/test_server.jl:438
-  [9] mktempdir(fn::var"#151#152"{Task, Channel{Nothing}, Channel{Float64}, SnapshotStore, Recorder, FlowSimulation{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, FaceVelocity{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, NavierStokesSystem{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, NavierStokesOptions{AdvectionOptions{LaxWendroff, MonotonizedCentral}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, MultigridOptions}, Adaptivity{Tuple{}, Tuple{}}, StaggeredDiffusionOperator{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, TwoPhaseAMR.StaggeredDiffusionComponent{1, Float64}, TwoPhaseAMR.StaggeredDiffusionComponent{2, Float64}, FreeSlip}, FreeSlip, Nothing, Nothing}, NavierStokesWorkspace{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, Nothing, DiagnosticCollection{Float64}}, @NamedTuple{base::SubString{String}, token::SubString{String}, address::String}}, parent::String; prefix::String)
-    @ Base.Filesystem ./file.jl:941
- [10] mktempdir(fn::Function, parent::String)
-    @ Base.Filesystem ./file.jl:937
- [11] top-level scope
-    @ ~/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/test/test_server.jl:412
- [12] macro expansion
-    @ ~/.julia/juliaup/julia-1.12.7+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
- [13] macro expansion
-    @ ~/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/test/test_server.jl:434 [inlined]
-Real simulation, WebSocket controls, history and recording: Error During Test at /home/ronald/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/test/test_server.jl:411
-  Got exception outside of a @test
-  Live recording failed: TaskFailedException
-  
-      nested task error: UndefVarError: `LiveVideoSampler` not defined in `TwoPhaseAMRMakieExt`
-      Suggestion: check for spelling errors or missing imports.
-      Hint: a global variable of this name also exists in TwoPhaseAMR.
-      Stacktrace:
-       [1] _encode_live!(recording::TwoPhaseAMRMakieExt.LiveRecording, recorder::Recorder, name::Symbol, options::@NamedTuple{diagnostics::Vector{Symbol}, diagnostic_options::Vector{@NamedTuple{names::Vector{Symbol}, scale::Symbol, hidden::Vector{@NamedTuple{name::Symbol, component::Int64}}}}, size::Tuple{Int64, Int64}, camera::NTuple{4, Float64}, colorrange::Tuple{Float64, Float64}, colormap::Symbol, phase_rendering::Symbol, interface::Bool, geometry::Bool, blocks::Bool, decorations::Symbol, title::Makie.Automatic, group::Symbol, references::Dict{Symbol, Any}, transform::Symbol, arrangement::Symbol, interfacecolor::Symbol, blockcolor::Tuple{Symbol, Float64}}, format::String, fps::Int64, px_per_unit::Int64, sim_per_second::Float64, deferred::Bool)
-         @ TwoPhaseAMRMakieExt ~/Documents/wt-time-linear/ext/TwoPhaseAMRMakieExt.jl:991
-       [2] encode
-         @ ~/Documents/wt-time-linear/ext/TwoPhaseAMRMakieExt.jl:1084 [inlined]
-       [3] (::TwoPhaseAMRMakieExt.var"#101#102"{TwoPhaseAMRMakieExt.var"#encode#100"{Int64, Float64, Int64, Recorder, Symbol, @NamedTuple{diagnostics::Vector{Symbol}, diagnostic_options::Vector{@NamedTuple{names::Vector{Symbol}, scale::Symbol, hidden::Vector{@NamedTuple{name::Symbol, component::Int64}}}}, size::Tuple{Int64, Int64}, camera::NTuple{4, Float64}, colorrange::Tuple{Float64, Float64}, colormap::Symbol, phase_rendering::Symbol, interface::Bool, geometry::Bool, blocks::Bool, decorations::Symbol, title::Makie.Automatic, group::Symbol, references::Dict{Symbol, Any}, transform::Symbol, arrangement::Symbol, interfacecolor::Symbol, blockcolor::Tuple{Symbol, Float64}}, Bool, TwoPhaseAMRMakieExt.LiveRecording, String}})()
-         @ TwoPhaseAMRMakieExt ~/Documents/wt-time-linear/ext/TwoPhaseAMRMakieExt.jl:1088
-  Stacktrace:
-    [1] error(s::String)
-      @ Base ./error.jl:44
-    [2] (::var"#157#158"{HTTP.WebSockets.WebSocket{Reseau.TCP.Conn, HTTP.WebSockets.var"#21#22"{HTTP.Conn, Bool, HTTP.Client{Nothing}}}, TwoPhaseAMRStudio.StudioClient, String, String, String, Task, Channel{Nothing}, Channel{Float64}, SnapshotStore, Recorder, FlowSimulation{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, FaceVelocity{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, NavierStokesSystem{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, NavierStokesOptions{AdvectionOptions{LaxWendroff, MonotonizedCentral}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, MultigridOptions}, Adaptivity{Tuple{}, Tuple{}}, StaggeredDiffusionOperator{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, TwoPhaseAMR.StaggeredDiffusionComponent{1, Float64}, TwoPhaseAMR.StaggeredDiffusionComponent{2, Float64}, FreeSlip}, FreeSlip, Nothing, Nothing}, NavierStokesWorkspace{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, Nothing, DiagnosticCollection{Float64}}, @NamedTuple{base::SubString{String}, token::SubString{String}, address::String}})(ws::HTTP.WebSockets.WebSocket{Reseau.TCP.Conn, HTTP.WebSockets.var"#21#22"{HTTP.Conn, Bool, HTTP.Client{Nothing}}})
-      @ Main ~/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/test/test_server.jl:604
-    [3] open(f::var"#157#158"{HTTP.WebSockets.WebSocket{Reseau.TCP.Conn, HTTP.WebSockets.var"#21#22"{HTTP.Conn, Bool, HTTP.Client{Nothing}}}, TwoPhaseAMRStudio.StudioClient, String, String, String, Task, Channel{Nothing}, Channel{Float64}, SnapshotStore, Recorder, FlowSimulation{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, FaceVelocity{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, NavierStokesSystem{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, NavierStokesOptions{AdvectionOptions{LaxWendroff, MonotonizedCentral}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, MultigridOptions}, Adaptivity{Tuple{}, Tuple{}}, StaggeredDiffusionOperator{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, TwoPhaseAMR.StaggeredDiffusionComponent{1, Float64}, TwoPhaseAMR.StaggeredDiffusionComponent{2, Float64}, FreeSlip}, FreeSlip, Nothing, Nothing}, NavierStokesWorkspace{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, Nothing, DiagnosticCollection{Float64}}, @NamedTuple{base::SubString{String}, token::SubString{String}, address::String}}, url::String; suppress_close_error::Bool, kwargs::@Kwargs{})
-      @ HTTP.WebSockets ~/.julia/packages/HTTP/k5UeH/src/http_websockets.jl:1191
-    [4] open(f::Function, url::String)
-      @ HTTP.WebSockets ~/.julia/packages/HTTP/k5UeH/src/http_websockets.jl:1183
-    [5] (::var"#153#154"{String, String, String, Task, Channel{Nothing}, Channel{Float64}, SnapshotStore, Recorder, FlowSimulation{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, FaceVelocity{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, NavierStokesSystem{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, NavierStokesOptions{AdvectionOptions{LaxWendroff, MonotonizedCentral}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, MultigridOptions}, Adaptivity{Tuple{}, Tuple{}}, StaggeredDiffusionOperator{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, TwoPhaseAMR.StaggeredDiffusionComponent{1, Float64}, TwoPhaseAMR.StaggeredDiffusionComponent{2, Float64}, FreeSlip}, FreeSlip, Nothing, Nothing}, NavierStokesWorkspace{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, Nothing, DiagnosticCollection{Float64}}, @NamedTuple{base::SubString{String}, token::SubString{String}, address::String}})(slow::HTTP.WebSockets.WebSocket{Reseau.TCP.Conn, HTTP.WebSockets.var"#21#22"{HTTP.Conn, Bool, HTTP.Client{Nothing}}})
-      @ Main ~/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/test/test_server.jl:444
-    [6] open(f::var"#153#154"{String, String, String, Task, Channel{Nothing}, Channel{Float64}, SnapshotStore, Recorder, FlowSimulation{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, FaceVelocity{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, NavierStokesSystem{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, NavierStokesOptions{AdvectionOptions{LaxWendroff, MonotonizedCentral}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, MultigridOptions}, Adaptivity{Tuple{}, Tuple{}}, StaggeredDiffusionOperator{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, TwoPhaseAMR.StaggeredDiffusionComponent{1, Float64}, TwoPhaseAMR.StaggeredDiffusionComponent{2, Float64}, FreeSlip}, FreeSlip, Nothing, Nothing}, NavierStokesWorkspace{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, Nothing, DiagnosticCollection{Float64}}, @NamedTuple{base::SubString{String}, token::SubString{String}, address::String}}, url::String; suppress_close_error::Bool, kwargs::@Kwargs{})
-      @ HTTP.WebSockets ~/.julia/packages/HTTP/k5UeH/src/http_websockets.jl:1191
-    [7] open
-      @ ~/.julia/packages/HTTP/k5UeH/src/http_websockets.jl:1183 [inlined]
-    [8] (::var"#151#152"{Task, Channel{Nothing}, Channel{Float64}, SnapshotStore, Recorder, FlowSimulation{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, FaceVelocity{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, NavierStokesSystem{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, NavierStokesOptions{AdvectionOptions{LaxWendroff, MonotonizedCentral}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, MultigridOptions}, Adaptivity{Tuple{}, Tuple{}}, StaggeredDiffusionOperator{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, TwoPhaseAMR.StaggeredDiffusionComponent{1, Float64}, TwoPhaseAMR.StaggeredDiffusionComponent{2, Float64}, FreeSlip}, FreeSlip, Nothing, Nothing}, NavierStokesWorkspace{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, Nothing, DiagnosticCollection{Float64}}, @NamedTuple{base::SubString{String}, token::SubString{String}, address::String}})(directory::String)
-      @ Main ~/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/test/test_server.jl:438
 Precompiling packages...
-    TwoPhaseAMR Being precompiled by another process (pid: 1081200, pidfile: /home/ronald/.julia/compiled/v1.12/TwoPhaseAMR/uMhhT_jgnTW.ji.pidfile)
-┌ Warning: attempting to remove probably stale pidfile
-│   path = "/home/ronald/.julia/compiled/v1.12/TwoPhaseAMR/uMhhT_jgnTW.ji.pidfile"
-└ @ FileWatching.Pidfile ~/.julia/juliaup/julia-1.12.7+0.x64.linux.gnu/share/julia/stdlib/v1.12/FileWatching/src/pidfile.jl:303
-  87959.6 ms  ✓ TwoPhaseAMR
-  1 dependency successfully precompiled in 88 seconds. 44 already precompiled.
-  5 dependencies precompiled but different versions are currently loaded (Base64, JuliaSyntaxHighlighting, Markdown, Serialization and StyledStrings). Restart julia to access the new versions. Otherwise, 10 dependents of these packages may trigger further precompilation to work with the unexpected versions.
-Precompiling packages...
-  29380.3 ms  ✓ HTTP
-   2615.9 ms  ✓ PNGFiles
-   1996.1 ms  ✓ JpegTurbo
-   1677.6 ms  ✓ Sixel
-   1056.9 ms  ✓ QOI
-  16177.4 ms  ✓ TiffImages
-   1306.9 ms  ✓ ImageAxes
-   4205.1 ms  ✓ MathTeXEngine
-   1116.3 ms  ✓ OpenEXR
-   1547.5 ms  ✓ WebP
-   1117.3 ms  ✓ FileIO → HTTPExt
-    821.5 ms  ✓ ImageMetadata
-   1222.1 ms  ✓ Netpbm
-  99165.2 ms  ✓ Makie
-   4427.1 ms  ✓ IntervalSets → IntervalSetsMakieExt
-   4077.7 ms  ✓ IntervalArithmetic → IntervalArithmeticMakieExt
-   5911.5 ms  ✓ TwoPhaseAMR → TwoPhaseAMRMakieExt
-  28837.0 ms  ✓ CairoMakie
-   6688.5 ms  ✓ TwoPhaseAMRStudio
-  19 dependencies successfully precompiled in 214 seconds. 314 already precompiled.
+   5968.4 ms  ✓ TwoPhaseAMR → TwoPhaseAMRMakieExt
+   6566.4 ms  ✓ TwoPhaseAMRStudio
+  2 dependencies successfully precompiled in 13 seconds. 331 already precompiled.
   43 dependencies precompiled but different versions are currently loaded (ArrayInterface, ArrayInterface → ArrayInterfaceSparseArraysExt, ArrayInterface → ArrayInterfaceStaticArraysCoreExt, Base64, BitTwiddlingConvenienceFunctions, CPUSummary, CloseOpenIntervals, CommonWorldInvalidations, Compat, Compat → CompatLinearAlgebraExt, CpuId, Dates, IfElse, IncompleteLU, InteractiveUtils, JuliaSyntaxHighlighting, Krylov, LayoutPointers, Logging, ManualMemory, Markdown, Polyester, PolyesterWeave, PrecompileTools, Preferences, Printf, RegionTrees, SIMDTypes, SciMLPublic, Serialization, SparseArrays, Static, StaticArrayInterface, StaticArrayInterface → StaticArrayInterfaceStaticArraysExt, StaticArrays, StaticArraysCore, StrideArraysCore, StyledStrings, SuiteSparse_jll, TOML, ThreadingUtilities, TwoPhaseAMR and UUIDs). Restart julia to access the new versions. Otherwise, 194 dependents of these packages may trigger further precompilation to work with the unexpected versions.
-Precompiling packages...
-   1634.2 ms  ✓ FilePathsBaseTestExt (serial)
-  1 dependency successfully precompiled in 2 seconds
-Precompiling packages...
-    485.5 ms  ✓ TestExt (serial)
-  1 dependency successfully precompiled in 0 seconds
-Precompiling packages...
-   1018.8 ms  ✓ DistributionsTestExt (serial)
-  1 dependency successfully precompiled in 1 seconds
 [ Info: Recorder: a native-precision frame needs 1.234 KiB; the memory budget of 2.000 GiB holds about 1698958 frames.
 [ Info: Recorder: a native-precision frame needs 1.234 KiB; the memory budget of 2.000 GiB holds about 1698958 frames.
-ERROR: LoadError: Some tests did not pass: 61 passed, 2 failed, 1 errored, 0 broken.
-in expression starting at /home/ronald/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/test/test_server.jl:411
-    [9] mktempdir(fn::var"#151#152"{Task, Channel{Nothing}, Channel{Float64}, SnapshotStore, Recorder, FlowSimulation{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, FaceVelocity{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, NavierStokesSystem{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, NavierStokesOptions{AdvectionOptions{LaxWendroff, MonotonizedCentral}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, MultigridOptions}, Adaptivity{Tuple{}, Tuple{}}, StaggeredDiffusionOperator{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}, TwoPhaseAMR.StaggeredDiffusionComponent{1, Float64}, TwoPhaseAMR.StaggeredDiffusionComponent{2, Float64}, FreeSlip}, FreeSlip, Nothing, Nothing}, NavierStokesWorkspace{Float64, BlockTreeMesh{Float64, TwoPhaseAMR.RootGrid{Float64, RegionTrees.Cell{TwoPhaseAMR.TreeNodeData, 2, Float64, 4}}}}, Nothing, DiagnosticCollection{Float64}}, @NamedTuple{base::SubString{String}, token::SubString{String}, address::String}}, parent::String; prefix::String)
-      @ Base.Filesystem ./file.jl:941
-   [10] mktempdir(fn::Function, parent::String)
-      @ Base.Filesystem ./file.jl:937
-   [11] top-level scope
-      @ ~/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/test/test_server.jl:412
-   [12] macro expansion
-      @ ~/.julia/juliaup/julia-1.12.7+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
-   [13] macro expansion
-      @ ~/Documents/wt-time-linear/lib/TwoPhaseAMRStudio/test/test_server.jl:434 [inlined]
-   [14] include(mod::Module, _path::String)
-      @ Base ./Base.jl:306
-   [15] exec_options(opts::Base.JLOptions)
-      @ Base ./client.jl:317
-   [16] _start()
-      @ Base ./client.jl:550
-Test Summary:                                              | Pass  Fail  Error  Total   Time
-Real simulation, WebSocket controls, history and recording |   61     2      1     64  27.9s
-RNG of the outermost testset: Random.Xoshiro(0xc0dc8ce5e9b24d18, 0x556500fab22a9557, 0x3bac6f6da2a442e9, 0x5ae68fc1fca2a27d, 0x67b7ab4815d9cd15)
+[ Info: Live recording wrote 12 frames to /tmp/jl_DLHVxC/live.gif; 0 dropped.
+[ Info: Recorder: a native-precision frame needs 1.234 KiB; the memory budget of 2.000 GiB holds about 1698958 frames.
+[ Info: Recorder: a native-precision frame needs 1.234 KiB; the memory budget of 2.000 GiB holds about 1698958 frames.
+[ Info: Recorder: a native-precision frame needs 1.234 KiB; the memory budget of 2.000 GiB holds about 1698958 frames.
+[ Info: Recorder: a native-precision frame needs 1.234 KiB; the memory budget of 2.000 GiB holds about 1698958 frames.
+TwoPhaseAMR Studio: http://127.0.0.1:41809/?token=2f31cec805b10ff97e43888d6b0960d1
+SSH tunnel: ssh -N -L 41809:127.0.0.1:41809 <remote-host>
+TwoPhaseAMR Studio: http://127.0.0.1:45961/?token=fb0d2f58e85a967224d642f551206458
+SSH tunnel: ssh -N -L 45961:127.0.0.1:45961 <remote-host>
+Test Summary:                       | Pass  Total   Time
+Ephemeral server and authentication |   47     47  18.5s
+TwoPhaseAMR Studio: http://127.0.0.1:45595/?token=2291de696caeb0135dcbd9f5c5c8b0fe
+SSH tunnel: ssh -N -L 45595:127.0.0.1:45595 <remote-host>
+Test Summary:                              | Pass  Total  Time
+Natural completion is not a requested stop |    4      4  9.2s
+TwoPhaseAMR Studio: http://127.0.0.1:46869/?token=b1cace604fc9e309fc4e27b89906d408
+SSH tunnel: ssh -N -L 46869:127.0.0.1:46869 <remote-host>
+TwoPhaseAMR Studio: http://127.0.0.1:35521/?token=a208f96b3fdc61422cee9d29b986cadd
+SSH tunnel: ssh -N -L 35521:127.0.0.1:35521 <remote-host>
+Test Summary:                        | Pass  Total  Time
+Recording diagnostic option protocol |   58     58  2.6s
+TwoPhaseAMR Studio: http://127.0.0.1:39829/?token=c8fbecf5deaf1e630dddfd3f02a34fd8
+SSH tunnel: ssh -N -L 39829:127.0.0.1:39829 <remote-host>
+Test Summary:                                              | Pass  Total   Time
+Real simulation, WebSocket controls, history and recording |  303    303  57.1s
+TwoPhaseAMR Studio: http://127.0.0.1:40425/?token=e80f6c0c4f55abe7c5d170aa273941eb
+SSH tunnel: ssh -N -L 40425:127.0.0.1:40425 <remote-host>
+Test Summary:                            | Pass  Total  Time
+Resumable driver controls and broadcasts |   37     37  7.8s
+TwoPhaseAMR Studio: http://127.0.0.1:46223/?token=76769b43ed4d4a936562efadb95b4d4b
+SSH tunnel: ssh -N -L 46223:127.0.0.1:46223 <remote-host>
+TwoPhaseAMR Studio: http://127.0.0.1:46143/?token=47b1a49669c272d9751fada3cde76090
+SSH tunnel: ssh -N -L 46143:127.0.0.1:46143 <remote-host>
+Test Summary:                   | Pass  Total  Time
+Stopped and unowned Studio runs |   13     13  0.8s
+TwoPhaseAMR Studio: http://127.0.0.1:45747/?token=32646b20d3226da0cdc898707cb3ea32
+SSH tunnel: ssh -N -L 45747:127.0.0.1:45747 <remote-host>
+Test Summary:                         | Pass  Total  Time
+Stopped state without captured fields |    5      5  0.6s
+TwoPhaseAMR Studio: http://127.0.0.1:41393/?token=e993ea3b8a2c48ccb11dfec7933639ba
+SSH tunnel: ssh -N -L 41393:127.0.0.1:41393 <remote-host>
+Test Summary:                                     | Pass  Total  Time
+State reports a later target without another step |    4      4  0.4s

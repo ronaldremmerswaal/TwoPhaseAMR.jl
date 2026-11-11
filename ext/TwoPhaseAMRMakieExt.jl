@@ -974,23 +974,15 @@ end
 # it needs no buffer beyond the two frames involved.
 function _encode_live!(
         recording, recorder, name, options, format, fps, px_per_unit,
-        sim_per_second, deferred,
+        sim_per_second, t_start, seed, seed_id, deferred,
     )
     subscription = getfield(recording, :subscription)
     store = snapshot_store(recorder)
     stream = nothing
     current = colorrange = stats = entry = colormap = nothing
     growing = false
-    recorder_frames = TwoPhaseAMR.frames(store)
-    seed = isempty(recorder_frames) ? nothing : newest_frame(store)
-    # Start at the simulation time at job start, not at the possibly lagging
-    # newest stored frame. The seed only anchors the left neighbour.
-    step_times = TwoPhaseAMR.step_log(store).time
-    t_start = isempty(step_times) ? (isnothing(seed) ? nothing : seed.time) :
-        last(step_times)
     sampler = isnothing(t_start) ? nothing :
         LiveVideoSampler{Frame}(t_start, sim_per_second / fps)
-    seed_id = isnothing(seed) ? 0 : seed.id
 
     function show!(frame)
         if isnothing(stream)
@@ -1074,6 +1066,15 @@ function _record_live(
     format in _VIDEO_FORMATS ||
         throw(ArgumentError("a live recording writes one of $(_VIDEO_FORMATS), got $path"))
     subscription = TwoPhaseAMR.subscribe(snapshot_store(recorder); capacity)
+    # Capture the simulation time and seed at job creation, before the encoder
+    # task can start late and observe a later store state.
+    store = snapshot_store(recorder)
+    stored = TwoPhaseAMR.frames(store)
+    seed = isempty(stored) ? nothing : TwoPhaseAMR.newest_frame(store)
+    step_times = TwoPhaseAMR.step_log(store).time
+    t_start = isempty(step_times) ? (isnothing(seed) ? nothing : seed.time) :
+        last(step_times)
+    seed_id = isnothing(seed) ? 0 : seed.id
     recording = LiveRecording(String(path), subscription, nothing, Int[], Float64[], 0)
     pool = _encoder_threadpool()
     deferred = isnothing(pool)
@@ -1083,7 +1084,7 @@ function _record_live(
         "encode while the solver runs."
     encode() = _encode_live!(
         recording, recorder, name, options, format, fps, px_per_unit,
-        sim_per_second, deferred,
+        sim_per_second, t_start, seed, seed_id, deferred,
     )
     recording.task = pool === :interactive ? Threads.@spawn(:interactive, encode()) :
         Threads.@spawn(:default, encode())
