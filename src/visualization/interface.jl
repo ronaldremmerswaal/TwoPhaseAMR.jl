@@ -196,10 +196,12 @@ a mix:
   target time, with ties going to the earlier frame. Stored frames are
   therefore repeated when the recording is sparse and skipped when it is
   dense; an animation never maps output frames to stored frames one-to-one.
-  `fps` (default 20) and `duration` in seconds (default 2) set the number of
-  output frames to `round(fps * duration) + 1`, including the first and last
-  frame, so the play time between them is `duration`; give `nframes` instead
-  to set the count directly. The automatic title is the simulation time of
+  `fps` (default 20) sets the frame rate. `duration` in seconds sets the
+  number of output frames to `round(fps * duration) + 1`, including the first
+  and last frame, so the play time between them is `duration`; without it the
+  duration scales with the number of candidate frames,
+  `clamp(count / fps, 2, 20)` seconds. Give `nframes` instead to set the count
+  directly. The automatic title is the simulation time of
   the displayed frame. The colour range is `colorrange` if given, else the
   registered range, else the range of the field over the candidate frames,
   symmetric about zero for vorticity and diverging colormaps. Optional
@@ -215,7 +217,10 @@ a mix:
   also advances linearly in simulation time here: output frame `k` shows the
   arrived frame nearest to `t_start + (k - 1) * step`, where `t_start` is the
   simulation time of the newest stored frame when the recording starts and
-  `step = sim_per_second / fps` (default `sim_per_second = 1`). A frame that
+  `step = sim_per_second / fps`. Without `sim_per_second`, it targets ten
+  seconds of video for the run's remaining simulation time (when a Studio
+  driver knows its final time), else for the stored frames' span, and falls
+  back to 1. A frame that
   arrives decides every output time up to its own time, using one frame of
   look-ahead; a sparse stream repeats frames, a dense stream skips them, and
   the final frame is held for the remaining output times. `fps` (default 20)

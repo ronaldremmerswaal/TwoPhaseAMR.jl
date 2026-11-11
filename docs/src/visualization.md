@@ -310,9 +310,10 @@ two sources; a recording uses exactly one source:
 - **Stored frames** samples stored frames on a uniform simulation-time grid.
   **Frames** selects the candidates (keyframes only or all stored frames) and
   the optional time window restricts them; without a window the whole
-  recording is used. **Duration** in seconds (default 2) and **FPS**
-  (default 20) set the output frame count `round(duration × fps) + 1`, which
-  includes both ends of the window. Each output frame shows the candidate
+  recording is used. **FPS** (default 20) and **Duration** set the output
+  frame count `round(duration × fps) + 1`, which includes both ends of the
+  window. Duration starts at `clamp(candidate frames / fps, 2, 20)` seconds
+  and stays editable; the dialog shows the resolved value. Each output frame shows the candidate
   frame nearest to its target time (ties go to the earlier frame), so a sparse
   recording repeats frames and a dense one skips them. The dialog shows the
   resulting output-frame count, distinct stored frames, uniform Δt, and
@@ -323,7 +324,9 @@ two sources; a recording uses exactly one source:
   second** and **FPS** set the uniform output spacing
   `Δt = sim_per_second / fps`; output frame `k` shows the arrived frame nearest
   to `t_start + k · Δt`, using one frame of look-ahead, so video time also
-  advances linearly in simulation time. A sparse stream repeats the last
+  advances linearly in simulation time. **Simulation time per video second**
+  starts at one tenth of the run's remaining simulation time (or of the
+  stored frame span when the end is unknown) and stays editable. A sparse stream repeats the last
   frame and a dense one skips frames. The dialog shows Δt and the simulation
   time per video second; duration and frame count are known only when the
   recording stops.
@@ -596,9 +599,10 @@ play time linearly in simulation time; neither maps video frames one-to-one
 to stored frames. The default `source=:stored` samples the store after (or
 during) the run. `frames=:keyframes` (default) or `:all` selects the
 candidates and `window=(t0, t1)` restricts them; without a window the whole
-recording is used. `fps` (default 20) and `duration` in seconds (default 2)
-set the output count to `round(fps × duration) + 1`; give `nframes` instead to
-set it directly. Output times are uniform over the window and each frame shows
+recording is used. `fps` (default 20) and `duration` set the output count to
+`round(fps × duration) + 1`; without `duration` it is
+`clamp(candidate count / fps, 2, 20)` seconds. Give `nframes` instead to set
+the count directly. Output times are uniform over the window and each frame shows
 the candidate nearest to its target time, with ties going to the earlier
 frame. The automatic title is the simulation time of the displayed frame.
 Stored exports accept a `progress(i,n)` callback called after each output
@@ -609,10 +613,11 @@ export returns its path. Cancellation is cooperative.
 
 `source=:live` records the frames of a recorder as the run produces them,
 previews and keyframes alike, including previews that retention later thins.
-Its uniform output spacing is `Δt = sim_per_second / fps`: output frame `k`
-shows the arrived frame nearest to `t_start + k · Δt`, where `t_start` is the
-simulation time at recording start (the last completed step, seeded with the
-newest stored frame). A frame that arrives decides every output time up to
+Its uniform output spacing is `Δt = sim_per_second / fps` (by default one
+tenth of the run's remaining simulation time, or of the stored frame span,
+per second of video): output frame `k` shows the arrived frame nearest to
+`t_start + k · Δt`, where `t_start` is the simulation time at recording start
+(the last completed step, seeded with the newest stored frame). A frame that arrives decides every output time up to
 its own time, so only one frame of look-ahead is needed; sparse streams repeat
 frames and dense streams skip them. On `close`, the last arrived frame is held
 through the simulation time at stop. For example,

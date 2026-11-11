@@ -842,10 +842,13 @@ function _export_scene(
     return (; figure, field_axes, plot, diagnostic_axes)
 end
 
-# A stored export maps the whole simulation window onto a fixed video length:
-# two seconds at 20 frames per second by default.
+# Stored exports default to 20 frames per second and a play time that scales
+# with the candidate count, between two and twenty seconds.
 const _EXPORT_FPS = 20
-const _EXPORT_DURATION = 2.0
+const _EXPORT_DURATION_MIN = 2.0
+const _EXPORT_DURATION_MAX = 20.0
+_default_duration(count::Integer, fps::Real) =
+    clamp(count / fps, _EXPORT_DURATION_MIN, _EXPORT_DURATION_MAX)
 
 # Nearest-frame sampling over the stored frames of the window. The output
 # times are uniform in simulation time, so stored frames repeat or are skipped.
@@ -854,7 +857,8 @@ function _video_schedule(times, window, fps, duration, nframes)
         throw(ArgumentError("give at most one of duration and nframes"))
     t_start, t_end = isnothing(window) ? (first(times), last(times)) :
         (Float64(window[1]), Float64(window[2]))
-    isnothing(duration) && isnothing(nframes) && (duration = _EXPORT_DURATION)
+    isnothing(duration) && isnothing(nframes) &&
+        (duration = _default_duration(length(times), fps))
     return isnothing(nframes) ?
         video_frame_schedule(times, t_start, t_end; fps, duration) :
         video_frame_schedule(times, t_start, t_end; fps, nframes)
@@ -945,8 +949,23 @@ _solver_running(recorder) =
 
 const _VIDEO_FORMATS = ("gif", "mp4", "mkv", "webm")
 
-# One default: one unit of simulation time per second of video.
+# Last-resort live default when the run and the store give no time span.
 const _LIVE_SIM_PER_SECOND = 1.0
+
+# Aim at ten seconds of video for the run's remaining simulation time, or for
+# the span of the stored frames when the run's end is unknown.
+function _live_default_rate(recorder, store)
+    times = TwoPhaseAMR.step_log(store).time
+    stored = TwoPhaseAMR.frames(store)
+    t_start = isempty(times) ? (isempty(stored) ? nothing : newest_frame(store).time) : last(times)
+    isnothing(t_start) && return _LIVE_SIM_PER_SECOND
+    driver = Base.@lock recorder.lock recorder.driver
+    t_final = driver isa TwoPhaseAMR.StudioDriver ? driver.final_time : nothing
+    isnothing(t_final) && (t_final = isempty(stored) ? nothing : last(stored).time)
+    isnothing(t_final) && return _LIVE_SIM_PER_SECOND
+    span = t_final - t_start
+    return span > 0 ? span / 10 : _LIVE_SIM_PER_SECOND
+end
 
 # Encode output frames on a uniform simulation-time grid. The arrival of a
 # frame decides every output time up to its own time, using that frame and the
@@ -1154,9 +1173,8 @@ function TwoPhaseAMR.export_animation(
             throw(ArgumentError("`duration` and `nframes` apply to source = :stored"))
         isnothing(progress) && isnothing(cancel) ||
             throw(ArgumentError("progress and cancel apply only to source = :stored"))
-        TwoPhaseAMR._positive_finite(
-            something(sim_per_second, _LIVE_SIM_PER_SECOND), "sim_per_second",
-        )
+        rate = something(sim_per_second, _live_default_rate(recording, snapshot_store(recording)))
+        TwoPhaseAMR._positive_finite(rate, "sim_per_second")
         options = _panel_options(; kwargs...)
         if !isnothing(options.diagnostics) && !isnothing(options.diagnostic_options)
             isnothing(recording.diagnostics) &&
@@ -1171,8 +1189,7 @@ function TwoPhaseAMR.export_animation(
         end
         return _record_live(
             path, recording, Symbol(field), options; fps,
-            sim_per_second = something(sim_per_second, _LIVE_SIM_PER_SECOND),
-            px_per_unit, capacity = something(capacity, 32),
+            sim_per_second = rate, px_per_unit, capacity = something(capacity, 32),
         )
     end
     throw(ArgumentError("source must be :stored or :live"))

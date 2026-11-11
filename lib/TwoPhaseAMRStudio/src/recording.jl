@@ -185,6 +185,10 @@ function _diagnostic_options(app, value, selected)
     return TwoPhaseAMR._validated_diagnostic_options(configs, groups, counts)
 end
 
+# Stored exports scale their play time with the number of candidate frames,
+# between two and twenty seconds; a live export derives its rate from the run.
+_default_export_duration(count::Integer, fps::Integer) = clamp(count / fps, 2.0, 20.0)
+
 function _validate_recording(app, message, one_shot)
     allowed = (
         "type", "protocol", "request", "action", "source", "path", "field", "diagnostics", "diagnostic_options",
@@ -237,7 +241,6 @@ function _validate_recording(app, message, one_shot)
         duration = _number(duration, "duration")
         duration > 0 || throw(ArgumentError("duration must be positive"))
     end
-    source == "stored" && isnothing(duration) && (duration = 2.0)
     # Makie rounds noninteger frame rates; do not silently change a client's FPS.
     fps = _positive_integer(get(message, "fps", 20), "fps")
     sim_per_second = get(message, "sim_per_second", nothing)
@@ -246,7 +249,6 @@ function _validate_recording(app, message, one_shot)
         sim_per_second = _number(sim_per_second, "sim_per_second")
         sim_per_second > 0 || throw(ArgumentError("sim_per_second must be positive"))
     end
-    source == "live" && isnothing(sim_per_second) && (sim_per_second = 1.0)
     capacity = _positive_integer(get(message, "capacity", 32), "capacity")
     source == "stored" && haskey(message, "capacity") &&
         throw(ArgumentError("capacity applies only to live recordings"))
@@ -456,10 +458,11 @@ function _recording_schedule(app, socket, message)
         end
     end
     isempty(times) && throw(ArgumentError("no stored frames match the selection"))
+    duration = something(options.duration, _default_export_duration(length(times), options.fps))
     t_start, t_end = isnothing(options.window) ? (first(times), last(times)) :
         (options.window[1], options.window[2])
     schedule = TwoPhaseAMR.video_frame_schedule(
-        times, t_start, t_end; fps = options.fps, duration = options.duration,
+        times, t_start, t_end; fps = options.fps, duration,
     )
     count = length(schedule)
     distinct = length(unique(schedule.indices))
@@ -467,7 +470,7 @@ function _recording_schedule(app, socket, message)
     return _send(socket, (;
         type = "recording_schedule", request, frames = count, distinct,
         repeats = count - distinct, sparse = 2 * distinct < count,
-        window = [t_start, t_end], fps = options.fps, duration = options.duration,
+        window = [t_start, t_end], fps = options.fps, duration,
         spacing, sim_per_second = spacing * options.fps,
         first_frame = ids[first(schedule.indices)],
     ))
@@ -741,6 +744,10 @@ function _start_recording!(app, message; one_shot = false)
     selection, counts = if one_shot
         selection, counts = _freeze_selection(app.store, diagnostics, options)
         isempty(selection) && throw(ArgumentError("no stored frames match the selection"))
+        options = merge(
+            options,
+            (; duration = something(options.duration, _default_export_duration(length(selection), options.fps))),
+        )
         (selection, counts)
     else
         (nothing, nothing)

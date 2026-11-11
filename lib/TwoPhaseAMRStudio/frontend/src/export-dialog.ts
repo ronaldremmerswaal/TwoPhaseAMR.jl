@@ -88,6 +88,8 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
   const scheduleElement = find<HTMLElement>('[data-testid="export-schedule"]');
   let previewPending = false;
   let pathWasEdited = false;
+  let durationEdited = false;
+  let simRateEdited = false;
   let lastSchedule: RecordingSchedule | null = null;
   let scheduleKey = '';
   let pendingKey = '';
@@ -201,6 +203,39 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
       ...(window.window ? { window: window.window } : {}),
       fps: selectedFps, duration: selectedDuration,
     };
+  }
+
+  function candidateTimes(): number[] {
+    const window = parseTimeWindow(from.value, to.value);
+    if (window.error) return [];
+    return state.timeline.frames
+      .filter(frame => (frames.value === 'all' || frame.kind !== 'preview') &&
+        (!window.window || (frame.time >= window.window[0] && frame.time <= window.window[1])))
+      .map(frame => frame.time);
+  }
+
+  function formatInput(value: number): string {
+    return Number(value.toPrecision(4)).toString();
+  }
+
+  // Stored play time scales with the candidate count (2–20 s). Live aims at
+  // ten seconds of video for the run's remaining time or, when that is
+  // unknown, for the span of the stored frames.
+  function applyStoredDurationDefault(): void {
+    if (durationEdited) return;
+    const count = candidateTimes().length;
+    if (count === 0) return;
+    duration.value = formatInput(Math.min(20, Math.max(2, count / Number(fps.value))));
+  }
+
+  function applyLiveRateDefault(): void {
+    if (simRateEdited) return;
+    const times = state.timeline.frames.map(frame => frame.time);
+    const current = state.time;
+    const span = state.finalTime !== null && current !== null && state.finalTime > current ?
+      state.finalTime - current :
+      times.length > 1 ? times[times.length - 1] - times[0] : 0;
+    simPerSecond.value = formatInput(span > 0 ? span / 10 : 1);
   }
 
   function setScheduleText(text: string, schedule: RecordingSchedule | null = null): void {
@@ -320,11 +355,28 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
   }
   panel.addEventListener('change', () => { if (!pathWasEdited) setDefaultPath(); update(); });
   window.addEventListener('studio-view-change', update);
-  source.addEventListener('change', () => { lastSchedule = null; scheduleKey = ''; scheduledKey = ''; update(); });
-  for (const input of [from, to, duration, fps, frames]) {
-    input.addEventListener('input', () => { lastSchedule = null; scheduleKey = ''; scheduledKey = ''; update(); });
+  source.addEventListener('change', () => {
+    lastSchedule = null; scheduleKey = ''; scheduledKey = '';
+    if (isLive()) applyLiveRateDefault(); else applyStoredDurationDefault();
+    update();
+  });
+  for (const input of [from, to, fps, frames]) {
+    input.addEventListener('input', () => {
+      lastSchedule = null; scheduleKey = ''; scheduledKey = '';
+      applyStoredDurationDefault();
+      applyLiveRateDefault();
+      update();
+    });
   }
-  simPerSecond.addEventListener('input', update);
+  duration.addEventListener('input', () => {
+    durationEdited = true;
+    lastSchedule = null; scheduleKey = ''; scheduledKey = '';
+    update();
+  });
+  simPerSecond.addEventListener('input', () => {
+    simRateEdited = true;
+    update();
+  });
   format.addEventListener('change', () => {
     const filename = path.value.trim();
     path.value = `${filename.replace(/\.[^./\\]+$/, '')}.${format.value}`;
@@ -348,6 +400,8 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
     lastSchedule = null;
     scheduleKey = '';
     scheduledKey = '';
+    applyStoredDurationDefault();
+    applyLiveRateDefault();
     const availableDiagnostics = diagnosticViews();
     diagnostics.replaceChildren(...groupDiagnostics((state.runs[0]?.diagnostics ?? []) as DiagnosticMetadata[]).map(group => {
       const row = document.createElement('div');
@@ -395,7 +449,10 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
       const stored = storedOptions(view);
       const live = liveOptions(view);
       if (!stored || !live) return;
-      options = { ...stored, source: 'stored', frames: 'keyframes', duration: 2, action: 'preview', frame };
+      options = {
+        type: 'recording', ...stored, source: 'stored', frames: 'keyframes',
+        duration: 2, action: 'preview', frame,
+      };
     } else {
       const command = scheduleCommand();
       if (!command) return;
@@ -409,8 +466,9 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
       frame = schedule.first_frame;
       const stored = storedOptions(view);
       if (!stored) return;
-      options = { ...stored, action: 'preview', frame };
+      options = { type: 'recording', ...stored, action: 'preview', frame };
     }
+    if (!options) return;
     previewPending = true;
     previewImage.hidden = true;
     update();
@@ -428,11 +486,11 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
     if (isLive()) {
       const options = liveOptions(view);
       if (!options) return;
-      client.recording({ ...options, action: 'start', path: path.value.trim() });
+      client.recording({ type: 'recording', ...options, action: 'start', path: path.value.trim() });
     } else {
       const options = storedOptions(view);
       if (!options) return;
-      client.recording({ ...options, action: 'export', path: path.value.trim() });
+      client.recording({ type: 'recording', ...options, action: 'export', path: path.value.trim() });
     }
   });
   state.subscribe(update);

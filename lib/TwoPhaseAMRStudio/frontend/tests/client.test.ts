@@ -53,11 +53,11 @@ describe('authenticated Studio client', () => {
     expect(state.connection).toBe('connected');
     client.control('pause');
     client.getFrames();
-    client.recording({ type: 'recording', action: 'start', source: 'live', path: 'run.mp4', field: 'p', diagnostics: ['mass'], fps: 20, sim_per_second: 1, camera: 'fit', phase_rendering: 'cell', size: [640, 360], theme: 'light', arrangement: 'right', interface: true, geometry: true, blocks: false });
+    client.recording({ type: 'recording', action: 'start', source: 'live', path: 'run.mp4', field: 'p', diagnostics: ['mass'], fps: 20, sim_per_second: 1, camera: 'fit', phase_rendering: 'cell', size: [640, 360], arrangement: 'right', interface: true, geometry: true, blocks: false });
     expect(socket.sent.slice(0, 3)).toEqual([
       { type: 'control', action: 'pause' },
       { type: 'get', what: 'frames' },
-      { type: 'recording', action: 'start', source: 'live', path: 'run.mp4', field: 'p', diagnostics: ['mass'], fps: 20, sim_per_second: 1, camera: 'fit', phase_rendering: 'cell', size: [640, 360], theme: 'light', arrangement: 'right', interface: true, geometry: true, blocks: false },
+      { type: 'recording', action: 'start', source: 'live', path: 'run.mp4', field: 'p', diagnostics: ['mass'], fps: 20, sim_per_second: 1, camera: 'fit', phase_rendering: 'cell', size: [640, 360], arrangement: 'right', interface: true, geometry: true, blocks: false },
     ]);
     const first = client.getField(7, 'p', 'f32', 'liquid');
     const second = client.getField(8, 'p');

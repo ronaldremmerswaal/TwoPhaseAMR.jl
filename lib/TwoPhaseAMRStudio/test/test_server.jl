@@ -337,6 +337,7 @@ end
         end
         _, _, _, _, defaults = TwoPhaseAMRStudio._validate_recording(app, base, true)
         @test defaults.diagnostic_options === nothing
+        @test defaults.duration === nothing # resolved from the frozen candidates
         _, _, _, _, empty_options = TwoPhaseAMRStudio._validate_recording(
             app, merge(base, Dict("diagnostic_options" => [])), true,
         )
@@ -899,7 +900,9 @@ end
                             timeout = _RECORDING_TIMEOUT,
                         )["recording"]
                         @test pending["status"] == "exporting"
-                        @test pending["total"] == TwoPhaseAMR.video_frame_count(20, 2.0)
+                        @test pending["total"] == TwoPhaseAMR.video_frame_count(
+                            20, clamp(length(keyframes(store)) / 20, 2.0, 20.0),
+                        )
                         @test pending["progress"] == 0.0 && pending["url"] === nothing
                         _send(ws, Dict("type" => "recording", "action" => "cancel"))
                         cancelling = _message(
@@ -940,7 +943,9 @@ end
                     @test stored["status"] == "completed"
                     stored["status"] == "completed" || error("Stored export failed: $(stored["error"])")
                     @test !stored["active"] && stored["path"] == stored_path
-                    @test stored["encoded"] == TwoPhaseAMR.video_frame_count(20, 2.0)
+                    @test stored["encoded"] == TwoPhaseAMR.video_frame_count(
+                        20, clamp(length(keyframes(store)) / 20, 2.0, 20.0),
+                    )
                     @test stored["dropped"] == 0
                     @test _gif_envelope(stored_path)
 
@@ -958,13 +963,15 @@ end
                             get(message, "request", nothing) == 1210,
                     )
                     keyed = keyframes(store)
-                    @test plan["frames"] == 41
+                    expected_duration = clamp(length(keyed) / 20, 2.0, 20.0)
+                    expected_frames = TwoPhaseAMR.video_frame_count(20, expected_duration)
+                    @test plan["frames"] == expected_frames
                     @test plan["distinct"] == length(keyed)
-                    @test plan["repeats"] == 41 - length(keyed)
-                    @test plan["sparse"] == (2 * length(keyed) < 41)
-                    @test plan["fps"] == 20 && plan["duration"] == 2.0
+                    @test plan["repeats"] == expected_frames - length(keyed)
+                    @test plan["sparse"] == (2 * length(keyed) < expected_frames)
+                    @test plan["fps"] == 20 && plan["duration"] ≈ expected_duration
                     @test plan["window"] == [first(keyed).time, last(keyed).time]
-                    @test plan["spacing"] ≈ (last(keyed).time - first(keyed).time) / 40
+                    @test plan["spacing"] ≈ (last(keyed).time - first(keyed).time) / (expected_frames - 1)
                     @test plan["sim_per_second"] ≈ plan["spacing"] * 20
                     @test plan["first_frame"] == first(keyed).id
                     @test !Base.@lock(app.lock, app.recording.active)
