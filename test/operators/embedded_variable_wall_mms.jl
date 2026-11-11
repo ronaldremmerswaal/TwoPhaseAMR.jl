@@ -52,9 +52,13 @@ function exact_value_forcing(x, y, axis, middle, halfheight, viscosities)
     return value, value - viscosity * laplacian
 end
 
-function fixture(n, refined, embedded, viscosities)
+function fixture(n, refined, embedded, viscosities; match_embedded_domain = false)
+    matched_open = !embedded && match_embedded_domain
     mesh = BlockTreeMesh(;
-        base_mesh = (n, n), block_size = (4, 4), extent = (L, L),
+        base_mesh = matched_open ? (n, 7n ÷ 8) : (n, n),
+        block_size = matched_open ? (2, 2) : (4, 4),
+        origin = matched_open ? (0.0, 1.0) : (0.0, 0.0),
+        extent = matched_open ? (L, L - 1) : (L, L),
         periodic = (true, false), max_level = 1,
         refine = (key, origin, extent) ->
         refined && key.level == 0 && origin[1] >= L / 2,
@@ -66,7 +70,7 @@ function fixture(n, refined, embedded, viscosities)
     else
         nothing
     end
-    middle, halfheight = embedded ? (4.5, 3.5) : (4.0, 4.0)
+    middle, halfheight = embedded || matched_open ? (4.5, 3.5) : (4.0, 4.0)
     interface = InterfaceField(mesh; geometry)
     initialize!(interface, (0.0, 1.0), middle)
     operator = StaggeredDiffusionOperator(
@@ -137,10 +141,10 @@ function helmholtz_errors(n, refined, embedded, viscosities)
     return (; errors)
 end
 
-function operator_difference(n, refined, embedded)
-    data = fixture(n, refined, embedded, (1.0, 1.0))
+function operator_difference(n, refined, embedded; match_embedded_domain = false)
+    data = fixture(n, refined, embedded, (1.0, 1.0); match_embedded_domain)
     (; mesh, geometry, operator, volumes) = data
-    bottom = embedded ? 1.0 : 0.0
+    bottom = embedded || match_embedded_domain ? 1.0 : 0.0
     height = 8.0 - bottom
     a = pi / height
     # psi = sin(K*x) * sin(a*(y-bottom))^2 is continuously
@@ -253,7 +257,12 @@ end
 @testset "uniform-viscosity stress versus scalar diffusion (#106)" begin
     for refined in (false, true)
         wall = [operator_difference(n, refined, true) for n in RESOLUTIONS]
-        open = refined ? [operator_difference(n, true, false) for n in RESOLUTIONS] : nothing
+        # Compare the embedded channel to the same open domain and spacing,
+        # rather than to a taller channel with a different manufactured field.
+        open = refined ? [
+                operator_difference(n, true, false; match_embedded_domain = true)
+                for n in RESOLUTIONS
+            ] : nothing
         for axis in 1:2
             differences = [result[axis] for result in wall]
             wall_rates = rates(differences)
@@ -269,8 +278,8 @@ end
                     "unembedded_variable_wall_operator_difference axis=$axis ",
                     "n=$RESOLUTIONS l2=$open_errors eoc=$open_rates"
                 )
-                # Compare the actual defects on every grid, not just the
-                # pre-asymptotic EOC of two different-height domains.
+                # Compare actual defects on identical physical domains, not
+                # just the pre-asymptotic EOC on two different-height domains.
                 @test all(differences .<= 1.1 .* open_errors)
                 @test all(diff(differences) .< 0)
                 @test wall_rates[end] + log2(1.1) >= open_rates[end]

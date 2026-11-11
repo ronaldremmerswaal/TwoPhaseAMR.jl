@@ -14,7 +14,7 @@ chapter states the continuous model and its sign conventions, the material
 properties on the mesh, the force map and the exact conditions under which
 it is balanced, the face curvature with its interpolation, extension and
 treatment of unresolved faces, the CSF and CGFM surface-tension jumps, the
-mimetic gravity model, the body acceleration and the two-velocity variant
+gravity model, the body acceleration and the two-velocity variant
 (the semi-discrete forces), and finally the stage of the time step at which
 each force acts and the time-step limits (the fully discrete update). The
 cell curvature is that of \cref{ch:interface}, the viscous stress is in
@@ -200,10 +200,9 @@ $\dt\max_f\abs{(\forcemap\fjump{})_f}$ with the coefficient of a displaced
 drop, $1.45$ with the two-velocity coefficient $\twocoef$ on the cut mesh
 (derivation audit, \code{proof_review/eq-forces-balance/}). No balance is
 claimed for a curvature that varies from face to face, for a face with
-unresolved curvature (\cref{sec:forces:curvature}), for gravity where the
+unresolved curvature (\cref{sec:forces:curvature}), and for gravity where the
 hydrostatic condition~\cref{eq:forces:hydrostatic} fails
-(\cref{sec:forces:gravity}), and for the mimetic two-velocity projection
-(\cref{sec:forces:two-velocity}).
+(\cref{sec:forces:gravity}).
 
 \emph{Checks} (\code{figures/forces.jl}, \code{surface_tension_check}). With
 $\fjump{}$ the independently evaluated jumps of
@@ -414,7 +413,8 @@ multiplies the jump by $\curvface_f$ before applying $\rieszmat$.
 
 \begin{deviation}{Surface-tension models}\label{dev:forces:st-models}
 The thesis also derives the mimetic continuum model (MCSF,
-\thesis{\S4.4}), the GFM with a geometric, nonconservative distance
+\thesis{\S4.4}), which the code does not implement, the GFM with a
+geometric, nonconservative distance
 $\gfmdist\neq\stagger{\volfrac}$~\thesis{\S4.5.2} and the sharp
 surface-tension model based on the first variation of the
 area~\thesis{\S4.6}. The code implements CSF and CGFM only.
@@ -433,7 +433,7 @@ Tests: \testsym{test/two_phase/forces.jl}{Variable-density balanced CSF and CGFM
 \end{implnote}
 
 \section{Gravity}\label{sec:forces:gravity}
-Gravity is the mimetic gravity model of the thesis~\thesis{\S7.6.2}: an
+Gravity is the gravity model of the thesis~\thesis{\S7.6.2}: an
 aperture density times the gradient of the potential at the interface
 centroids. The cell potential is
 \begin{equation}\label{eq:forces:potential}
@@ -566,7 +566,7 @@ point \srcsym{src/interface/height_functions.jl}{_interface_centroid}~\cref{eq:f
 liquid apertures \srcsym{src/two_phase/two_velocity/transport_geometry.jl}{_current_phase_face_apertures!}
 (cached per reconstruction; the call also prepares them for the two-velocity
 projection). Diagnostic \srcsym{src/two_phase/forces.jl}{_gravitational_potential_energy}.
-Tests: \testsym{test/two_phase/forces.jl}{Mimetic hydrostatic balance}
+Tests: \testsym{test/two_phase/forces.jl}{Hydrostatic balance}
 (uniform, composite and adapted meshes, vertical and oblique gravity, density
 ratio 1000, velocity below $2048\machineeps$ after the projection),
 \testsym{test/indicator/geometry.jl}{Cut-cell AMR forces retain balanced pressure cancellation}
@@ -612,8 +612,8 @@ velocities,
   \qquad \phase\in\{\liq,\gas\},
 \end{equation}
 except where a phase is absent (\code{NaN}), with the force map
-$\forcemaptv$ of the projection that follows (\cref{ch:projection}, CMDGFM
-or mimetic): the map~\cref{eq:forces:map} with the common coefficient
+$\forcemaptv$ of the projection that follows (\cref{ch:projection}, CMDGFM):
+the map~\cref{eq:forces:map} with the common coefficient
 $\twocoef$~\cref{eq:forces:coefficient} of the two-velocity projections in
 place of $\facecoef$ and the same $\rieszmat$, evaluated with the pressure
 operator that the selected projection caches, its coefficient rebuilt from
@@ -641,10 +641,7 @@ $\dt=0.01$, tolerance $10^{-10}$) leaves, relative to $\dt\abs{\gravacc}$:
 at most $\chkStepOne$ with one velocity (uniform and composite, without
 solid and with a solid in the gas or in the liquid); with CMDGFM
 $\chkStepCmdgfm$ without solid, and $\chkStepCmdgfmSolidUniform$ (uniform)
-and $\chkStepCmdgfmSolidAmr$ (composite) with a solid in either phase; with
-the mimetic projection $\chkStepMimeticUniform$ (uniform) and
-$\chkStepMimeticAmr$ (composite) without solid, $\chkStepMimeticSolidAmr$ on
-the composite mesh with a solid. A drop with prescribed constant curvature,
+and $\chkStepCmdgfmSolidAmr$ (composite) with a solid in either phase. A drop with prescribed constant curvature,
 its CSF force added to both phases and projected by CMDGFM, keeps at most
 $\chkTensionTwoCmdgfm$ of the increment without solid and
 $\chkTensionTwoCmdgfmCut$ on the cut mesh ($\chkTensionTwoOne$ with one
@@ -656,12 +653,7 @@ $\forcemap\fjump{}$ is not in the range of $\forcemaptv\jumpmat$: CMDGFM left
 $0.029$ (solid in the gas) and $0.030$ (in the liquid) of $\dt\abs{\gravacc}$
 and $0.013$ of the drop's increment, now $1.1\times10^{-10}$,
 $4.3\times10^{-11}$ and $2.2\times10^{-12}$ (projection only; derivation
-audit). The mimetic projection is not balanced with either map: the variant
-\apitype{MimeticProjection}\code{(variant=:joint_face)} is balanced on the
-uniform mesh without solid ($6\times10^{-12}$) but leaves $0.09$ on the
-composite one, and an interface on a grid line leaves $1.0$ (uniform) and
-$1.8$ (composite) with the default variant (derivation audit). This
-limitation, whose cause is not derived, is open (\issue{76}).
+(derivation audit).
 
 \begin{deviation}{Two-velocity forces}\label{dev:forces:two-velocity}
 The thesis puts surface tension into the jump conditions of the
@@ -672,8 +664,7 @@ as one common explicit increment~\cref{eq:forces:two-velocity}, computed with
 the pressure map of the projection, to both phases; its projections apply
 $\gfmthing^{\phase}$ to $\gradjump$ only, so no physical value jump
 $\pvaljump$ is imposed. The balance statements of \cref{sec:forces:map}
-carry over to CMDGFM with $\twocoef$ in place of $\facecoef$, not to the
-mimetic projection (\issue{76}).
+carry over to CMDGFM with $\twocoef$ in place of $\facecoef$.
 \end{deviation}
 
 \begin{implnote}
@@ -690,9 +681,9 @@ Tests: \testsym{test/two_phase/forces.jl}{CMDGFM cut composite constant-curvatur
 constant-curvature CSF and CGFM force on the cut composite mesh to
 $10^{-8}$), \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM hydrostatic rest with embedded solids (issue #76)}
 (one step of the composite planar fixture with a solid in either phase stays
-at rest to $10^{-8}\dt\abs{\gravacc}$). Checks: \code{hydrostatic_step},
-\code{two_velocity_tension}; the former map and the mimetic variants in the
-derivation audit \code{proof_review/eq-forces-two-velocity/}.
+at rest to $10^{-8}\dt\abs{\gravacc}$). Checks: \code{hydrostatic_step} and
+\code{two_velocity_tension}; the former map in the derivation audit
+\code{proof_review/eq-forces-two-velocity/}.
 \end{implnote}
 
 \section{Fully discrete update and time-step limits}\label{sec:forces:time}
@@ -722,8 +713,7 @@ pressure increment of the incremental one-velocity and CMDGFM projections
 (\cref{eq:projection:pressure-predictor,eq:projection:pressure-increment});
 the boundary values at $\timevar^{\timelevel{n+1}}$ are imposed once, after
 the forces with one velocity and before them, for both phases, with two
-velocities, and the legacy mimetic projection takes $\velo^{\stage{3}}$ and
-solves for the whole pressure (\cref{sec:projection:pressure-update}). In
+velocities. In
 the two-velocity step with a solid the increments and the old-pressure
 gradient use the map $\forcemaptv$ of the projection, and the one-velocity
 coefficient $\facecoef$ is not refreshed (\cref{eq:forces:two-velocity}).

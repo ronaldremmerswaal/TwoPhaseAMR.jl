@@ -73,10 +73,31 @@ end
 
 @inline _transport_limit_name(bound, solver, ::Nothing) = "advective"
 
+# The advective bound of a step accepts `0 < cfl <= 1/2` for the WY sweeps of a
+# two-phase model and `0 < cfl <= 1` for the one-phase staggered bound, whose
+# per-face Courant numbers stay within one over that range. The step check uses
+# the largest accepted value, so that the requested `cfl` alone decides which
+# steps `stable_timestep` can return and which steps `step!` accepts (#121).
+@inline _admissible_transport_cfl(::Nothing) = 1.0
+@inline _admissible_transport_cfl(::TwoPhaseModel) = 0.5
+
+# `simulate!` reports an out-of-range `cfl` up front, also when a prescribed
+# `dt` makes it unused, so that the accepted range is one documented contract.
+function _check_cfl_range(cfl, model)
+    0 < cfl <= _admissible_transport_cfl(model) || throw(
+        ArgumentError(
+            isnothing(model) ? "cfl must lie in (0, 1] for one phase" :
+                "cfl must lie in (0, 1/2] for two phases",
+        ),
+    )
+    return nothing
+end
+
 function _check_transport_timestep(
         velocity, ::Type{T}, solver, workspace, dt, model,
     ) where {T}
-    bound = _timestep_bound(velocity, solver, workspace, model; cfl = 0.5)
+    cfl = _admissible_transport_cfl(model)
+    bound = _timestep_bound(velocity, solver, workspace, model; cfl)
     dt <= bound * (1 + 1.0e-6 + 32eps(T)) ||
         throw(ArgumentError("time step $dt exceeds $(_transport_limit_name(bound, solver, model)) stability bound $bound"))
     return nothing
@@ -165,7 +186,10 @@ divergence defect instead of amplifying it in the pressure correction.
 The transporting flux is
 frozen at the old-time velocity while each coordinate sweep updates both
 transported velocity components. No-permeation is automatic in non-periodic
-directions.
+directions. The step must lie within the bound returned by
+[`stable_timestep`](@ref) at the top of its admissible `cfl` range (`1` for one
+phase, `1/2` for two phases) times `1 + 1e-6 + 32eps(T)`; a larger step throws
+an `ArgumentError` that names the active transport bound.
 """
 function step!(
         velocity::FaceVelocity{T}, pressure::CellField{T},
@@ -239,13 +263,23 @@ function step!(
     )
 end
 
-"""Return the convective CFL bound for a Navier--Stokes step."""
+"""
+    stable_timestep(velocity, solver, workspace; cfl=0.45)
+
+Return the convective CFL bound of a Navier--Stokes step: the staggered bound
+of the one-phase momentum transport, or the minimum of the WY bound and the
+capillary and gravity bounds of a two-phase model, evaluated at `cfl`. The
+admissible range is `0 < cfl <= 1` for one phase and `0 < cfl <= 1/2` for two
+phases. `step!` accepts every step this function returns, since it checks
+against the same bound at the top of that range.
+"""
 function stable_timestep(
         velocity::FaceVelocity,
         solver::NavierStokesSystem,
         workspace::NavierStokesWorkspace;
         cfl = 0.45
     )
+    _check_cfl_range(cfl, solver.two_phase)
     return _timestep_bound(
         velocity, solver, workspace, solver.two_phase; cfl
     )

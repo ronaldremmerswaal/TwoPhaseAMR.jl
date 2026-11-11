@@ -227,13 +227,6 @@ function _phase_force_pressure_operator!(projection, work::CMDGFMProjectionWorks
     return _cmdgfm_pressure_cache!(cache, projection, data).operator
 end
 
-function _phase_force_pressure_operator!(projection, work::MimeticProjectionWorkspace)
-    cache = work.cache
-    data = _projection_face_data(projection, work; storage = cache.pressure.face_data)
-    cache.pressure.face_data = data
-    return _mimetic_pressure_cache!(cache, projection, data).pressure.operator
-end
-
 function _two_velocity_pressure_operator!(solver, workspace, state, model)
     if state.projection_solver isa CMDGFMProjectionSolver &&
             isnothing(solver.geometry)
@@ -243,8 +236,8 @@ function _two_velocity_pressure_operator!(solver, workspace, state, model)
         _refresh_pressure_substep!(solver, workspace, model)
         return solver.pressure_solver.operator
     end
-    # Mimetic and cut-cell CMDGFM use their own pressure operator. In
-    # particular, the two-velocity cut-cell coefficient is A/rho, not A²/rho.
+    # Cut-cell CMDGFM uses its own pressure operator. In particular, the
+    # two-velocity cut-cell coefficient is A/rho, not A²/rho.
     return _phase_force_pressure_operator!(
         state.projection_solver, state.projection_workspace,
     )
@@ -264,13 +257,10 @@ The geometric interface and both intrinsic phase velocities use the same
 transport stage as the passive two-velocity API. Body force, surface tension,
 and gravity modify the momentum predictor. CMDGFM subtracts the old physical
 pressure gradient from the predictor, then corrects velocity with a pressure
-increment that is added to the physical pressure. Mimetic instead leaves the
-predictor free of the old pressure and solves for the full pressure and its
-phase jump, replacing the physical pressure.
+increment that is added to the physical pressure.
 
 For a shortened CMDGFM step, the old-aperture mixture flux is scaled by
-the reference step, which must be at least `dt`. The legacy mimetic method
-retains its original absolute projection without this reference-step policy.
+the reference step, which must be at least `dt`.
 Viscosity acts implicitly on the phase-mass weighted one-velocity state; its
 common increment is applied to both phases.
 
@@ -318,8 +308,7 @@ function step!(
     _enforce_phase_velocity_boundary!(
         state.old_velocity, solver, current_time,
     )
-    incremental = state.projection_solver isa CMDGFMProjectionSolver
-    inherited_flux = !incremental || time_step == reference_step ? nothing :
+    inherited_flux = time_step == reference_step ? nothing :
         _capture_two_velocity_inherited_flux!(solver, workspace, state)
     # The CFL check must see the same boundary-enforced velocity as advection.
     _transport_substep!(
@@ -340,26 +329,6 @@ function step!(
         velocity, solver, current_time + time_step,
     )
     phase_forces = model.sigma > zero(T) || any(!iszero, model.gravity)
-    if !incremental
-        if phase_forces
-            pressure_operator = if isnothing(model.interface.geometry)
-                _refresh_pressure_substep!(solver, workspace, model)
-                solver.pressure_solver.operator
-            else
-                _phase_force_pressure_operator!(
-                    state.projection_solver, state.projection_workspace,
-                )
-            end
-            _phase_force_substep!(
-                velocity, workspace, time_step, model, pressure_operator,
-            )
-        end
-        return _project_two_velocity!(
-            velocity, pressure, solver, workspace, state, time_step;
-            pressure_prepared = phase_forces,
-            tolerance = dimensionless_tolerance, max_iterations = cycle_limit,
-        )
-    end
     pressure_operator = _two_velocity_pressure_operator!(
         solver, workspace, state, model,
     )

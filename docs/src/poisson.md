@@ -98,13 +98,13 @@ and newly exposed faces interpolate between adjacent coarse face planes.
 Both searches use sorted lattice-line indexes: binary interval lookup visits
 only overlapping segments, and an outward walk finds the nearest bracketing
 normal lines without rescanning every coarse face. Restriction is its adjoint.
-Each coarse matrix contains the single-phase
-Laplacian and the same wall and AMR consistency closures as that mesh's fine
-operator; no Galerkin product is used.
+Each coarse matrix contains the single-phase Laplacian and the same wall and
+geometric AMR contact closures as that mesh's fine operator; no Galerkin
+product is used.
 
-The corrected AMR Laplacian is mildly nonsymmetric, so
-`StaggeredEllipticSolver` uses right-preconditioned BiCGSTAB by default. Each
-component has its own V-cycle. Bottom systems with at most 256 unknowns use
+The integrated AMR diffusion operator is symmetric positive definite for a
+positive reaction term, so `StaggeredEllipticSolver` uses preconditioned CG by
+default. Each component has its own V-cycle. Bottom systems with at most 256 unknowns use
 retained dense LU; larger ones use sparse LU with symbolic reuse when their
 pattern is unchanged. A timestep change refreshes the shifted matrices and
 factors without rebuilding the hierarchy or Krylov workspaces. Matching levels
@@ -312,9 +312,10 @@ FGMRES workspaces are supported. Method-specific settings such as
 `krylov_options`; the package retains control of residual tolerances,
 iteration limits, and preconditioner placement. The default pressure method
 is CG. Staggered diffusion selects CG for a volume-weighted symmetric operator,
-including the embedded conservative operator, and BiCGSTAB otherwise. CG with a
-tree-geometric multigrid preconditioner requires equal `pre_sweeps` and
-`post_sweeps`; unequal counts raise `ArgumentError`. Other Krylov methods may
+which includes the unembedded and embedded composite operators, and BiCGSTAB
+otherwise. CG with a tree-geometric multigrid preconditioner requires equal
+`pre_sweeps` and `post_sweeps`; unequal counts raise `ArgumentError`. Other
+Krylov methods may
 use unequal counts.
 
 The operator and solver setup may allocate; `apply!`, a warmed `solve!`, and

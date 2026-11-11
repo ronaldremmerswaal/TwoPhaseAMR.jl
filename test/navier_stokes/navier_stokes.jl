@@ -889,7 +889,7 @@ end
     end
 
     # Pruning this tree leaves an AMR interface on an intermediate coarse
-    # level; the unembedded coarse correction is genuinely nonsymmetric.
+    # level; both embedded and unembedded operators retain weighted symmetry.
     mesh = BlockTreeMesh(
         base_mesh = (8, 8), block_size = (4, 4), max_level = 2,
         refine = (key, origin, extent) -> key.level == 0 ||
@@ -909,20 +909,20 @@ end
         )
     end
 
-    # An unembedded corrected AMR operator must stay BiCGSTAB even at zero
-    # shift, since the solver's workspace is retained when the shift changes.
-    corrected = StaggeredDiffusionOperator(mesh; viscosity = 1.0)
-    @test any(
-        component -> !TwoPhaseAMR._staggered_shift_is_symmetric(component),
-        (corrected.x, corrected.y),
+    # The unembedded AMR operator also selects CG even at zero shift, so the
+    # retained Krylov workspace remains valid when the shift changes.
+    unembedded = StaggeredDiffusionOperator(mesh; viscosity = 1.0)
+    @test all(
+        TwoPhaseAMR._staggered_shift_is_symmetric,
+        (unembedded.x, unembedded.y),
     )
     for strength in (0.0, 0.013)
         solver = StaggeredEllipticSolver(
-            StaggeredEllipticOperator(corrected; diffusion = strength);
+            StaggeredEllipticOperator(unembedded; diffusion = strength);
             preconditioner = nothing,
         )
-        @test solver.x.krylov isa TwoPhaseAMR.Krylov.BicgstabWorkspace
-        @test solver.y.krylov isa TwoPhaseAMR.Krylov.BicgstabWorkspace
+        @test solver.x.krylov isa TwoPhaseAMR.Krylov.CgWorkspace
+        @test solver.y.krylov isa TwoPhaseAMR.Krylov.CgWorkspace
     end
 
     rhs = FaceVelocity(
@@ -939,9 +939,9 @@ end
         @test cg.x.krylov isa TwoPhaseAMR.Krylov.CgWorkspace
         @test cg.y.krylov isa TwoPhaseAMR.Krylov.CgWorkspace
         @test length(cg.x.preconditioner.levels) >= 3
-        @test any(
-            coarse -> any(
-                component -> !TwoPhaseAMR._staggered_shift_is_symmetric(component),
+        @test all(
+            coarse -> all(
+                TwoPhaseAMR._staggered_shift_is_symmetric,
                 (coarse.x, coarse.y),
             ),
             cg.x.preconditioner.diffusion_operators[2:end],
@@ -1179,7 +1179,7 @@ end
     components = (zero_solver.x, zero_solver.y)
     workspaces = map(component -> component.krylov, components)
     factors = map(component -> component.preconditioner.coarse_factorization, components)
-    @test all(workspace -> workspace isa TwoPhaseAMR.Krylov.BicgstabWorkspace, workspaces)
+    @test all(workspace -> workspace isa TwoPhaseAMR.Krylov.CgWorkspace, workspaces)
     TwoPhaseAMR._update_staggered_elliptic!(zero_solver, 0.02)
     for axis in 1:2
         @test components[axis].krylov === workspaces[axis]

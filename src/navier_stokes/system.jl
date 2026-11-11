@@ -45,22 +45,17 @@ mesh's `MeshAdaptationOptions`; `velocity`, `pressure`, indicator fields, and
 the additional `adaptive_fields` are transferred in place before
 topology-dependent operators are rebuilt. The stored pressure is the latest
 projection pressure. Automatic Krylov selection uses PCG for symmetric
-positive (semi-)definite systems and BiCGSTAB otherwise. Thus pressure and
-coupled two-phase stress diffusion use PCG, as does the volume-weighted
-symmetric embedded single-phase viscous system; a corrected nonsymmetric
-single-phase AMR diffusion operator uses BiCGSTAB. Explicit choices take
-precedence. The two preconditioners are independent. Both configurations use
+positive (semi-)definite systems and BiCGSTAB otherwise. Pressure and both
+the single-phase and coupled two-phase viscous systems use PCG, including
+on composite meshes. Explicit choices take precedence. The two preconditioners
+are independent. Both configurations use
 rediscretized tree-geometric hierarchies by default; CG requires equal pre-
 and post-sweep counts for these hierarchies.
 
 For a liquid/gas velocity tuple, `two_velocity_projection` selects the
-physical pressure-gradient model. `CMDGFMProjection()` is the default
-nonsymmetric conservative multidimensional ghost-fluid system and BiCGSTAB
-solve. `MimeticProjection()` selects the symmetric three-block formulation
-with jointly fitted, smoothed-aperture normal rows. Its only alternate layout
-is `MimeticProjection(variant=:joint_face)`, which starts from CMDGFM's
-normal-dominant face selection. Both retain the full jump space and fit local
-normal/tangential observations before assembling the KKT system.
+physical pressure-gradient model. `CMDGFMProjection()` is the nonsymmetric
+conservative multidimensional ghost-fluid system and BiCGSTAB solve; it is the
+only supported projection.
 """
 mutable struct NavierStokesSystem{T, M <: BlockTreeMesh, O <: NavierStokesOptions, A <: Adaptivity, D, B, G, TP}
     mesh::M

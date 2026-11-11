@@ -312,7 +312,7 @@ end
 @testset "two-velocity projected-step divergence with slip" begin
     dt = 1.0e-3
     tolerance = 1.0e-9
-    for projection in (CMDGFMProjection(), MimeticProjection()), cut in (false, true)
+    for cut in (false, true)
         mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, false))
         geometry = cut ? GeometryField(mesh, (x, y) -> y - 0.1; lipschitz = 1) : nothing
         interface = InterfaceField(
@@ -330,7 +330,6 @@ end
                 dynamic_viscosity = (0.0, 0.0),
             );
             geometry, velocity_model = TwoVelocityModel(
-                pressure_projection = projection,
                 interface_transport = FrozenInterfaceFluxes(),
             ),
             velocity = (liquid, gas), boundary = FreeSlip(),

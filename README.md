@@ -96,7 +96,7 @@ The high-level API makes the physical and numerical choices explicit:
 | Physics | `SinglePhase`, `TwoPhase`, `SurfaceTension` | — |
 | Phase velocity | `OneVelocityModel`, `TwoVelocityModel` | one velocity |
 | Interface transport | `FrozenInterfaceFluxes`, `ProjectedLiquidVelocity` | frozen |
-| Two-velocity pressure | `CMDGFMProjection`, `MimeticProjection` | CMDGFM |
+| Two-velocity pressure | `CMDGFMProjection` | CMDGFM |
 | Surface tension | `CGFM`, `CSF` | CGFM |
 | Momentum advection | `AdvectionOptions` | Lax--Wendroff |
 | Linear solution | `LinearSolverOptions`, `MultigridOptions` | automatic Krylov and tree GMG |

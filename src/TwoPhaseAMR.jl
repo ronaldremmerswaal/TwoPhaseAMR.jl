@@ -87,10 +87,7 @@ export LinearSolverStats, solve!, residual_norms
 export algebraic_multigrid_preconditioner, incomplete_lu_preconditioner
 export incomplete_cholesky_preconditioner
 export ProjectionWorkspace, project!
-export MimeticProjectionSolver, MimeticProjectionWorkspace
-export MimeticProjectionStats, mimetic_gradient!
 export AbstractTwoVelocityProjection
-export MimeticProjection
 export CMDGFMProjection, CMDGFMProjectionSolver, CMDGFMProjectionWorkspace
 export CMDGFMProjectionStats, cmdgfm_gradient!, cmdgfm_jump_interpolant
 export PhysicalDimension, DiagnosticInfo, diagnostic_info
@@ -190,15 +187,8 @@ include("two_phase/two_velocity/transport_geometry.jl")
 # two_phase/projection
 include("two_phase/projection/methods.jl")
 include("two_phase/projection/common.jl")
-include("two_phase/projection/mimetic_foundation.jl")
 include("two_phase/projection/cmdgfm_cache.jl")
 include("two_phase/projection/cmdgfm_projection.jl")
-include("two_phase/projection/mimetic_fit_scratch.jl")
-include("two_phase/projection/mimetic_cache.jl")
-include("two_phase/projection/mimetic_projection.jl")
-include("two_phase/projection/mimetic_smoothed.jl")
-include("two_phase/projection/mimetic_face_rows.jl")
-include("two_phase/projection/mimetic_joint_fit.jl")
 # two_phase
 include("two_phase/forces.jl")
 # single_phase
