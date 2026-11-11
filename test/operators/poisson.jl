@@ -1230,7 +1230,7 @@ end
     # Include a size above the threaded-loop grain and interleave components so
     # their reductions and updates cannot rely on contiguous component ranges.
     for T in (Float32, Float64),
-            number_of_cells in (19, 4 * TwoPhaseAMR._PARALLEL_GRAIN + 17)
+            number_of_cells in (19, 4 * TwoPhaseAMR._PARALLEL_GRAIN[] + 17)
         indices = [
             cell == number_of_cells ? 4 : iszero(cell % 17) ? 0 : mod1(cell, 3)
                 for cell in 1:number_of_cells
