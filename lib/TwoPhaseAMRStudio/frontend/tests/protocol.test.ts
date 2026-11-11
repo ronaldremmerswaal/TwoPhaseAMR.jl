@@ -69,6 +69,18 @@ describe('Studio JSON messages', () => {
     expect(() => parseServerMessage('{"type":"recording_preview","request":4,"url":"//evil.test/image"}')).toThrow();
     expect(() => parseServerMessage('{"type":"recording_preview","request":-1,"url":"/preview/4"}')).toThrow();
     expect(() => parseServerMessage('{"type":"unknown"}')).toThrow();
+    const schedule = {
+      type: 'recording_schedule', request: 4, frames: 41, distinct: 3, repeats: 38, sparse: true,
+      window: [0, 0.04], fps: 20, duration: 2, spacing: 0.001, sim_per_second: 0.02, first_frame: 1,
+    };
+    expect(parseServerMessage(JSON.stringify(schedule)).type).toBe('recording_schedule');
+    for (const bad of [
+      { ...schedule, request: -1 }, { ...schedule, frames: 1.5 }, { ...schedule, distinct: -1 },
+      { ...schedule, duration: -1 }, { ...schedule, spacing: Number.NaN },
+      { ...schedule, window: [1, 0] }, { ...schedule, sparse: 'yes' }, { ...schedule, first_frame: null },
+    ]) {
+      expect(() => parseServerMessage(JSON.stringify(bad))).toThrow();
+    }
   });
 
   it('parses continuation metadata and rejects malformed capability or suggestions', () => {
@@ -80,5 +92,17 @@ describe('Studio JSON messages', () => {
     expect(() => parseServerMessage(JSON.stringify({ ...state, resumable: null }))).toThrow();
     expect(() => parseServerMessage(JSON.stringify({ ...state, suggested_final_time: '4' }))).toThrow();
     expect(() => parseServerMessage('{"type":"state","run_state":"completed","recording":{},"resumable":true,"suggested_final_time":1e999}')).toThrow();
+  });
+
+  it('validates the live frame times a recording reports', () => {
+    const state = { type: 'state', run_state: 'completed', recording: { active: false, times: [0, 0.5, 1] } };
+    expect(parseServerMessage(JSON.stringify(state)).type).toBe('state');
+    // A recording without times, or with null, is the normal stored case.
+    expect(parseServerMessage(JSON.stringify({ ...state, recording: { active: true, times: null } })).type).toBe('state');
+    for (const times of [['0'], [0, Number.NaN], {}, 3, [0, null]]) {
+      expect(() => parseServerMessage(JSON.stringify({ ...state, recording: { active: true, times } }))).toThrow();
+    }
+    const hello = { type: 'hello', protocol: 1, runs: [], frames: [], recording: { active: true, times: [0, Infinity] } };
+    expect(() => parseServerMessage(JSON.stringify(hello))).toThrow();
   });
 });

@@ -171,40 +171,67 @@ diagnosticsgrid!(args...; kwargs...) = _requires_makie("diagnosticsgrid!")
 
 """
     export_animation(path, recording; field, source=:stored, window=nothing,
-                     diagnostics=nothing, diagnostic_options=nothing, framerate=12, size=automatic,
+                     frames=:keyframes, fps=20, duration=nothing, nframes=nothing,
+                     sim_per_second=nothing,
+                     diagnostics=nothing, diagnostic_options=nothing, size=automatic,
                      px_per_unit=1, camera=:fit, colorrange=nothing,
                      colormap=nothing, phase_rendering=:cell, interface=true,
                      geometry=true, blocks=false, interfacecolor=:black,
                      blockcolor=(:gray40, 0.8), decorations=:minimal,
                      title=automatic, group=:dimension, references=Dict(),
-                     transform=:raw, arrangement=:auto, every=1, capacity=32,
+                     transform=:raw, arrangement=:auto, capacity=32,
                      progress=nothing, cancel=nothing)
 
 Animate field `field` of a recording as a GIF or video (`.gif`, `.mp4`,
 `.mkv`, or `.webm`). An animation shows either stored or live frames, never
 a mix:
 
-- `source=:stored` (default) writes the keyframes of a
-  [`SnapshotStore`](@ref) or [`Recorder`](@ref) after the run, optionally
-  only those with times in `window = (t0, t1)`. The colour range is
-  `colorrange` if given, else the registered range, else the
-  range of the field over the exported frames, symmetric about zero for
-  vorticity and diverging colormaps. Optional `progress(i, n)` runs after each
-  frame is submitted to the encoder; `cancel()` is a zero-argument predicate
-  checked between frames and around finalization. On cancellation the
-  function returns `nothing`, removes its partial output, and leaves any pre-existing
-  destination intact. Otherwise it returns `path`. These callbacks apply
-  only to `source=:stored`; callback failures are propagated.
+- `source=:stored` (default) samples the stored frames of a
+  [`SnapshotStore`](@ref) or [`Recorder`](@ref) after (or during) the run.
+  `frames=:keyframes` (default) or `:all` chooses the candidates. Only frames
+  with times in `window = (t0, t1)` are candidates; without a window the whole
+  recording, from its first to its last candidate frame time, is used. Video
+  time advances linearly in simulation time: output frames are uniformly
+  spaced over the window and each shows the candidate frame nearest to its
+  target time, with ties going to the earlier frame. Stored frames are
+  therefore repeated when the recording is sparse and skipped when it is
+  dense; an animation never maps output frames to stored frames one-to-one.
+  `fps` (default 20) sets the frame rate. `duration` in seconds sets the
+  number of output frames to `round(fps * duration) + 1`, including the first
+  and last frame, so the play time between them is `duration`; without it the
+  duration scales with the number of candidate frames,
+  `clamp(count / fps, 2, 20)` seconds. Give `nframes` instead to set the count
+  directly. The automatic title is the simulation time of
+  the displayed frame. The colour range is `colorrange` if given, else the
+  registered range, else the range of the field over the candidate frames,
+  symmetric about zero for vorticity and diverging colormaps. Optional
+  `progress(i, n)` runs after each output frame is submitted to the encoder;
+  `cancel()` is a zero-argument predicate checked between frames and around
+  finalization. On cancellation the function returns `nothing`, removes its
+  partial output, and leaves any pre-existing destination intact. Otherwise
+  it returns `path`. Callback failures are propagated.
 - `source=:live` records the frames of a [`Recorder`](@ref) as the run
   produces them (previews and keyframes, including previews that retention
   later thins) and returns a handle at once; start it before
-  [`simulate!`](@ref) and `close` it afterwards to write `path`. Every
-  `every`-th frame is encoded on a thread other than the solver's, through a
-  queue of `capacity` frames: the solver never waits, and frames that arrive
-  while the queue is full are dropped and counted. The handle reports
-  `encoded`, `dropped`, and `skipped` frames. Without a registered or given
-  range, the colour range is that of the frames recorded so far. Viewing or
-  reading the store from other tasks does not affect the recording.
+  [`simulate!`](@ref) and `close` it afterwards to write `path`. Video time
+  also advances linearly in simulation time here: output frame `k` shows the
+  arrived frame nearest to `t_start + (k - 1) * step`, where `t_start` is the
+  simulation time of the newest stored frame when the recording starts and
+  `step = sim_per_second / fps`. Without `sim_per_second`, it targets ten
+  seconds of video for the run's remaining simulation time (when a Studio
+  driver knows its final time), else for the stored frames' span, and falls
+  back to 1. A frame that
+  arrives decides every output time up to its own time, using one frame of
+  look-ahead; a sparse stream repeats frames, a dense stream skips them, and
+  the final frame is held for the remaining output times. `fps` (default 20)
+  sets the encoding frame rate. Frames are encoded on a thread other than the
+  solver's, through a queue of `capacity` frames: the solver never waits, and
+  frames that arrive while the queue is full are dropped and counted. The
+  handle reports `encoded`, `dropped`, and the ids of the frames written.
+  `window`, `frames`, `duration`, `nframes`, `progress`, and `cancel` apply
+  only to `source=:stored`. Without a registered or given range, the colour
+  range is that of the frames recorded so far. Viewing or reading the store
+  from other tasks does not affect the recording.
 
 The figure is built once and the frames are swapped through an `Observable`.
 Makie's video stream pads odd resulting pixel widths and heights by one and

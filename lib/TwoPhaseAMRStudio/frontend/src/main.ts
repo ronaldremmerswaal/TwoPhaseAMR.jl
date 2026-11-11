@@ -1,6 +1,9 @@
 import 'dockview/dist/styles/dockview.css';
 import './style.css';
 import './continue.css';
+// Before anything that imports uPlot, which formats ticks with the reported
+// browser locale while it loads.
+import './locale';
 import { createDockview, themeDark, themeLight, type DockviewApi } from 'dockview';
 import { StudioClient } from './client';
 import { groupDiagnostics, type DiagnosticGroup, type DiagnosticMetadata } from './diagnostic-data';
@@ -22,21 +25,6 @@ root.innerHTML = `
       <button type="button" class="run-name" data-testid="run-name" title="Open run summary">—</button>
       <span class="run-status" data-tone="neutral"><strong data-testid="run-state">UNKNOWN</strong></span>
       <span id="run-clock" data-testid="run-clock">t = — / — · step — · last dt — · — steps/s</span>
-      <details class="recording-controls" data-testid="recording-controls">
-        <summary title="Recording controls">Record <span class="recording-indicator" data-testid="recording-state" role="status" aria-live="polite"></span></summary>
-        <form id="recording-form">
-          <h2>Recording</h2>
-          <label>Source <select data-testid="recording-source" aria-label="Recording source"><option value="live">Live</option><option value="stored">Stored</option></select></label>
-          <label>Output path <input data-testid="recording-path" aria-label="Recording output path" type="text" required autocomplete="off" placeholder="output.mp4"></label>
-          <label>Field <select data-testid="recording-field" aria-label="Recording field" required></select></label>
-          <fieldset><legend>Diagnostics</legend><div id="diagnostic-options"></div></fieldset>
-          <div class="recording-actions">
-            <button type="submit" data-testid="recording-start">Start recording</button>
-            <button type="button" data-testid="recording-stop">Stop recording</button>
-          </div>
-          <span id="recording-detail"></span>
-        </form>
-      </details>
       <span class="connection" data-testid="connection"><span data-testid="connection-status" role="status">Connecting</span></span>
     </div>
     <div class="header-row action-row">
@@ -375,13 +363,6 @@ const continueReason = find<HTMLElement>('#continue-reason');
 let suggestionKey: string | null = null;
 let continuationPending: { previousFinalTime: number | null; previousTime: number | null; previousStep: number | null } | null = null;
 const reconnectButton = find<HTMLButtonElement>('#reconnect');
-const recordingForm = find<HTMLFormElement>('#recording-form');
-const recordingSource = find<HTMLSelectElement>('[data-testid="recording-source"]');
-const recordingPath = find<HTMLInputElement>('[data-testid="recording-path"]');
-const recordingField = find<HTMLSelectElement>('[data-testid="recording-field"]');
-const diagnosticOptions = find<HTMLElement>('#diagnostic-options');
-const recordingStart = find<HTMLButtonElement>('[data-testid="recording-start"]');
-const recordingStop = find<HTMLButtonElement>('[data-testid="recording-stop"]');
 const slider = find<HTMLInputElement>('[data-testid="timeline-scrub"]');
 const playButton = find<HTMLButtonElement>('[data-testid="timeline-play"]');
 const speedPicker = find<HTMLSelectElement>('#playback-speed');
@@ -410,14 +391,6 @@ continueForm.addEventListener('submit', event => {
 reconnectButton.addEventListener('click', () => client.connect());
 find<HTMLButtonElement>('#dismiss-error').addEventListener('click', () => state.clearError());
 find<HTMLButtonElement>('#refresh-frames').addEventListener('click', () => client.getFrames());
-recordingForm.addEventListener('submit', event => {
-  event.preventDefault();
-  const path = recordingPath.value.trim();
-  if (!path || !recordingField.value) { state.setError('Choose a recording field and output path.'); return; }
-  const diagnostics = [...diagnosticOptions.querySelectorAll<HTMLInputElement>('input:checked')].map(input => input.value);
-  client.recording({ type: 'recording', action: 'start', source: recordingSource.value === 'stored' ? 'stored' : 'live', path, field: recordingField.value, diagnostics });
-});
-recordingStop.addEventListener('click', () => client.recording({ type: 'recording', action: 'stop' }));
 find<HTMLButtonElement>('[data-testid="timeline-follow"]').addEventListener('click', () => state.navigate(timeline => timeline.follow()));
 find<HTMLButtonElement>('[data-testid="timeline-prev"]').addEventListener('click', () => state.navigate(timeline => timeline.step(-1)));
 find<HTMLButtonElement>('[data-testid="timeline-next"]').addEventListener('click', () => state.navigate(timeline => timeline.step(1)));
@@ -474,18 +447,6 @@ function render(): void {
   find<HTMLElement>('.run-status').dataset.tone = presentation.tone;
   find<HTMLElement>('#run-clock').textContent = `t = ${formatStatusNumber(state.time)} / ${formatStatusNumber(state.finalTime)} · step ${formatCount(state.step)} · last dt ${formatStatusNumber(state.dt)} · ${formatRate(state.stepsPerSecond)} steps/s`;
   find<HTMLElement>('#store-size').textContent = `store ${formatStore(state.storeBytes, state.storeBudget, state.frameCount)}`;
-  const recording = state.recording;
-  const indicator = find<HTMLElement>('[data-testid="recording-state"]');
-  const recordingStatus = indicator.querySelector<HTMLElement>('[data-testid="recording-status"]');
-  if (recording.active && !recordingStatus) {
-    const label = document.createElement('span');
-    label.dataset.testid = 'recording-status';
-    label.textContent = '● REC';
-    indicator.append(label);
-  } else if (!recording.active) {
-    recordingStatus?.remove();
-  }
-  find<HTMLElement>('#recording-detail').textContent = `${recording.status} · ${recording.encoded} encoded · ${recording.dropped} dropped${recording.active && recording.source ? ` · ${recording.source}` : ''}${recording.field ? ` · ${recording.field}` : ''}${recording.path ? ` · ${recording.path}` : ''}${recording.error ? ` · ${recording.error}` : ''}`;
   const resuming = state.runState === 'paused' || state.runState === 'pause_requested';
   pauseButton.querySelector<HTMLElement>('.control-label')!.textContent = resuming ? 'Resume' : 'Pause';
   pauseButton.querySelector<HTMLElement>('.control-icon')!.textContent = resuming ? '▶' : 'Ⅱ';
@@ -533,33 +494,7 @@ function render(): void {
       configureLayoutMetadata();
       if (!layoutInitialized && automaticLayout) buildAutomaticLayout();
     }
-    const selectedField = recordingField.value;
-    recordingField.replaceChildren(...fields.map(field => {
-      const option = document.createElement('option');
-      option.value = field.name;
-      option.textContent = field.label || field.name;
-      return option;
-    }));
-    if (fields.some(field => field.name === selectedField)) recordingField.value = selectedField;
-    const checked = new Set([...diagnosticOptions.querySelectorAll<HTMLInputElement>('input:checked')].map(input => input.value));
-    diagnosticOptions.replaceChildren(...diagnostics.map(diagnostic => {
-      const label = document.createElement('label');
-      const input = document.createElement('input');
-      input.type = 'checkbox';
-      input.value = diagnostic.name;
-      input.checked = checked.has(diagnostic.name);
-      input.dataset.testid = 'recording-diagnostic';
-      label.append(input, document.createTextNode(diagnostic.label || diagnostic.name));
-      return label;
-    }));
-    if (!diagnostics.length) diagnosticOptions.textContent = 'None available';
   }
-  recordingSource.disabled = !connected || recording.active;
-  recordingPath.disabled = !connected || recording.active;
-  recordingField.disabled = !connected || recording.active || !fields.length;
-  for (const input of diagnosticOptions.querySelectorAll<HTMLInputElement>('input')) input.disabled = !connected || recording.active;
-  recordingStart.disabled = !connected || recording.active || !fields.length;
-  recordingStop.disabled = !connected || !recording.active;
 
   const timeline = state.timeline;
   const current = timeline.current;

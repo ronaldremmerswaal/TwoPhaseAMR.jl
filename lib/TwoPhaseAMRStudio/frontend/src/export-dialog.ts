@@ -1,7 +1,14 @@
 import type { StudioClient } from './client';
 import { groupDiagnostics, type DiagnosticMetadata } from './diagnostic-data';
+import {
+  durationLimit, frameSelection, liveSummary, parseTimeWindow, pendingScheduleText, scheduleAttributes,
+  scheduleKey, scheduleSummary, ScheduleRequests,
+} from './export-plan';
 import type { StudioState } from './state';
-import type { DiagnosticExportOptions, FrameId, PreviewCommand } from './types';
+import type {
+  DiagnosticExportOptions, FrameId, LiveExportOptions, PreviewCommand, RecordingSchedule,
+  ScheduleCommand, StoredExportOptions,
+} from './types';
 
 /** The visible settings of a field panel, sampled when export starts. */
 export interface ExportView {
@@ -31,15 +38,18 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
       <fieldset><legend>Diagnostics by dimension</legend><div class="export-diagnostics"></div></fieldset>
       <label>Diagnostics layout <select name="arrangement" data-testid="export-arrangement"><option value="right">Stacked to the right</option><option value="below">Below the field</option></select></label>
       <label>Camera <select name="camera" data-testid="export-camera"><option value="current">Current view</option><option value="fit">Fit domain</option></select></label>
-      <label>Frames <select name="frames" data-testid="export-frames"><option value="keyframes">Keyframes</option><option value="all">All stored frames</option></select></label>
-      <div class="export-window"><label>From time <input name="from" type="number" step="any" placeholder="start"></label><label>To time <input name="to" type="number" step="any" placeholder="end"></label></div>
-      <label>Every <input name="every" type="number" min="1" step="1" value="1" required> frame(s)</label>
-      <label>Colour range <select name="range"><option value="global">Global over selected frames</option><option value="current">Current panel range</option></select></label>
-      <div class="export-dimensions"><label>Width <input name="width" type="number" min="2" max="8192" step="2" value="1280" required></label><label>Height <input name="height" type="number" min="2" max="8192" step="2" value="720" required></label><label>FPS <input name="fps" type="number" min="1" max="240" step="1" value="12" required></label></div>
+      <label class="export-stored">Frames <select name="frames" data-testid="export-frames"><option value="keyframes">Keyframes</option><option value="all">All stored frames</option></select></label>
+      <div class="export-window export-stored"><label>From time <input name="from" type="number" step="any" placeholder="start"></label><label>To time <input name="to" type="number" step="any" placeholder="end"></label></div>
+      <label class="export-stored">Duration <input name="duration" type="number" min="0.001" step="any" value="2" required> s</label>
+      <label class="export-live">Simulation time per video second <input name="sim_per_second" type="number" min="0.000001" step="any" value="1" required></label>
+      <label>FPS <input name="fps" type="number" min="1" max="240" step="1" value="20" required></label>
+      <div class="export-schedule" data-testid="export-schedule" role="status" aria-live="polite"></div>
+      <label>Colour range <select name="range" data-testid="export-range"><option value="global">Global over stored frames</option><option value="auto">Automatic as frames arrive</option><option value="current">Current panel range</option></select></label>
+      <div class="export-dimensions"><label>Width <input name="width" type="number" min="2" max="8192" step="2" value="1280" required></label><label>Height <input name="height" type="number" min="2" max="8192" step="2" value="720" required></label></div>
       <label>Theme <select name="theme"><option value="current">Current</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
       <label>Format <select name="format" data-testid="export-format"><option value="mp4">MP4</option><option value="gif">GIF</option><option value="webm">WebM</option></select></label>
       <label>Output file on server <input name="path" data-testid="export-path" type="text" value="studio.mp4" required></label>
-      <p class="export-note">Stored export renders a field and the selected diagnostic groups. Live export records new frames until stopped.</p>
+      <p class="export-note">Stored export samples the chosen frames by simulation time. Live export records produced frames from now until stopped. Both play time linearly in simulation time.</p>
       <div class="export-actions"><button type="button" data-testid="export-preview">Preview frame</button><button type="submit" data-testid="export-submit">Export</button><button type="button" data-testid="export-stop">Stop live recording</button><button type="button" data-testid="export-cancel">Cancel export</button><button type="button" class="export-close">Close</button></div>
       <progress data-testid="export-progress" aria-label="Export progress" max="1" hidden></progress>
       <div class="export-status" data-testid="export-status" role="status" aria-live="polite"></div>
@@ -61,7 +71,8 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
   const range = find<HTMLSelectElement>('[name="range"]');
   const from = find<HTMLInputElement>('[name="from"]');
   const to = find<HTMLInputElement>('[name="to"]');
-  const every = find<HTMLInputElement>('[name="every"]');
+  const duration = find<HTMLInputElement>('[name="duration"]');
+  const simPerSecond = find<HTMLInputElement>('[name="sim_per_second"]');
   const width = find<HTMLInputElement>('[name="width"]');
   const height = find<HTMLInputElement>('[name="height"]');
   const fps = find<HTMLInputElement>('[name="fps"]');
@@ -75,24 +86,264 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
   const cancel = find<HTMLButtonElement>('[data-testid="export-cancel"]');
   const progress = find<HTMLProgressElement>('[data-testid="export-progress"]');
   const status = find<HTMLElement>('[data-testid="export-status"]');
+  const scheduleElement = find<HTMLElement>('[data-testid="export-schedule"]');
   let previewPending = false;
   let pathWasEdited = false;
+  let durationEdited = false;
+  let simRateEdited = false;
+  let lastSchedule: RecordingSchedule | null = null;
+  // Shown instead of "Computing…" until the plan is refreshed: a failed
+  // preflight must not look like one that never answered.
+  let scheduleError: string | null = null;
+  const requests = new ScheduleRequests();
+  let scheduleTimer: number | undefined;
   const download = find<HTMLAnchorElement>('[data-testid="export-download"]');
   const diagnostics = find<HTMLElement>('.export-diagnostics');
   const note = find<HTMLElement>('.export-note');
+  const storedFields = [...dialog.querySelectorAll<HTMLElement>('.export-stored')];
+
+  const isLive = (): boolean => source.value === 'live';
+
+  function checkedDiagnostics(): HTMLInputElement[] {
+    return [...diagnostics.querySelectorAll<HTMLInputElement>('input:checked')];
+  }
+
+  function diagnosticNames(): string[] {
+    return checkedDiagnostics().flatMap(input => JSON.parse(input.value) as string[]);
+  }
+
+  function diagnosticOptions(): DiagnosticExportOptions[] {
+    const currentDiagnostics = diagnosticViews();
+    return checkedDiagnostics().flatMap(input => {
+      const row = input.closest<HTMLElement>('.export-diagnostic-row')!;
+      const panelId = row.querySelector<HTMLSelectElement>('select')?.value ?? row.dataset.panelId;
+      const config = currentDiagnostics.find(item => item.panelId === panelId);
+      return config ? [{ names: config.names, scale: config.scale, hidden: config.hidden }] : [];
+    });
+  }
+
+  function selectedRange(view: ExportView): [number, number] | null {
+    if (!view.colorrange) return null;
+    if (view.colorrange[0] !== view.colorrange[1]) return view.colorrange;
+    const value = view.colorrange[0];
+    const padding = value === 0 ? 0.5 : Math.max(Math.abs(value) * 0.01, 2 ** -149);
+    const limit = 3.4028234663852886e38;
+    return [Math.max(-limit, value - padding), Math.min(limit, value + padding)];
+  }
+
+  function themeValue(): 'light' | 'dark' {
+    return theme.value === 'current' ?
+      (document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light') :
+      theme.value === 'dark' ? 'dark' : 'light';
+  }
+
+  function commonOptions(view: ExportView) {
+    if (camera.value === 'current' && !view.camera) {
+      state.setError('The selected panel has no current camera yet.');
+      return null;
+    }
+    if (range.value === 'current' && !view.colorrange) {
+      state.setError('The selected panel has no current colour range yet.');
+      return null;
+    }
+    const current = selectedRange(view);
+    return {
+      field: view.field,
+      diagnostics: diagnosticNames(),
+      camera: camera.value === 'fit' ? 'fit' as const : view.camera!,
+      ...(range.value === 'current' && current ? { colorrange: current } : {}),
+      ...(view.colormap ? { colormap: view.colormap } : {}),
+      phase_rendering: view.mode,
+      size: [Number(width.value), Number(height.value)] as [number, number],
+      fps: Number(fps.value),
+      arrangement: arrangement.value === 'below' ? 'below' as const : 'right' as const,
+      interface: view.overlays.interface,
+      geometry: view.overlays.solid,
+      blocks: view.overlays.blocks || view.overlays.levels,
+      ...(diagnosticOptions().length ? { diagnostic_options: diagnosticOptions() } : {}),
+    };
+  }
+
+  function storedOptions(view: ExportView): StoredExportOptions | null {
+    const common = commonOptions(view);
+    if (!common) return null;
+    const window = parseTimeWindow(from.value, to.value);
+    if (window.error) { state.setError(window.error); return null; }
+    return {
+      ...common,
+      source: 'stored',
+      frames: frameSelection(frames.value),
+      ...(window.window ? { window: window.window } : {}),
+      colorrange: range.value === 'current' ? common.colorrange ?? view.colorrange! : 'global',
+      theme: themeValue(),
+      duration: Number(duration.value),
+    };
+  }
+
+  function liveOptions(view: ExportView): LiveExportOptions | null {
+    const common = commonOptions(view);
+    if (!common) return null;
+    return {
+      ...common,
+      source: 'live',
+      sim_per_second: Number(simPerSecond.value),
+    };
+  }
+
+  function scheduleCommand(): ScheduleCommand | null {
+    const view = views().find(item => item.id === panel.value);
+    if (!view?.ready) return null;
+    const window = parseTimeWindow(from.value, to.value);
+    if (window.error) return null;
+    const selectedFps = Number(fps.value);
+    const selectedDuration = Number(duration.value);
+    if (!Number.isInteger(selectedFps) || selectedFps < 1 || !(selectedDuration > 0)) return null;
+    return {
+      type: 'recording', action: 'schedule', source: 'stored', field: view.field,
+      diagnostics: diagnosticNames(), frames: frameSelection(frames.value),
+      ...(window.window ? { window: window.window } : {}),
+      fps: selectedFps, duration: selectedDuration,
+    };
+  }
+
+  function candidateTimes(): number[] {
+    const window = parseTimeWindow(from.value, to.value);
+    if (window.error) return [];
+    return state.timeline.frames
+      .filter(frame => (frames.value === 'all' || frame.kind !== 'preview') &&
+        (!window.window || (frame.time >= window.window[0] && frame.time <= window.window[1])))
+      .map(frame => frame.time);
+  }
+
+  function formatInput(value: number): string {
+    return Number(value.toPrecision(4)).toString();
+  }
+
+  // Stored play time scales with the candidate count (2–20 s). Live aims at
+  // ten seconds of video for the run's remaining time or, when that is
+  // unknown, for the span of the stored frames.
+  function applyStoredDurationDefault(): void {
+    if (durationEdited) return;
+    const count = candidateTimes().length;
+    if (count === 0) return;
+    duration.value = formatInput(Math.min(20, Math.max(2, count / Number(fps.value))));
+  }
+
+  function applyLiveRateDefault(): void {
+    if (simRateEdited) return;
+    const times = state.timeline.frames.map(frame => frame.time);
+    const current = state.time;
+    const span = state.finalTime !== null && current !== null && state.finalTime > current ?
+      state.finalTime - current :
+      times.length > 1 ? times[times.length - 1] - times[0] : 0;
+    simPerSecond.value = formatInput(span > 0 ? span / 10 : 1);
+  }
+
+  function setScheduleText(text: string, schedule: RecordingSchedule | null = null): void {
+    scheduleElement.textContent = text;
+    // Clear the attributes written below; `dataset` also carries the element's
+    // test id, which must survive so callers can still address the summary.
+    for (const key of Object.keys(scheduleElement.dataset)) {
+      if (key !== 'testid') delete scheduleElement.dataset[key];
+    }
+    if (schedule) {
+      for (const [key, value] of Object.entries(scheduleAttributes(schedule))) {
+        scheduleElement.setAttribute(key, value);
+      }
+      scheduleElement.dataset.tone = schedule.sparse ? 'warning' : 'ok';
+    } else {
+      scheduleElement.dataset.tone = 'idle';
+    }
+  }
+
+  function renderSchedule(): void {
+    if (isLive()) {
+      const rate = Number(simPerSecond.value);
+      const selectedFps = Number(fps.value);
+      setScheduleText(rate > 0 && selectedFps > 0 ? liveSummary(rate, selectedFps) : 'Choose a positive rate and frame rate.');
+      return;
+    }
+    const window = parseTimeWindow(from.value, to.value);
+    if (window.error) { setScheduleText(window.error); return; }
+    if (!lastSchedule) { setScheduleText(pendingScheduleText(scheduleError)); return; }
+    setScheduleText(scheduleSummary(lastSchedule), lastSchedule);
+  }
+
+  function resetSchedule(): void {
+    lastSchedule = null;
+    scheduleError = null;
+    requests.reset();
+  }
+
+  function requestSchedule(command: ScheduleCommand, key: string): void {
+    const generation = requests.start(key);
+    scheduleError = null;
+    setScheduleText('Computing the time-linear schedule…');
+    client.schedule(command).then(schedule => {
+      // A superseded answer, or a switch to a live source, must not leave the
+      // request pending: that would block every later stored preflight.
+      if (!requests.settle(generation, key) || isLive()) {
+        requests.cancel(generation);
+        renderSchedule();
+        return;
+      }
+      lastSchedule = schedule;
+      renderSchedule();
+    }).catch(error => {
+      if (!requests.fail(generation, key)) return;
+      // Keep the reason on screen: the next `update()` re-renders the summary,
+      // and a retry for the same plan is suppressed until it changes.
+      lastSchedule = null;
+      scheduleError = error instanceof Error ? error.message : 'Could not compute the export schedule.';
+      setScheduleText(scheduleError);
+    });
+  }
+
+  function maybeRequestSchedule(): void {
+    if (!dialog.open || isLive() || state.recording.active) return;
+    const command = scheduleCommand();
+    if (!command) { renderSchedule(); return; }
+    // Include the stored frames: `update()` runs on every incoming frame, and a
+    // new frame changes the plan even when the form did not change.
+    const key = scheduleKey(command, state.timeline.frames);
+    if (!requests.needs(key)) return;
+    requests.arm(key);
+    window.clearTimeout(scheduleTimer);
+    scheduleTimer = window.setTimeout(() => requestSchedule(command, key), 120);
+  }
 
   function update(): void {
     const recording = state.recording;
-    const live = source.value === 'live';
-    for (const item of [frames, from, to, theme]) item.disabled = live || recording.active;
-    for (const item of [camera, arrangement, range, every, width, height, fps, format]) item.disabled = recording.active;
-    range.options[0].textContent = live ? 'Automatic as frames arrive' : 'Global over selected frames';
-    panel.disabled = recording.active;
-    source.disabled = recording.active;
-    path.disabled = recording.active;
+    const live = isLive();
+    for (const item of storedFields) item.hidden = live;
+    simPerSecond.closest<HTMLElement>('.export-live')!.hidden = !live;
+    for (const item of [panel, source, camera, arrangement, frames, range, from, to, duration, simPerSecond, width, height, fps, theme, format, path]) {
+      item.disabled = recording.active;
+    }
+    frames.disabled = recording.active || live;
+    from.disabled = recording.active || live;
+    to.disabled = recording.active || live;
+    duration.disabled = recording.active || live;
+    simPerSecond.disabled = recording.active || !live;
+    // Keep the duration input inside the server's frame-count cap; the browser
+    // then blocks a submission the preflight would reject.
+    duration.max = String(durationLimit(Number(fps.value)));
+    theme.disabled = recording.active || live;
+    if (live) {
+      range.options[0].hidden = true;
+      range.options[1].hidden = false;
+      if (range.value === 'global') range.value = 'auto';
+    } else {
+      range.options[0].hidden = false;
+      range.options[1].hidden = true;
+      if (range.value === 'auto') range.value = 'global';
+    }
     for (const input of diagnostics.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input, select')) input.disabled = recording.active;
     const selectedView = views().find(view => view.id === panel.value);
-    note.textContent = 'Diagnostic exports use the selected panel’s visible series and y-axis scale. Stored export renders selected groups; live export records new frames until stopped.' +
+    note.textContent = (live
+      ? 'Live export samples arriving frames on a uniform simulation-time grid from the start time until stopped; a sparse stream repeats the last frame. Theme applies to stored exports only.'
+      : 'Stored export samples the candidate frames on a uniform simulation-time grid over the chosen window.') +
+      ' Diagnostic exports use the selected panel’s visible series and y-axis scale.' +
       (selectedView?.overlays.cells || selectedView?.overlays.levels ? ' Cell edges and level colours are not included in server-side output.' : '');
     submit.disabled = recording.active || previewPending || !selectedView?.ready || state.connection !== 'connected';
     preview.disabled = recording.active || previewPending || !selectedView?.ready || state.connection !== 'connected' || selectedView.frame === null;
@@ -115,6 +366,8 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
         download.hidden = false;
       }
     }
+    renderSchedule();
+    maybeRequestSchedule();
   }
   function setDefaultPath(): void {
     const view = views().find(item => item.id === panel.value);
@@ -123,7 +376,28 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
   }
   panel.addEventListener('change', () => { if (!pathWasEdited) setDefaultPath(); update(); });
   window.addEventListener('studio-view-change', update);
-  source.addEventListener('change', update);
+  source.addEventListener('change', () => {
+    resetSchedule();
+    if (isLive()) applyLiveRateDefault(); else applyStoredDurationDefault();
+    update();
+  });
+  for (const input of [from, to, fps, frames]) {
+    input.addEventListener('input', () => {
+      resetSchedule();
+      applyStoredDurationDefault();
+      applyLiveRateDefault();
+      update();
+    });
+  }
+  duration.addEventListener('input', () => {
+    durationEdited = true;
+    resetSchedule();
+    update();
+  });
+  simPerSecond.addEventListener('input', () => {
+    simRateEdited = true;
+    update();
+  });
   format.addEventListener('change', () => {
     const filename = path.value.trim();
     path.value = `${filename.replace(/\.[^./\\]+$/, '')}.${format.value}`;
@@ -144,6 +418,9 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
     pathWasEdited = false;
     setDefaultPath();
     previewImage.hidden = true;
+    resetSchedule();
+    applyStoredDurationDefault();
+    applyLiveRateDefault();
     const availableDiagnostics = diagnosticViews();
     diagnostics.replaceChildren(...groupDiagnostics((state.runs[0]?.diagnostics ?? []) as DiagnosticMetadata[]).map(group => {
       const row = document.createElement('div');
@@ -173,57 +450,48 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
     if (!diagnostics.childNodes.length) diagnostics.textContent = 'None available';
     update();
     dialog.showModal();
+    maybeRequestSchedule();
   });
-  find<HTMLButtonElement>('.export-close').addEventListener('click', () => dialog.close());
+  find<HTMLButtonElement>('.export-close').addEventListener('click', () => {
+    window.clearTimeout(scheduleTimer);
+    dialog.close();
+  });
   stop.addEventListener('click', () => client.recording({ type: 'recording', action: 'stop' }));
   cancel.addEventListener('click', () => client.recording({ type: 'recording', action: 'cancel' }));
-  function selectedOptions(): Omit<PreviewCommand, 'action' | 'frame'> | null {
+  preview.addEventListener('click', async () => {
+    for (const input of [width, height, fps, duration, simPerSecond]) if (!input.reportValidity()) return;
     const view = views().find(item => item.id === panel.value);
-    if (!view?.ready) { state.setError('Wait for the selected field panel to finish loading.'); return null; }
-    const checkedDiagnostics = [...diagnostics.querySelectorAll<HTMLInputElement>('input:checked')];
-    const selected = checkedDiagnostics.flatMap(input => JSON.parse(input.value) as string[]);
-    const currentDiagnostics = diagnosticViews();
-    const diagnosticOptions = checkedDiagnostics.flatMap(input => {
-      const row = input.closest<HTMLElement>('.export-diagnostic-row')!;
-      const panelId = row.querySelector<HTMLSelectElement>('select')?.value ?? row.dataset.panelId;
-      const config = currentDiagnostics.find(item => item.panelId === panelId);
-      return config ? [{ names: config.names, scale: config.scale, hidden: config.hidden }] : [];
-    });
-    if (camera.value === 'current' && !view.camera) { state.setError('The selected panel has no current camera yet.'); return null; }
-    if (range.value === 'current' && !view.colorrange) { state.setError('The selected panel has no current colour range yet.'); return null; }
-    const selectedRange = view.colorrange && view.colorrange[0] === view.colorrange[1] ? (() => {
-      const value = view.colorrange![0];
-      const padding = value === 0 ? 0.5 : Math.max(Math.abs(value) * 0.01, 2 ** -149);
-      const limit = 3.4028234663852886e38;
-      return [Math.max(-limit, value - padding), Math.min(limit, value + padding)] as [number, number];
-    })() : view.colorrange;
-    let window: [number, number] | undefined;
-    if (from.value || to.value) {
-      const start = from.value ? Number(from.value) : -Number.MAX_VALUE;
-      const end = to.value ? Number(to.value) : Number.MAX_VALUE;
-      if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) { state.setError('Choose a valid export time window.'); return null; }
-      window = [start, end];
+    if (!view?.ready || view.frame === null) return;
+    let frame = view.frame;
+    let options: PreviewCommand | null = null;
+    if (isLive()) {
+      const stored = storedOptions(view);
+      const live = liveOptions(view);
+      if (!stored || !live) return;
+      options = {
+        type: 'recording', ...stored, source: 'stored', frames: 'keyframes',
+        duration: 2, action: 'preview', frame,
+      };
+    } else {
+      const command = scheduleCommand();
+      if (!command) return;
+      let schedule = lastSchedule;
+      if (!schedule) {
+        try { schedule = await client.schedule(command); }
+        catch (error) { state.setError(error instanceof Error ? error.message : 'Could not compute the export schedule.'); return; }
+        lastSchedule = schedule;
+        renderSchedule();
+      }
+      frame = schedule.first_frame;
+      const stored = storedOptions(view);
+      if (!stored) return;
+      options = { type: 'recording', ...stored, action: 'preview', frame };
     }
-    return {
-      type: 'recording', source: 'stored', field: view.field, diagnostics: selected, diagnostic_options: diagnosticOptions,
-      frames: frames.value === 'all' ? 'all' : 'keyframes', ...(window ? { window } : {}),
-      camera: camera.value === 'fit' ? 'fit' : view.camera!,
-      colorrange: range.value === 'global' ? 'global' : selectedRange!, ...(view.colormap ? { colormap: view.colormap } : {}),
-      phase_rendering: view.mode, size: [Number(width.value), Number(height.value)], framerate: Number(fps.value),
-      every: Number(every.value), arrangement: arrangement.value === 'below' ? 'below' : 'right',
-      interface: view.overlays.interface, geometry: view.overlays.solid, blocks: view.overlays.blocks || view.overlays.levels,
-      theme: theme.value === 'current' ? (document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light') : theme.value === 'dark' ? 'dark' : 'light',
-    };
-  }
-  preview.addEventListener('click', () => {
-    for (const input of [width, height, fps, every]) if (!input.reportValidity()) return;
-    const frame = views().find(item => item.id === panel.value)?.frame;
-    const options = selectedOptions();
-    if (frame == null || !options) return;
+    if (!options) return;
     previewPending = true;
     previewImage.hidden = true;
     update();
-    client.preview({ ...options, action: 'preview', frame }).then(url => {
+    client.preview(options).then(url => {
       previewImage.src = url;
       previewImage.hidden = false;
     }).catch(error => {
@@ -232,20 +500,16 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
   });
   form.addEventListener('submit', event => {
     event.preventDefault();
-    const options = selectedOptions();
-    if (!options) return;
-    if (source.value === 'live') {
-      client.recording({
-        type: 'recording', action: 'start', source: 'live', path: path.value.trim(),
-        field: options.field, diagnostics: options.diagnostics, diagnostic_options: options.diagnostic_options,
-        camera: options.camera, ...(options.colorrange === 'global' ? {} : { colorrange: options.colorrange }),
-        ...(options.colormap ? { colormap: options.colormap } : {}),
-        phase_rendering: options.phase_rendering, size: options.size, framerate: options.framerate,
-        every: options.every, arrangement: options.arrangement,
-        interface: options.interface, geometry: options.geometry, blocks: options.blocks,
-      });
+    const view = views().find(item => item.id === panel.value);
+    if (!view?.ready) return;
+    if (isLive()) {
+      const options = liveOptions(view);
+      if (!options) return;
+      client.recording({ type: 'recording', ...options, action: 'start', path: path.value.trim() });
     } else {
-      client.recording({ ...options, action: 'export', path: path.value.trim() });
+      const options = storedOptions(view);
+      if (!options) return;
+      client.recording({ type: 'recording', ...options, action: 'export', path: path.value.trim() });
     }
   });
   state.subscribe(update);

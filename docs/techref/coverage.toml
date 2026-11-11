@@ -2465,6 +2465,7 @@ check = "solv_cmdgfm_cases"
 "src/observation/schedules.jl" = { class = "storage" }
 "src/observation/store.jl" = { class = "storage" }
 "src/observation/topology.jl" = { class = "storage" }
+"src/observation/video.jl" = { class = "storage" }
 "src/visualization/camera.jl" = { class = "ui" }
 "src/visualization/diagnostic_groups.jl" = { class = "ui" }
 "src/visualization/diagnostic_metadata.jl" = { class = "ui" }
