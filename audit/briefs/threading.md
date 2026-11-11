@@ -22,19 +22,22 @@ orchestrator without further owner approval once the prerequisites below are met
    reports the measured cost; tolerance-based equivalence is not accepted without
    a new owner decision.
 2. **Machine time:** the agent may run speed-up measurements with up to
-   4 threads on this shared machine, without asking, when `free -g` available
-   ≥ 8 GB and the 1-minute load average is below 4 (check `uptime` right before);
-   at most one multi-threaded process at a time, each run ≤ 10 minutes; otherwise
-   wait and retry. All correctness work stays single-threaded except the
-   equivalence tests. Confirm the final numbers once on a CI runner
-   (`gh workflow run`), reporting both.
+   8 threads on this shared machine (Ryzen 9 5950X, 16 physical cores), without
+   asking, when `free -g` available ≥ 8 GB and the 1-minute load average is below 4
+   (check `uptime` right before); at most one multi-threaded process at a time, each
+   run ≤ 10 minutes; otherwise wait and retry. All correctness work stays
+   single-threaded except the equivalence tests. Confirm the final 1/2/4-thread
+   numbers once on a CI runner (`gh workflow run`; standard runners have 4 vCPUs,
+   so 8 threads is measured locally only), reporting both.
 
 ## Scope (WORKPLAN 4E.4; audit C15, C16, C20, F11, F23, E-7 in `audit/audit-core.md`,
 `audit/audit-twophase.md`, `audit/audit-perf.md`, `audit/AUDIT.md`)
 
-1. **Re-measure first** on current `main`: 1/2/4 threads on Taylor–Green 128²
-   (hierarchical), capillary wave with CMDGFM (k = 4) and the cylinder; profile
-   the serial fraction of a step. Audit baseline (pre-4B–4E.3): 4 threads gave
+1. **Re-measure first** on current `main`: 1/2/4/8 threads on Taylor–Green 128²
+   (hierarchical), capillary wave with CMDGFM (k = 4), the cylinder, and the
+   Stokes-3 wave (`examples/10_stokes3_wave`) with both `OneVelocityModel()` and the
+   two-velocity model, at the example's default resolution and one level finer;
+   profile the serial fraction of a step. Audit baseline (pre-4B–4E.3): 4 threads gave
    TG 1.17× (uniform), 1.53× (hierarchical), CMDGFM 1.16×. Order step 4 by the
    profile, not by the audit's guesses.
 2. **One threading layer:** five launch primitives (`@_parallel`, `_parallel_for`,
@@ -59,9 +62,25 @@ orchestrator without further owner approval once the prerequisites below are met
 
 ## Acceptance
 
-- 4-thread speed-up ≥ 2× on TG 128² (hierarchical) and capillary CMDGFM k = 4,
-  measured as above; report a table for 1/2/4 threads incl. the cylinder.
-- Oracle bitwise (single thread) unchanged; equivalence test bitwise at 1/2/4 threads.
+- Owner decision (2026-11-12):
+  - **Hard acceptance:** 4 threads ≥ 2× on TG 128² (hierarchical), capillary CMDGFM
+    k = 4 and the Stokes-3 wave with the one- and the two-velocity model, results
+    bitwise identical for every thread count.
+  - **Stretch goal:** 8 threads ≥ 4× (≥ 50 % parallel efficiency) on the same cases
+    one level finer than their default/benchmark resolution (Stokes-3: one level finer
+    than the example default). Where it is missed, report the profile showing what
+    remains serial or memory-bound.
+  - **Smoothers/preconditioners:** if the profile shows that inherently sequential
+    parts (ILU triangular solves, Gauss–Seidel-type smoothers, regrid/tree operations)
+    block a target, do **not** replace them with parallel variants: stop that line of
+    work and report the measured cost; switching methods changes iteration counts and
+    results and is an owner decision.
+  - Report a 1/2/4/8-thread table for all cases incl. the cylinder and the
+    example-default Stokes-3 resolution.
+- Oracle: one bitwise record valid for every thread count. One re-record is allowed in
+  the PR introducing fixed-chunk reductions (separate commit, every changed case listed
+  with its max relative change vs the old record, ≤ 1e-10); otherwise unchanged.
+  Equivalence test bitwise at 1/2/4 threads (CI) and 8 threads (locally, reported).
 - Focused groups, techref ch. 11/14 threading statements, docs (`docs/src`
   performance/threading section), CHANGELOG updated; Runic 1.10.0 on all `.jl`.
 - One PR per step (1 is a report, 2–5 are PRs), each green on CI with the
