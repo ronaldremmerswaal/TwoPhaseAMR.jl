@@ -71,8 +71,7 @@ element of `range` (a 1-based `AbstractVector`, such as `1:n` or
 `eachindex(vector)`), with the same ownership rules. `continue` skips an
 element; `break` and `return` are rejected. As in any closure, assigning a
 variable of the enclosing function captures it: on the threaded path that is a
-race, and Julia boxes the variable. The threading tests therefore require that
-no package method lowers to a `Core.Box`.
+race, and Julia boxes the variable, so bodies only write owned array entries.
 """
 macro _parallel(arguments...)
     isempty(arguments) && throw(ArgumentError("@_parallel requires a for loop"))
