@@ -351,8 +351,9 @@ function step_selection_check()
     aligned_difference = maximum(abs, whole.velocity.interior .- aligned.velocity.interior)
     @assert aligned_difference == 0 && whole.pressure.blocks == aligned.pressure.blocks
 
-    # The check of step!: (1 + 1e-6 + 32 eps) times the bound at cfl = 1/2.
-    hard = stable_timestep(stab_taylor_green(); cfl = 0.5)
+    # The check of step!: (1 + 1e-6 + 32 eps) times the bound at the top of the
+    # one-phase cfl range, stagcfl = 1 (#121).
+    hard = stable_timestep(stab_taylor_green(); cfl = 1)
     accepted = stab_accepts(stab_taylor_green(), (1 + 0.9e-6) * hard)
     rejected = !stab_accepts(stab_taylor_green(), (1 + 2.0e-6) * hard)
     @assert accepted && rejected

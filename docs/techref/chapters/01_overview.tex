@@ -786,10 +786,6 @@ the chapters state and that are tracked by issues open at the audited commit;
     Lax--Wendroff and limited face states next to a solid can see a dual
       Courant number above one
       & \issue{72} & \cref{sec:momentum:cfl}\\
-    In one phase \apifun{stable_timestep} accepts a CFL number up to one, but
-      \apifun{step!} checks at $\half$, so \apifun{simulate!} with
-      \code{cfl} above $\half$ stops at its first advection-limited step
-      & \issue{121} & \cref{sec:stab:bounds}\\
     \multicolumn{3}{@{}l}{\emph{Viscosity}}\\
     One phase: the corrected rows at level transitions are not symmetric, and
       the implicit step can raise the energy (by up to $2.7$ per step in the

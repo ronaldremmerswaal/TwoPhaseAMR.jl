@@ -692,11 +692,13 @@ conjugate gradients with non-symmetric multigrid cycles (\issue{128}); a
 degenerate vertex patch with two cells per periodic period, which limits the
 coarsest multigrid level (\issue{36}); and a level-set initialisation that
 can fail for valid input (\issue{49}). The open bugs \issue{117} and
-\issue{118} (refinement criteria), \issue{121} (the one-phase \code{cfl}
-range) and \issue{127} (an allocation contract) do not affect accuracy. Since
+\issue{118} (refinement criteria) and \issue{127} (an allocation contract) do
+not affect accuracy. Since
 the audited commit, PR~\#125 has fixed \issue{117} and \issue{118}
-(\cref{sec:amr:band,sec:amr:curvature}) and PR~\#130 \issue{126} and
-\issue{127}; the others are open. Open
+(\cref{sec:amr:band,sec:amr:curvature}), PR~\#130 \issue{126} and
+\issue{127}, and \issue{121}, the one-phase \code{cfl} range, is fixed by the
+step check of~\cref{eq:stab:check}, which now uses the top of the accepted
+range (\cref{sec:stab:bounds}); the others are open. Open
 investigations: unbounded CTU fluxes at hanging dual faces (\issue{70}), dual
 Courant numbers above one next to a solid (\issue{72}), energy growth of the
 corrected Laplacian at level transitions (\issue{80}) and the fallback for

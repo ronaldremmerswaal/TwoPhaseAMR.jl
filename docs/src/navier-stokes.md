@@ -485,7 +485,13 @@ returned statistics report projection convergence to the caller.
 absolute final time. It uses `flow.force` unless overridden. If `dt` is
 omitted, the solver combines the staggered convective
 CFL bound with the two-phase capillary and gravity-wave restrictions when
-those forces are present. The implicit-midpoint diffusion stage imposes no
+those forces are present. The `cfl` keyword must lie in `(0, 1]` for one phase
+and `(0, 1/2]` for two phases; outside that range `simulate!` and
+[`stable_timestep`](@ref) throw an `ArgumentError` that names the range, also
+when a prescribed `dt` makes `cfl` unused. Each step is checked against the
+same bound at the top of that range, so every step
+the bound returns is accepted and `cfl` alone sets the margin. The
+implicit-midpoint diffusion stage imposes no
 diffusion-based timestep restriction; pass `dt` explicitly when a particular
 temporal accuracy resolution is required. Crank--Nicolson is second-order but
 does not strongly damp unresolved stiff modes, so reduce the time step when a
