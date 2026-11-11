@@ -222,6 +222,25 @@ end
     end
 end
 
+# Boundary mixture flux integrated per cell, independently of the cached
+# assembly. Simulated walls are no-permeation, but this reference is also
+# built from prescribed boundary fields, which may carry a nonzero normal
+# component; the production right-hand side always subtracts this term.
+function _cmdgfm_boundary_mixture(interface, velocity)
+    mesh = interface.mesh
+    nx, ny = mesh.block_size
+    result = zeros(eltype(interface), ncells(mesh))
+    for (index, face) in pairs(mesh.boundary_faces)
+        liquid, gas = CPR._phase_boundary_face_apertures(interface, index)
+        result[CPR._cell_index(face.cell, nx, ny)] +=
+            face.side * face.area * CPR._projection_phase_sum(
+            liquid, velocity[1].boundary[index],
+            gas, velocity[2].boundary[index],
+        )
+    end
+    return result
+end
+
 # Independent, deliberately allocation-heavy reference: retain the original
 # full sparse products so cached/local assembly cannot validate itself.
 function _cmdgfm_fresh_reference(solver, work, velocity, dt)
@@ -248,8 +267,8 @@ function _cmdgfm_fresh_reference(solver, work, velocity, dt)
     )
     mixture = CPR._phase_product.(data.liquid_aperture, velocity[1].interior) .+
         CPR._phase_product.(data.gas_aperture, velocity[2].interior)
-    # The predictors are no-permeation, so boundary faces add no mixture flux.
-    rhs = vcat((transpose(Ip) * mixture) ./ T(dt), rhs_jump)
+    boundary = _cmdgfm_boundary_mixture(solver.interface, velocity)
+    rhs = vcat((transpose(Ip) * mixture .- boundary[indices]) ./ T(dt), rhs_jump)
     return (; matrix = [PP PX; XP XX], rhs, indices, anchors, mixed, op, data)
 end
 
