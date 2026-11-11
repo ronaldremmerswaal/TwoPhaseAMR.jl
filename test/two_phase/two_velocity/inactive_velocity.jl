@@ -75,8 +75,7 @@ end
 end
 
 @testset "NaN phase storage survives transport, diffusion and projection" begin
-    for projection in (CMDGFMProjection(), MimeticProjection()),
-            transport in (FrozenInterfaceFluxes(), ProjectedLiquidVelocity())
+    for transport in (FrozenInterfaceFluxes(), ProjectedLiquidVelocity())
         mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, false))
         interface = InterfaceField(mesh, (x, y) -> y - 0.47)
         flow = FlowSimulation(
@@ -84,10 +83,7 @@ end
                 interface; density = (1000.0, 1.0),
                 dynamic_viscosity = (0.02, 0.001)
             );
-            velocity_model = TwoVelocityModel(
-                pressure_projection = projection,
-                interface_transport = transport
-            ),
+            velocity_model = TwoVelocityModel(interface_transport = transport),
             velocity = (
                 (x, y, t, a) -> a == 1 ? 0.05 : 0.0,
                 (x, y, t, a) -> a == 1 ? -0.02 : 0.0,

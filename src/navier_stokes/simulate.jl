@@ -7,7 +7,10 @@
 
 Advance to `final_time`. If `dt` is omitted, a stable step is
 chosen initially and retained while it remains below the current bound, which
-also reuses the shifted viscous hierarchy and bottom factorization. Consecutive
+also reuses the shifted viscous hierarchy and bottom factorization. The `cfl`
+keyword must lie in `(0, 1]` for one phase and `(0, 1/2]` for two phases; each
+step is checked against the same bound at the top of that range, so every step
+the bound returns is accepted. Consecutive
 automatic calls using the same fields, solver, workspace and topology retain
 the unmodified proposal, not the last step adjusted to `final_time`. If the
 next step would leave less than `1e-6` of the proposal, it is stretched to
@@ -88,6 +91,7 @@ function _simulate!(
     initial_unresolved = flow.unresolved_curvature_faces
     target_time >= current_time ||
         throw(ArgumentError("final_time must not precede the initial time"))
+    _check_cfl_range(cfl, solver.two_phase)
     dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
     cycle_limit = _navier_stokes_cycle_limit(solver, max_cycles)
     options = (; tolerance = dimensionless_tolerance, max_cycles = cycle_limit)

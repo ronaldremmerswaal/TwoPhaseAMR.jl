@@ -271,7 +271,6 @@ end
     for velocity_model in (
                 OneVelocityModel(),
                 TwoVelocityModel(pressure_projection = CMDGFMProjection()),
-                TwoVelocityModel(pressure_projection = MimeticProjection()),
             ), formulation in (CSF(), CGFM())
         mesh = BlockTreeMesh(block_size = (16, 16), periodic = (false, false))
         interface = InterfaceField(
@@ -410,7 +409,7 @@ end
         @test checked > 0
     end
 end
-@testset "Mimetic hydrostatic balance" begin
+@testset "Hydrostatic balance" begin
     for kind in 1:3, gravity in ((0.0, -1.0), (0.6, -0.8))
         mesh = BlockTreeMesh(
             block_size = (8, 8), max_level = 2, periodic = (false, false),

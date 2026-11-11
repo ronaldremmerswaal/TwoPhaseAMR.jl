@@ -65,7 +65,7 @@ diagnostics, or observer events.
 | velocity formulation | `FlowSimulation` | `OneVelocityModel()`, `TwoVelocityModel(...)` | one velocity |
 | surface-tension force | `SurfaceTension` | `CGFM()`, `CSF()` | CGFM |
 | two-velocity interface carrier | `TwoVelocityModel` | `FrozenInterfaceFluxes()`, `ProjectedLiquidVelocity()` | frozen |
-| two-velocity projection | `TwoVelocityModel` | `CMDGFMProjection()`, `MimeticProjection()` | CMDGFM |
+| two-velocity projection | `TwoVelocityModel` | `CMDGFMProjection()` | CMDGFM |
 
 Interface transport and two-velocity projection are meaningful only for
 `TwoVelocityModel`. Surface-tension force selection applies to either velocity

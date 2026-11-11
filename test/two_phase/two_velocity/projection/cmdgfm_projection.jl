@@ -766,7 +766,7 @@ end
 end
 
 function _unit_scaled_two_velocity_projection(
-        method, length_unit, time_unit, density_unit;
+        length_unit, time_unit, density_unit;
         tolerance, max_iterations, preconditioner, warm_start = false
     )
     mesh = BlockTreeMesh(
@@ -797,27 +797,18 @@ function _unit_scaled_two_velocity_projection(
         )
     )
     velocity = (liquid, gas)
-    stats = if method == :cmdgfm
-        solver = CMDGFMProjectionSolver(interface; density, preconditioner)
-        work = CMDGFMProjectionWorkspace(solver)
-        fill_halo!(pressure)
-        gradients = (FaceVelocity(mesh), FaceVelocity(mesh))
-        cmdgfm_gradient!(gradients, pressure, solver, work)
-        CMD._projection_correct_phase_velocities!(
-            velocity, gradients, 0.125time_unit, eltype(pressure),
-        )
-        project!(
-            velocity, pressure, solver, 0.125time_unit, work;
-            tolerance, max_iterations, warm_start,
-        )
-    else
-        solver = MimeticProjectionSolver(interface; density, variant = method, preconditioner)
-        work = MimeticProjectionWorkspace(solver)
-        project!(
-            velocity, pressure, solver, 0.125time_unit, work;
-            tolerance, max_iterations,
-        )
-    end
+    solver = CMDGFMProjectionSolver(interface; density, preconditioner)
+    work = CMDGFMProjectionWorkspace(solver)
+    fill_halo!(pressure)
+    gradients = (FaceVelocity(mesh), FaceVelocity(mesh))
+    cmdgfm_gradient!(gradients, pressure, solver, work)
+    CMD._projection_correct_phase_velocities!(
+        velocity, gradients, 0.125time_unit, eltype(pressure),
+    )
+    stats = project!(
+        velocity, pressure, solver, 0.125time_unit, work;
+        tolerance, max_iterations, warm_start,
+    )
     return (; stats, velocity, pressure, speed, pressure_unit = density_unit * speed^2)
 end
 
@@ -825,17 +816,15 @@ end
     # Power-of-two changes preserve the dimensionless mesh and data exactly,
     # while exercising micrometre-sized cells and independent time/mass units.
     units = ((1.0, 1.0, 1.0), (2.0^-20, 2.0^-10, 2.0), (4.0, 0.5, 8.0))
-    methods = (
-        (:cmdgfm, false, :block), (:cmdgfm, true, :block),
-        (:cmdgfm, false, :ilu), (:cmdgfm, false, nothing),
-        (:joint_face, false, :cholesky), (:joint_face, false, nothing),
-        (:joint_smoothed, false, :cholesky),
+    configurations = (
+        (false, :block), (true, :block),
+        (false, :ilu), (false, nothing),
     )
-    for (method, warm_start, preconditioner) in methods,
+    for (warm_start, preconditioner) in configurations,
             (tolerance, max_iterations) in ((1.0e-6, 2000), (1.0e-12, 1))
         runs = [
             _unit_scaled_two_velocity_projection(
-                method, length_unit, time_unit, density_unit;
+                length_unit, time_unit, density_unit;
                 tolerance, max_iterations, preconditioner, warm_start,
             ) for (length_unit, time_unit, density_unit) in units
         ]
@@ -861,15 +850,9 @@ end
             defect_atol = reference.converged ? tolerance : 1.0e-12
             @test result.mixture_volume_defect ≈ reference.mixture_volume_defect rtol = 1.0e-8 atol = defect_atol
             @test result.normal_velocity_defect ≈ reference.normal_velocity_defect rtol = 1.0e-8 atol = defect_atol
-            if method != :cmdgfm
-                @test result.tangential_defect ≈ reference.tangential_defect rtol = 1.0e-8 atol = defect_atol
-            end
             if result.converged
                 @test result.mixture_volume_defect <= tolerance
                 @test result.normal_velocity_defect <= tolerance
-                if method != :cmdgfm
-                    @test result.tangential_defect <= tolerance
-                end
             end
             for phase in 1:2
                 reference_values = first_run.velocity[phase].interior
@@ -884,5 +867,164 @@ end
                     interior(first_run.pressure, block) ./ first_run.pressure_unit rtol = 2.0e-5 atol = 2.0e-8
             end
         end
+    end
+end
+
+@testset "Two-velocity projection preserves prescribed through-flow" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
+    interface = InterfaceField(
+        mesh, (x, y) -> hypot(x - 0.45, y - 0.47) - 0.26; lipschitz = 1,
+    )
+    field = (x, y, time, axis) -> axis == 1 ?
+        1 + 0.4sinpi(x) * cospi(2y) : 0.0
+    velocity = (FaceVelocity(mesh, field), FaceVelocity(mesh, field))
+    TwoPhaseAMR._mark_inactive_phase_velocities!(velocity, interface)
+    boundary_before = map(phase -> copy(phase.boundary), velocity)
+    solver = CMDGFMProjectionSolver(interface; density = (10.0, 1.0))
+    work = CMDGFMProjectionWorkspace(solver)
+    dt, tolerance = 0.05, 1.0e-8
+    stats = project!(
+        velocity, CellField(mesh), solver, dt, work;
+        tolerance, max_iterations = 4000,
+    )
+    @test stats.converged
+    for phase in 1:2
+        @test all(isequal.(velocity[phase].boundary, boundary_before[phase]))
+    end
+    outflow = [
+        index for (index, face) in pairs(mesh.boundary_faces)
+            if face.axis == 1 && face.side == 1
+    ]
+    inflow = [
+        index for (index, face) in pairs(mesh.boundary_faces)
+            if face.axis == 1 && face.side == -1
+    ]
+    @test !isempty(outflow) && !isempty(inflow)
+    @test all(index -> velocity[2].boundary[index] == 1.0, [inflow; outflow])
+
+    # Reconstruct each cell's actual mixture flux independently of the
+    # solver's residual, including the two prescribed boundary fluxes.
+    liquid_aperture, gas_aperture = TwoPhaseAMR._current_phase_face_apertures!(interface)
+    flux = zeros(ncells(mesh))
+    for (index, face) in pairs(mesh.faces)
+        liquid = iszero(liquid_aperture[index]) ? 0.0 :
+            liquid_aperture[index] * velocity[1].interior[index]
+        gas = iszero(gas_aperture[index]) ? 0.0 :
+            gas_aperture[index] * velocity[2].interior[index]
+        value = face.area * (liquid + gas)
+        flux[TwoPhaseAMR._cell_index(face.minus, mesh.block_size...)] -= value
+        flux[TwoPhaseAMR._cell_index(face.plus, mesh.block_size...)] += value
+    end
+    for (index, face) in pairs(mesh.boundary_faces)
+        liquid_aperture_b, gas_aperture_b =
+            TwoPhaseAMR._phase_boundary_face_apertures(interface, interface.geometry, index)
+        liquid = iszero(liquid_aperture_b) ? 0.0 :
+            liquid_aperture_b * velocity[1].boundary[index]
+        gas = iszero(gas_aperture_b) ? 0.0 :
+            gas_aperture_b * velocity[2].boundary[index]
+        flux[TwoPhaseAMR._cell_index(face.cell, mesh.block_size...)] -=
+            face.side * face.area * (liquid + gas)
+    end
+    outflow_cells = [
+        TwoPhaseAMR._cell_index(mesh.boundary_faces[index].cell, mesh.block_size...)
+            for index in outflow
+    ]
+    volumes = [mesh.blocks[ref.block].volume for ref in TwoPhaseAMR._cell_references(mesh)]
+    outflow_defect = maximum(cell -> dt * abs(flux[cell]) / volumes[cell], outflow_cells)
+    @test outflow_defect <= 1.1tolerance
+end
+
+@testset "Two-velocity open boundary compatibility" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
+    inlet(x, y, time, axis) = axis == 1 ? 1.0 : 0.0
+    slow(x, y, time, axis) = axis == 1 ? 0.4 : 0.0
+    zero_gradient = VelocityBoundaryConditions(
+        left = Inflow(inlet), right = ZeroGradientVelocity(),
+        bottom = NoSlip(), top = NoSlip(),
+    )
+
+    # One-velocity preparation must remain permissive: its open-pressure
+    # projection, unlike the two-velocity Neumann projection, adjusts the flux.
+    for preserve_open in (false, true)
+        shared = FaceVelocity(mesh, slow)
+        enforce_velocity_boundary!(shared, zero_gradient; preserve_open)
+        net = sum(
+            face.side * face.area * shared.boundary[index]
+                for (index, face) in pairs(mesh.boundary_faces)
+        )
+        @test net ≈ -0.6 atol = 64eps()
+    end
+
+    function open_flow(outlet, speed)
+        interface = InterfaceField(mesh, (x, y) -> y - 0.5; lipschitz = 1)
+        boundary = VelocityBoundaryConditions(
+            left = Inflow(inlet), right = outlet, bottom = NoSlip(), top = NoSlip(),
+        )
+        initial(x, y, time, axis) = axis == 1 ? speed : 0.0
+        return FlowSimulation(
+            mesh, TwoPhase(
+                interface; density = (2.0, 1.0), dynamic_viscosity = (0.0, 0.0),
+            );
+            velocity_model = TwoVelocityModel(),
+            velocity = (initial, initial), boundary,
+        )
+    end
+
+    # Without a balancing Outflow, a nonzero extrapolated flux must be
+    # rejected both before a fixed step and during automatic CFL setup.
+    incompatible_preparation = open_flow(ZeroGradientVelocity(), 0.4)
+    @test_throws ArgumentError TwoPhaseAMR._enforce_phase_velocity_boundary!(
+        incompatible_preparation.velocity, incompatible_preparation.system, 0.0,
+    )
+    incompatible = open_flow(ZeroGradientVelocity(), 0.4)
+    @test_throws ArgumentError step!(
+        incompatible.velocity, incompatible.pressure, incompatible.system,
+        0.001, incompatible.workspace,
+    )
+    automatic = open_flow(ZeroGradientVelocity(), 0.4)
+    @test_throws ArgumentError simulate!(automatic, 0.001)
+
+    # Outflow corrects an initially mismatched extrapolation; an already
+    # compatible ZeroGradient outlet remains usable without a correction.
+    for (outlet, speed) in ((Outflow(), 0.4), (ZeroGradientVelocity(), 1.0))
+        flow = open_flow(outlet, speed)
+        TwoPhaseAMR._enforce_phase_velocity_boundary!(flow.velocity, flow.system, 0.0)
+        for phase in 1:2
+            values = flow.velocity[phase].boundary
+            for side in (-1, 1)
+                indices = [
+                    index for (index, face) in pairs(mesh.boundary_faces)
+                        if face.axis == 1 && face.side == side && isfinite(values[index])
+                ]
+                @test !isempty(indices)
+                @test all(index -> isapprox(values[index], 1.0; atol = 64eps()), indices)
+            end
+            net = sum(
+                face.side * face.area * values[index]
+                    for (index, face) in pairs(mesh.boundary_faces)
+                    if isfinite(values[index])
+            )
+            @test abs(net) <= 64eps()
+        end
+        boundary_before = map(phase -> copy(phase.boundary), flow.velocity)
+        stats = project!(flow; dt = 0.01, tolerance = 1.0e-8, max_cycles = 4000)
+        @test stats.converged
+        @test stats.mixture_volume_defect <= stats.target_defect
+        @test stats.normal_velocity_defect <= stats.target_defect
+        for phase in 1:2
+            @test all(isequal.(flow.velocity[phase].boundary, boundary_before[phase]))
+        end
+        @test _phase_storage_contract(flow.velocity, flow.interface)
+        # The projection supports compatible prescribed through-flow, but
+        # WY transport independently requires impermeable phase boundaries.
+        transport_error = try
+            simulate!(flow, 0.001; dt = 0.001, tolerance = 1.0e-8, max_cycles = 4000)
+            nothing
+        catch exception
+            exception
+        end
+        @test transport_error isa ArgumentError
+        @test transport_error isa ArgumentError &&
+            transport_error.msg == "WY requires zero active phase boundary velocity"
     end
 end

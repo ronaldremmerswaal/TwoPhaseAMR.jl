@@ -36,7 +36,6 @@ step enters only through the matrices and tolerances of the calling chapters.
     viscous, one phase & \cref{eq:solvers:shifted-single} & SPD & CG & tree MG (faces of an axis) & 100\\
     viscous, two phases & \cref{eq:viscosity:phase-midpoint} & SPD & CG & tree MG (all faces) & 500\\
     CMDGFM projection & \cref{eq:projection:cmdgfm-system} & nonsymmetric & BiCGSTAB & V-cycle and ILU blocks & 500\\
-    mimetic projection & \cref{eq:projection:kkt} & symmetric indefinite & MINRES & block-diagonal Cholesky & 500\\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -183,7 +182,7 @@ Tests: \testsym{test/operators/poisson.jl}{Factorized pressure action matches as
 The cell solves and both viscous solves run one driver around the Krylov
 methods of Krylov.jl~\cite{montoison2023}: CG~\cite{hestenes1952},
 BiCGSTAB~\cite{vandervorst1992}, GMRES~\cite{saad1986} or FGMRES. The CMDGFM
-and mimetic projections call BiCGSTAB and MINRES in loops of their own
+projection calls BiCGSTAB in a loop of its own
 (\cref{sec:solvers:projection}).
 
 \emph{Norms and stop level.} With $\volmat$ the diagonal weights of the solve
@@ -309,8 +308,7 @@ the viscous steps and the liquid-carrier projection throw, and a full
 given; the one-velocity and liquid-carrier projections start from a zero
 increment; the viscous solves start from the destination field, the velocity
 before the viscous step; the CMDGFM projection may start from the previous
-increment (\cref{sec:solvers:projection}); the mimetic projection starts from
-zero.
+increment (\cref{sec:solvers:projection}).
 
 \emph{Storage.} A solver owns its Krylov workspace, its solution,
 right-hand-side, residual and product vectors and the scratch of the
@@ -824,29 +822,10 @@ previous increment with a jump regenerated from the current residual,
 accepted only if it reduces the largest defect below $0.95$ times that of
 zero and lowers the Euclidean residual (\cref{sec:projection:defects}).
 
-\emph{Mimetic.} The symmetric indefinite system~\cref{eq:projection:kkt} is
-scaled by a congruence (rows proportional to columns), which keeps it
-symmetric, and solved by MINRES~\cite{paige1975}, left-preconditioned with the
-symmetric positive definite block-diagonal matrix of \cref{sec:projection:mimetic}
-whose pressure and multiplier blocks are factorised by sparse Cholesky
-(CHOLMOD); there is no first guess, and up to eight passes restart from the
-true residual.
-
-\begin{deviation}{Float32 mimetic projection (open)}\label{dev:solvers:float32}
-In single precision the mimetic projection of a mixed-circle case does not
-converge: at the tolerance $10^{-3}$ MINRES stops after $22$ iterations with
-$12$ of $17$ constraint rows independent and a normal velocity defect of
-$0.55$ (\code{converged=false}), whereas the sparse-factor solves and the
-pure-phase projections converge in single precision. The rank and fit
-tolerances are scaled for double precision; whether they or the conditioning
-of the fitted rows cause the failure is not determined (\issue{45}). The code
-accepts \code{Float32} for the mimetic projection without a warning.
-\end{deviation}
-
 \begin{implnote}
 \apifun{project!} of \apitype{ProjectionWorkspace} (one velocity),
 \apitype{CMDGFMProjection}\code{(; preconditioner=:block, preconditioner_options=(;))}
-with \apitype{CMDGFMProjectionSolver}, and \apitype{MimeticProjectionSolver}.
+with \apitype{CMDGFMProjectionSolver}.
 One velocity \srcsym{src/navier_stokes/projection.jl}{project!}; liquid
 carrier \srcsym{src/two_phase/two_velocity/transport_workspace.jl}{_project_liquid_velocity!};
 CMDGFM \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_project_cmdgfm_assembled!}
@@ -857,10 +836,7 @@ with \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_ScaledProjectionPre
 preconditioner \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{CMDGFMBlockPreconditioner}
 and \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{CMDGFMReducedPressurePreconditioner}~\cref{eq:solvers:block-preconditioner},
 \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_pressure_preconditioner},
-first guess \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_initial_solution!};
-mimetic \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_krylov_scaling!},
-\srcsym{src/two_phase/projection/mimetic_projection.jl}{MimeticBlockCholeskyPreconditioner}
-and \srcsym{src/two_phase/projection/mimetic_cache.jl}{_mimetic_krylov_workspace!}.
+first guess \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_initial_solution!}.
 Tests: \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM block-preconditioned BiCGSTAB},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{Two-velocity projection convergence is independent of physical units},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{CMDGFM shares only compatible scalar pressure data},
@@ -868,9 +844,6 @@ Tests: \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMD
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM AMR whole-system ILU regression (issue #126)}
 (the composite fixture of \cref{sec:solvers:measured} converges with both preconditioners),
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM omitted gauge row and iteration budget},
-\testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{Mimetic MINRES workspace is reused and resized},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Mimetic Cholesky factor solves support both scalar types},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Float32 pure-phase mimetic projection},
 \testsym{test/navier_stokes/navier_stokes.jl}{pressure failure reports convergence diagnostics}.
 \end{implnote}
 

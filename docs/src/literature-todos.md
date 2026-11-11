@@ -68,8 +68,6 @@ construction and explains its derivation and validation.
 - **TODO:** Add a direct reference for the complete CMDGFM pressure projection,
   including its bounded multidimensional jump interpolation and two-block
   preconditioner.
-- **TODO:** Add a direct reference for the symmetric three-block mimetic
-  pressure projection and its `(p, xi, lambda)` constraints.
 
 ## Time integration and linear solution
 

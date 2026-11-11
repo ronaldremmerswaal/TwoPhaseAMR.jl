@@ -312,8 +312,7 @@ function _manufactured_poisson_registry(interface, fields)
 end
 
 """
-    run_example(; resolution=32, density=(1000.0, 1.0),
-                method=:mimetic, ...)
+    run_example(; resolution=32, density=(1000.0, 1.0), ...)
 
 Solve the periodic manufactured two-velocity Poisson problem. The prescribed
 predictor is the sum of a divergence-free velocity and `grad(p)/rho`; one
@@ -330,14 +329,11 @@ and both components of the scaled gradient-jump error
 `xi_h - xi`, where `xi=[grad(p)/rho]`. The jump errors are shown only on mixed
 staggered faces. Pressure is shifted by its volume-mean error before display
 because the periodic Poisson problem determines it only up to a constant.
-Additional keywords are passed to the selected projection solver.
-Set `method=:cmdgfm` for CMDGFM, `:mimetic` for the default jointly fitted
-smoothed-aperture projection, or `:joint_face` for its face-row variant.
+The projection is CMDGFM; additional keywords are passed to its solver.
 """
 function run_example(;
         resolution = 32,
         density = MANUFACTURED_POISSON_DENSITY,
-        method = :mimetic,
         tolerance = 1.0e-9,
         max_iterations = 5000,
         kwargs...,
@@ -356,25 +352,8 @@ function run_example(;
     predictor = _manufactured_predictor(mesh, density)
     projected_velocity = (copy(predictor[1]), copy(predictor[2]))
     raw_pressure = CellField(mesh)
-    solver, workspace = if method === :cmdgfm
-        selected_solver = CMDGFMProjectionSolver(
-            interface; density, kwargs...,
-        )
-        selected_solver, CMDGFMProjectionWorkspace(selected_solver)
-    elseif method in (:mimetic, :joint_face)
-        selected_solver = MimeticProjectionSolver(
-            interface; density,
-            variant = method === :mimetic ? :joint_smoothed : :joint_face,
-            kwargs...,
-        )
-        selected_solver, MimeticProjectionWorkspace(selected_solver)
-    else
-        throw(
-            ArgumentError(
-                "method must be :cmdgfm, :mimetic, or :joint_face",
-            ),
-        )
-    end
+    solver = CMDGFMProjectionSolver(interface; density, kwargs...)
+    workspace = CMDGFMProjectionWorkspace(solver)
     stats = project!(
         projected_velocity, raw_pressure, solver, 1.0, workspace;
         tolerance, max_iterations,
@@ -386,7 +365,7 @@ function run_example(;
     registry = _manufactured_poisson_registry(interface, fields)
     return (;
         mesh, interface, predictor, projected_velocity, raw_pressure,
-        method, density, solver, workspace, stats, fields...,
+        density, solver, workspace, stats, fields...,
         analytical_jump_components, registry,
     )
 end

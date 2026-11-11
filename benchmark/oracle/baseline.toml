@@ -51,56 +51,6 @@ time = 0.02
     max = 1.0
     sha256 = "371230724306004ed0146d9a9eefdbcda581cc197707905df7c612651ea1202b"
 
-[cases.capillary_mimetic]
-steps = 20
-time = 0.02
-
-    [cases.capillary_mimetic.diagnostics]
-    amplitude = 0.009745242203546
-    analytical_amplitude = 0.009517346104461356
-
-    [cases.capillary_mimetic.fields.pressure]
-    count = 384
-    finite_count = 384
-    l2 = 1.1278572578859238
-    max = 0.2085641300417921
-    sha256 = "85e3bcd9592a59f2a2ac3bb1b1b5d45a592b63f30bea461e1bb8b6a6b024936b"
-
-    [cases.capillary_mimetic.fields.velocity_phase1_1]
-    count = 384
-    finite_count = 267
-    l2 = 0.1052046013146765
-    max = 0.03922109749625781
-    sha256 = "8db7ec27ece51ae0e371e24beff40956aa5684fb8f5538099346158f8bd03bd8"
-
-    [cases.capillary_mimetic.fields.velocity_phase1_2]
-    count = 384
-    finite_count = 274
-    l2 = 0.5594797812388127
-    max = 0.2684978762612477
-    sha256 = "ca0373fe996c711baa7fc54b73da6be5e6fb157b334145dba420da58850f52a0"
-
-    [cases.capillary_mimetic.fields.velocity_phase2_1]
-    count = 384
-    finite_count = 137
-    l2 = 0.4791739245932676
-    max = 0.3154763473066535
-    sha256 = "fa70b55cd86cf3ba6833b914ba771b3c8c1dda04b3303eb94f7ea5e8ef3969bf"
-
-    [cases.capillary_mimetic.fields.velocity_phase2_2]
-    count = 384
-    finite_count = 144
-    l2 = 0.5549482381567048
-    max = 0.25676013068135534
-    sha256 = "6a0b5aba202af7875d24c95e398b3a385357797589bb42103732a1ec87d90aba"
-
-    [cases.capillary_mimetic.fields.volume_fraction]
-    count = 384
-    finite_count = 384
-    l2 = 15.956410998360914
-    max = 1.0
-    sha256 = "07f2b86b9f5de39654c344a0e972c33ff5a190b932fbb34cd43a4854df34b53f"
-
 [cases.capillary_one]
 steps = 20
 time = 0.02

@@ -469,8 +469,8 @@ end
     gravity!(acceleration, interface, pressure_operator, workspace;
              density, gravity)
 
-Thesis mimetic gravity model: the mixture density averaged over each open face
-times the gradient of `dot(gravity, interface_centroid)`. Pure cells use their
+The mixture density averaged over each open face times the gradient of
+`dot(gravity, interface_centroid)`. Pure cells use their
 cell centroids. On mixed-level meshes aperture-weighted jumps enter the
 pressure's weighted inverse metric, retaining exact cancellation when a
 hydrostatic potential exists. Closed faces contribute no force. Nonzero gravity

@@ -6,21 +6,17 @@ step, the forces and the boundary values at $\timevar^{\timelevel{n+1}}$, is
 corrected by a pressure gradient so that the end-of-step velocity satisfies
 the discrete incompressibility constraint and, with two velocities, a discrete
 condition on the normal velocity jump at the interface; this is step T5 of
-the thesis~\thesis{\S7.2}. Three projections are implemented: the Poisson
+the thesis~\thesis{\S7.2}. Two projections are implemented: the Poisson
 projection of a shared velocity (one phase, or two phases with one velocity),
-and two projections of the intrinsic phase velocities: the conservative
-multidimensional ghost-fluid method (CMDGFM, the default)~\thesis{\S7.3} and a
-mimetic projection that minimises the kinetic energy of the correction
-subject to fitted normal-jump constraints, which replaces the thesis' mimetic
-gradient operator~\thesis{\S7.4} and is kept as a legacy option
-(\cref{sec:projection:mimetic}). The one-velocity and CMDGFM projections are
+and the projection of the intrinsic phase velocities by the conservative
+multidimensional ghost-fluid method (CMDGFM)~\thesis{\S7.3}. Both are
 incremental: the step first subtracts the gradient of the previous pressure
 from the predictor, and the projection, written in
 \cref{sec:projection:one,sec:projection:two,sec:projection:cmdgfm} for a
 predictor $\velo^{\stage{3}}$ and a pressure $\pres$, then solves for the
 pressure increment (\cref{sec:projection:pressure-update}). This chapter states the continuous
 constraints, the discrete constraints and pressure maps, the matrices and
-right-hand sides of the three systems with their gauges and the rules that
+right-hand sides of the two systems with their gauges and the rules that
 select the jump unknowns and rows, the properties that hold exactly
 (divergence and energy identities, momentum identity, diagonal dominance), and
 then the fully discrete projection stage: boundary values, the pressure
@@ -70,9 +66,8 @@ by the divergence theorem in each phase, with the outward normal $\inormal$
 of the liquid and $-\inormal$ of the gas at the interface
 (\cref{dev:projection:interface-work}). The pressure therefore does
 no work on a solenoidal field whose normal velocity is continuous at the
-interface. The thesis builds its mimetic gradient on this identity; the
-code's mimetic projection imposes normal continuity as a constraint of a
-kinetic-energy minimisation (\cref{sec:projection:mimetic}).
+interface. CMDGFM imposes normal continuity through its jump rows and a
+mixture-divergence target (\cref{sec:projection:cmdgfm}).
 
 \begin{deviation}{Sign of the interface pressure work}\label{dev:projection:interface-work}
 The thesis prints the interface term of~\cref{eq:projection:cont-energy}
@@ -86,6 +81,7 @@ audit with exact rational integration on a polynomial example
 (\code{proof_review/eq-projection-continuous/}). The thesis uses the identity
 only to motivate its mimetic gradient; its discrete
 statements~\thesis{eqs.~(7.38)--(7.44)} do not depend on the printed sign.
+The code does not implement that gradient operator.
 \end{deviation}
 
 \section{One velocity: the Poisson projection}\label{sec:projection:one}
@@ -278,8 +274,7 @@ floor and the face is open,
   \facesmix=\set{f\in\facesint}{\ffloor<\clampfrac{f}<1-\ffloor,\ \phaseaperture{\liq}{f}+\phaseaperture{\gas}{f}>0};
 \end{equation}
 the jump unknowns $\gradjump_f$ live on a subset $\facesjump\subseteq\facesmix$
-chosen by the projection, and $\gradjump_f=0$ elsewhere (except on the
-inactive faces of the mimetic projection, \cref{eq:projection:active}). The
+chosen by the projection, and $\gradjump_f=0$ elsewhere. The
 constraint is the cut-cell mixture divergence of the thesis~\thesis{eq.~(6.19)},
 \begin{equation}\label{eq:projection:mixture-divergence}
   \meas{\opencell{c}}\roundpar{\divmix(\velo^{\liq},\velo^{\gas})}_c
@@ -349,7 +344,7 @@ symmetric positive definite, and for every component $\compcells$
 \end{equation}
 because the faces between two components are closed and carry no phase
 aperture. Summing the pressure rows of~\cref{eq:projection:cmdgfm-system}
-or~\cref{eq:projection:kkt} over a component therefore gives zero on the
+over a component therefore gives zero on the
 left (the constant of the component is a null vector of $\stifftv$) and
 $-1/\dt$ times the boundary flux of the component on the right: the dropped
 row holds as soon as the other rows of its component hold if that flux
@@ -360,7 +355,7 @@ Face data \srcsym{src/two_phase/projection/common.jl}{_projection_face_data}~\cr
 (\code{zeta_liquid}, \code{zeta_gas} are $\gfmthing^{\phase}$, \code{coupling}
 is $\apgfm{}$, \code{relative_mass} is $\redmass{}$); phase gradients
 \srcsym{src/two_phase/projection/common.jl}{_projection_gradient_core!}~\cref{eq:projection:phase-gradient},
-public as \apifun{cmdgfm_gradient!} and \apifun{mimetic_gradient!};
+public as \apifun{cmdgfm_gradient!};
 correction \srcsym{src/two_phase/projection/common.jl}{_projection_correct_phase_velocities!};
 mixture flux \srcsym{src/two_phase/projection/cmdgfm_cache.jl}{_cmdgfm_cell_flux!}~\cref{eq:projection:mixture-divergence};
 gauge \srcsym{src/two_phase/projection/common.jl}{_projection_gauge_partition!};
@@ -626,257 +621,10 @@ and operator of the one-velocity pressure solver are shared. Tests:
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM block-preconditioned BiCGSTAB}.
 \end{implnote}
 
-\section{Mimetic projection}\label{sec:projection:mimetic}
-The mimetic projection keeps a jump unknown on almost every mixed face and
-chooses the correction of least kinetic energy among those that satisfy the
-mixture constraint and a set of fitted normal-jump constraints; its optimality
-conditions are a symmetric three-block saddle-point (KKT) system.
-It is a legacy option, kept unchanged for comparison: an absolute projection
-that solves for the whole pressure in every step, without the incremental form
-and the reference step of \cref{sec:projection:pressure-update}, so that very
-short steps still give pressure spikes through its rows; it does not preserve
-hydrostatic rest (\cref{dev:projection:hydrostatic}, \issue{76}). The frozen
-interface fluxes of \cref{sec:vof:frozen} with the CMDGFM projection are the
-main two-velocity method.
-
-\emph{Active and inactive faces.} A mixed face is active if both of its cells
-are uncut up to the fraction floor, both phases have a relative mass of at
-least $\activefrac$ and the face is open,
-\begin{equation}\label{eq:projection:active}
-  \begin{gathered}
-  \facesjump=\set{f\in\facesmix}{\openfrac{c}\ge1-\ffloor\ \text{for}\ c\in\cellset{f},\
-    \frac{\min(\facemass{\liq}{f},\facemass{\gas}{f})}{\facemass{}{f}}\ge\activefrac,\
-    \phaseaperture{\liq}{f}+\phaseaperture{\gas}{f}>\ffloor},\\
-  \facesinactive=\facesmix\setminus\facesjump,
-  \end{gathered}
-\end{equation}
-($\activefrac=10^{-6}$ by default), and on the inactive faces the jump is
-removed:
-\begin{equation}\label{eq:projection:inactive}
-  \gradjump_f=\frac{\jump{\velo^{\stage{3}}}_f}{\dt},\qquad
-  \jump{\velo^{\timelevel{n+1}}}_f=0\qquad(f\in\facesinactive).
-\end{equation}
-Next to a cut cell the two phases therefore move with one velocity; the faces
-outside $\facesmix$ keep $\gradjump_f=0$.
-
-\emph{Minimisation.} Let $\kktD=\diag{\redmass{f}\opendualvol{f}}_{f\in\facesjump}$
-($\opendualvol{f}=\dualvol{f}$ without solid) and let $\kktN$ be the fitted
-constraint rows below. By~\cref{eq:projection:decomposition} the kinetic
-energy of a correction $(\delta\onevelo,\delta\jump{\velo})$ in the metric
-$\kinmetric{\twocoef}$ of~\cref{eq:projection:one-energy} for the common part
-and the reduced masses for the jump is
-\begin{equation}\label{eq:projection:mimetic-min}
-  \energydeficit=\tfrac12\norm{\delta\onevelo}^2_{\kinmetric{\twocoef}}
-  +\tfrac12\sum_{f\in\facesjump}\redmass{f}\opendualvol{f}\,\delta\jump{\velo}_f^2 ,
-\end{equation}
-and the projection minimises $\energydeficit$ over all corrections of
-$\onevelo$ on the faces with $\twocoef_f>0$ and of the jump on $\facesjump$
-(the jump on $\facesinactive$ given by~\cref{eq:projection:inactive}, zero
-elsewhere), subject to $\divmix(\velo^{\timelevel{n+1}})=0$ in $\cellsret$
-and $\kktN\jump{\velo^{\timelevel{n+1}}}_{\facesjump}=0$. Its first-order
-conditions, with the multipliers $-\dt\,\pres$ of the mixture constraint and
-$\dt\,\kktmult$ of the rows, give
-$\delta\onevelo=-\dt\forcemaptv\jumpmat\pres$ (by~\cref{eq:projection:one-energy},
-the gradient is the Riesz representative of $\apermat\jumpmat$),
-$\delta\jump{\velo}=-\dt\gradjump$, and the KKT system
-\begin{equation}\label{eq:projection:kkt}
-  \begin{bmatrix}
-    -\kktS & \kktC & 0\\
-    \kktC^{\transpose} & \kktD & \kktN^{\transpose}\\
-    0 & \kktN & 0
-  \end{bmatrix}
-  \begin{bmatrix}\pres_{\cellsret}\\ \gradjump_{\facesjump}\\ \kktmult\end{bmatrix}
-  =\frac{1}{\dt}
-  \begin{bmatrix}
-    \rhsvec_{\cellsret}\\
-    0\\
-    \kktN\jump{\velo^{\stage{3}}}_{\facesjump}
-  \end{bmatrix},
-  \qquad
-  \kktC=-\jumpmat_{\facesjump\cellsret}^{\transpose}\diag{\apgfm{}}_{\facesjump},
-\end{equation}
-with
-$\rhsvec_c=\meas{\opencell{c}}\divmix(\velo^{\stage{3}})_c
-+\roundpar{\jumpmat_{\facesinactive\cellsret}^{\transpose}\diag{\apgfm{}}_{\facesinactive}\jump{\velo^{\stage{3}}}_{\facesinactive}}_c$
-for $c\in\cellsret$.
-The first row is~\cref{eq:projection:mixture-update} with the inactive jumps
-moved to the right-hand side, the third is
-$\kktN\jump{\velo^{\timelevel{n+1}}}_{\facesjump}=0$, and the second is jump
-stationarity, $\kktD\gradjump=\diag{\apgfm{}}\jumpmat\pres-\kktN^{\transpose}\kktmult$.
-The matrix is symmetric and indefinite; it is nonsingular when $\kktS$ is
-(\cref{eq:projection:gauge}) and the rows of $\kktN$ are independent, which
-the rank selection below ensures. Since every admissible end-of-step
-velocity satisfies the homogeneous constraints, the minimiser is orthogonal
-to its correction: with
-$E(\velo)=\norm{\onevelo}^2_{\kinmetric{\twocoef}}+\sum_f\redmass{f}\opendualvol{f}\jump{\velo}_f^2$
-over the faces with both phases,
-\begin{equation}\label{eq:projection:mimetic-energy}
-  E\roundpar{\velo^{\stage{3}}}=E\roundpar{\velo^{\timelevel{n+1}}}+E\roundpar{\velo^{\timelevel{n+1}}-\velo^{\stage{3}}}
-\end{equation}
-for an exact solution with impermeable boundary faces (vanishing boundary
-values), up to
-the leftover $-2\dt\sum_{f}\apgfm{f}\jump{\velo^{\timelevel{n+1}}}_f(\jumpmat\pres)_f$
-by which the left-hand side exceeds the right-hand side, summed over the faces
-that carry both phases but are not in $\facesmix$ (a staggered fraction within
-$\ffloor$ of $0$ or $1$ without being $0$ or $1$). The leftover is zero when
-$\apgfm{f}\jump{\velo}_f=0$ there, as on the fixtures of
-\cref{tab:projection:counts}, and amounts to $7\times10^{-4}$ of
-$E(\velo^{\stage{3}})$ for $\ffloor=0.1$ in the derivation audit
-(\code{proof_review/eq-projection-kkt/}). With nonzero boundary values the
-left-hand side also exceeds the right-hand side by the boundary pressure work
-$2\dt\sum_{f\in\facesbnd}\fside{f}\meas{f}\roundpar{\phaseaperture{\liq}{f}\velo^{\liq}_f+\phaseaperture{\gas}{f}\velo^{\gas}_f}\pres_{\cbnd{f}}$,
-as with one velocity~\cref{eq:projection:one-energy}, even when the boundary
-flux of every component vanishes. The statistic \code{energy_identity_error} is
-$2\abs{\langle\velo^{\timelevel{n+1}},\velo^{\timelevel{n+1}}-\velo^{\stage{3}}\rangle}$,
-the defect of~\cref{eq:projection:mimetic-energy} as computed by the code,
-boundary work included.
-The kinetic energy is not conserved: the projection removes the
-energy of its correction, like the one-velocity projection, and
-by~\cref{eq:projection:cont-energy} this is what a projection that enforces
-normal continuity should do. The momentum identity~\cref{eq:projection:phase-identities}
-holds as for the CMDGFM.
-
-\emph{Smoothed rows} (\code{:joint_smoothed}, the default). The rows sit at
-cells. With the integrated liquid-aperture vector, the thesis' interface area
-vector up to the sign~\thesis{eq.~(2.43)},
-\begin{equation}\label{eq:projection:aperture-vector}
-  \apvec{c}=\sum_{f\in\faceset{c}}\orient{c}{f}\,\meas{f}\,\phaseaperture{\liq}{f}\,\fnormal{f}
-  =\meas{c}\,\divh\roundpar{\phaseaperture{\liq}{}\fnormal{}}_c
-\end{equation}
-(boundary faces with $\fside{f}$), and its one-ring sum
-$\apvecs{c}=\apvec{c}+\sum\apvec{c'}$ over the face neighbours $c'$ (once per
-shared face) that are mixed and have $\apvec{c}\cdot\apvec{c'}>0$, a row
-exists for every mixed cell, $\ffloor<\condfrac{\liq}{c}<1-\ffloor$, with
-$\openfrac{c}\ge1-\ffloor$ and $\abs{\apvec{c}}>64\machineeps\max(\cellmax{c},1)$.
-Its moments and base rows are
-\begin{equation}\label{eq:projection:smoothed-rows}
-  \begin{gathered}
-  \rownormal{c}=\abs{\apvec{c}}\frac{\apvecs{c}}{\abs{\apvecs{c}}},\qquad
-  \rowtangent{c}=\roundpar{-\rownormal{c,2},\rownormal{c,1}},\\
-  (\kktN^{0}\jump{\velo})_c=\sum_{k=1}^{2}\rownormal{c,k}\,\frac{\sum_{f\in\faceset{c}\cap\facesaxis{k}\cap\facesjump}\meas{f}\,\jump{\velo}_f}{\sum_{f\in\faceset{c}\cap\facesaxis{k}\cap\facesjump}\meas{f}},
-  \end{gathered}
-\end{equation}
-and $\kktT^0$ the same with $\rowtangent{c}$: the area-weighted cell average
-of each Cartesian component of the jump over the active faces of $c$, dotted
-with the row normal, an approximation of
-$\abs{\interface_c}\inormal\cdot\jump{\Velo}$ up to the sign. A component
-$k$ with $\abs{\rownormal{c,k}}>64\machineeps\abs{\apvec{c}}$ needs an active
-face of axis $k$ on $c$, otherwise the row is unresolved; the scale of the row
-in the normal defect is $\rowscale{c}=\abs{\apvec{c}}$, approximately the
-interface length in the cell (to $3\times10^{-13}$ for a shallow planar
-interface, within $6\,\%$ for a steep one and $26\,\%$ on the curved drop of
-the derivation audit, \code{proof_review/eq-projection-mimetic-rows/}): a
-normalisation, not a length measurement.
-
-\emph{Face rows} (\code{:joint_face}). The rows sit at active faces that the
-CMDGFM classification resolves with $\jumpbeta_f\ge\half$ and whose transverse
-faces are all active,
-\begin{equation}\label{eq:projection:face-rows}
-  (\kktN^{0}\jump{\velo})_f=\jump{\velo}_f+\normratio{f}\sum_{h\in\transfaces{f}}\transweight{f}{h}\,\jump{\velo}_h,\qquad
-  \rowscale{f}=\sqrt{1+\normratio{f}^2},
-\end{equation}
-the CMDGFM row~\cref{eq:projection:cmdgfm-row} with $\jumpbeta=1$ and
-without inference; faces with $\jumpbeta_f<\half$ are left to the jump
-stationarity. An active face with an unresolved CMDGFM stencil gets a row
-only if the face aperture vector
-$\apvec{f}=(\cellwidth{\cminus{f}}{k}\apvec{\cminus{f}}+\cellwidth{\cplus{f}}{k}\apvec{\cplus{f}})/(\cellwidth{\cminus{f}}{k}+\cellwidth{\cplus{f}}{k})$
-is nearly aligned with the face,
-$\abs{\apvec{f,t}}\le\min(1,\cellmax{\cminus{f}}/\min_{k'}\domextent{k'})\abs{\apvec{f}}$:
-then $(\kktN^0\jump{\velo})_f=(\apvec{f,k}\jump{\velo}_f+\apvec{f,t}\sum_h\mixweight{h}\jump{\velo}_h/\sum_h\mixweight{h})/\abs{\apvec{f}}$
-over the active faces $h$ of axis $t$ in the vertex patches of $f$ (or its
-first term alone if $\abs{\apvec{f,t}}\le64\machineeps\abs{\apvec{f}}$; no
-row if $\abs{\apvec{f,k}}\le\sqrt{\machineeps}\abs{\apvec{f}}$ or there is no
-such face), with $\rowscale{f}=1$. The moments are the row of
-$\kktN^0\constjump$ and its rotation, $\rownormal{f}$ and $\rowtangent{f}$,
-with the constant-jump samples $\constjump_{f,k}=1$ if $\faxis{f}=k$ and $0$
-otherwise: a constant vector jump $\jump{\Velo}$ has the face jumps
-$\constjump\jump{\Velo}$.
-
-\emph{Joint fit.} The base rows only fix where the rows are and what moments
-they must reproduce; the coefficients are refitted on local patches. The
-support $\patchsupport{r}$ of row $r$ collects the faces of all rows within
-$\patchradius$ steps of $r$ in the graph in which two rows are adjacent if
-their base rows $\kktN^0$ or $\kktT^0$ share a face. On it, the geometric
-base rows give the faces of axis $k$ the weights
-$\geoweight{f}\propto\big(\sum_{i=1}^{2}(\pos{f}-\rowpos{r})_i^2/\cellwidth{c_r}{i}^2+\tfrac{1}{16}\big)^{-1}$
-(nearest periodic image), normalised to sum one per axis, where $\rowpos{r}$
-is the centre of the row's cell or face and $c_r$ its cell (the cell
-$\cminus{f}$ of a face row): $\fitbase=(\rownormal{r,\faxis{f}}\geoweight{f})_{f}$
-for a normal row and $(\rowtangent{r,\faxis{f}}\geoweight{f})_{f}$ for a
-tangent row. The fitted row $\fitrow$ (row $r$ of $\kktN$ or of $\kktT$,
-restricted to $\patchsupport{r}$) is
-\begin{equation}\label{eq:projection:joint-fit}
-  \begin{gathered}
-  \fitrow=\fitorigin+\fitscale\,\fitbasis\fitcoef,\qquad
-  \fitorigin=\operatorname*{arg\,min}_{\fitrow\constjump=\fitmoment}\norm{\fitrow-\fitbase}_2,\qquad
-  \fitscale=\min\curlypar{1,\frac{\fitcap\norm{\fitbase}_2}{\norm{\fitbasis\fitcoef}_2}},\\
-  \fitcoef=\operatorname*{arg\,min}_{\fitcoef}\ \sum_{\fitobs}\frac{w_{\fitobs}}{\norm{\fitobs}_2^2}\roundpar{\fitobs\cdot(\fitorigin+\fitbasis\fitcoef)-\fittarget}^2+\tfrac{1}{10}\norm{\fitcoef}_2^2,
-  \end{gathered}
-\end{equation}
-with the row's moment $\fitmoment=\rownormal{r}$ or $\rowtangent{r}$
-reproduced exactly, $\fitbasis$ an orthonormal basis of the null space of
-these two moment conditions on the support, and the observations $\fitobs$
-with their weights $w_{\fitobs}$ and targets $\fittarget$:
-\begin{itemize}
-\item for tangent rows, with $w_{\fitobs}=\fitpressure$, the four pressure
-  observations, the rows of $\pressobs_r$: for $j=1,2$ the entries
-  $\apgfm{f}\meas{f}(\disp{f})_j/\kktD_f$ with
-  $\fittarget=(1/\dens^{\gas}-1/\dens^{\liq})\rowtangent{r,j}$, and for the
-  two phase-wise linear modes $\kinkmode{\liq}_c=\condfrac{\liq}{c}\rowdist{c}$
-  and $\kinkmode{\gas}_c=(1-\condfrac{\liq}{c})\rowdist{c}$ the entries
-  $\apgfm{f}\meas{f}(\kinkmode{\phase}_{\cplus{f}}-\kinkmode{\phase}_{\cminus{f}})/\kktD_f$
-  with $\fittarget=0$. By jump stationarity without multipliers,
-  $\gradjump=\kktD^{-1}\diag{\apgfm{}}\jumpmat\pres$; for an affine pressure the
-  tangent observation should then be the jump of the scaled tangential
-  derivative, $\jump{\dens^{-1}}\rowtangent{r}\cdot\gradient\pres$~\thesis{eq.~(7.20)};
-\item with $w_{\fitobs}=\fitcomm$ and $\fittarget=0$, the rows of
-  $\kktN\kktD^{-1}$ (for a tangent row) or $\kktT\kktD^{-1}$ (for a normal row)
-  that overlap $\patchsupport{r}$, so that $\kktT\kktD^{-1}\kktN^{\transpose}$, the
-  effect of the multipliers on the tangential observation, is small.
-\end{itemize}
-A fit is accepted if it is finite and reproduces the moment to $10^{-8}\max(\norm{\fitmoment}_\infty,1)$;
-otherwise the row keeps $\fitbase$ (a fallback, counted). The fit alternates
-$\fitsweeps$ times: all tangent rows against the current normal rows, then
-all normal rows against the new tangent rows, each from its base row. Only
-the fitted normal rows enter~\cref{eq:projection:kkt}; $\kktT$ is not a
-constraint. Since the fitted rows reproduce the moments, a constant jump that
-satisfies the base rows satisfies the fitted ones; the commutation
-$\kktT\kktD^{-1}\kktN^{\transpose}\approx0$ and the pressure observations hold
-only approximately, which affects the accuracy but not the symmetry,
-momentum or energy identities, because the same $\kktN$ appears in the
-constraint and in the stationarity row.
-
-\emph{Rank and fallback.} The rows are normalised in the metric of the
-multiplier Schur complement, $\kktN_r\kktD^{-1/2}/\norm{\kktN_r\kktD^{-1/2}}_2$,
-and a sparse QR with column pivoting of the transpose of the normalised
-matrix (SuiteSparseQR, tolerance $\ranktol$) gives the numerical rank; the
-first rank pivot rows, in their original order, are retained and the
-dependent rows are dropped from~\cref{eq:projection:kkt}. All candidate rows
-still enter the normal defect~\cref{eq:projection:defects}. A support without
-faces of one axis cannot carry that moment: the row keeps its base row and is
-counted as unresolved and as a fallback; unresolved locations get no row.
-With no rows at all, the jump is determined by the energy minimisation and
-the mixture constraint alone.
-
-\emph{Checks} (\code{mimetic_check}). For both variants on the four fixtures
-of \cref{tab:projection:counts}, the assembled matrix is exactly symmetric;
-the fitted rows reproduce the moments of the base rows to $\chkMimMoment$;
-after one projection at $\presstol=10^{-10}$ the inactive jumps are below
-$\chkMimInactive$ and the energy identity~\cref{eq:projection:mimetic-energy},
-with independently computed masses and the code's metric, holds to
-$\chkMimEnergy$ of $E(\velo^{\stage{3}})$, while the projection removes
-$\chkMimRemovedMin$--$\chkMimRemovedMax\,\%$ of it. The largest normalised
-entry of $\kktT\kktD^{-1}\kktN^{\transpose}$ is
-$\chkMimCommutingMin$--$\chkMimCommutingMax$, and
-$\chkMimPressureMin$--$\chkMimPressureMax\,\%$ of the rows meet the pressure
-observations with an error, relative to $\rowscale{r}\max_{\phase}(1/\dens^{\phase})$,
-of at most the largest width of their cell divided by the largest domain
-extent (the numbers in parentheses in the table; the code's
-\code{pressure_commuting_constraint_rows}).
 
 \begin{table}
   \centering\small
-  \caption{Unknowns and rows of the two-velocity projections on the drop
+  \caption{Unknowns and rows of the CMDGFM projection on the drop
     fixtures (a drop of radius $1.6$ centred at $(4.3,2.3)$ in the walled
     box of \cref{ch:forces}, densities $(1000,1)$; composite: the right half
     refined once; with solid: resting on the sloped solid $y<0.9+0.1x$),
@@ -890,85 +638,15 @@ extent (the numbers in parentheses in the table; the code's
     & no solid & solid & no solid & solid\\
     \midrule
     mixed faces $\#\facesmix$ & \chkTabMixed\\
-    \multicolumn{5}{@{}l}{\emph{CMDGFM}}\\
-    \quad resolved rows $\#\facesjump$ & \chkTabResolved\\
+    resolved rows $\#\facesjump$ & \chkTabResolved\\
     \quad of which $\jumpbeta_f<1$ & \chkTabInferred\\
     \quad of which zero diagonal margin & \chkTabTight\\
     \quad unresolved by rule 2 & \chkTabNeighbour\\
     \quad unresolved by rules 4, 5 & \chkTabOtherUnresolved\\
-    \quad BiCGSTAB iterations & \chkTabCmdIterations\\
-    \multicolumn{5}{@{}l}{\emph{Mimetic}}\\
-    \quad active faces $\#\facesjump$ & \chkTabActive\\
-    \quad inactive next to a cut cell & \chkTabEmbedded\\
-    \quad inactive by mass or aperture & \chkTabMass\\
-    \quad rows \code{:joint_smoothed} & \chkTabRowsSmoothed\\
-    \quad rows \code{:joint_face} & \chkTabRowsFace\\
-    \quad MINRES iterations (smoothed/face) & \chkTabMimIterations\\
+    BiCGSTAB iterations & \chkTabCmdIterations\\
     \bottomrule
   \end{tabular}
 \end{table}
-
-\begin{deviation}{Mimetic gradient}\label{dev:projection:mimetic}
-The thesis derives its mimetic gradient operator from momentum and
-kinetic-energy conservation~\thesis{eqs.~(7.29), (7.30), (7.44)}: the
-constraint $\divh\roundpar{(\phaseaperture{\gas}{}-\phaseaperture{\liq}{})\jump{\velo}}=0$~\thesis{eq.~(7.38)} and an
-explicit Helmholtz decomposition of the jump into the gradient of a cell
-potential and the curl of an edge potential, both scaled by the aperture
-jump, solved for in two systems~\thesis{eqs.~(7.40), (7.49)}. The code keeps the thesis'
-form of the phase gradient~\thesis{eq.~(7.48)} but obtains the jump by
-minimising the kinetic energy of the correction~\cref{eq:projection:mimetic-min}
-under the mixture constraint and locally fitted normal-jump rows, in one
-symmetric KKT system~\cref{eq:projection:kkt} in $(\pres,\gradjump,\kktmult)$;
-there are no potentials and no edge (curl) space. It removes the jump on the
-inactive faces next to cut cells and of small relative mass, and its rows
-reproduce constant jumps exactly but commute with the pressure and the
-multipliers only approximately.
-\end{deviation}
-
-\begin{deviation}{Hydrostatic rest with the mimetic projection}\label{dev:projection:hydrostatic}
-In the cases of \cref{sec:forces:two-velocity}, the CMDGFM jump unknowns stay
-zero for equal phase increments and the CMDGFM returns the hydrostatic rest
-state to $\chkStepCmdgfm$--$\chkStepCmdgfmSolidAmr$ of $\dt\abs{\gravacc}$,
-with or without a solid. The mimetic projection does not: one inviscid step
-from the hydrostatic rest state of \cref{sec:forces:gravity} leaves a velocity
-of $\chkStepMimeticUniform$ (uniform mesh) and $\chkStepMimeticAmr$
-(composite mesh) of $\dt\abs{\gravacc}$ without solid and
-$\chkStepMimeticSolidAmr$ on the composite mesh with a solid;
-\code{:joint_face} is balanced only on the uniform mesh without solid
-($6\times10^{-12}$) and leaves $0.09$ on the composite one, and an interface
-on a grid line leaves $1.0$ (uniform) and $1.8$ (composite) with the default
-variant (\issue{76}). A static drop on a composite mesh keeps about $600$
-times the parasitic velocity of the CMDGFM. The cause is not derived; it is
-under investigation (\issue{76}).
-\end{deviation}
-
-\begin{implnote}
-\apitype{MimeticProjection}\code{(; variant=:joint_smoothed, preconditioner=:cholesky, active_mass_fraction=1e-6, rank_tolerance=nothing, patch_radius=2, pressure_weight=1000, commutator_weight=1000, correction_cap=1, fit_sweeps=3)}
-with \apitype{MimeticProjectionSolver} and \apitype{MimeticProjectionWorkspace};
-\code{rank_tolerance=nothing} means $\ranktol=\sqrt{\machineeps}$, and
-\apifun{project!}\code{(velocity, pressure, solver, dt, workspace; tolerance=sqrt(eps(T)), max_iterations=500, check_symmetry=false)}
-returns \apitype{MimeticProjectionStats} and overwrites \code{pressure} with
-the solution. Active faces
-\srcsym{src/two_phase/projection/mimetic_projection.jl}{_local_active_faces}~\cref{eq:projection:active};
-system \srcsym{src/two_phase/projection/mimetic_projection.jl}{_assemble_mimetic_system!}~\cref{eq:projection:kkt};
-rows \srcsym{src/two_phase/projection/mimetic_smoothed.jl}{_local_aperture_normal_tangent_reconstruction}~\cref{eq:projection:aperture-vector,eq:projection:smoothed-rows}
-with \srcsym{src/two_phase/projection/mimetic_projection.jl}{_local_integrated_aperture_vectors}
-and \srcsym{src/two_phase/projection/mimetic_smoothed.jl}{_local_one_ring_aperture_vectors},
-\srcsym{src/two_phase/projection/mimetic_face_rows.jl}{_local_joint_face_rows}~\cref{eq:projection:face-rows};
-fit \srcsym{src/two_phase/projection/mimetic_joint_fit.jl}{_local_joint_constraint_operator}
-and \srcsym{src/two_phase/projection/mimetic_joint_fit.jl}{_local_joint_soft_row!}~\cref{eq:projection:joint-fit};
-rank \srcsym{src/two_phase/projection/mimetic_projection.jl}{_local_independent_rows}.
-MINRES~\cite{paige1975} (Krylov.jl) with the symmetric positive definite
-block-diagonal preconditioner with the blocks $\kktS$, $\kktD$ and
-$\kktN\kktD^{-1}\kktN^{\transpose}$, the last shifted by $256\machineeps$ times
-its largest diagonal entry (at least one), factorised by Cholesky (\code{:cholesky}) or approximated by
-\code{:amg}, \code{:ilu}, \code{:ichol}. Tests:
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Three-block mimetic pressure projection},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic pressure projection on an AMR interface},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection with embedded geometry},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Jointly fitted mimetic projection variants},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Mimetic projection configuration}.
-\end{implnote}
 
 \section{Fully discrete projection stage}\label{sec:projection:time}
 The projection is an algebraic problem for the given predictor and $\dt$;
@@ -1007,7 +685,7 @@ equilibrium. The two-velocity projection retains its phase boundary values.
 Its boundary preparation rejects a nonzero net phase flux when no
 \apitype{Outflow} supplies a balancing correction; standalone projections
 expect already compatible boundary data
-(\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Two-velocity open boundary compatibility}).
+(\testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{Two-velocity open boundary compatibility}).
 Two-velocity transport supports impermeable and periodic boundaries only
 (\cref{ch:vof-transport}).
 The explicit initial-data contract is tested by
@@ -1167,24 +845,14 @@ proposal moves the drag by $1.8$--$8.5$ ($0.67$--$4.9$) and the lift by
 $2.6$--$4.0$ ($0.63$--$3.1$) times their change over a full step, alternating
 with the parity of the step (\issue{90}; the test asserts at most $12$).
 
-\emph{Mimetic projection.} The legacy mimetic projection is absolute: its
-predictor is $\velo^{\phase,\stage{3}}$ without the old pressure, since a
-common gradient is not the whole phase-gradient correction
-of~\cref{eq:projection:kkt}; its solution $\pres$ is the whole pressure
-$\pres^{\timelevel{n+1}}$, zero at the anchor cells, and replaces the
-physical pressure; and it has no reference step: its mixture, normal-jump and
-inactive-jump rows divide the defects of the predictor by the actual $\dt$,
-so that very short steps still produce pressure spikes (\issue{90}).
-
 \emph{First guess.} The one-velocity Krylov iteration starts from a zero
 increment. The CMDGFM with its block preconditioner tries the zero increment
 and, if the mesh topology is unchanged, the increment of its previous
 projection (relative to the anchors), each with the jump that the ILU of
 $\jumpblock$ assigns to it, and starts from a candidate only if it lowers the
 residual 2-norm and lowers the largest residual defect by at least $5\,\%$
-relative to the best candidate so far (initially the zero solution); the
-mimetic projection starts from zero. The converged result depends on the
-first guess only within the tolerance.
+relative to the best candidate so far (initially the zero solution). The
+converged result depends on the first guess only within the tolerance.
 
 \begin{deviation}{Incremental projection and reference step}\label{dev:projection:incremental}
 The thesis' step T5 solves for the whole pressure in every
@@ -1228,9 +896,7 @@ last step),
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{CMDGFM incremental projection satisfies the coupled system},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{CMDGFM shortened projection retains only the mixture target},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{CMDGFM moving interface enforces the actual short-step jump},
-\testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Two-velocity short-step reference flux},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Mimetic absolute pressure projection},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Mimetic stepping uses the absolute momentum predictor}.
+\testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Two-velocity short-step reference flux}.
 \end{implnote}
 
 \subsection{Defects and tolerance}\label{sec:projection:defects}
@@ -1244,15 +910,11 @@ With two velocities the defects are measured on the end-of-step velocity,
 \begin{equation}\label{eq:projection:defects}
   \begin{gathered}
   \defect{V}=\dt\max_{c:\,\meas{\opencell{c}}>0}\abs{\roundpar{\divmix(\velo^{\timelevel{n+1}})}_c},\qquad
-  \defect{\eta}=\max_{f\in\facesjump}\frac{\dt\abs{\normaljump{f}(\velo^{\timelevel{n+1}})}}{h_f}\ \ \text{(CMDGFM)},\\
-  \defect{\eta}=\max\curlypar{\max_{r}\frac{\dt\abs{(\kktN\jump{\velo^{\timelevel{n+1}}})_r}}{\rowscale{r}h_r},\
-    \max_{f\in\facesinactive}\frac{\dt\abs{\jump{\velo^{\timelevel{n+1}}}_f}}{h_f}}\ \ \text{(mimetic)},
+  \defect{\eta}=\max_{f\in\facesjump}\frac{\dt\abs{\normaljump{f}(\velo^{\timelevel{n+1}})}}{h_f},
   \end{gathered}
 \end{equation}
 Here $h_f$ is the smallest cell edge of either cell adjacent to face $f$,
-using the fine-cell minimum edge at a coarse--fine face; $h_r$ is $h_f$ for a
-face row and the smallest edge of the cell for a smoothed cell row. The
-mimetic maximum includes all candidate rows, including the dependent ones.
+using the fine-cell minimum edge at a coarse--fine face.
 The CMDGFM converges if $\defect{V}$, $\defect{\eta}$ and the residual
 defects $\dt^2\max_{c\in\cellsret,\,\meas{\opencell{c}}>0}\abs{\resvec_c}/\meas{\opencell{c}}$
 and $\dt^2\max_{f\in\facesjump}\abs{\resvec_f}/h_f$ of~\cref{eq:projection:cmdgfm-system},
@@ -1262,21 +924,14 @@ relative to the retained share $(1-\dt/\dtref)$ of the inherited mixture
 divergence while the reported $\defect{V}$ and $\defect{\eta}$ remain those of
 the end-of-step velocity; it restarts BiCGSTAB on the true residual, within
 its iteration budget, until the residual defects are met
-(\cref{sec:solvers:projection}). The mimetic projection converges
-if $\defect{V}$, $\defect{\eta}$ and the tangential defect
-$\defect{\tau}=\dt^2\max_{f\in\facesjump}\abs{\resvec_f}/(\facemass{}{f}\opendualvol{f}h_f)$
-of the jump rows are at most $\presstol$ and its pressure-row and normal
-multiplier-row residual defects are also at most $\presstol$. It restarts
-MINRES until all three block-row defects are met (the multiplier rows are
-divided by $\rowscale{r}h_r$ and multiplied by $\dt^2$). The normal and jump-row
+(\cref{sec:solvers:projection}). The normal and jump-row
 criteria previously compared dimensional velocities directly with the
 dimensionless tolerance; the length and time scaling above fixes that
 unit-dependent stopping rule (\issue{94}). Both Krylov systems are also
 nondimensionalised before iteration using the largest domain extent $L$ and
 density $\rho_0$: the pressure and gradient-jump scales are
-$\rho_0(L/\dt)^2$ and $L/\dt^2$. The mimetic system uses a symmetric
-congruence scaling, preserving MINRES symmetry; reported raw algebraic
-residual norms remain dimensional. Floating-point roundoff can still change
+$\rho_0(L/\dt)^2$ and $L/\dt^2$; reported raw algebraic residual norms
+remain dimensional. Floating-point roundoff can still change
 the iteration count of an unpreconditioned solve near convergence.
 \apifun{project!} and the field-level \apifun{step!} report a projection that
 misses its rules (\code{converged=false});
@@ -1286,11 +941,8 @@ misses its rules (\code{converged=false});
 \begin{implnote}
 Statistics \apitype{CMDGFMProjectionStats} (\code{mixture_volume_defect},
 \code{normal_velocity_defect}, \code{minimum_jump_diagonal_margin},
-\code{momentum_identity_error}, \code{underresolved_jump_rows}) and
-\apitype{MimeticProjectionStats} (also \code{tangential_defect},
-\code{energy_identity_error}, row counts); residual defects
-\srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_residual_defects}
-and \srcsym{src/two_phase/projection/mimetic_projection.jl}{_local_mimetic_residual_defects};
+\code{momentum_identity_error}, \code{underresolved_jump_rows}); residual
+defects \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_residual_defects};
 first guess \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_initial_solution!};
 boundary values \srcsym{src/operators/staggered_diffusion.jl}{enforce_velocity_boundary!},
 \srcsym{src/embedded/operators.jl}{enforce_geometry_no_slip!} and, for two
@@ -1301,7 +953,6 @@ the stage in \srcsym{src/single_phase/stepping.jl}{step!} and
 Tests: \testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{CMDGFM initial guesses preserve the converged projection},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{Two-velocity projection convergence is independent of physical units},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM dimensionless jump and residual defects},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Mimetic dimensionless active and inactive jump defects},
 \testsym{test/navier_stokes/navier_stokes.jl}{pressure failure reports convergence diagnostics}.
 \end{implnote}
 
@@ -1319,9 +970,9 @@ interface),
   \velo^{\phase}\leftarrow\velo^{\phase}-\dtprop\,\sgrad{\phase}(\presinc,\gradjump),
 \end{equation}
 where the potential $\presinc$ is solved in a scratch field that starts at
-zero: the transferred physical pressure is kept. The matrices of~\cref{eq:projection:cmdgfm-system,eq:projection:kkt}
-do not depend on the step and their right-hand sides scale with $1/\dtprop$,
-so $(\presinc,\gradjump,\kktmult)$ scales with $1/\dtprop$ and the corrected
+zero: the transferred physical pressure is kept. The matrix of~\cref{eq:projection:cmdgfm-system}
+does not depend on the step and its right-hand side scales with $1/\dtprop$,
+so $(\presinc,\gradjump)$ scales with $1/\dtprop$ and the corrected
 velocity does not depend on $\dtprop$; the step only sets the gauge of
 $\defect{V}=\dtprop\max\abs{\divmix}$, and the untruncated step keeps a step
 shortened to reach the end time from loosening the constraint for a resumed
@@ -1352,6 +1003,5 @@ called by \srcsym{src/navier_stokes/flow_simulation.jl}{step!} after
 \testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Regrid on a shortened final step},
 \testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Ordinary regrid tolerance is not tightened},
 \testsym{test/navier_stokes/high_level_api.jl}{regrid defects keep the transfer reference},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Mimetic absolute projection after regridding},
 \testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Fast phase velocities at regrid}.
 \end{implnote}

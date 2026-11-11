@@ -27,8 +27,7 @@ function TwoPhaseModel(
     )
     pressure_projection isa AbstractTwoVelocityProjection || throw(
         ArgumentError(
-            "pressure_projection must be MimeticProjection() or " *
-                "CMDGFMProjection()",
+            "pressure_projection must be a CMDGFMProjection()",
         ),
     )
     any(a -> interface.mesh.periodic[a] && !iszero(physics.gravity[a]), 1:2) &&
@@ -70,18 +69,6 @@ end
 # The intrinsic workspace is allocated lazily. Its transport schedule has the
 # same type as the already-constructed shared-velocity momentum schedule.
 # Regridding rebuilds this enclosing workspace with the new schedule types.
-function _two_velocity_projection_types(
-        ::CMDGFMProjection{P, O}, ::Type{T}, ::Type{M}, ::Type{F},
-    ) where {P, O, T, M, F}
-    return CMDGFMProjectionSolver{T, F, P, O}, CMDGFMProjectionWorkspace{T, M}
-end
-
-function _two_velocity_projection_types(
-        ::MimeticProjection{V, P, O}, ::Type{T}, ::Type{M}, ::Type{F},
-    ) where {V, P, O, T, M, F}
-    return MimeticProjectionSolver{T, V, F, P, O}, MimeticProjectionWorkspace{T, M}
-end
-
 function _two_velocity_workspace_type(
         model::TwoPhaseModel{T, M}, advection::A,
         momentum::MomentumAdvectionWorkspace{T, M, WX, WY},
@@ -91,8 +78,12 @@ function _two_velocity_workspace_type(
     Y = PhaseFaceScalar{2, T, M, PhaseFaceAdvectionScratch{T}, WY, F}
     N = TwoVelocityMomentumAdvectionWorkspace{T, M, X, Y, typeof(model.interface.geometry)}
     V = FaceVelocity{T, M}
-    S, W = _two_velocity_projection_types(model.pressure_projection, T, M, F)
-    return TwoVelocityFlowWorkspace{A, N, Tuple{V, V}, V, S, W}
+    projection = model.pressure_projection
+    S = CMDGFMProjectionSolver{
+        T, F, typeof(projection.preconditioner),
+        typeof(projection.preconditioner_options),
+    }
+    return TwoVelocityFlowWorkspace{A, N, Tuple{V, V}, V, S, CMDGFMProjectionWorkspace{T, M}}
 end
 
 

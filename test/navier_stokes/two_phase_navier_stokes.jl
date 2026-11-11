@@ -102,7 +102,6 @@ end
             (
                 OneVelocityModel(),
                 TwoVelocityModel(pressure_projection = CMDGFMProjection()),
-                TwoVelocityModel(pressure_projection = MimeticProjection()),
             )
         ) do velocity_model
             FlowSimulation(

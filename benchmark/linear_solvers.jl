@@ -39,16 +39,12 @@ for (topology, mixed) in ("uniform" => false, "mixed" => true)
     ) evals = 1
 end
 
-function two_velocity_projection_fixture(method)
+function two_velocity_projection_fixture()
     mesh = benchmark_mesh(false)
     interface = InterfaceField(mesh, benchmark_levelset; lipschitz = 2)
     density = (1000.0, 1.0)
-    solver = method isa CMDGFMProjection ?
-        CMDGFMProjectionSolver(interface; density) :
-        MimeticProjectionSolver(interface; density)
-    workspace = method isa CMDGFMProjection ?
-        CMDGFMProjectionWorkspace(solver) :
-        MimeticProjectionWorkspace(solver)
+    solver = CMDGFMProjectionSolver(interface; density)
+    workspace = CMDGFMProjectionWorkspace(solver)
     velocity = (
         FaceVelocity(mesh, benchmark_velocity),
         FaceVelocity(
@@ -69,9 +65,5 @@ end
 
 SUITE["two-velocity projection"]["CMDGFM"] =
     @benchmarkable project_two_velocity!(case) setup = (
-    case = two_velocity_projection_fixture(CMDGFMProjection())
-) evals = 1
-SUITE["two-velocity projection"]["mimetic"] =
-    @benchmarkable project_two_velocity!(case) setup = (
-    case = two_velocity_projection_fixture(MimeticProjection())
+    case = two_velocity_projection_fixture()
 ) evals = 1

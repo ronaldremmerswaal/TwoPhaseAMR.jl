@@ -11,35 +11,6 @@ mutable struct TwoVelocityFlowWorkspace{A, M, V, F, S, W}
     projection_workspace::W
 end
 
-function _two_velocity_projection_workspace(
-        field, density, projection::MimeticProjection,
-    )
-    solver = _mimetic_projection_solver(
-        field, projection.variant; density,
-        preconditioner = projection.preconditioner,
-        preconditioner_options = projection.preconditioner_options,
-        active_mass_fraction = projection.active_mass_fraction,
-        rank_tolerance = projection.rank_tolerance,
-        patch_radius = projection.patch_radius,
-        pressure_weight = projection.pressure_weight,
-        commutator_weight = projection.commutator_weight,
-        correction_cap = projection.correction_cap,
-        fit_sweeps = projection.fit_sweeps,
-    )
-    return solver, MimeticProjectionWorkspace(solver)
-end
-
-function _two_velocity_projection_workspace(
-        field, density, projection::CMDGFMProjection,
-    )
-    solver = CMDGFMProjectionSolver(
-        field; density, preconditioner = projection.preconditioner,
-        preconditioner_options = projection.preconditioner_options,
-    )
-    return solver, CMDGFMProjectionWorkspace(solver)
-end
-
-
 function _two_velocity_flow_workspace(
         model::TwoPhaseModel{T}, advection::WYAdvectionWorkspace,
     ) where {T}
@@ -58,9 +29,13 @@ function _two_velocity_flow_workspace(
     mixture_velocity = FaceVelocity(field.mesh, T)
     diffused_mixture = FaceVelocity(field.mesh, T)
     momentum = MomentumAdvectionWorkspace(field, old_velocity)
-    solver, projection_workspace = _two_velocity_projection_workspace(
-        field, model.density, model.pressure_projection,
+    projection = model.pressure_projection
+    solver = CMDGFMProjectionSolver(
+        field; density = model.density,
+        preconditioner = projection.preconditioner,
+        preconditioner_options = projection.preconditioner_options,
     )
+    projection_workspace = CMDGFMProjectionWorkspace(solver)
     return TwoVelocityFlowWorkspace(
         advection, momentum, old_velocity, convected,
         mixture_velocity, diffused_mixture, solver,
@@ -83,8 +58,7 @@ function _reconfigure_two_velocity_flow_workspace(state, model, advection)
     # Preserve Krylov and geometric templates across AMR. Topology-dependent
     # caches are validated against block keys at the next assembly.
     state isa TwoVelocityFlowWorkspace || return nothing
-    state.projection_solver isa Union{CMDGFMProjectionSolver, MimeticProjectionSolver} ||
-        return nothing
+    state.projection_solver isa CMDGFMProjectionSolver || return nothing
     mesh = model.interface.mesh
     for velocity in (
             state.old_velocity..., state.convected...,
@@ -106,16 +80,8 @@ function _reconfigure_two_velocity_flow_workspace(state, model, advection)
     # Old matrix indices no longer refer to this live mesh; never expose it
     # as a current assembled system before the next projection.
     work.matrix = spzeros(eltype(mesh.origin), 0, 0)
-    if work isa CMDGFMProjectionWorkspace
-        work.jump_block = spzeros(eltype(mesh.origin), 0, 0)
-        empty!(work.stencils)
-    else
-        work.block_preconditioner = spzeros(eltype(mesh.origin), 0, 0)
-        work.constraint_matrix = spzeros(eltype(mesh.origin), 0, 0)
-        work.active_faces = Int[]
-        empty!(work.constraint_locations)
-        empty!(work.constraint_scales)
-    end
+    work.jump_block = spzeros(eltype(mesh.origin), 0, 0)
+    empty!(work.stencils)
     # The visible indices may alias the cache's gauge/active buffers. Detach
     # instead of clearing the cached state if a rebuild retains the topology.
     work.pressure_indices = Int[]
@@ -134,8 +100,7 @@ function _project_two_velocity!(
     )
     projection = state.projection_solver
     model = solver.two_phase
-    compatible = projection isa CMDGFMProjectionSolver &&
-        isnothing(solver.geometry)
+    compatible = isnothing(solver.geometry)
     if compatible
         pressure_prepared || _refresh_pressure_substep!(solver, workspace, model)
         shared = nothing
@@ -173,12 +138,10 @@ function _project_regridded_two_velocity!(
     state.projection_solver isa CMDGFMProjectionSolver && reconstruct!(model.interface)
     _enforce_phase_velocity_boundary!(velocity, solver, time)
     # Preserve transferred physical pressure. CMDGFM needs zero scratch for an
-    # absolute projection; the legacy mimetic solve overwrites its scratch.
+    # absolute projection.
     correction_pressure = workspace.projection.divergence
-    if state.projection_solver isa CMDGFMProjectionSolver
-        for block in correction_pressure.blocks
-            fill!(block, zero(eltype(correction_pressure)))
-        end
+    for block in correction_pressure.blocks
+        fill!(block, zero(eltype(correction_pressure)))
     end
     stats = _project_two_velocity!(
         velocity, correction_pressure, solver, workspace, state, dt;

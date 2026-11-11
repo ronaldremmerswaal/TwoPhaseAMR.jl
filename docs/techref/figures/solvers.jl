@@ -535,7 +535,7 @@ function solvers_checks_only(write_output)
         found = match(r"^\\newcommand\\(\w+)\{", line)
         isnothing(found) || !(found.captures[1] in names)
     end
-    anchor = findfirst(line -> startswith(line, "\\newcommand\\chkTabMimIterations{"), lines)
+    anchor = findfirst(line -> startswith(line, "\\newcommand\\chkTabCmdIterations{"), lines)
     @assert !isnothing(anchor)
     own = [rstrip(macro_line(name, value)) for (name, value) in macros]
     lines = [lines[1:anchor]; own; lines[(anchor + 1):end]]

@@ -320,19 +320,15 @@ end
 
 """Maximum pressure-row residual divided by the corresponding cell volume.
 
-CMDGFM skips nonpositive volumes; the mimetic KKT residual divides every
-retained row. The compile-time policy keeps those distinct semantics.
+Rows with a nonpositive volume are skipped.
 """
-function _projection_pressure_residual_maximum(
-        residual, indices, volumes,
-        ::Val{skip_nonpositive}
-    ) where {skip_nonpositive}
+function _projection_pressure_residual_maximum(residual, indices, volumes)
     T = eltype(residual)
     pressure = zero(T)
     for local_index in 1:length(indices)
         cell = @inbounds indices[local_index]
         volume = @inbounds volumes[cell]
-        skip_nonpositive && !(volume > zero(T)) && continue
+        volume > zero(T) || continue
         @inbounds pressure = max(
             pressure, abs(residual[local_index]) / volume,
         )

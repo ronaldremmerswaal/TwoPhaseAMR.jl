@@ -37,6 +37,7 @@ end
         @test v["chkStabKhMarginCfl"] == @sprintf("%.2f", 0.45 * parse(Float64, v["chkStabKhMargin"]))
         @test v["chkStabKhUnstableCfl"] == @sprintf("%.2f", 0.45 * parse(Float64, v["chkStabKhUnstable"]))
         @test round(0.5 / 0.45; digits = 2) == 1.11
+        @test round(1.0 / 0.45; digits = 2) == 2.22
         @test parse(Float64, v["chkStabWaveMargin"]) > sqrt(2)
         println(
             "M2 capillary margin ", v["chkStabWaveMargin"], " (unstable at ", v["chkStabWaveUnstable"], "), Denner static factor ", sqrt(2),

@@ -13,7 +13,8 @@
 #   C3  dt_grav of the code = thesis (7.4)/sqrt2 at rest; step! names the active bound ("capillary", "gravity", "advective");
 #   C4  step!: accepts dt = (1 + 0.9e-6) dt(cfl = 1/2), rejects (1 + 2e-6) dt(cfl = 1/2) [capillary- and gravity-limited: relative to the bound itself;
 #       advective-limited: margin 0.5/0.45 = 1.11 relative to the step selected at cfl = 0.45], one and two velocities;
-#   C5  cfl ranges: two phases (0, 1/2], one phase (0, 1]; single-phase step! uses cfl = 1/2 in its check, so simulate!(cfl = 0.8) of a single phase fails;
+#   C5  cfl ranges: two phases (0, 1/2], one phase (0, 1]; the one-phase step! checks at the top of its range (cfl = 1), so
+#       every step stable_timestep returns is accepted and simulate!(cfl = 0.8) runs;
 #   C6  bounds are infinite without rates (sigma = 0 or rho_l = rho_g, g = 0, U = 0).
 # Run:    julia --heap-size-hint=3G -t 1 --project=docs/techref/figures proof_review/ch-stability-accuracy/scripts/code_01_bounds.jl
 
@@ -115,17 +116,14 @@ isdefined(Main, :STAB_CFL) || include(joinpath(@__DIR__, "_prelude.jl"))
         @test isfinite(stable_timestep(one; cfl = 1.0))
         @test_throws ArgumentError stable_timestep(one; cfl = 1.01)
         @test stable_timestep(one; cfl = 1.0) ≈ 2 * stable_timestep(one; cfl = 0.5) rtol = 1.0e-13
-        # the check of step! uses cfl = 1/2: a single-phase simulate! with cfl in (1/2, 1] stops at its first step
-        err = try
-            simulate!(stab_taylor_green(), 0.05; cfl = 0.8)
-            nothing
-        catch e
-            e
-        end
-        @test err isa ArgumentError && occursin("advective stability bound", err.msg)
-        ok = simulate!(stab_taylor_green(), 0.05; cfl = 0.5)
+        # the check of step! uses the top of the range, cfl = 1: every step stable_timestep returns is accepted, and a
+        # single-phase simulate! with cfl in (0, 1] runs
+        ok = simulate!(stab_taylor_green(), 0.05; cfl = 0.8)
         @test ok.steps >= 1
-        println("C5 single-phase simulate!(cfl = 0.8): ", err isa ArgumentError ? err.msg : err)
+        hard = stable_timestep(stab_taylor_green(); cfl = 1.0)
+        @test step_message(stab_taylor_green(), 0.99 * hard) == ""
+        @test occursin("advective stability bound", step_message(stab_taylor_green(), 1.01 * hard))
+        println("C5 single-phase simulate!(cfl = 0.8): ", ok.steps, " steps")
     end
 
     @testset "C6 bounds without rates are infinite" begin

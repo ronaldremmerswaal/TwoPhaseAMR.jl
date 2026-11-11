@@ -225,7 +225,6 @@ machine-local reference points, not contracts.
     \code{vortex_reverse} & 05 vortex reversal (transport only) & level 2, $\tend=0.05$, automatic step & 6\\
     \code{capillary_one} & 06 capillary wave & level 1, $\tend=0.02$, $\dt=0.001$ & 20\\
     \code{capillary_cmdgfm} & 06, two velocities, CMDGFM & as above & 20\\
-    \code{capillary_mimetic} & 06, two velocities, mimetic & as above & 20\\
     \code{sessile} & 08 sessile droplet & level 1, $\tend=0.01$, $\dt=0.001$ & 10\\
     \code{sloped} & 09 sloped sessile droplet & level 1, $\tend=0.01$, $\dt=0.001$ & 10\\
     \code{stokes3} & 10 third-order Stokes wave & level 1, $\tend=0.01$, $\dt=0.001$ & 10\\
@@ -239,11 +238,10 @@ bitwise (10 cases)'' for pull request 124, merged as the audited commit).
 \nolinkurl{benchmark/oracle/record.jl} rewrites the record; this is done
 only when the numerical reference or the measurement environment changes
 intentionally, together with the tests that verify the change. Since its
-introduction on 2026-11-07 the record was rewritten for the mimetic projection
-changes of work item 4D.2 (results within the solver tolerance; tolerance mode
-passes at $2\times10^{-9}$), for the deterministic face order needed on
+introduction on 2026-11-07 the record was rewritten for the deterministic
+face order needed on
 Julia 1.11 and 1.13 (every face list reordered; tolerance mode passes at
-$10^{-10}$, and at $2\times10^{-9}$ for the mimetic case), and after the
+$10^{-10}$), and after the
 fixes of the triple-cell reconstruction (\issue{48}), of the staggered
 momentum transport at walls, level transitions and cut walls (\issue{60},
 \issue{61}, \issue{62}), of the cut-face gravity (\issue{74}), of the
@@ -371,7 +369,7 @@ transitions).
   Vortex reversal, two velocities & symmetric difference; $L^1$ fraction; staggered liquid and gas scalars & initial state & uniform projected $2.17$, $2.28$; gas $1.96$, $1.29$ & end $\ge1.5$; fin $\ge1.5$ ($\ge1.2$ gas)\\
   Split-WY reversal, two velocities (16, 24, 32) & $L^1$ fraction; phase scalars & initial state & projected $2.59$, $2.99$; $1.35$, $1.58$ & fin $\ge1.8$ (uniform), $\ge1.5$ (scalars)\\
   Rotating disc, tangential jump & $L^1$ fraction after the rotation & initial state & projected end $2.50$; frozen $1.31$ & end $\ge2.0$ (projected), $\ge0.8$ (frozen)\\
-  Rotating disc, mimetic and CMDGFM projections (8--32) & $L^1$ fraction & initial state & end $1.27$ (mimetic), $1.40$ (CMDGFM) & end $\ge1.2$ (mimetic, projected), $\ge0.9$\\
+  Rotating disc, CMDGFM projection (8--32) & $L^1$ fraction & initial state & end $1.40$ (CMDGFM) & end $\ge0.9$\\
   Phase-scalar AMR transfer & phase-weighted $L^1$ after one refinement & mm scalars & -- & all $\ge1.8$\\
   CMDGFM jump interpolant & mean jump error over resolved stencils & affine velocity with a constant jump & -- & end $\ge0.8$, decreasing\\
   \multicolumn{5}{@{}l}{\emph{Flows}}\\
@@ -392,8 +390,9 @@ the two-phase embedded-wall rates stay within $\log_2 1.1$ of the
 open-domain rates. The scalar Laplacian now uses the same geometric
 transition contacts as the fully open cut-cell operator (\issue{80}).
 Pointwise transition-row truncation errors need not predict solution-level
-convergence: the composite Helmholtz solution above converges with order at
-least $1.8$ in both norms despite transition rows with $O(1)$ error.
+convergence: the composite Helmholtz solution above approaches second order in
+both norms ($\ge1.7$ between the first two base widths on the tested layouts)
+despite transition rows with $O(1)$ error.
 The separate variable-viscosity stress transition remains first order
 (\issue{112}; the shifted-solve test pins $0.8$).
 
@@ -429,7 +428,6 @@ Tests in the order of \cref{tab:verif:orders}:
 \testsym{test/integration/two_velocity_vortex.jl}{Continuous two-velocity vortex reversal},
 \testsym{test/integration/two_velocity_transport.jl}{Two-velocity split-WY reversal convergence},
 \testsym{test/integration/two_velocity_rotation.jl}{Tangentially discontinuous circular-disc rotation},
-\testsym{test/integration/two_velocity_rotation.jl}{Rotating disc with the physical mimetic projection},
 \testsym{test/integration/two_velocity_rotation.jl}{Rotating disc with the CMDGFM projection},
 \testsym{test/two_phase/transport.jl}{Intrinsic phase scalar AMR transfer convergence},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM jump interpolant consistency};
@@ -478,19 +476,17 @@ enters.
   Momentum, wall force (\issue{106}) & aligned embedded wall, three wall types, single and double precision & momentum loss equal to the viscosity times the wall length, to $512\machineeps$ times that length\\
   Skew-symmetry & centred staggered convection, uniform and composite & $2\times10^{-14}$; constant field $64\machineeps$\\
   Energy, viscous operator & uniform and composite & energy rate $\le256\,\#\facesint\,\machineeps$; stiffness eigenvalues non-negative to round-off; implicit energy factor $\le1+10^{-12}$\\
-  Energy, mimetic projection & Pythagoras identity, periodic, cut and split domains, density ratio $10$ and $1000$ & reported identity error to $4096\machineeps$ and $\le128\times$ tolerance\\
-  Divergence, projections & CMDGFM and mimetic projections, after a regrid, with slip, open boundaries & defects $\le$ solver tolerance; flows $\le2\times10^{-8}$\\
+  Divergence, projections & CMDGFM projection, after a regrid, with slip, open boundaries & defects $\le$ solver tolerance; flows $\le2\times10^{-8}$\\
   Gradient--divergence duality & elliptic operator & $8\times10^{-13}$; symmetric to $4\times10^{-14}$\\
-  Hydrostatic rest & flat heavy interface, vertical and oblique gravity, density ratio $1000$; mimetic projection; sloped solid on a composite mesh; CMDGFM with solids (\issue{76}) & velocity $<10^{-9}$; $\le2048\machineeps$; relative speed $\le10^{-8}$; $\le10^{-7}\dt\abs{\gravacc}$\\
+  Hydrostatic rest & flat heavy interface, vertical and oblique gravity, density ratio $1000$; sloped solid on a composite mesh; CMDGFM with solids (\issue{76}) & velocity $<10^{-9}$; $\le2048\machineeps$; $\le10^{-7}\dt\abs{\gravacc}$\\
   Static drop & variable-density CSF and CGFM with constant curvature & velocity after the projection $<10^{-9}$\\
   Exactness & affine face prolongation; limited cell prolongation; constant fields in transfer and advection; translation by the frozen subfaces; prescribed through-flow & $5\times10^{-14}$; $4\machineeps$; exact; $512\machineeps$; $64\machineeps$\\
 \end{longtable}}
 
 No test asserts the balance of the total energy over a complete step: the
 energy enters through the identities of the projection and of the viscous
-operator, the decay of the parasitic currents of the floating droplet
-(\cref{sec:verif:benchmarks}) and the identity error below $10^{-6}$ of the
-mimetic projections in the Kelvin--Helmholtz runs (\cref{sec:stab:gaps}).
+operator and the decay of the parasitic currents of the floating droplet
+(\cref{sec:verif:benchmarks}).
 
 \begin{implnote}
 Tests in the order of \cref{tab:verif:invariants}:
@@ -512,24 +508,19 @@ Tests in the order of \cref{tab:verif:invariants}:
 \testsym{test/operators/advection/staggered_advection.jl}{centred staggered convection is skew-symmetric},
 \testsym{test/operators/advection/staggered_advection.jl}{AMR staggered flux compatibility and stability},
 \testsym{test/operators/staggered_diffusion.jl}{staggered diffusion stable core on uniform and AMR meshes},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Mimetic absolute pressure projection},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Mimetic correction boundary pressure work},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM projection invariants},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{CMDGFM incremental projection satisfies the coupled system},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic pressure projection on an AMR interface},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Mimetic absolute projection after regridding},
 \testsym{test/navier_stokes/navier_stokes.jl}{open channel pressure flux and divergence},
 \testsym{test/operators/poisson.jl}{elliptic operator preserves gradient-divergence duality},
 \testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Flat heavy interface remains hydrostatic},
-\testsym{test/two_phase/forces.jl}{Mimetic hydrostatic balance},
+\testsym{test/two_phase/forces.jl}{Hydrostatic balance},
 \testsym{test/two_phase/forces.jl}{Hydrostatic liquid at a sloped solid on a composite mesh},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM hydrostatic rest with embedded solids (issue #76)},
 \testsym{test/two_phase/forces.jl}{Variable-density balanced CSF and CGFM projection},
 \testsym{test/mesh/adaptivity.jl}{face prolongation is affine exact},
 \testsym{test/mesh/variables.jl}{cell fields, halos, restriction, and prolongation},
 \testsym{test/operators/advection/cell_advection.jl}{conservative centred advection},
-\testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Frozen-subface WY common-normal translation},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection preserves prescribed through-flow}.
+\testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Frozen-subface WY common-normal translation}.
 \end{implnote}
 
 \section{Benchmark flows}\label{sec:verif:benchmarks}
@@ -567,7 +558,6 @@ instability studies refine the step with the mesh through the bounds of
   Floating droplet, mode 4, DR $1000$ (16, 32) & period of the kinetic energy; largest kinetic energy & Lamb period & -- & period error and energy fall by more than $4$; viscous peaks decay\\
   Sessile droplet, $90^\circ$, Bo $1.21$, La $550$ (12, 24, 48) & $L^1$ fraction at a quarter capillary time & Laplace--Young profile & $2.23$, $2.72$ & all $\ge1.2$, decreasing\\
   Kelvin--Helmholtz, two velocities (8, 16, 32) & amplitude error & dispersion relation~\thesis{App.~7.B} & DR $1$, We $0.5$: end $1.56$ (frozen), $1.59$ (projected); DR $1000$: $0.91$, $0.51$; DR $1$, We $5$: $1.02$, $1.21$ & end $\ge0.8$; $\ge0.48$ (DR $1000$, projected); decreasing\\
-  \quad mimetic projection (8, 16) & as above & as above & We $0.5$: $1.210$, $1.257$; We $5$: $0.229$, $0.104$ & We $0.5$: maximum $<1.35$; We $5$: decreasing\\
   Rayleigh--Taylor, frozen (8, 16, 32) & amplitude error & as above & DR $3$, Bo $0.5$: end $3.05$; DR $1000$: $1.78$; DR $3$, Bo $2$: $1.36$ & end $\ge1.7$; $\ge1.3$ (Bo $2$); decreasing\\
   Combined KH--RT, DR $3$, We $0.5$, Bo $0.75$ & as above & as above & end $0.95$ & end $\ge0.79$; decreasing\\
 \end{longtable}}
@@ -582,8 +572,7 @@ order to $\half$ until the advective bound is active,
 \cref{sec:stab:accuracy}), the projected liquid velocity at density ratio
 $1000$ (bound $0.48$; an earlier run recorded in the test gave $0.493$), the
 Rayleigh--Taylor wave at Bond number $2$ ($1.3$) and the combined wave
-($0.79$). The mimetic Kelvin--Helmholtz wave at Weber number $0.5$ does not
-converge from $8$ to $16$ cells; its bound is on the larger error only. The
+($0.79$). The
 sessile droplet converges faster than the order of about $1.5$ that the
 thesis observes for the symmetric difference of its sessile
 droplets~\thesis{\S4.8.3}.
@@ -612,7 +601,6 @@ Tests in the order of \cref{tab:verif:benchmarks}:
 (\srcsym{test/integration/two_phase_droplet.jl}{floating_droplet_case}),
 \testsym{test/integration/two_phase_sessile_droplet.jl}{Sessile droplet equilibrium convergence},
 \testsym{test/integration/two_velocity_instabilities.jl}{Two-velocity Kelvin--Helmholtz dispersion convergence},
-\testsym{test/integration/two_velocity_instabilities.jl}{Mimetic KH projection mesh and time refinement},
 \testsym{test/integration/two_velocity_instabilities.jl}{Two-velocity Rayleigh--Taylor dispersion convergence},
 \testsym{test/integration/two_velocity_instabilities.jl}{Combined KH/RT dispersion convergence};
 dispersion relation
@@ -665,7 +653,7 @@ code.
     09 sloped sessile droplet & volume change; divergence norm & zero & $-1.46794\times10^{-11}$; $7.9249\times10^{-8}$\\
     10 Stokes wave & interface after two periods versus initial profile (RMS; maximum) & third-order Stokes profile (not an exact solution) & $0.0449043$; $0.103414$\\
     11 LGPI & liquid volume change & zero & $-3.61\times10^{-9}$ of $0.182426$\\
-    12 manufactured Poisson & pressure RMS/maximum error, $32$ cells & manufactured & mimetic $0.0388801/0.192510$; joint-face $0.0253219/0.160006$; CMDGFM $1.04378/8.98783$\\
+    12 manufactured Poisson & pressure RMS/maximum error, $32$ cells & manufactured & CMDGFM $1.04378/8.98783$\\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -696,11 +684,13 @@ conjugate gradients with non-symmetric multigrid cycles (\issue{128}); a
 degenerate vertex patch with two cells per periodic period, which limits the
 coarsest multigrid level (\issue{36}); and a level-set initialisation that
 can fail for valid input (\issue{49}). The open bugs \issue{117} and
-\issue{118} (refinement criteria), \issue{121} (the one-phase \code{cfl}
-range) and \issue{127} (an allocation contract) do not affect accuracy. Since
+\issue{118} (refinement criteria) and \issue{127} (an allocation contract) do
+not affect accuracy. Since
 the audited commit, PR~\#125 has fixed \issue{117} and \issue{118}
-(\cref{sec:amr:band,sec:amr:curvature}) and PR~\#130 \issue{126} and
-\issue{127}; the others are open. Open
+(\cref{sec:amr:band,sec:amr:curvature}), PR~\#130 \issue{126} and
+\issue{127}, and \issue{121}, the one-phase \code{cfl} range, is fixed by the
+step check of~\cref{eq:stab:check}, which now uses the top of the accepted
+range (\cref{sec:stab:bounds}); the others are open. Open
 investigations: unbounded CTU fluxes at hanging dual faces (\issue{70}), dual
 Courant numbers above one next to a solid (\issue{72}), and the fallback for
 orphaned edges at open walls (\issue{99}).
@@ -712,7 +702,7 @@ capillary wave) or does not grow by more than a factor $1.5$, $2$ or $2.1$
 (two-velocity capillary and Kelvin--Helmholtz waves). The one-velocity
 capillary wave at density ratio one gave $0.0126$, $0.0046$ and $0.0030$,
 the frozen two-velocity wave $0.00655$, $0.00782$ and $0.01137$ and the
-mimetic Kelvin--Helmholtz wave $1.257$, $1.135$ and $1.153$.
+Kelvin--Helmholtz wave of the two-velocity model.
 
 \emph{References.} The examples' numbers are not asserted and can lag the
 code (\cref{sec:verif:gallery}). The cylinder regression pins a transient,

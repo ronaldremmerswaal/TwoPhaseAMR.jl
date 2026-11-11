@@ -3,10 +3,7 @@ using Test, TwoPhaseAMR
 const TV_ROTATION = TwoPhaseAMR
 const ROTATION_PROJECTION_TOLERANCE = sqrt(eps())
 
-function _rotation_case(
-        resolution, method;
-        pressure_projection = MimeticProjection(),
-    )
+function _rotation_case(resolution, method)
     mesh = BlockTreeMesh(
         block_size = (resolution, resolution), periodic = (false, false),
     )
@@ -38,25 +35,17 @@ function _rotation_case(
     one_functions = (
         PhaseFaceScalar{1}(interface), PhaseFaceScalar{2}(interface),
     )
-    mimetic_solver = if pressure_projection isa MimeticProjection
-        MimeticProjectionSolver(
-            interface; density = (1.0, 1.0), preconditioner = :cholesky,
-        )
-    else
-        CMDGFMProjectionSolver(
-            interface; density = (1.0, 1.0), preconditioner = :block,
-        )
-    end
-    mimetic_projection = (
+    projection_solver = CMDGFMProjectionSolver(
+        interface; density = (1.0, 1.0), preconditioner = :block,
+    )
+    projection_case = (
         pressure = CellField(mesh),
-        solver = mimetic_solver,
-        workspace = pressure_projection isa MimeticProjection ?
-            MimeticProjectionWorkspace(mimetic_solver) :
-            CMDGFMProjectionWorkspace(mimetic_solver),
+        solver = projection_solver,
+        workspace = CMDGFMProjectionWorkspace(projection_solver),
     )
     return (;
         mesh, interface, velocity, analytical_velocity, workspace,
-        mimetic_projection,
+        projection_case,
         staggered, one_functions, liquid_scalar, gas_scalar,
         centre, angular_velocity,
         initial_fraction = copy(interface.fraction),
@@ -64,8 +53,8 @@ function _rotation_case(
     )
 end
 
-function _project_rotation_mimetic!(case)
-    projection = case.mimetic_projection
+function _project_rotation!(case)
+    projection = case.projection_case
     before = map(copy, case.velocity)
     stats = project!(
         case.velocity, projection.pressure, projection.solver, 1.0,
@@ -84,7 +73,7 @@ function _project_rotation_mimetic!(case)
     return (; stats, corrections)
 end
 
-function _advance_mimetic_rotation!(case; final_time = 0.03125)
+function _advance_rotation!(case; final_time = 0.03125)
     time = 0.0
     step = 0
     converged = true
@@ -101,7 +90,7 @@ function _advance_mimetic_rotation!(case; final_time = 0.03125)
     maximum_normal_velocity_defect = 0.0
     while time < final_time - 16eps()
         _set_stationary_rotation!(case)
-        projection = _project_rotation_mimetic!(case)
+        projection = _project_rotation!(case)
         stats = projection.stats
         converged &= stats.converged
         maximum_initial_residual = max(maximum_initial_residual, stats.initial_residual)
@@ -372,7 +361,7 @@ function _advance_rotation_pair!(projected, frozen; final_time = 0.125)
             frozen_preprojection_error,
             _face_velocity_linf(frozen, frozen.velocity),
         )
-        projection = _project_rotation_mimetic!(frozen)
+        projection = _project_rotation!(frozen)
         statistics = projection.stats
         projection_count += 1
         maximum_initial_residual = max(maximum_initial_residual, statistics.initial_residual)
@@ -539,7 +528,7 @@ function _initial_projection_snapshot(case)
             converged = true,
         )
     end
-    projection = _project_rotation_mimetic!(case)
+    projection = _project_rotation!(case)
     statistics = projection.stats
     return (;
         before,
@@ -767,69 +756,11 @@ end
     end
 end
 
-@testset "Rotating disc with the physical mimetic projection" begin
-    resolutions = (8, 16, 32)
-    for (method_name, method) in pairs(
-            (;
-                projected = ProjectedLiquidVelocity(
-                    tolerance = 1.0e-12, max_cycles = 500,
-                ),
-                frozen = FrozenInterfaceFluxes(),
-            )
-        )
-        results = map(resolutions) do resolution
-            case = _rotation_case(resolution, method)
-            result = _advance_mimetic_rotation!(case)
-            println(
-                "two_velocity_mimetic_rotation method=$method_name " *
-                    "n=$resolution result=$result",
-            )
-            @test result.projection_converged
-            @test result.maximum_mixture_divergence <=
-                ROTATION_PROJECTION_TOLERANCE
-            @test result.maximum_normal_velocity_defect <=
-                ROTATION_PROJECTION_TOLERANCE
-            @test result.volume_error <=
-                _rotation_volume_tolerance(case, result.steps)
-            @test result.one_error <= 1024eps()
-            result
-        end
-        for metric in (
-                :error, :maximum_error, :staggered_liquid_error,
-                :staggered_gas_error,
-            )
-            errors = [getproperty(result, metric) for result in results]
-            rates = _reported_rotation_rates(errors, resolutions)
-            println(
-                "two_velocity_mimetic_rotation_convergence " *
-                    "method=$method_name metric=$metric n=$resolutions " *
-                    "errors=$errors rates=$rates",
-            )
-        end
-        interface_errors = collect(getproperty.(results, :error))
-        @test all(diff(interface_errors) .< 0)
-        interface_rate = _aggregate_rotation_rate(
-            interface_errors, resolutions,
-        )
-        if method_name === :projected
-            @test interface_rate >= 1.2
-        end
-        for metric in (:staggered_liquid_error, :staggered_gas_error)
-            errors = collect(getproperty.(results, metric))
-            @test all(diff(errors) .< 0)
-            @test _aggregate_rotation_rate(errors, resolutions) >= 0.9
-        end
-    end
-end
-
 @testset "Rotating disc with the CMDGFM projection" begin
     resolutions = (8, 16, 32)
     results = map(resolutions) do resolution
-        case = _rotation_case(
-            resolution, FrozenInterfaceFluxes();
-            pressure_projection = CMDGFMProjection(),
-        )
-        result = _advance_mimetic_rotation!(case)
+        case = _rotation_case(resolution, FrozenInterfaceFluxes())
+        result = _advance_rotation!(case)
         println(
             "two_velocity_CMDGFM_rotation method=frozen " *
                 "n=$resolution result=$result",
