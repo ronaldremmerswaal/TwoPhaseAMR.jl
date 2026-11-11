@@ -17,11 +17,6 @@ bytes_per_step = 1.7931184e6
 seconds_per_step = 0.0033100292000000004
 steps = 10
 
-[warm_capillary_mimetic]
-bytes_per_step = 1.81801928e7
-seconds_per_step = 0.0158308974
-steps = 10
-
 [warm_capillary_one]
 bytes_per_step = 1.6232656e6
 seconds_per_step = 0.0024340099
