@@ -33,7 +33,7 @@ step enters only through the matrices and tolerances of the calling chapters.
     \midrule
     one-velocity projection & \cref{eq:solvers:cell-matrix}, $\reactcoef=0$ & SPSD & CG & tree MG (cells) & 100 / 500\\
     liquid carrier (\cref{sec:vof:projected}) & \cref{eq:solvers:cell-matrix}, $\reactcoef=0$ & SPSD & CG & none & 200\\
-    viscous, one phase & \cref{eq:solvers:shifted-single} & SPD or nonsymmetric & CG or BiCGSTAB & tree MG (faces of an axis) & 100\\
+    viscous, one phase & \cref{eq:solvers:shifted-single} & SPD & CG & tree MG (faces of an axis) & 100\\
     viscous, two phases & \cref{eq:viscosity:phase-midpoint} & SPD & CG & tree MG (all faces) & 500\\
     CMDGFM projection & \cref{eq:projection:cmdgfm-system} & nonsymmetric & BiCGSTAB & V-cycle and ILU blocks & 500\\
     \bottomrule
@@ -684,22 +684,21 @@ with the explicit terms and wall sources of~\cref{eq:viscosity:single-midpoint}
 in $\mathsf{w}$. The matrix $\dualvolmat(\idmat-s\lapstag{k})$ is symmetric
 for every $s$ iff $\dualvolmat\lapstag{k}$ is. The automatic Krylov selection
 uses CG when this weighted symmetry is guaranteed for both components and
-BiCGSTAB otherwise. The corrected rows of~\cref{eq:viscosity:laplacian} at
-level transitions are nonsymmetric ($\dualvolmat\lapstag{k}$ misses symmetry
-by $27\,\%$ of its largest entry on the composite fixture), so on composite
-meshes without a solid the one-phase viscous step uses BiCGSTAB (\issue{80}).
-The embedded operator has no corrected band: $\dualvolmat\lapstag{k}$ is
-symmetric to round-off ($4\times10^{-17}$ on a composite mesh with a solid),
-so its weighted system uses CG rather than BiCGSTAB (\issue{128}). The default
+BiCGSTAB otherwise; it certifies it by checking
+$\dualvolmat\lapstag{k}=-\viscstiff{k}$ entrywise in the assembled
+arithmetic, and rejects an operator whose matrix was replaced or perturbed
+after construction. The unembedded and embedded geometric operators satisfy
+$\dualvolmat\lapstag{k}=-\viscstiff{k}$ with symmetric positive semidefinite
+stiffness, so their shifted systems select CG on composite as well as
+uniform meshes (\issue{80}, \issue{128}). The default
 preconditioner is, per component,
 a tree multigrid with the coarsening of \cref{sec:solvers:hierarchy} (counted
 in faces of the axis), rediscretisation with the same viscosity, boundary
 conditions and shift on every coarse mesh, no Galerkin product, the
 smoother~\cref{eq:solvers:jacobi}, and a dense LU coarse solve for at most
-$256$ unknowns, a sparse LU otherwise. For a symmetric fine system the coarse
-matrices use the conservative symmetric stiffness without the AMR correction,
-so that the V-cycle remains symmetric for CG even on composite coarse meshes.
-For a nonsymmetric fine system they retain the corrected operator. Its transfer
+$256$ unknowns, a sparse LU otherwise. The coarse matrices always use the
+conservative symmetric stiffness of their rediscretized operator, so the
+V-cycle remains symmetric for CG even on composite coarse meshes. Its transfer
 is the linear staggered interpolation from the coarser tree: a fine face on a
 coarse face line takes the length-weighted mean of the coarse faces that it
 overlaps, a new face interpolates linearly between the two neighbouring coarse
@@ -713,8 +712,7 @@ the hierarchy is rebuilt with the reuse of \cref{sec:solvers:reuse}, which
 here also requires the same boundary type and the same $s$:
 \apifun{step!}\code{(flow, dt)} builds the new operator with the step just taken, so runs with a fixed step
 reuse the coarse levels. Matrix preconditioners (\code{:ilu}, \dots) are built
-from the symmetric part $s\viscstiff{k}+\dualvolmat$ without the corrected
-rows.
+from the symmetric shifted stiffness $s\viscstiff{k}+\dualvolmat$.
 
 \emph{Two phases.} The coupled system~\cref{eq:viscosity:phase-midpoint},
 $(\massmat+\tfrac12\dt\,\strainmat^{\transpose}\stressw\strainmat)\velo^{\stage{2}}=\rhsvec$,
@@ -898,7 +896,7 @@ reaches $\chkSolvVariableRatio$ (uniform) and $\chkSolvVariableAmrRatio$
     \multicolumn{7}{@{}l}{\emph{One-phase viscous, both components}}\\
     \quad $\sigma=1$, $128\times128$, CG & \chkSolvShiftAUnknowns & \chkSolvShiftALevels & \chkSolvShiftACycles & \chkSolvShiftAFactor & \chkSolvShiftAPlain & \chkSolvShiftAPlainFactor\\
     \quad $\sigma=100$, $128\times128$, CG & \chkSolvShiftBUnknowns & \chkSolvShiftBLevels & \chkSolvShiftBCycles & \chkSolvShiftBFactor & \chkSolvShiftBPlain & \chkSolvShiftBPlainFactor\\
-    \quad $\sigma=100$, composite, BiCGSTAB & \chkSolvShiftAmrUnknowns & \chkSolvShiftAmrLevels & \chkSolvShiftAmrCycles & \chkSolvShiftAmrFactor & \chkSolvShiftAmrPlain & \chkSolvShiftAmrPlainFactor\\
+    \quad $\sigma=100$, composite, CG & \chkSolvShiftAmrUnknowns & \chkSolvShiftAmrLevels & \chkSolvShiftAmrCycles & \chkSolvShiftAmrFactor & \chkSolvShiftAmrPlain & \chkSolvShiftAmrPlainFactor\\
     \multicolumn{7}{@{}l}{\emph{Two-phase viscous, drop, CG}}\\
     \quad $64\times64$ & \chkSolvVariableUnknowns & \chkSolvVariableLevels & \chkSolvVariableCycles & \chkSolvVariableFactor & \chkSolvVariablePlain & \chkSolvVariablePlainFactor\\
     \quad composite, base $64^2$ & \chkSolvVariableAmrUnknowns & \chkSolvVariableAmrLevels & \chkSolvVariableAmrCycles & \chkSolvVariableAmrFactor & \chkSolvVariableAmrPlain & \chkSolvVariableAmrPlainFactor\\
@@ -922,12 +920,14 @@ V-cycle with four Jacobi sweeps per level.
 small shifts ($\sigma=1$: $\chkSolvShiftACycles$ against
 $\chkSolvShiftAPlain$ iterations) and the multigrid keeps the count low at
 $\sigma=100$ on the uniform mesh ($\chkSolvShiftBCycles$ against
-$\chkSolvShiftBPlain$). On the composite mesh, where the corrected rows make
-the system nonsymmetric, multigrid-preconditioned BiCGSTAB needs
+$\chkSolvShiftBPlain$). On the composite mesh multigrid-preconditioned CG needs
 $\chkSolvShiftAmrCycles$ iterations with $\convfactor=\chkSolvShiftAmrFactor$,
-against $\chkSolvShiftAmrPlain$ without preconditioner; this preconditioner,
-with its unsmoothed linear transfer, is much less effective there than on the
-uniform mesh. For the coupled two-phase stress the counts are
+against $\chkSolvShiftAmrPlain$ without preconditioner. The previous
+nonsymmetric operator needed $42$ BiCGSTAB iterations and $199$ without the
+preconditioner. For a separate half-refined $16\times16$ base mesh, $s=0.1$,
+smooth right-hand side, coarse size $16$ and tolerance $10^{-10}$, the two
+component counts changed from $4/4$ BiCGSTAB iterations (periodic) and $5/5$
+(walled) to $8/8$ CG and $9/9$ CG. For the coupled two-phase stress the counts are
 $\chkSolvVariableCycles$ and $\chkSolvVariableAmrCycles$ against
 $\chkSolvVariablePlain$ and $\chkSolvVariableAmrPlain$.
 

@@ -267,9 +267,9 @@ the viscous step.
 
 \emph{Viscosity} (\cref{ch:viscosity}). The viscous step is the one implicit
 substep, an implicit midpoint rule. A single phase uses a componentwise
-staggered Laplacian of the kinematic viscosity with corrected rows at level
-transitions and, with a solid, rows for the embedded walls; two phases use
-the variable stress $\divergence(2\visc\strainrate)$ with the geometric mean
+staggered Laplacian of the kinematic viscosity with geometric transition
+contacts and, with a solid, rows for the embedded walls; two phases use the
+variable stress $\divergence(2\visc\strainrate)$ with the geometric mean
 of the phase viscosities, and the two-velocity model diffuses the
 mass-weighted mixture velocity and gives both phases its increment.
 
@@ -629,7 +629,7 @@ events \apifun{observe!} with \apitype{SimulationState} and
       & \code{:lhf}, \code{:lhf_ghf}, \code{:wy}
       & \cref{sec:interface:normals}\\
     Krylov method and preconditioner (\apitype{LinearSolverOptions} and \apitype{MultigridOptions})
-      & pressure projection and viscous steps: CG, or BiCGSTAB after a symmetry test for the one-phase viscous step (CG on a uniform, BiCGSTAB on a composite mesh), with the tree geometric multigrid (\code{:auto}); the CMDGFM system (BiCGSTAB) has its own preconditioner, the liquid carrier (CG) none (\cref{tab:solvers:systems})
+      & pressure projection and viscous steps: CG, or BiCGSTAB after a symmetry test for the one-phase viscous step (CG on uniform and composite meshes), with the tree geometric multigrid (\code{:auto}); the CMDGFM system (BiCGSTAB) has its own preconditioner, the liquid carrier (CG) none (\cref{tab:solvers:systems})
       & \cref{ch:solvers}\\
     time step (\code{dt} and \code{cfl} of \apifun{simulate!})
       & automatic with CFL number $0.45$; a prescribed step
@@ -787,10 +787,6 @@ the chapters state and that are tracked by issues open at the audited commit;
       Courant number above one
       & \issue{72} & \cref{sec:momentum:cfl}\\
     \multicolumn{3}{@{}l}{\emph{Viscosity}}\\
-    One phase: the corrected rows at level transitions are not symmetric, and
-      the implicit step can raise the energy (by up to $2.7$ per step in the
-      stiff limit)
-      & \issue{80} & \cref{sec:viscosity:single,sec:stab:bounds}\\
     Orphaned transverse edges at outflow, zero-gradient and inflow walls next
       to a level transition keep a two-point difference that is not exact for
       linear fields

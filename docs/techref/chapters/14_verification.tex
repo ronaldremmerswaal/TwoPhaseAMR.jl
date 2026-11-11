@@ -341,14 +341,14 @@ transitions).
   Gradient, stretched composite & face gradient, area-weighted $L^2$ & mm pressure & -- & all $>1.0$, decreasing\\
   Poisson, composite, multigrid & cell $L^2$ & mm, Dirichlet & -- & all $>1.7$, decreasing\\
   Staggered Laplacian, uniform periodic & dual-volume $L^2$ of the tendency & mm velocity & -- & both $>1.9$\\
-  Corrected Laplacian, composite & as above & mm velocity & -- & $>1.8$, $>1.5$\\
+  Composite Helmholtz (\issue{80}) & maximum and dual-volume $L^2$ solution error & mm velocity & $1.78$--$1.84$, $1.88$--$1.92$ (max.); $1.99$--$2.01$ ($L^2$) & first pair $\ge1.7$, second $\ge1.85$\\
   Cut-cell Helmholtz, walls and transitions (\issue{87}) & maximum norm & mm velocity & -- & all $\ge1.8$\\
   Aligned embedded wall (\issue{106}) & maximum, $L^2$, $L^1$ & mm velocity & -- & all $\ge1.5$ (max.), $\ge1.8$ ($L^2$, $L^1$)\\
   Inclined embedded wall (\issue{106}, \issue{110}) & maximum, $L^2$, $L^1$ & mm velocity & -- & all $\ge0.6$ (max.), $\ge0.8$ ($L^2$, $L^1$); finest error $\le1.02\times$ pinned\\
   Variable stress, bulk & $L^2$ of the tendency & mm, $\visc(x)$ & -- & all $\ge1.8$\\
   Variable stress, shifted solve on fixed and adapted trees & solution $L^2$ & mm, $\visc(x)$ & -- & all $\ge0.8$, decreasing\\
   Two-phase embedded-wall Helmholtz (\issue{106}) & dual-volume $L^2$ per direction & mm, piecewise stream function & $1.86$--$2.06$ & all $\ge1.9$ (equal viscosities, uniform); else within $\log_2 1.1$ of the open domain\\
-  Stress with uniform viscosity versus scalar diffusion & $L^2$ difference & scalar Laplacian & $2.11$--$2.83$ (uniform); $0.48$--$0.50$ (composite) & all $\ge2.0$ (uniform); composite: below $1.1\times$ the open-domain difference\\
+  Stress with uniform viscosity versus scalar diffusion & $L^2$ difference & scalar Laplacian & $2.11$--$2.83$ (uniform); $0.48$--$0.50$ (composite) & all $\ge2.0$ (uniform); composite: below $1.1\times$ the same-domain open difference\\
   Lax--Wendroff translation & $L^2$ & exact translation & -- & both $>1.9$\\
   Staggered convection, composite & dual-volume $L^2$ of the tendency & mm velocity & -- & all $>1.3$; $>1.35$ (Lax--Wendroff, limited at transitions)\\
   \multicolumn{5}{@{}l}{\emph{Interface}}\\
@@ -387,23 +387,14 @@ maximum norm of the fraction
 is not asserted and does not converge (uniform $0.60$, $0.37$; composite
 $-0.16$, $0.28$).\label{par:verif:transition-order} With a level transition
 the two-phase embedded-wall rates stay within $\log_2 1.1$ of the
-open-domain rates. The difference between the stress with uniform viscosity
-and the scalar Laplacian, applied to the divergence-free field of the test,
-converges with order $0.5$ on composite meshes, with and without the wall.
-That field has a vanishing normal velocity on the transitions; there the
-stress rows differ from the scalar rows (whose band is $O(\minwidth)$) by
-terms of order one on cells that cover an area of order $\minwidth$, whence
-the $L^2$ order $\tfrac12$ (the maximum norm does not converge). The order is
-a property of the field, not of the operator: for a field whose normal
-velocity does not vanish on the transition the stress rows differ from the
-Laplacian by $O(\minwidth^{-1})$ with alternating signs along the transition
-($L^2$ order $-\tfrac12$ in the same test), so the flux through the
-transition faces is inconsistent by a term of order one on an area
-$O(\minwidth)$. The solution error of the shifted solve is first order
-(\issue{112}: $0.985$ and $1.002$ in $L^2$; the test pins $0.8$); no order of
-the solution follows from the order of the difference, since rows of
-truncation order one at a transition can give a solution of order two
-(\cref{eq:viscosity:cut}).
+open-domain rates. The scalar Laplacian now uses the same geometric
+transition contacts as the fully open cut-cell operator (\issue{80}).
+Pointwise transition-row truncation errors need not predict solution-level
+convergence: the composite Helmholtz solution above approaches second order in
+both norms ($\ge1.7$ between the first two base widths on the tested layouts)
+despite transition rows with $O(1)$ error.
+The separate variable-viscosity stress transition remains first order
+(\issue{112}; the shifted-solve test pins $0.8$).
 
 \begin{implnote}
 Tests in the order of \cref{tab:verif:orders}:
@@ -411,7 +402,8 @@ Tests in the order of \cref{tab:verif:orders}:
 \testsym{test/operators/gradient.jl}{compatible pressure gradient},
 \testsym{test/operators/poisson.jl}{geometric multigrid Poisson convergence},
 \testsym{test/operators/staggered_diffusion.jl}{uniform periodic staggered Laplacian convergence},
-\testsym{test/operators/staggered_diffusion.jl}{corrected AMR Laplacian converges and has stable spectrum},
+\testsym{test/operators/staggered_diffusion.jl}{composite diffusion solution convergence (#80)},
+\testsym{test/operators/staggered_diffusion.jl}{composite implicit diffusion is energy contractive (#80)},
 \testsym{test/operators/staggered_diffusion.jl}{cut-cell Helmholtz convergence at walls and level transitions (#87)},
 \testsym{test/operators/embedded_wall_rows.jl}{grid-aligned embedded-wall Helmholtz convergence (#106)},
 \testsym{test/operators/embedded_wall_rows.jl}{inclined embedded-wall Helmholtz comparison (#106)},
@@ -483,7 +475,7 @@ enters.
   Momentum, AMR transfer & refine and coarsen of a face velocity & $2\times10^{-13}$; divergence does not grow\\
   Momentum, wall force (\issue{106}) & aligned embedded wall, three wall types, single and double precision & momentum loss equal to the viscosity times the wall length, to $512\machineeps$ times that length\\
   Skew-symmetry & centred staggered convection, uniform and composite & $2\times10^{-14}$; constant field $64\machineeps$\\
-  Energy, viscous operator & stable core, uniform and composite & energy rate $\le256\,\#\facesint\,\machineeps$; smallest stiffness eigenvalue $\ge-2\times10^{-12}$\\
+  Energy, viscous operator & uniform and composite & energy rate $\le256\,\#\facesint\,\machineeps$; stiffness eigenvalues non-negative to round-off; implicit energy factor $\le1+10^{-12}$\\
   Divergence, projections & CMDGFM projection, after a regrid, with slip, open boundaries & defects $\le$ solver tolerance; flows $\le2\times10^{-8}$\\
   Gradient--divergence duality & elliptic operator & $8\times10^{-13}$; symmetric to $4\times10^{-14}$\\
   Hydrostatic rest & flat heavy interface, vertical and oblique gravity, density ratio $1000$; sloped solid on a composite mesh; CMDGFM with solids (\issue{76}) & velocity $<10^{-9}$; $\le2048\machineeps$; $\le10^{-7}\dt\abs{\gravacc}$\\
@@ -700,8 +692,7 @@ the audited commit, PR~\#125 has fixed \issue{117} and \issue{118}
 step check of~\cref{eq:stab:check}, which now uses the top of the accepted
 range (\cref{sec:stab:bounds}); the others are open. Open
 investigations: unbounded CTU fluxes at hanging dual faces (\issue{70}), dual
-Courant numbers above one next to a solid (\issue{72}), energy growth of the
-corrected Laplacian at level transitions (\issue{80}) and the fallback for
+Courant numbers above one next to a solid (\issue{72}), and the fallback for
 orphaned edges at open walls (\issue{99}).
 
 \emph{Order in time.} No test asserts an order in time

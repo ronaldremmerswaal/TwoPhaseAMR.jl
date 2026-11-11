@@ -142,13 +142,16 @@ restrictive~\thesis{eq.~(7.4)}; the code multiplies it by $2^{-1/2}$
 (\cref{sec:viscosity:time}), and the flow bound is the convective one also
 for a large viscosity. In two phases the implicit midpoint step does not
 increase the mass-weighted kinetic energy for any $\dt$, up to the
-residual~\cref{eq:viscosity:energy}. The single-phase Crank--Nicolson step,
-whose explicit half acts on $\velo^{\timelevel{n}}$, has no such balance
-(\cref{dev:viscosity:time-level}), and on composite meshes the band rows of
-the corrected Laplacian are not symmetric: the midpoint step can then raise
-the energy by a factor of up to $1.1$ (walls) and $2.7$ (periodic) per step
-in the stiff limit, noticeably once $\visc\dt/(\dens\minwidth^2)\gtrsim0.1$
-(\cref{eq:viscosity:laplacian}, \issue{80}). $\dtvisc$, the explicit
+residual~\cref{eq:viscosity:energy}. The single-phase geometric stiffness is
+also positive semidefinite: backward Euler is contractive for every $\dt$,
+as is midpoint when $\velo^{\timelevel{n}}=\velo^{\stage{1}}$. The actual
+single-phase split step evaluates its explicit half at
+$\velo^{\timelevel{n}}$ (\cref{dev:viscosity:time-level}), so, by
+\cref{eq:viscosity:split-bound}, its energy grows by at most
+$\big((\velo^{\stage{1}}-\velo^{\timelevel{n}})^{\transpose}\dualvolmat(\velo^{\stage{1}}-\velo^{\timelevel{n}})\big)^{1/2}$,
+the dual-volume distance between the transported and the old velocity, plus
+the work of moving walls; the old transition-band energy growth is removed
+(\issue{80}). $\dtvisc$, the explicit
 estimate of \apifun{stable_timestep}\code{(operator; cfl=0.9)} for a
 \apitype{StaggeredDiffusionOperator}, is used by no flow step. The body force
 is integrated with the midpoint rule and has no bound~\cref{eq:forces:body}.
@@ -475,13 +478,13 @@ with a solid they reached $3.3\,\wycflval$, and a Lax--Wendroff or limited
 face state next to a solid may see a Courant number above one, for which no
 bound is claimed (\cref{sec:momentum:cfl}, \issue{72}).
 
-\emph{Energy of the split step.} No step of the code is claimed to be
+\emph{Energy of the split step.} The full split step is not claimed to be
 energy-stable: the centred and Lax--Wendroff convection add energy in time
 (\cref{eq:momentum:euler-energy}), the CMDGFM has no energy identity
-(\cref{sec:projection:cmdgfm}), and the viscous step can raise the energy at
-level transitions (\cref{sec:stab:bounds}). The bounds therefore limit the
-step by the time scales of transport and interface waves, not by an energy
-estimate.
+(\cref{sec:projection:cmdgfm}), and the single-phase viscous step has
+different explicit and implicit arguments (\cref{sec:stab:bounds}). The
+bounds therefore limit the step by the time scales of transport and
+interface waves, not by an energy estimate.
 
 \begin{implnote}
 Run-time checks: \srcsym{src/vof/fluxes.jl}{_swept_fraction} (open strip),
@@ -513,7 +516,7 @@ the space--time error.
     VOF transport (\cref{ch:vof-transport}) & exact space--time fluxes of the reconstruction, no method-of-lines form (\cref{sec:vof:balance}) & symmetric difference $1.8$ (translation, cut walls); vortex reversal $1.5$\\
     Staggered convection (\cref{ch:momentum-transport}) & forward Euler sweeps with Lax--Wendroff or limited states~\cref{eq:momentum:split} & Lax--Wendroff translation $1.9$ (uniform); convection on composite meshes $1.3$\\
     Pressure gradient and projection (\cref{ch:discrete-setting,ch:projection}) & CMDGFM jump interpolant first order for affine fields (\cref{sec:projection:cmdgfm}) & gradient on composite meshes $1.4$, stretched $1.0$; Poisson $1.7$; jump interpolant $0.8$\\
-    Viscous operator (\cref{ch:viscosity}) & two-point difference second order; band rows at transitions $O(\minwidth)$~\cref{eq:viscosity:laplacian}; PLIC wall rows first order (\issue{110}); variable stress at transitions first order (\issue{112}); geometric-mean viscosity at a jump first order (\issue{113}); orphan edges at non-Dirichlet walls not exact for linear fields (\issue{99}) & uniform $1.9$; composite $1.8$; cut walls with transitions $1.8$ (max); aligned embedded walls $1.5$ (max), $1.8$ ($L^1$, $L^2$); inclined walls $0.6$ (max), $0.8$ pinned; variable stress bulk $1.8$, at transitions $0.8$ pinned\\
+    Viscous operator (\cref{ch:viscosity}) & two-point difference second order; transition rows can be $O(1)$~\cref{eq:viscosity:laplacian}; PLIC wall rows first order (\issue{110}); variable stress at transitions first order (\issue{112}); geometric-mean viscosity at a jump first order (\issue{113}); orphan edges at non-Dirichlet walls not exact for linear fields (\issue{99}) & uniform $1.9$; composite Helmholtz $1.8$ (max, $L^2$); cut walls with transitions $1.8$ (max); aligned embedded walls $1.5$ (max), $1.8$ ($L^1$, $L^2$); inclined walls $0.6$ (max), $0.8$ pinned; variable stress bulk $1.8$, at transitions $0.8$ pinned\\
     AMR transfer (\cref{ch:amr-criteria-transfer}) & conservative; prolongation first order next to coarser blocks & phase scalar transfer $1.8$\\
     Forces in time (\cref{ch:forces}) & forward Euler~\cref{eq:forces:stages} & --\\
     \bottomrule
@@ -579,7 +582,8 @@ Tests (the asserted lower bounds of \cref{tab:stab:orders}):
 \testsym{test/operators/poisson.jl}{geometric multigrid Poisson convergence},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM jump interpolant consistency},
 \testsym{test/operators/staggered_diffusion.jl}{uniform periodic staggered Laplacian convergence},
-\testsym{test/operators/staggered_diffusion.jl}{corrected AMR Laplacian converges and has stable spectrum},
+\testsym{test/operators/staggered_diffusion.jl}{composite diffusion solution convergence (#80)},
+\testsym{test/operators/staggered_diffusion.jl}{composite implicit diffusion is energy contractive (#80)},
 \testsym{test/operators/staggered_diffusion.jl}{cut-cell Helmholtz convergence at walls and level transitions (#87)},
 \testsym{test/operators/embedded_wall_rows.jl}{grid-aligned embedded-wall Helmholtz convergence (#106)},
 \testsym{test/operators/embedded_wall_rows.jl}{inclined embedded-wall Helmholtz comparison (#106)},

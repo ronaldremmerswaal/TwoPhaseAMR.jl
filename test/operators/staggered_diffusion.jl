@@ -1,4 +1,4 @@
-using LinearAlgebra: Symmetric, dot, eigvals
+using LinearAlgebra: Diagonal, I, Symmetric, dot, eigvals, opnorm
 using SparseArrays: SparseMatrixCSC, nnz, spdiagm
 using Random: MersenneTwister, rand
 using Krylov
@@ -169,6 +169,47 @@ end
     end
 end
 
+@testset "unembedded geometric diffusion matches fully open geometry (#80)" begin
+    for periodic in ((true, true), (false, false), (true, false)),
+            boundary in (NoSlip(), FreeSlip(), NoSlip((x, y, t, axis) -> x + 2y + t))
+        mesh = BlockTreeMesh(
+            base_mesh = (8, 8), block_size = (4, 4), extent = (8.0, 8.0),
+            periodic = periodic, max_level = 1,
+            refine = (key, origin, extent) -> key.level == 0 && key.i == 0 && key.j == 0,
+        )
+        geometry = GeometryField(mesh, (x, y) -> 1.0; lipschitz = 1)
+        bare = StaggeredDiffusionOperator(mesh; boundary)
+        open = StaggeredDiffusionOperator(geometry; boundary)
+        velocity = FaceVelocity(
+            mesh, (x, y, t, axis) -> sin(x + 0.3y + axis),
+        )
+        bare_rate, open_rate = FaceVelocity(mesh), FaceVelocity(mesh)
+        diffusion!(bare_rate, velocity, bare; time = 0.4)
+        diffusion!(open_rate, velocity, open; time = 0.4)
+        for (a, b) in zip((bare.x, bare.y), (open.x, open.y))
+            @test a.local_to_global == b.local_to_global
+            @test a.volumes == b.volumes
+            @test a.stiffness ≈ b.stiffness rtol = 1.0e-13 atol = 1.0e-13
+        end
+        @test bare_rate.interior ≈ open_rate.interior rtol = 1.0e-13 atol = 1.0e-13
+    end
+    mesh32 = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (4, 4),
+        origin = (0.0f0, 0.0f0), extent = (8.0f0, 8.0f0),
+        periodic = (false, false), max_level = 1,
+        refine = (key, origin, extent) -> key.level == 0 && key.i == 0 && key.j == 0,
+    )
+    bare32 = StaggeredDiffusionOperator(mesh32; viscosity = 1.0f0)
+    open32 = StaggeredDiffusionOperator(
+        GeometryField(mesh32, (x, y) -> 1.0f0; lipschitz = 1); viscosity = 1.0f0,
+    )
+    for (a, b) in zip((bare32.x, bare32.y), (open32.x, open32.y))
+        @test eltype(a.stiffness) === Float32
+        @test a.stiffness ≈ b.stiffness rtol = 64eps(Float32)
+        @test TwoPhaseAMR._staggered_conservative_laplacian(a)
+    end
+end
+
 @testset "cut-cell diffusion connections at an AMR transition (#78)" begin
     mesh = BlockTreeMesh(
         base_mesh = (8, 8), block_size = (4, 4), extent = (8.0, 8.0),
@@ -214,7 +255,7 @@ end
             mesh, Val(axis), Float64,
         )
         _, local_to_global = TwoPhaseAMR._component_local_to_global(mesh, axis)
-        connections = TwoPhaseAMR._cut_cell_diffusion_connections(
+        connections = TwoPhaseAMR._geometric_diffusion_connections(
             geometry, Val(axis), schedule, incidences, local_to_global,
         )
         return connections, local_to_global
@@ -517,7 +558,7 @@ end
             schedule = TwoPhaseAMR._cut_cell_dual_schedule(geometry, Val(axis), false)
             incidences, _, _ = TwoPhaseAMR._component_incidences(mesh, Val(axis), Float64)
             _, local_to_global = TwoPhaseAMR._component_local_to_global(mesh, axis)
-            connections = TwoPhaseAMR._cut_cell_diffusion_connections(
+            connections = TwoPhaseAMR._geometric_diffusion_connections(
                 geometry, Val(axis), schedule, incidences, local_to_global,
             )
             expected = Dict{Tuple{Int, Int}, Float64}()
@@ -528,10 +569,10 @@ end
                 minus = incidences[TwoPhaseAMR._cell_index(flux.minus, nx, ny)]
                 plus = incidences[TwoPhaseAMR._cell_index(flux.plus, nx, ny)]
                 mlo, mmid, mhi = TwoPhaseAMR._open_dual_trace(
-                    geometry, Val(axis), flux.minus, 1, flux,
+                    geometry, Val(axis), flux.minus, 1, flux, Float64,
                 )
                 plo, pmid, phi = TwoPhaseAMR._open_dual_trace(
-                    geometry, Val(axis), flux.plus, -1, flux,
+                    geometry, Val(axis), flux.plus, -1, flux, Float64,
                 )
                 for a in minus, b in plus
                     a.local_index == b.local_index && continue
@@ -691,48 +732,185 @@ end
     end
 end
 
-@testset "corrected AMR Laplacian converges and has stable spectrum" begin
-    function corrected_error(nx; spectrum = false)
+@testset "composite diffusion solution convergence (#80)" begin
+    function solution_errors(n, layout)
         mesh = BlockTreeMesh(
-            block_size = (nx, nx), max_level = 2,
+            base_mesh = (n, n), block_size = (4, 4), extent = (8.0, 8.0),
+            periodic = (false, false), max_level = 1,
             refine = (key, origin, extent) ->
-            key.level == 0 ||
-                (key.level == 1 && key.i == 0 && key.j == 0),
+            key.level == 0 && key.i >= div(n, 8) &&
+                (layout === :strip || key.j >= div(n, 8)),
         )
-        velocity = FaceVelocity(
-            mesh, (x, y, time, axis) -> axis == 1 ?
-                sinpi(2x) * cospi(2y) : cospi(2x) * sinpi(2y)
-        )
-        tendency = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
-        operator = StaggeredDiffusionOperator(mesh; boundary = FreeSlip())
-        diffusion!(tendency, velocity, operator)
-        squared = 0.0
-        total_volume = 0.0
+        operator = StaggeredDiffusionOperator(mesh; viscosity = 1.0)
+        maximum_error, squared_error, total_volume = 0.0, 0.0, 0.0
         for component in (operator.x, operator.y)
-            if spectrum
-                eigenvalues = eigvals(Matrix(component.laplacian))
-                @test maximum(real, eigenvalues) <=
-                    1.0e-10 * maximum(abs, eigenvalues)
+            exact = [
+                sinpi(mesh.faces[index].center[1] / 8) *
+                    sinpi(mesh.faces[index].center[2] / 8)
+                    for index in component.local_to_global
+            ]
+            volumes = component.volumes
+            rhs = volumes .* ((1 + 2 * (pi / 8)^2) .* exact)
+            numerical = (spdiagm(0 => volumes) + component.stiffness) \ rhs
+            error = numerical - exact
+            maximum_error = max(maximum_error, maximum(abs, error))
+            squared_error += dot(volumes, abs2.(error))
+            total_volume += sum(volumes)
+        end
+        return (; maximum = maximum_error, l2 = sqrt(squared_error / total_volume))
+    end
+
+    for layout in (:strip, :corner)
+        errors = [solution_errors(n, layout) for n in (16, 32, 64)]
+        for name in (:maximum, :l2)
+            values = collect(getproperty.(errors, name))
+            orders = log2.(values[1:2] ./ values[2:3])
+            println("issue80 composite $layout $name errors=$values eoc=$orders")
+            @test all(diff(values) .< 0)
+            # Transition rows are not pointwise second order, so the observed
+            # slopes depend on where the transition crosses the solution: they
+            # approach two from below and are not uniformly above 1.8.
+            @test orders[1] >= 1.7
+            @test orders[2] >= 1.85
+        end
+    end
+    # Transition rows can have O(1) pointwise truncation error. The
+    # manufactured Helmholtz solution above checks the resulting global
+    # accuracy instead of requiring the removed quadratic-exact row closure.
+end
+
+@testset "composite implicit diffusion is energy contractive (#80)" begin
+    function energy_ratios(diffusion, periodic)
+        worst_backward_euler, worst_midpoint = 0.0, 0.0
+        for component in (diffusion.x, diffusion.y)
+            volumes = component.volumes
+            stiffness = component.stiffness
+            @test stiffness == transpose(stiffness)
+            spectrum = eigvals(Symmetric(Matrix(stiffness)))
+            @test minimum(spectrum) >= -1.0e-12 * max(1.0, maximum(abs, spectrum))
+            @test TwoPhaseAMR._staggered_conservative_laplacian(component)
+            if periodic == (true, true)
+                constant = ones(length(volumes))
+                @test maximum(abs, stiffness * constant) <=
+                    1.0e-12 * max(1.0, maximum(abs, nonzeros(stiffness)))
             end
-            for local_index in eachindex(component.local_to_global)
-                global_index = component.local_to_global[local_index]
-                face = mesh.faces[global_index]
-                x, y = face.center
-                exact = -8pi^2 * (
-                    face.axis == 1 ?
-                        sinpi(2x) * cospi(2y) : cospi(2x) * sinpi(2y)
+            laplacian = Matrix(component.laplacian)
+            identity = Matrix{Float64}(I, length(volumes), length(volumes))
+            volume_half = Diagonal(sqrt.(volumes))
+            volume_inverse_half = Diagonal(inv.(sqrt.(volumes)))
+            for dt in (1.0e-3, 1.0e-1, 10.0, 1.0e3)
+                backward = volume_half * (
+                    (identity - dt * laplacian) \ volume_inverse_half
                 )
-                squared += component.volumes[local_index] *
-                    (tendency.interior[global_index] - exact)^2
-                total_volume += component.volumes[local_index]
+                midpoint = volume_half * (
+                    (identity - dt * laplacian / 2) \
+                        ((identity + dt * laplacian / 2) * volume_inverse_half)
+                )
+                worst_backward_euler = max(worst_backward_euler, opnorm(backward)^2)
+                worst_midpoint = max(worst_midpoint, opnorm(midpoint)^2)
             end
         end
-        return sqrt(squared / total_volume)
+        return (; worst_backward_euler, worst_midpoint)
     end
-    corrected_error(4; spectrum = true)
-    errors = corrected_error.((8, 16, 32))
-    @test log2(errors[1] / errors[2]) > 1.8
-    @test log2(errors[2] / errors[3]) > 1.5
+
+    function expect_cg(diffusion)
+        solver = StaggeredEllipticSolver(
+            StaggeredEllipticOperator(diffusion; diffusion = 0.1);
+            preconditioner = nothing,
+        )
+        @test solver.x.krylov isa Krylov.CgWorkspace
+        @test solver.y.krylov isa Krylov.CgWorkspace
+        return nothing
+    end
+
+    function composite_mesh(; periodic, pattern, extent, max_level)
+        return BlockTreeMesh(
+            base_mesh = (8, 8), block_size = (4, 4), extent = extent,
+            periodic = periodic, max_level = max_level,
+            refine = (key, origin, extent) ->
+            (
+                key.level == 0 &&
+                    (pattern == :strip ? key.i == 0 : key.i == 0 && key.j == 0)
+            ) ||
+                (pattern == :nested && key.level == 1 && key.i == 0 && key.j == 0),
+        )
+    end
+
+    function split_mesh(periodic)
+        return BlockTreeMesh(
+            base_mesh = (8, 8), block_size = (4, 4), extent = (8.0, 8.0),
+            periodic = periodic, max_level = 1,
+            refine = (key, origin, extent) -> key.level == 0 && key.i == 0,
+        )
+    end
+
+    maximum_backward_euler = 0.0
+    maximum_midpoint = 0.0
+    for periodic in ((true, true), (false, false), (true, false)),
+            pattern in (:strip, :corner, :nested), boundary in (NoSlip(), FreeSlip())
+        mesh = composite_mesh(
+            periodic = periodic, pattern = pattern,
+            extent = pattern == :nested ? (16.0, 16.0) : (8.0, 8.0),
+            max_level = pattern == :nested ? 2 : 1,
+        )
+        diffusion = StaggeredDiffusionOperator(mesh; viscosity = 1.0, boundary)
+        expect_cg(diffusion)
+        ratios = energy_ratios(diffusion, periodic)
+        maximum_backward_euler = max(maximum_backward_euler, ratios.worst_backward_euler)
+        maximum_midpoint = max(maximum_midpoint, ratios.worst_midpoint)
+    end
+
+    # An embedded disc straddling the refinement interface exercises the
+    # signed wall-contact corrections of _wall_contact_stencil!. A moving
+    # NoSlip wall is a regression guard only: the wall value enters
+    # _add_wall_source! and never the stiffness or the Laplacian, so its rows
+    # must equal the stationary ones here.
+    for boundary in (
+            NoSlip(), FreeSlip(),
+            NoSlip((x, y, t, axis) -> axis == 1 ? 1 + t : 0.0),
+        )
+        geometry = GeometryField(
+            split_mesh((false, false)),
+            (x, y) -> hypot(x - 4.0, y - 4.0) - 2.0; lipschitz = 1,
+        )
+        diffusion = StaggeredDiffusionOperator(
+            geometry; viscosity = 1.0, boundary,
+        )
+        expect_cg(diffusion)
+        ratios = energy_ratios(diffusion, (false, false))
+        maximum_backward_euler = max(maximum_backward_euler, ratios.worst_backward_euler)
+        maximum_midpoint = max(maximum_midpoint, ratios.worst_midpoint)
+    end
+
+    # Mixed side conditions: the split boundary strips and the sides without
+    # a wall row must keep the stiffness positive semidefinite.
+    for sides in (
+            VelocityBoundaryConditions(
+                left = Inflow((x, y, t, axis) -> axis == 1 ? y : 0.0),
+                right = Outflow(), bottom = ZeroGradientVelocity(),
+                top = NoSlip((x, y, t, axis) -> axis == 1 ? 1 + t : 0.0),
+            ),
+            VelocityBoundaryConditions(
+                left = ZeroGradientVelocity(),
+                right = Inflow((x, y, t, axis) -> axis == 1 ? 1 + t : 0.0),
+                bottom = Outflow(), top = NoSlip(),
+            ),
+        )
+        diffusion = StaggeredDiffusionOperator(
+            split_mesh((false, false)); viscosity = 1.0, boundary = sides,
+        )
+        expect_cg(diffusion)
+        ratios = energy_ratios(diffusion, (false, false))
+        maximum_backward_euler = max(maximum_backward_euler, ratios.worst_backward_euler)
+        maximum_midpoint = max(maximum_midpoint, ratios.worst_midpoint)
+    end
+
+    println(
+        "issue80 worst energy ratio backward=$maximum_backward_euler ",
+        "midpoint=$maximum_midpoint",
+    )
+    @test maximum_backward_euler <= 1 + 1.0e-12
+    @test maximum_midpoint <= 1 + 1.0e-12
 end
 
 @testset "wall slip and no-slip closures" begin
@@ -761,6 +939,22 @@ end
     stationary = StaggeredDiffusionOperator(mesh)
     diffusion!(tendency, constant_tangent, stationary)
     @test minimum(tendency.interior) < 0
+
+    # Couette flow between a stationary floor and a moving lid is reproduced
+    # on a composite mesh as well, including the split boundary strips of the
+    # level transition.
+    composite = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (4, 4), extent = (1.0, 1.0),
+        periodic = (true, false), max_level = 1,
+        refine = (key, origin, extent) -> key.level == 0 && key.i == 0,
+    )
+    composite_couette = FaceVelocity(
+        composite, (x, y, time, axis) -> axis == 1 ? y : 0.0
+    )
+    composite_tendency = FaceVelocity(composite, (x, y, time, axis) -> 0.0)
+    composite_operator = StaggeredDiffusionOperator(composite; boundary = moving_lid)
+    diffusion!(composite_tendency, composite_couette, composite_operator)
+    @test maximum(abs, composite_tendency.interior) <= 2.0e-12
 end
 
 @testset "moving domain walls do not move an embedded disc" begin
@@ -1134,7 +1328,9 @@ end
         mesh; viscosity = 0.1, boundary = FreeSlip()
     )
     operator = StaggeredEllipticOperator(diffusion; diffusion = 0.1)
-    solver = StaggeredEllipticSolver(operator; coarse_size = 16)
+    solver = StaggeredEllipticSolver(
+        operator; coarse_size = 16, krylov = Krylov.BicgstabWorkspace,
+    )
     right_hand_side = FaceVelocity(
         mesh, (x, y, time, axis) -> axis == 1 ?
             sinpi(2x) * cospi(2y) : cospi(2x) * sinpi(2y)

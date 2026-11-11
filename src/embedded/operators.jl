@@ -856,11 +856,27 @@ function _wall_connection_measure(
     )
     return measure * clamp(one(T) - T(solid_fraction), zero(T), one(T))
 end
+@inline _diffusion_geometry_mesh(mesh::BlockTreeMesh) = mesh
+@inline _diffusion_geometry_mesh(geometry::GeometryField) = geometry.mesh
+@inline _diffusion_open_degree(::BlockTreeMesh, ::Val, index) = true
+@inline _diffusion_open_degree(geometry::GeometryField, ::Val{Axis}, index) where {Axis} =
+    geometry.dual_volumes[Axis][index] > 0
+@inline _diffusion_open_face(::BlockTreeMesh, index) = true
+@inline _diffusion_open_face(geometry::GeometryField, index) = geometry.aperture[index] > 0
+@inline _diffusion_solid_line_fraction(
+    ::BlockTreeMesh, ref, axis, side, ::Type{T},
+) where {T} = zero(T)
+@inline _diffusion_solid_line_fraction(
+    geometry::GeometryField, ref, axis, side, ::Type{T},
+) where {T} = T(_cell_solid_line_fraction(geometry.solid, ref, axis, side))
 
+# Shared by the unembedded and cut-cell paths: an unembedded mesh has no solid
+# and no covered degrees of freedom, so its split-side contacts are fully open.
 function _add_split_side_diffusion_connections!(
-        connections, geometry::GeometryField{T}, ::Val{Axis}, incidences,
+        connections::Vector{DualDiffusionConnection{T}},
+        geometry, ::Val{Axis}, incidences,
     ) where {T, Axis}
-    mesh = geometry.mesh
+    mesh = _diffusion_geometry_mesh(geometry)
     nx, ny = mesh.block_size
     tangent = 3 - Axis
     for (cell_index, cell_faces) in pairs(incidences)
@@ -870,11 +886,11 @@ function _add_split_side_diffusion_connections!(
         block = mesh.blocks[block_index]
         for first_index in eachindex(cell_faces)
             first = cell_faces[first_index]
-            geometry.dual_volumes[Axis][first.local_index] > zero(T) || continue
+            _diffusion_open_degree(geometry, Val(Axis), first.local_index) || continue
             for second_index in (first_index + 1):length(cell_faces)
                 second = cell_faces[second_index]
                 first.side == second.side || continue
-                geometry.dual_volumes[Axis][second.local_index] > zero(T) || continue
+                _diffusion_open_degree(geometry, Val(Axis), second.local_index) || continue
                 first_face = mesh.faces[first.global_index]
                 second_face = mesh.faces[second.global_index]
                 first_lo, first_hi = _face_local_tangent_interval(mesh, ref, first_face)
@@ -890,8 +906,8 @@ function _add_split_side_diffusion_connections!(
                 # shared transverse interface therefore has half the open
                 # length of the clipped line through the split point. The
                 # advection schedule only supplies the fine-cell contribution.
-                solid_fraction = _cell_solid_line_fraction(
-                    geometry.solid, ref, tangent, T(split),
+                solid_fraction = _diffusion_solid_line_fraction(
+                    geometry, ref, tangent, T(split), T,
                 )
                 measure = T(0.5) * T(block.spacing[Axis]) *
                     clamp(one(T) - T(solid_fraction), zero(T), one(T))
@@ -914,7 +930,7 @@ function _add_split_side_diffusion_connections!(
 end
 
 function _open_dual_trace(
-        geometry::GeometryField{T}, ::Val{Axis}, ref, side, flux_face,
+        geometry::GeometryField{T}, ::Val{Axis}, ref, side, flux_face, ::Type{T},
     ) where {T, Axis}
     mesh = geometry.mesh
     block = mesh.blocks[ref.block]
@@ -944,12 +960,26 @@ function _open_dual_trace(
     end
     return lo, (lo + hi) / 2, hi
 end
+function _open_dual_trace(
+        mesh::BlockTreeMesh, ::Val{Axis}, ref, side, flux_face, ::Type{T},
+    ) where {T, Axis}
+    block = mesh.blocks[ref.block]
+    center = cellcenter(mesh, ref.block, ref.i, ref.j)
+    offset = T(
+        _wrapped_delta(
+            center[Axis] - flux_face.center[Axis], mesh.extent[Axis], mesh.periodic[Axis],
+        )
+    )
+    width = T(block.spacing[Axis])
+    return offset - width / 2, offset, offset + width / 2
+end
 
-function _cut_cell_diffusion_connections(
-        geometry::GeometryField{T}, ::Val{Axis}, schedule, incidences,
+
+function _geometric_diffusion_connections(
+        geometry, ::Val{Axis}, schedule::AMRDualAdvectionSchedule{T}, incidences,
         local_to_global,
     ) where {T, Axis}
-    mesh = geometry.mesh
+    mesh = _diffusion_geometry_mesh(geometry)
     nx, ny = mesh.block_size
     tangent = 3 - Axis
     excluded_fluxes = falses(length(mesh.faces))
@@ -967,17 +997,17 @@ function _cut_cell_diffusion_connections(
         level_change = mesh.blocks[flux_face.minus.block].key.level !=
             mesh.blocks[flux_face.plus.block].key.level
         excluded_fluxes[flux_index] = true
-        geometry.aperture[flux_index] > zero(T) || continue
+        _diffusion_open_face(geometry, flux_index) || continue
         minus_lo, minus_mid, minus_hi = _open_dual_trace(
-            geometry, Val(Axis), flux_face.minus, 1, flux_face,
+            geometry, Val(Axis), flux_face.minus, 1, flux_face, T,
         )
         plus_lo, plus_mid, plus_hi = _open_dual_trace(
-            geometry, Val(Axis), flux_face.plus, -1, flux_face,
+            geometry, Val(Axis), flux_face.plus, -1, flux_face, T,
         )
         for first in minus_faces, second in plus_faces
             first.local_index == second.local_index && continue
-            geometry.dual_volumes[Axis][first.local_index] > zero(T) || continue
-            geometry.dual_volumes[Axis][second.local_index] > zero(T) || continue
+            _diffusion_open_degree(geometry, Val(Axis), first.local_index) || continue
+            _diffusion_open_degree(geometry, Val(Axis), second.local_index) || continue
             first_face = mesh.faces[first.global_index]
             second_face = mesh.faces[second.global_index]
             _, first_hi = _face_local_tangent_interval(mesh, flux_face.minus, first_face)
@@ -1260,27 +1290,10 @@ function _cut_cell_transverse_stencils(
     return isempty(stencils) ? nothing : stencils
 end
 
-function _cut_cell_diffusion_component(
-        geometry::GeometryField{T}, ::Val{Axis}, boundary, aligned,
-    ) where {T, Axis}
-    mesh = geometry.mesh
-    schedule = _cut_cell_dual_schedule(geometry, Val(Axis), false)
-    incidences, global_to_local, _ =
-        _component_incidences(mesh, Val(Axis), T)
-    _, local_to_global = _component_local_to_global(mesh, Axis)
-    volumes = copy(schedule.volumes)
-    connections = _cut_cell_diffusion_connections(
-        geometry, Val(Axis), schedule, incidences, local_to_global,
-    )
-    wall_connections = _wall_diffusion_connections(
-        mesh, Val(Axis), T, incidences, global_to_local; geometry,
-    )
-    append!(
-        wall_connections,
-        _embedded_wall_connections(
-            geometry, Val(Axis), incidences, global_to_local, aligned,
-        ),
-    )
+function _geometric_diffusion_stiffness(
+        mesh, connections, local_to_global, wall_connections, boundary,
+        ::Val{Axis}, ::Type{T},
+    ) where {Axis, T}
     transverse_stencils = _cut_cell_transverse_stencils(
         mesh, connections, local_to_global, wall_connections, boundary, Val(Axis), T,
     )
@@ -1299,9 +1312,35 @@ function _cut_cell_diffusion_component(
             )
         end
     end
-    stiffness = _diffusion_stiffness(
+    return _diffusion_stiffness(
         mesh, local_to_global, connections,
         wall_connections, boundary, T; gradient_stencil,
+    )
+end
+
+function _cut_cell_diffusion_component(
+        geometry::GeometryField{T}, ::Val{Axis}, boundary, aligned,
+    ) where {T, Axis}
+    mesh = geometry.mesh
+    schedule = _cut_cell_dual_schedule(geometry, Val(Axis), false)
+    incidences, global_to_local, _ =
+        _component_incidences(mesh, Val(Axis), T)
+    _, local_to_global = _component_local_to_global(mesh, Axis)
+    volumes = copy(schedule.volumes)
+    connections = _geometric_diffusion_connections(
+        geometry, Val(Axis), schedule, incidences, local_to_global,
+    )
+    wall_connections = _wall_diffusion_connections(
+        mesh, Val(Axis), T, incidences, global_to_local; geometry,
+    )
+    append!(
+        wall_connections,
+        _embedded_wall_connections(
+            geometry, Val(Axis), incidences, global_to_local, aligned,
+        ),
+    )
+    stiffness = _geometric_diffusion_stiffness(
+        mesh, connections, local_to_global, wall_connections, boundary, Val(Axis), T,
     )
     dirichlet_faces = Int[]
     wall_reactions = WallDiffusionReaction{T}[]

@@ -1089,7 +1089,8 @@ tests = [
 [[claims]]
 label = "eq:viscosity:connections"
 sources = [
-  { file = "src/operators/staggered_diffusion.jl", symbol = "_dual_diffusion_connections" }
+  { file = "src/operators/staggered_diffusion.jl", symbol = "_dual_diffusion_connections" },
+  { file = "src/embedded/operators.jl", symbol = "_geometric_diffusion_connections" },
 ]
 tests = [
   { file = "test/operators/staggered_diffusion.jl", testset = "staggered diffusion stable core on uniform and AMR meshes" },
@@ -1099,7 +1100,9 @@ check = "uniform_laplacian_check"
 [[claims]]
 label = "eq:viscosity:gradient"
 sources = [
-  { file = "src/operators/staggered_diffusion.jl", symbol = "_gradient_stencil" }
+  { file = "src/operators/staggered_diffusion.jl", symbol = "_gradient_stencil" },
+  { file = "src/embedded/operators.jl", symbol = "_cut_cell_gradient_stencil" },
+  { file = "src/embedded/operators.jl", symbol = "_cut_cell_transverse_stencils" },
 ]
 tests = [
   { file = "test/operators/staggered_diffusion.jl", testset = "staggered diffusion stable core on uniform and AMR meshes" }
@@ -1107,7 +1110,8 @@ tests = [
 [[claims]]
 label = "eq:viscosity:stiffness"
 sources = [
-  { file = "src/operators/staggered_diffusion.jl", symbol = "_diffusion_stiffness" }
+  { file = "src/operators/staggered_diffusion.jl", symbol = "_diffusion_stiffness" },
+  { file = "src/embedded/operators.jl", symbol = "_geometric_diffusion_stiffness" },
 ]
 tests = [
   { file = "test/operators/staggered_diffusion.jl", testset = "staggered diffusion stable core on uniform and AMR meshes" }
@@ -1116,13 +1120,14 @@ check = "uniform_laplacian_check"
 [[claims]]
 label = "eq:viscosity:laplacian"
 sources = [
-  { file = "src/operators/staggered_diffusion.jl", symbol = "_corrected_laplacian" },
-  { file = "src/operators/staggered_diffusion.jl", symbol = "_quadratic_laplacian_stencil" }
+  { file = "src/operators/staggered_diffusion.jl", symbol = "_staggered_diffusion_component" },
+  { file = "src/embedded/operators.jl", symbol = "_geometric_diffusion_stiffness" },
 ]
 tests = [
-  { file = "test/operators/staggered_diffusion.jl", testset = "corrected AMR Laplacian converges and has stable spectrum" }
+  { file = "test/operators/staggered_diffusion.jl", testset = "composite diffusion solution convergence (#80)" },
+  { file = "test/operators/staggered_diffusion.jl", testset = "composite implicit diffusion is energy contractive (#80)" },
 ]
-check = "corrected_laplacian_check"
+check = "symmetric_laplacian_check"
 [[claims]]
 label = "eq:viscosity:walls"
 sources = [
@@ -1139,7 +1144,7 @@ sources = [
   { file = "src/embedded/operators.jl", symbol = "_embedded_wall_connections" },
   { file = "src/embedded/operators.jl", symbol = "_embedded_aligned_wall_segments" },
   { file = "src/embedded/operators.jl", symbol = "_cut_cell_diffusion_component" },
-  { file = "src/embedded/operators.jl", symbol = "_cut_cell_diffusion_connections" },
+  { file = "src/embedded/operators.jl", symbol = "_geometric_diffusion_connections" },
   { file = "src/embedded/operators.jl", symbol = "_open_dual_trace" },
   { file = "src/embedded/operators.jl", symbol = "_add_split_side_diffusion_connections!" },
   { file = "src/embedded/operators.jl", symbol = "_cut_cell_gradient_stencil" },
@@ -2008,7 +2013,8 @@ tests = [
   { file = "test/operators/gradient.jl", testset = "compatible pressure gradient" },
   { file = "test/operators/poisson.jl", testset = "geometric multigrid Poisson convergence" },
   { file = "test/operators/staggered_diffusion.jl", testset = "uniform periodic staggered Laplacian convergence" },
-  { file = "test/operators/staggered_diffusion.jl", testset = "corrected AMR Laplacian converges and has stable spectrum" },
+  { file = "test/operators/staggered_diffusion.jl", testset = "composite diffusion solution convergence (#80)" },
+  { file = "test/operators/staggered_diffusion.jl", testset = "composite implicit diffusion is energy contractive (#80)" },
   { file = "test/operators/staggered_diffusion.jl", testset = "cut-cell Helmholtz convergence at walls and level transitions (#87)" },
   { file = "test/operators/embedded_wall_rows.jl", testset = "grid-aligned embedded-wall Helmholtz convergence (#106)" },
   { file = "test/operators/embedded_wall_rows.jl", testset = "inclined embedded-wall Helmholtz comparison (#106)" },
