@@ -32,6 +32,22 @@ task model documented by Polyester:
 - [Julia PSA on task migration and thread-local state](https://julialang.org/blog/2023/07/PSA-dont-use-threadid/)
 - [Polyester.jl](https://github.com/JuliaSIMD/Polyester.jl)
 
+## Errors and user callbacks
+
+A threaded loop body never throws. Polyester rethrows an exception raised in
+the calling thread's index range as itself, but one raised in a worker's range
+as a `TaskFailedException`, while the other ranges keep running; the error a
+user sees would depend on the thread count. Inputs are therefore validated
+serially before a threaded loop, which then cannot fail, and a rejected input
+leaves the state unchanged where the old serial code did.
+
+User callbacks (`initialize!` functions, `FaceVelocity`/`set_velocities!`
+initializers, level sets, `PhaseScalar` initializers, `Dirichlet` halo and
+inflow values, wall velocities, body forces and diagnostics) are evaluated
+serially on the calling task, in a fixed order. They need not be thread-safe,
+their exceptions propagate unchanged, and a callback with side effects (a
+random perturbation, a counter) gives the same result for every thread count.
+
 ## Blocks and tiles
 
 The public mesh remains a tree of fixed-size blocks. Kernels over block-backed

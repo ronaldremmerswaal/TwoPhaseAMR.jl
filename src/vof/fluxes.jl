@@ -455,17 +455,15 @@ function _advect_wy!(
             momentum_workspace, work, field, axis, momentum_sources,
             density, scheme, amr_interface_scheme,
         )
-        _parallel_block_columns(mesh) do b, first_j, last_j
-            fraction = @inbounds field.fraction.blocks[b]
+        # Validate serially: the threaded update must not throw.
+        for b in 1:nblocks(mesh)
             conditional = @inbounds field.conditional_fraction.blocks[b]
-            indicator_values = @inbounds work.indicator.blocks[b]
             fraction_increment = @inbounds work.increment.blocks[b]
-            gas_fraction_increment = @inbounds work.gas_increment.blocks[b]
-            gas_carrier_values = @inbounds work.gas_carrier.blocks[b]
+            indicator_values = @inbounds work.indicator.blocks[b]
             open_values = isnothing(geometry) ? nothing :
                 @inbounds geometry.open_fraction.blocks[b]
             offset = (b - 1) * cells_per_block
-            @inbounds for j in first_j:last_j, i in 1:nx
+            for j in 1:ny, i in 1:nx
                 ii, jj = i + halo, j + halo
                 c = conditional[ii, jj] + fraction_increment[ii, jj]
                 open = isnothing(open_values) ? one(T) : open_values[ii, jj]
@@ -493,6 +491,20 @@ function _advect_wy!(
                             "indicator=$(indicator_values[ii, jj]), faces=$flux_details",
                     )
                 end
+            end
+        end
+        _parallel_block_columns(mesh) do b, first_j, last_j
+            fraction = @inbounds field.fraction.blocks[b]
+            conditional = @inbounds field.conditional_fraction.blocks[b]
+            fraction_increment = @inbounds work.increment.blocks[b]
+            gas_fraction_increment = @inbounds work.gas_increment.blocks[b]
+            gas_carrier_values = @inbounds work.gas_carrier.blocks[b]
+            open_values = isnothing(geometry) ? nothing :
+                @inbounds geometry.open_fraction.blocks[b]
+            @inbounds for j in first_j:last_j, i in 1:nx
+                ii, jj = i + halo, j + halo
+                c = conditional[ii, jj] + fraction_increment[ii, jj]
+                open = isnothing(open_values) ? one(T) : open_values[ii, jj]
                 c = clamp(c, zero(T), one(T))
                 snap = field.fraction_floor
                 c = c <= snap ? zero(T) : c >= 1 - snap ? one(T) : c

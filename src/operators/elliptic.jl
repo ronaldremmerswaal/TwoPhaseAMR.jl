@@ -716,11 +716,14 @@ function _update_elliptic_face_coefficient!(
             operator.diffusion * stiffness_values[index]
     end
     if !iszero(operator.reaction)
+        # Validate serially: the threaded update must not throw.
+        for index in eachindex(operator.volumes)
+            _csc_stored_pointer(matrix, index, index)
+        end
         @_parallel for index in 1:length(operator.volumes)
-            _add_existing_sparse!(
-                matrix, index, index,
+            pointer = _csc_stored_pointer(matrix, index, index)
+            @inbounds matrix_values[pointer] +=
                 operator.reaction * operator.volumes[index]
-            )
         end
     end
     _impose_inactive_constraints!(matrix, operator.constraints)
@@ -742,17 +745,20 @@ function _update_elliptic_activity!(
     )
     length(active_cells) == length(operator.constraints) == length(volumes) ||
         throw(DimensionMismatch("elliptic activity arrays have the wrong size"))
-    @_parallel for index in eachindex(operator.constraints)
-        active = @inbounds active_cells[index]
-        volume = T(@inbounds volumes[index])
-        active == (volume > zero(T)) || throw(
+    # Validate before writing: a rejected mask leaves the operator unchanged,
+    # and the threaded update must not throw.
+    for index in eachindex(operator.constraints)
+        active_cells[index] == (T(volumes[index]) > zero(T)) || throw(
             ArgumentError(
                 "active elliptic cells must have positive volume",
             )
         )
+    end
+    @_parallel for index in eachindex(operator.constraints)
+        active = @inbounds active_cells[index]
         @inbounds begin
             operator.constraints[index] = active ? zero(T) : one(T)
-            operator.volumes[index] = volume
+            operator.volumes[index] = T(volumes[index])
         end
     end
     _elliptic_boundary_data!(

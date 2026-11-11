@@ -62,6 +62,12 @@ function _refresh_variable_diffusion_matrix_from_inertia!(
         @inbounds matrix_values[index] = half_step * stiffness_values[index]
     end
     rows = rowvals(matrix)
+    # Validate serially: the threaded update must not throw.
+    for column in 1:size(matrix, 2)
+        any(pointer -> rows[pointer] == column, nzrange(matrix, column)) || error(
+            "variable diffusion stiffness has no diagonal at index $column",
+        )
+    end
     @_parallel for column in 1:size(matrix, 2)
         diagonal = 0
         for pointer in nzrange(matrix, column)
@@ -70,9 +76,6 @@ function _refresh_variable_diffusion_matrix_from_inertia!(
                 break
             end
         end
-        iszero(diagonal) && error(
-            "variable diffusion stiffness has no diagonal at index $column",
-        )
         @inbounds matrix_values[diagonal] += inertia[column]
     end
     return matrix

@@ -195,15 +195,14 @@ function _refresh_conditional_fraction!(field::InterfaceField{T}) where {T}
     nx, ny = mesh.block_size
     h = mesh.halo
     _resize_interface_cache!(field.conditional_fraction)
-    _parallel_block_columns(mesh) do block, first_j, last_j
+    # Validate serially: the threaded update must not throw.
+    for block in 1:nblocks(mesh)
         physical = @inbounds field.fraction.blocks[block]
-        conditional = @inbounds field.conditional_fraction.blocks[block]
         open = isnothing(geometry) ? nothing :
             @inbounds geometry.open_fraction.blocks[block]
-        @inbounds for j in first_j:last_j, i in 1:nx
-            ii, jj = i + h, j + h
-            available = isnothing(open) ? one(T) : open[ii, jj]
-            value = physical[ii, jj]
+        for j in 1:ny, i in 1:nx
+            available = isnothing(open) ? one(T) : open[i + h, j + h]
+            value = physical[i + h, j + h]
             tolerance = T(128) * eps(T) * max(one(T), available)
             isfinite(value) && value >= -tolerance &&
                 value <= available + tolerance || throw(
@@ -212,7 +211,17 @@ function _refresh_conditional_fraction!(field::InterfaceField{T}) where {T}
                         "in cell $(CellRef(block, i, j))",
                 )
             )
-            value = clamp(value, zero(T), available)
+        end
+    end
+    _parallel_block_columns(mesh) do block, first_j, last_j
+        physical = @inbounds field.fraction.blocks[block]
+        conditional = @inbounds field.conditional_fraction.blocks[block]
+        open = isnothing(geometry) ? nothing :
+            @inbounds geometry.open_fraction.blocks[block]
+        @inbounds for j in first_j:last_j, i in 1:nx
+            ii, jj = i + h, j + h
+            available = isnothing(open) ? one(T) : open[ii, jj]
+            value = clamp(physical[ii, jj], zero(T), available)
             ratio = available > zero(T) ? value / available : zero(T)
             if ratio <= field.fraction_floor
                 value = zero(T)

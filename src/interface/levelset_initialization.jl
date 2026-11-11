@@ -174,6 +174,8 @@ Failures to resolve geometry or quadrature throw rather than silently accepting
 an inaccurate fraction. Initialization is transactional: failed quadrature does
 not modify the existing fraction field. This is an initialization operation;
 mesh adaptation uses geometric PLIC transfer instead of resampling the level set.
+The level set, like every user callback, is evaluated serially on the calling
+task.
 """
 function InterfaceField(
         mesh::BlockTreeMesh, levelset;
@@ -247,12 +249,13 @@ function initialize!(
     h = mesh.halo
     result = CellField(mesh, T)
     endpoint_tolerance = 64eps(T)
-    _parallel_block_columns(mesh) do b, first_j, last_j
+    # Serial: the level set is a user callback.
+    for b in 1:nblocks(mesh)
         block = @inbounds mesh.blocks[b]
         values = @inbounds result.blocks[b]
         dx, dy = block.spacing
         tolerance = atol * block.volume
-        @inbounds for j in first_j:last_j, i in 1:nx
+        @inbounds for j in 1:ny, i in 1:nx
             x = block.origin[1] + (i - 1 / 2) * dx
             y = block.origin[2] + (j - 1 / 2) * dy
             lo = (x - dx / 2, y - dy / 2)

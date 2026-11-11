@@ -36,10 +36,13 @@ are the package's only launch primitives.
 
 Every index must own its outputs: results may not depend on which thread or in
 which order indices run, so the serial and threaded paths are bitwise
-identical. Reductions use fixed chunk schedules instead. `f` must not throw;
-record failures in owned outputs and throw after the launch. Polyester runs
-`f` on its worker threads, so any user callback reached from `f` must be
-thread-safe.
+identical. Reductions use fixed chunk schedules instead.
+
+`f` must not throw: Polyester rethrows an exception from the calling thread's
+range as itself but one from a worker's range as a `TaskFailedException`,
+while the other ranges keep running. Callers validate their inputs before the
+launch and throw their own error. User callbacks are never called from `f`;
+they run serially on the calling task.
 
 Polyester passes a closure that captures arrays to its workers in a heap box
 (a few dozen bytes per threaded launch); per-cell loops therefore use

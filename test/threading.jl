@@ -95,6 +95,58 @@ expand_parallel(loop) = macroexpand(TwoPhaseAMR, :(@_parallel $loop))
     end
 end
 
+@testset "parallel failures and user callbacks" begin
+    # Inputs are validated before threaded loops, which therefore never
+    # surface a TaskFailedException from a Polyester worker.
+    mesh = BlockTreeMesh(base_mesh = (32, 32), block_size = (8, 8), periodic = (false, false))
+    interface = InterfaceField(mesh, (x, y) -> y - 0.5; lipschitz = 1)
+    interface.fraction.blocks[end][3, 3] = 2.0
+    with_parallel_grain(1) do
+        @test_throws ArgumentError TwoPhaseAMR._refresh_conditional_fraction!(interface)
+    end
+
+    active = trues(ncells(mesh))
+    volumes = TwoPhaseAMR._cell_volumes(mesh, Float64)
+    operator = EllipticOperator(
+        mesh; face_coefficient = ones(length(mesh.faces)), reaction = 0.75,
+        active_cells = active, volumes, inactive_condition = :dirichlet,
+    )
+    constraints = copy(operator.constraints)
+    operator_volumes = copy(operator.volumes)
+    inconsistent = copy(volumes)
+    inconsistent[end] = 0.0
+    with_parallel_grain(1) do
+        @test_throws ArgumentError TwoPhaseAMR._update_elliptic_activity!(
+            operator, active, inconsistent,
+        )
+    end
+    @test operator.constraints == constraints
+    @test operator.volumes == operator_volumes
+
+    # Initialization stays transactional now that the level set runs serially.
+    fraction = copy(interface.fraction.blocks)
+    failing_levelset(x, y) = x > 0.7 ? error("level set failed") : y - 0.5
+    @test_throws "level set failed" initialize!(interface, failing_levelset; lipschitz = 1)
+    @test interface.fraction.blocks == fraction
+
+    # User callbacks run serially on the calling task, so a callback that is
+    # not thread-safe (here: push! to a shared vector) is still correct.
+    calls = Int[]
+    field = CellField(mesh)
+    velocity = FaceVelocity(mesh)
+    with_parallel_grain(1) do
+        initialize!(field, (x, y) -> (push!(calls, Threads.threadid()); x))
+        set_velocities!(velocity, (x, y, time, axis) -> (push!(calls, Threads.threadid()); y))
+        fill_halo!(field, Dirichlet((x, y, time) -> (push!(calls, Threads.threadid()); 0.0)))
+        @test_throws ArgumentError PhaseScalar(interface; liquid = (x, y) -> x > 0.9 ? NaN : 1.0)
+    end
+    physical_halos = count(entry -> entry.physical_boundary, mesh.halo_entries)
+    @test physical_halos > 0
+    @test length(calls) ==
+        ncells(mesh) + length(mesh.faces) + length(mesh.boundary_faces) + physical_halos
+    @test all(==(Threads.threadid()), calls)
+end
+
 @testset "shared-memory kernel scheduling" begin
     mesh = BlockTreeMesh(block_size = (64, 64))
     field = CellField(mesh)

@@ -125,16 +125,16 @@ end
 """
     initialize!(field, f)
 
-Set every interior cell to `f(x, y)`. Halos are untouched.
+Set every interior cell to `f(x, y)`. Halos are untouched. Like every user
+callback, `f` is evaluated serially on the calling task, block by block.
 """
 function initialize!(field::CellField, f)
     nx, ny = field.mesh.block_size
     h = field.mesh.halo
-    _parallel_block_columns(field.mesh) do b, first_j, last_j
+    for (b, block) in pairs(field.mesh.blocks)
         values = @inbounds field.blocks[b]
-        block = @inbounds field.mesh.blocks[b]
         dx, dy = block.spacing
-        @inbounds for j in first_j:last_j, i in 1:nx
+        @inbounds for j in 1:ny, i in 1:nx
             x = block.origin[1] + (i - 1 / 2) * dx
             y = block.origin[2] + (j - 1 / 2) * dy
             values[i + h, j + h] = f(x, y)
@@ -180,7 +180,7 @@ abstract type AbstractBoundaryCondition end
 """Copy the closest interior value into a physical-boundary halo."""
 struct ZeroGradient <: AbstractBoundaryCondition end
 
-"""A physical-boundary value supplied as `value(x, y, time)`."""
+"""A physical-boundary value supplied as `value(x, y, time)`, evaluated serially."""
 struct Dirichlet{F} <: AbstractBoundaryCondition
     value::F
 end
@@ -195,13 +195,22 @@ end
 
 Fill same-level, coarse--fine, periodic, and physical halos using the schedule
 built with the mesh. Fine-to-coarse values are conservative area averages;
-coarse-to-fine values use piecewise-constant prolongation.
+coarse-to-fine values use piecewise-constant prolongation. A `Dirichlet`
+value function is evaluated serially, before the threaded interior halos.
 """
 function fill_halo!(field::CellField, boundary::AbstractBoundaryCondition = ZeroGradient(); time = 0)
     mesh = field.mesh
+    serial_boundary = boundary isa Dirichlet
+    if serial_boundary
+        for entry in mesh.halo_entries
+            entry.physical_boundary || continue
+            _set!(field, _boundary_value(boundary, field, entry, time), entry.destination)
+        end
+    end
     @_parallel for entry_index in 1:length(mesh.halo_entries)
         entry = mesh.halo_entries[entry_index]
         if entry.physical_boundary
+            serial_boundary && continue
             _set!(field, _boundary_value(boundary, field, entry, time), entry.destination)
         else
             value = zero(eltype(field))
