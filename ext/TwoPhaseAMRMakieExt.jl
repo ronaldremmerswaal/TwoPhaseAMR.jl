@@ -921,6 +921,11 @@ function Base.getproperty(recording::LiveRecording, name::Symbol)
         # The encoder appends while the recording runs; hand out a copy so a
         # reader never observes a partially written vector.
         return Base.@lock getfield(recording, :lock) copy(getfield(recording, name))
+    elseif name === :stop_time
+        # `nothing` until the stop time is frozen, and never a torn read.
+        return Base.@lock getfield(recording, :lock) (
+            getfield(recording, :stop_captured) ? getfield(recording, :stop_time) : nothing
+        )
     end
     return getfield(recording, name)
 end

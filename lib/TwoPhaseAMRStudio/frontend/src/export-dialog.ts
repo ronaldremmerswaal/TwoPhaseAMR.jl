@@ -1,8 +1,8 @@
 import type { StudioClient } from './client';
 import { groupDiagnostics, type DiagnosticMetadata } from './diagnostic-data';
 import {
-  durationLimit, frameSelection, liveSummary, parseTimeWindow, scheduleAttributes, scheduleKey,
-  scheduleSummary, ScheduleRequests,
+  durationLimit, frameSelection, liveSummary, parseTimeWindow, pendingScheduleText, scheduleAttributes,
+  scheduleKey, scheduleSummary, ScheduleRequests,
 } from './export-plan';
 import type { StudioState } from './state';
 import type {
@@ -92,6 +92,9 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
   let durationEdited = false;
   let simRateEdited = false;
   let lastSchedule: RecordingSchedule | null = null;
+  // Shown instead of "Computing…" until the plan is refreshed: a failed
+  // preflight must not look like one that never answered.
+  let scheduleError: string | null = null;
   const requests = new ScheduleRequests();
   let scheduleTimer: number | undefined;
   const download = find<HTMLAnchorElement>('[data-testid="export-download"]');
@@ -262,12 +265,19 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
     }
     const window = parseTimeWindow(from.value, to.value);
     if (window.error) { setScheduleText(window.error); return; }
-    if (!lastSchedule) { setScheduleText('Computing the time-linear schedule…'); return; }
+    if (!lastSchedule) { setScheduleText(pendingScheduleText(scheduleError)); return; }
     setScheduleText(scheduleSummary(lastSchedule), lastSchedule);
+  }
+
+  function resetSchedule(): void {
+    lastSchedule = null;
+    scheduleError = null;
+    requests.reset();
   }
 
   function requestSchedule(command: ScheduleCommand, key: string): void {
     const generation = requests.start(key);
+    scheduleError = null;
     setScheduleText('Computing the time-linear schedule…');
     client.schedule(command).then(schedule => {
       // A superseded answer, or a switch to a live source, must not leave the
@@ -281,10 +291,11 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
       renderSchedule();
     }).catch(error => {
       if (!requests.fail(generation, key)) return;
-      // Show the reason and let the next frame or edit ask again instead of
-      // leaving a stale summary on screen.
+      // Keep the reason on screen: the next `update()` re-renders the summary,
+      // and a retry for the same plan is suppressed until it changes.
       lastSchedule = null;
-      setScheduleText(error instanceof Error ? error.message : 'Could not compute the export schedule.');
+      scheduleError = error instanceof Error ? error.message : 'Could not compute the export schedule.';
+      setScheduleText(scheduleError);
     });
   }
 
@@ -366,13 +377,13 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
   panel.addEventListener('change', () => { if (!pathWasEdited) setDefaultPath(); update(); });
   window.addEventListener('studio-view-change', update);
   source.addEventListener('change', () => {
-    lastSchedule = null; requests.reset();
+    resetSchedule();
     if (isLive()) applyLiveRateDefault(); else applyStoredDurationDefault();
     update();
   });
   for (const input of [from, to, fps, frames]) {
     input.addEventListener('input', () => {
-      lastSchedule = null; requests.reset();
+      resetSchedule();
       applyStoredDurationDefault();
       applyLiveRateDefault();
       update();
@@ -380,7 +391,7 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
   }
   duration.addEventListener('input', () => {
     durationEdited = true;
-    lastSchedule = null; requests.reset();
+    resetSchedule();
     update();
   });
   simPerSecond.addEventListener('input', () => {
@@ -407,8 +418,7 @@ export function installExportDialog(button: HTMLButtonElement, state: StudioStat
     pathWasEdited = false;
     setDefaultPath();
     previewImage.hidden = true;
-    lastSchedule = null;
-    requests.reset();
+    resetSchedule();
     applyStoredDurationDefault();
     applyLiveRateDefault();
     const availableDiagnostics = diagnosticViews();

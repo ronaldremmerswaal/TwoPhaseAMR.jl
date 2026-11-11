@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   durationLimit, frameSelection, formatSimTime, liveSpacing, liveSummary, MAX_EXPORT_FRAMES,
-  parseTimeWindow, scheduleAttributes, scheduleKey, scheduleSummary, ScheduleRequests,
+  parseTimeWindow, pendingScheduleText, scheduleAttributes, scheduleKey, scheduleSummary, ScheduleRequests,
 } from '../src/export-plan';
 import type { RecordingSchedule } from '../src/types';
 
@@ -107,5 +107,14 @@ describe('export schedule requests', () => {
     expect(requests.settle(requests.start('x'), 'x')).toBe(true);
     requests.reset();
     expect(requests.needs('x')).toBe(true);
+  });
+
+  it('keeps a preflight failure visible instead of reverting to progress text', () => {
+    // `update()` re-renders the summary on every state/frame message, so a
+    // failure must outrank the "Computing…" placeholder until the plan changes.
+    expect(pendingScheduleText(null)).toContain('Computing');
+    expect(pendingScheduleText('fps × duration gives 100001 output frames')).toBe(
+      'fps × duration gives 100001 output frames',
+    );
   });
 });

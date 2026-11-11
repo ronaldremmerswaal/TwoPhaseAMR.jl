@@ -22,6 +22,11 @@ export function scheduleKey(
   return JSON.stringify([command, frames.length, last ? [last.id, last.time] : null]);
 }
 
+/** Summary text while no plan is available: an error outranks progress. */
+export function pendingScheduleText(error: string | null): string {
+  return error ?? 'Computing the time-linear schedule…';
+}
+
 /**
  * Bookkeeping for the dialog's schedule preflight. A key is armed while its
  * debounce timer runs, pending while its response is in flight, applied once a
