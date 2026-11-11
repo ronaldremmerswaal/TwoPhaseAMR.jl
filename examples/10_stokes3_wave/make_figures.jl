@@ -108,7 +108,7 @@ function readme_animations(outdir, store, period)
     animation(path; kwargs...) = export_animation(
         path, store; field = :velocity_vorticity,
         window, camera, colorrange, blocks = true,
-        title = frame -> @sprintf("t/T = %.3f", frame.time / period), framerate = 12,
+        title = frame -> @sprintf("t/T = %.3f", frame.time / period), fps = 12, duration = 80 / 12,
         size = (900, 400), kwargs...
     )
     animation(joinpath(outdir, "readme_light.gif"))
@@ -188,7 +188,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     )
     export_animation(
         joinpath(outdir, "wave.gif"), store; field = :velocity_vorticity,
-        blocks = true, diagnostics = [:kinetic_energy], framerate = 8
+        blocks = true, diagnostics = [:kinetic_energy], fps = 8, duration = 5.0
     )
     return (; flow, result, recorder, errors)
 end

@@ -40,7 +40,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     save(joinpath(outdir, "energy_cells.png"), figure)
     export_animation(
         joinpath(outdir, "vorticity.gif"), store; field = :vorticity,
-        blocks = true, diagnostics = [:projected_kinetic_energy, :cells], framerate = 8
+        blocks = true, diagnostics = [:projected_kinetic_energy, :cells], fps = 8, duration = 5.0
     )
     println(
         "Setup + simulation: ", simulation_seconds, " s; including figures: ",

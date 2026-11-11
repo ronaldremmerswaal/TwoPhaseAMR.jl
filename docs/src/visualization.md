@@ -303,26 +303,48 @@ The examples' `--studio` runs are resumable. A bare simulation callback without
 an explicit driver cannot be continued; this does not prevent using a closure
 to open Studio for an already driver-backed example.
 
-The Export dialog renders a field panel and optional diagnostic groups using
-the server-side animation API. Select stored keyframes or all stored frames,
-optionally restrict the time window or select every nth frame, and choose a
-camera, colour range, diagnostic arrangement (right or below), resolution,
-frame rate and output file. Width and height must be positive even pixel
-counts; the frame rate is a positive integer. The dialog reports progress and
-can cooperatively cancel a stored export; a completed file can be downloaded.
-When diagnostics sit to the right in a fixed-size export, the requested camera
-view is fitted isotropically in the available field area; extra domain area may
-be visible if the output panel has a different aspect.
-**Preview frame** renders the selected panel's currently displayed stored
-frame. Preview and animation rendering cannot run concurrently.
+The Export dialog is the only recording entry point. It renders a field panel
+and optional diagnostic groups using the server-side animation API and offers
+two sources; a recording uses exactly one source:
+
+- **Stored frames** samples stored frames on a uniform simulation-time grid.
+  **Frames** selects the candidates (keyframes only or all stored frames) and
+  the optional time window restricts them; without a window the whole
+  recording is used. **Duration** in seconds (default 2) and **FPS**
+  (default 20) set the output frame count `round(duration × fps) + 1`, which
+  includes both ends of the window. Each output frame shows the candidate
+  frame nearest to its target time (ties go to the earlier frame), so a sparse
+  recording repeats frames and a dense one skips them. The dialog shows the
+  resulting output-frame count, distinct stored frames, uniform Δt, and
+  simulation time per video second, and warns when a sparse recording repeats
+  many frames. Stored jobs can be cancelled cooperatively.
+- **Live stream** records the frames the run produces from now until stopped,
+  including previews that retention later thins. **Simulation time per video
+  second** and **FPS** set the uniform output spacing
+  `Δt = sim_per_second / fps`; output frame `k` shows the arrived frame nearest
+  to `t_start + k · Δt`, using one frame of look-ahead, so video time also
+  advances linearly in simulation time. A sparse stream repeats the last
+  frame and a dense one skips frames. The dialog shows Δt and the simulation
+  time per video second; duration and frame count are known only when the
+  recording stops.
+
+Choose a camera, colour range, diagnostic arrangement (right or below),
+resolution, theme and output file. Width and height must be positive even
+pixel counts; the frame rate is a positive integer. The dialog reports
+progress and offers a download when a file completes. When diagnostics sit to
+the right in a fixed-size export, the requested camera view is fitted
+isotropically in the available field area; extra domain area may be visible if
+the output panel has a different aspect.
+**Preview frame** renders the stored frame the time line shows first for a
+stored source (or the selected panel's current frame for a live source) with
+the chosen settings. Preview and animation rendering cannot run concurrently.
 Exports honor the chosen diagnostic panel's hidden components and y scale.
-Alternatively start a live recording; a recording uses exactly one source.
-The Record menu also starts and stops recording independently of timeline navigation.
 Live encoding uses a bounded queue and reports dropped frames. With no
 interactive thread and one compute thread, the live queue remains bounded and
 encoding is deferred until the solver is idle; frames lost while the queue is
-full are included in the dropped count. The `● REC` status is shared between
-connected browsers.
+full are included in the dropped count. Recording state is server-owned and
+shared between connected browsers, independent of timeline navigation in each
+browser.
 
 Client extensions can register dockable panel types through
 `window.twoPhaseAMRStudio.registerPanel`; the supplied client exposes
@@ -405,16 +427,20 @@ Recording is a server-owned session, for example:
 {"type":"recording","action":"stop"}
 ```
 
-Use `"source":"stored"` instead to freeze the keyframe selection at stop and
-export it asynchronously. A one-shot stored export uses
+A stored export is one-shot:
 `{"type":"recording","action":"export","source":"stored",...}`; cancel it
-with `{"type":"recording","action":"cancel"}`. The status reports `active`,
-`source`, `field`, `path`, `status`, `encoded`, `dropped`, `skipped`, `total`,
-`progress`, `url`, and any `error`. Stored progress counts frames submitted to
-the encoder and can reach 1 before file finalization. A cancellation request
-transitions through `cancelling` to `cancelled`; completion may win the final
-commit race. Only `completed` exposes the token-authenticated download URL.
-Navigating the timeline sends none of these commands.
+with `{"type":"recording","action":"cancel"}`. Stored options include
+`frames` (`keyframes` or `all`), `window`, `fps`, and `duration`; live options
+include `fps`, `sim_per_second`, and the queue `capacity`. The status reports
+`active`, `source`, `field`, `path`, `status`, `encoded`, `dropped`, `total`,
+`progress`, `url`, `times` (the simulation time of every live output frame,
+once completed), and any `error`. Stored progress counts output frames
+submitted to the encoder and can reach 1 before file finalization. A
+cancellation request transitions through `cancelling` to `cancelled`;
+completion may win the final commit race. Only `completed` exposes the
+token-authenticated download URL. A `schedule` action reports the time-linear
+plan without starting a job. Navigating the timeline sends none of these
+commands.
 
 Both stored and live commands may include `diagnostic_options`, an array of
 `{"names":["kinetic_energy"],"scale":"log","hidden":[{"name":"kinetic_energy","component":1}]}`
@@ -524,7 +550,7 @@ store = snapshot_store(recorder)
 export_figure("vorticity.png", store; field=:velocity_vorticity,
     at=[0.0, 0.5, 1.0], blocks=true)
 export_animation("vorticity.gif", store; field=:velocity_vorticity,
-    diagnostics=[:kinetic_energy], framerate=12)
+    diagnostics=[:kinetic_energy], fps=20, duration=2.0)
 ```
 
 [`export_figure`](@ref) draws one panel per requested time (the stored frame
@@ -563,35 +589,48 @@ end
 
 #### Stored or live animations
 
-An animation shows either stored or live frames, never a mix. The default
-`source=:stored` animates the keyframes in the store after the run,
-optionally only those in `window=(t0, t1)`. It also accepts a `progress(i,n)`
-callback called after each frame is submitted and a zero-argument `cancel()`
-predicate checked between frames and around finalization. A cancelled export
-returns `nothing`, removes its temporary output, and preserves any existing
-destination; a successful export returns its path. Cancellation is cooperative.
+An animation shows either stored or live frames, never a mix. Both sources
+play time linearly in simulation time; neither maps video frames one-to-one
+to stored frames. The default `source=:stored` samples the store after (or
+during) the run. `frames=:keyframes` (default) or `:all` selects the
+candidates and `window=(t0, t1)` restricts them; without a window the whole
+recording is used. `fps` (default 20) and `duration` in seconds (default 2)
+set the output count to `round(fps × duration) + 1`; give `nframes` instead to
+set it directly. Output times are uniform over the window and each frame shows
+the candidate nearest to its target time, with ties going to the earlier
+frame. The automatic title is the simulation time of the displayed frame.
+Stored exports accept a `progress(i,n)` callback called after each output
+frame is submitted and a zero-argument `cancel()` predicate checked between
+frames and around finalization. A cancelled export returns `nothing`, removes
+its temporary output, and preserves any existing destination; a successful
+export returns its path. Cancellation is cooperative.
 
 `source=:live` records the frames of a recorder as the run produces them,
 previews and keyframes alike, including previews that retention later thins.
-For example, continue the flow to a later time with a fresh recorder:
+Its uniform output spacing is `Δt = sim_per_second / fps`: output frame `k`
+shows the arrived frame nearest to `t_start + k · Δt`, where `t_start` is the
+simulation time of the newest stored frame when recording starts. A frame
+that arrives decides every output time up to its own time, so only one frame
+of look-ahead is needed; sparse streams repeat frames, dense streams skip
+them, and the last frame is held for the remaining output times. For example,
+continue the flow to a later time with a fresh recorder:
 
 ```julia
 recorder = Recorder(fields; diagnostics=flow, preview=EveryNSteps(5))
 recording = export_animation("live.mp4", recorder; field=:velocity_vorticity,
-    source=:live, diagnostics=[:kinetic_energy])
+    source=:live, diagnostics=[:kinetic_energy], fps=20, sim_per_second=1.0)
 simulate!(flow, 2.0; observer=recorder)
-close(recording)    # encodes the queued frames and writes live.mp4
-recording.encoded, recording.dropped, recording.skipped
+close(recording)    # flushes the time line and writes live.mp4
+recording.encoded, recording.dropped, recording.ids, recording.times
 ```
 
 Live encoding does not make the solver wait for the encoder. It receives
-frames through a [`subscribe`](@ref) queue of `capacity` frames
-(default 32) and encodes every `every`-th frame (default 1) on a thread other
-than the solver's. If the encoder falls behind, frames arriving at a full
-queue are dropped and counted, and `close` reports the counts. Frame capture
-and encoding still consume computational resources. The recording is
-independent of any viewer: reading the store, viewing old frames, or scrubbing
-history from other tasks does not change it. Without a
+frames through a [`subscribe`](@ref) queue of `capacity` frames (default 32)
+on a thread other than the solver's. If the encoder falls behind, frames
+arriving at a full queue are dropped and counted, and `close` reports the
+counts. Frame capture and encoding still consume computational resources. The
+recording is independent of any viewer: reading the store, viewing old
+frames, or scrubbing history from other tasks does not change it. Without a
 second thread (Julia started with `-t 1` and no interactive thread), frames
 are queued during the run and encoded after it. Without a registered or given
 colour range, a live recording uses the range of the frames recorded so far,

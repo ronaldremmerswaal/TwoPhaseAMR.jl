@@ -102,7 +102,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     export_animation(
         joinpath(outdir, "shedding.gif"), store; field = :vorticity, window,
         blocks = true, colorrange = (-3, 3), colormap = cgrad(:balance, 31; categorical = true),
-        framerate = 12, size = (700, 310)
+        fps = 12, duration = 4.0, size = (700, 310)
     )
     readme_animations(outdir, store, window)
     println("Including figures: ", (time_ns() - started) / 1.0e9, " s (package loading excluded)")
