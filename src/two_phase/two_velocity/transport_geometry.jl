@@ -52,7 +52,8 @@ function _frozen_interface_stable_timestep(
     for (face_index, face) in pairs(mesh.faces), phase in 1:2
         aperture = phase == 1 ? work.liquid_aperture[face_index] :
             work.gas_aperture[face_index]
-        aperture > zero(T) || continue
+        # A subface at round-off width carries no flux the sweep can resolve.
+        aperture > _wy_strip_area_tolerance(T) || continue
         u = velocity[phase].interior[face_index]
         iszero(u) && continue
         donor = u >= 0 ? face.minus : face.plus
@@ -108,7 +109,7 @@ function _frozen_interface_stable_timestep(
                         other_aperture = other_phase == 1 ?
                             work.liquid_aperture[other_index] :
                             work.gas_aperture[other_index]
-                        other_aperture > zero(T) || continue
+                        other_aperture > _wy_strip_area_tolerance(T) || continue
                         other_u = velocity[other_phase].interior[other_index]
                         other_u < zero(T) || continue
                         other_lo, other_hi = _frozen_subface_interval(
@@ -123,14 +124,12 @@ function _frozen_interface_stable_timestep(
                         other_rate = abs(other_u) * other_face.area * other_aperture
                         maxrate = max(
                             maxrate,
-                            _wy_cut_strip_rate(
+                            _wy_side_strip_rate(
                                 other_rate, left_area, other_aperture,
-                                block.volume, other_index, other_face, donor,
-                                other_phase,
+                                block.volume,
                             ),
-                            _wy_cut_strip_rate(
+                            _wy_side_strip_rate(
                                 rate, right_area, aperture, block.volume,
-                                face_index, face, donor, phase,
                             ),
                         )
                     end
@@ -262,21 +261,24 @@ The two adjacent face traces are clipped independently, so their average can
 miss the shared open aperture by a few ulp and leave a residue on a phase
 that does not reach the face. Such a residue is not a physical opening: its
 subface has essentially zero width and no open strip, which would make the
-cut-donor bound infinite.
+cut-donor bound infinite. Both traces are fractions of the *whole* face, so
+their rounding error is absolute rather than proportional to the aperture.
 """
-@inline _phase_aperture_residue(::Type{T}, open) where {T} =
-    T(64) * eps(T) * open
+@inline _phase_aperture_residue(::Type{T}) where {T} = T(64) * eps(T)
 
 """
     _snap_phase_apertures(liquid, open)
 
 Split `open` into liquid and gas apertures, collapsing a round-off residue on
-either phase to exactly zero.
+either phase to exactly zero. The pair always sums to `open`, and a face whose
+own open extent is at round-off level keeps both apertures: the cut-donor
+bounds treat such a face as carrying no resolvable flux.
 """
 @inline function _snap_phase_apertures(liquid::T, open::T) where {T}
     liquid = clamp(liquid, zero(T), open)
     gas = open - liquid
-    residue = _phase_aperture_residue(T, open)
+    residue = _phase_aperture_residue(T)
+    open > residue || return liquid, gas
     liquid <= residue && return zero(T), open
     gas <= residue && return open, zero(T)
     return liquid, gas
@@ -359,7 +361,7 @@ end
     liquid = clamp(
         _face_aperture(field, geometry, face, face.cell), zero(T), open,
     )
-    return liquid, open - liquid
+    return _snap_phase_apertures(T(liquid), open)
 end
 
 @inline _phase_boundary_face_apertures(field::InterfaceField, index) =

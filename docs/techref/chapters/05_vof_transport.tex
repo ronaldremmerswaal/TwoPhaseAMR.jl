@@ -402,10 +402,13 @@ positive rate through a strip whose open area is zero, or below the sweep's
 area tolerance $256\machineeps\aperture{f}$, cannot be represented by a
 donating region in that donor: the bound raises an \code{ArgumentError}
 naming the face, the donor cell and the strip area instead of returning an
-unusable step. Residues of the phase apertures themselves are snapped to
-zero, and the sweep's area tolerance is widened by the slack of the step
-check (\cref{eq:stab:check}), so a step that passes the check is not rejected
-by the sweep.
+unusable step. Phase apertures within $64\machineeps$ of a pure phase are
+snapped to zero (the traces are fractions of the whole face, so their
+rounding is absolute), and a face whose own open extent is at that level is
+left out of the strip constraints because it carries no resolvable flux. The
+sweep's area tolerance is widened by the slack of the step check
+(\cref{eq:stab:check}), so a step that passes the check is not rejected by the
+sweep.
 Otherwise \apifun{stable_timestep} returns
 \begin{equation}\label{eq:vof:dtwy}
   \begin{split}

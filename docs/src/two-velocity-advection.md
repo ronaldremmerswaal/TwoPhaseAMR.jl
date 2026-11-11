@@ -339,10 +339,12 @@ disjoint, including at hanging faces.
 The two face traces of a cut cell are clipped independently, so a phase that
 does not reach a face can be left with an aperture of a few machine epsilons.
 That residue is snapped to exactly zero, since it would describe a subface of
-zero width with no open strip. A genuine flux whose donor strip has no open
-area, or one below the sweep's area tolerance, cannot be represented by any
-donating region: the bound raises an `ArgumentError` naming the face, its
-donor cell and the strip area instead of returning an unusable step.
+zero width with no open strip; a face whose own open extent is at that
+round-off level carries no resolvable flux and is left out of the strip
+constraints. A genuine flux whose donor strip has no open area, or one below
+the sweep's area tolerance, cannot be represented by any donating region: the
+bound raises an `ArgumentError` naming the face, its donor cell and the strip
+area instead of returning an unusable step.
 
 For Method A, the physical-interface restriction is (9) with the projected
 liquid carrier. The auxiliary gas carrier has its own incoming, outgoing,

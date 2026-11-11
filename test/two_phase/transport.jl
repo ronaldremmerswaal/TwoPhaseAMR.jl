@@ -1147,20 +1147,35 @@ end
 
 @testset "WY phase apertures snap round-off residues" begin
     for T in (Float32, Float64)
-        open = T(0.5)
-        residue = T(32) * eps(T) * open
+        open = T(1)
+        # The traces are fractions of the whole face: the residue is absolute.
+        residue = T(32) * eps(T)
         @test TP._snap_phase_apertures(open - residue, open) == (open, zero(T))
         @test TP._snap_phase_apertures(residue, open) == (zero(T), open)
         @test TP._snap_phase_apertures(zero(T), open) == (zero(T), open)
         @test TP._snap_phase_apertures(open, open) == (open, zero(T))
         @test TP._snap_phase_apertures(open, zero(T)) == (zero(T), zero(T))
+        # The same absolute residue is snapped on a nearly closed face, where
+        # a proportional tolerance would leave it in place.
+        closed = T(1.0e-3)
+        @test TP._snap_phase_apertures(closed - T(32) * eps(T), closed) ==
+            (closed, zero(T))
+        @test TP._snap_phase_apertures(T(32) * eps(T), closed) ==
+            (zero(T), closed)
         # A resolvable opening survives, and the pair still sums to the face.
-        keep = T(256) * eps(T) * open
+        keep = T(256) * eps(T)
         liquid, gas = TP._snap_phase_apertures(open - keep, open)
         @test liquid == open - keep
         @test gas > zero(T) && liquid + gas == open
         liquid, gas = TP._snap_phase_apertures(keep, open)
         @test liquid == keep && liquid + gas == open
+        # A face whose own open extent is at round-off level keeps both
+        # apertures, so the snap cannot turn it into a single phase.
+        sliver = T(0.5) * eps(T)
+        @test TP._snap_phase_apertures(sliver, sliver) == (sliver, zero(T))
+        @test TP._snap_phase_apertures(zero(T), sliver) == (zero(T), sliver)
+        @test TP._snap_phase_apertures(T(0.25) * eps(T), sliver) ==
+            (T(0.25) * eps(T), T(0.25) * eps(T))
     end
 end
 
@@ -1246,9 +1261,11 @@ end
 """Whether every frozen phase aperture is negligible or resolvable."""
 function wy_phase_apertures_snapped(work, geometry, T)
     snapped = true
+    residue = T(64) * eps(T)
     for (index, face) in pairs(work.mesh.faces)
         open = @inbounds geometry.aperture[index]
-        residue = T(64) * eps(T) * open
+        # A face at round-off open extent keeps both apertures.
+        open > residue || continue
         for value in (
                 @inbounds(work.liquid_aperture[index]),
                 @inbounds(work.gas_aperture[index]),

@@ -275,7 +275,8 @@ open support. Return `nothing` when the strips have no open overlap.
     lo < hi || return nothing
     half = T(0.5)
     overlap = _wy_open_strip_area(solid, donor, axis, lo, hi, -half, half)
-    overlap > zero(T) || return nothing
+    # A common open support at round-off level leaves nothing to separate.
+    overlap > _wy_strip_area_tolerance(T) || return nothing
 
     # The open solid PLIC is a half-plane. Find its normal support in the
     # intersection of the two tangential intervals, then split that support
@@ -319,6 +320,18 @@ that slack, so a step the checks accept is not rejected there.
 @inline _wy_step_slack(::Type{T}) where {T} = T(1.0e-6) + T(32) * eps(T)
 
 """
+Absolute strip-area floor of a cut-donor bound, as a cell fraction.
+
+A face (or phase subface) aperture below it carries no flux the sweep can
+resolve, so the geometric strip constraints skip it.
+"""
+@inline _wy_strip_area_tolerance(::Type{T}) where {T} = T(256) * eps(T)
+
+"""Floor of a strip's open area behind a face with aperture `aperture`."""
+@inline _wy_strip_floor(::Type{T}, aperture) where {T} =
+    T(256) * eps(T) * aperture
+
+"""
 Error for an outgoing face whose open donor strip cannot hold its flux.
 
 A positive flux through a strip with no open area, or with an open area below
@@ -346,8 +359,14 @@ face aperture; otherwise the prescribed flux has no donating region.
 @inline function _wy_cut_strip_rate(
         rate::T, area::T, aperture, volume, face_index, face, donor, phase::Int,
     ) where {T}
-    floor = T(256) * eps(T) * aperture
+    floor = _wy_strip_floor(T, aperture)
     area > floor || throw(_wy_strip_error(face_index, face, donor, phase, area, floor))
+    return _wy_strip_rate(rate, area, volume)
+end
+
+"""Strip rate of one side of an opposing pair, if that side is resolvable."""
+@inline function _wy_side_strip_rate(rate::T, area::T, aperture, volume) where {T}
+    area > _wy_strip_floor(T, aperture) || return zero(T)
     return _wy_strip_rate(rate, area, volume)
 end
 
@@ -414,7 +433,9 @@ function stable_timestep(
         if !isnothing(geometry) && !iszero(u)
             aperture = geometry.aperture[i]
             solid = geometry.solid
-            if aperture > zero(T) && _get(solid.fraction, donor) > zero(T)
+            # A face at round-off open extent carries no resolvable flux.
+            if aperture > _wy_strip_area_tolerance(T) &&
+                    _get(solid.fraction, donor) > zero(T)
                 lo, hi = _face_local_tangent_interval(mesh, donor, face)
                 volume = mesh.blocks[donor.block].volume
                 rate = abs(u) * face.area * aperture
@@ -436,7 +457,7 @@ function stable_timestep(
                         other_u = velocity.interior[other_index]
                         other_u < zero(T) || continue
                         other_aperture = geometry.aperture[other_index]
-                        other_aperture > zero(T) || continue
+                        other_aperture > _wy_strip_area_tolerance(T) || continue
                         other_lo, other_hi = _face_local_tangent_interval(mesh, donor, other)
                         areas = _wy_opposing_strip_areas(
                             solid, donor, face.axis, other_lo, other_hi, lo, hi,
@@ -446,12 +467,11 @@ function stable_timestep(
                         other_rate = abs(other_u) * other.area * other_aperture
                         maxrate = max(
                             maxrate,
-                            _wy_cut_strip_rate(
+                            _wy_side_strip_rate(
                                 other_rate, left_area, other_aperture, volume,
-                                other_index, other, donor, 0,
                             ),
-                            _wy_cut_strip_rate(
-                                rate, right_area, aperture, volume, i, face, donor, 0,
+                            _wy_side_strip_rate(
+                                rate, right_area, aperture, volume,
                             ),
                         )
                     end
