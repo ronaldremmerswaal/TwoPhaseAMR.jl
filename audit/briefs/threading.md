@@ -66,7 +66,9 @@ orchestrator without further owner approval once the prerequisites below are met
 - Owner decision (2026-11-12):
   - **Hard acceptance:** 4 threads ≥ 2× on TG 128² (hierarchical), the cylinder and
     the Stokes-3 wave with the one- and the two-velocity model, results bitwise
-    identical for every thread count.
+    identical for every thread count. Owner (2026-11-12): the hard target may be met
+    one level finer than the default/benchmark resolution when the default problem is
+    too small; always report both resolutions.
   - **Stretch goal:** 8 threads ≥ 4× (≥ 50 % parallel efficiency) on the same cases
     one level finer than their default/benchmark resolution (Stokes-3: one level finer
     than the example default). Where it is missed, report the profile showing what
