@@ -862,7 +862,9 @@ end
 
     # An embedded disc straddling the refinement interface exercises the
     # signed wall-contact corrections of _wall_contact_stencil!. A moving
-    # wall has the same stiffness; only its source term depends on the value.
+    # NoSlip wall is a regression guard only: the wall value enters
+    # _add_wall_source! and never the stiffness or the Laplacian, so its rows
+    # must equal the stationary ones here.
     for boundary in (
             NoSlip(), FreeSlip(),
             NoSlip((x, y, t, axis) -> axis == 1 ? 1 + t : 0.0),

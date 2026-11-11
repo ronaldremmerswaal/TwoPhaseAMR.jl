@@ -44,7 +44,6 @@ mutable struct TreeStaggeredMultigridComponent{T, F, L, D, O} <:
     coarse_augmented::Bool
     coarse_rhs::Vector{T}
     coarse_solution::Vector{T}
-    symmetric_coarse::Bool
     pre_sweeps::Int
     post_sweeps::Int
     pruning::Symbol
@@ -92,12 +91,13 @@ function _staggered_conservative_laplacian(component::StaggeredDiffusionComponen
     return true
 end
 
-# Check all shifts, not just the present one: a zero shift can hide a
-# perturbed matrix. Every operator the package builds has L = -V^-1 K with K
+# Check all shifts, not just the present one: a zero shift can hide an
+# asymmetric pair. Every operator the package builds has L = -V^-1 K with K
 # symmetric positive semidefinite by construction, so the shifted system is
 # symmetric for every shift. Checking that relation in the same arithmetic used
 # to assemble L certifies it without assuming adjacent dual volumes are equal,
-# and rejects a matrix that was replaced or perturbed after construction.
+# and rejects a laplacian or stiffness pair perturbed after construction; a
+# replaced shifted matrix is caught by _staggered_shift_matches.
 function _staggered_shift_is_symmetric(component::StaggeredDiffusionComponent)
     volumes = component.volumes
     all(volume -> isfinite(volume) && volume > zero(volume), volumes) || return false
@@ -205,12 +205,17 @@ function _staggered_shift_pattern(laplacian::SparseMatrixCSC{T, Int}) where {T}
     return SparseMatrixCSC(n, n, columns, rows, values)
 end
 
+# A fine level keeps the mass form V*(reaction*I - diffusion*laplacian) of
+# _staggered_elliptic_component; a coarse level keeps the symmetric stiffness
+# form reaction*V + diffusion*S of _staggered_stable_matrix. The two are equal
+# in exact arithmetic but not in floating point, so the caller states which it
+# is.
 function _refresh_staggered_component!(
         component::StaggeredEllipticComponent{Axis, T},
         diffusion_component::StaggeredDiffusionComponent{Axis, T},
-        reaction::T, diffusion::T; symmetric_coarse = false,
+        reaction::T, diffusion::T; coarse = false,
     ) where {Axis, T}
-    laplacian = symmetric_coarse ?
+    laplacian = coarse ?
         diffusion_component.stiffness : diffusion_component.laplacian
     matrix = component.matrix
     if !_staggered_has_shift_pattern(matrix, laplacian)
@@ -234,7 +239,7 @@ function _refresh_staggered_component!(
             end
             has_laplacian_entry = laplacian_pointer <= laplacian_end &&
                 @inbounds(laplacian_rows[laplacian_pointer] == row)
-            if symmetric_coarse
+            if coarse
                 # Match diffusion * stiffness + reaction * mass.
                 value = has_laplacian_entry ?
                     @inbounds(diffusion * laplacian_values[laplacian_pointer]) : zero(T)
@@ -265,7 +270,7 @@ end
 
 function _tree_staggered_component(
         diffusion_operators, elliptic_operators, prolongations,
-        ::Val{Axis}; pre_sweeps, post_sweeps, pruning, symmetric_coarse,
+        ::Val{Axis}; pre_sweeps, post_sweeps, pruning,
         reuse = nothing, reused_new_start = 0, reused_old_start = 0,
     ) where {Axis}
     components = [
@@ -305,17 +310,16 @@ function _tree_staggered_component(
         coarse_rhs = zeros(T, length(coarse.volumes))
         coarse_solution = similar(coarse_rhs)
     else
+        # A reused suffix is accepted only for an identical mesh, boundary
+        # type, reaction and shift, so its coarse factorization is current.
         factorization = reuse.coarse_factorization
-        if reuse.symmetric_coarse != symmetric_coarse
-            factorization = _refactorize_coarse!(factorization, coarse.matrix)
-        end
         coarse_rhs = reuse.coarse_rhs
         coarse_solution = reuse.coarse_solution
     end
     return TreeStaggeredMultigridComponent(
         diffusion_operators, components, levels, prolongations,
         factorization, false,
-        coarse_rhs, coarse_solution, symmetric_coarse, pre_sweeps, post_sweeps, pruning,
+        coarse_rhs, coarse_solution, pre_sweeps, post_sweeps, pruning,
         iszero(reused_new_start) ? 0 :
             length(components) - reused_new_start + 1,
     )
@@ -346,15 +350,11 @@ TreeStaggeredGeometricMultigridPreconditioner(
     T, typeof(operator), typeof(x), typeof(y),
 }(operator, x, y)
 
-# For a symmetric fine system, use the symmetric energy stiffness on every
-# coarse level so that the V-cycle remains suitable for CG.
+# Coarse levels use the symmetric energy stiffness of their rediscretized
+# operator, so the V-cycle remains suitable for CG.
 function _staggered_coarse_operator(
         diffusion_operator::StaggeredDiffusionOperator{T}, reaction, diffusion,
-        symmetric_coarse::Bool,
     ) where {T}
-    symmetric_coarse || return StaggeredEllipticOperator(
-        diffusion_operator; reaction, diffusion,
-    )
     make_component(component::StaggeredDiffusionComponent{Axis, T}) where {Axis} =
         StaggeredEllipticComponent{Axis, T}(
         _staggered_stable_matrix(component, reaction, diffusion),
@@ -377,8 +377,6 @@ function TreeStaggeredGeometricMultigridPreconditioner(
     ) where {T}
     multigrid = MultigridOptions(; coarse_size, pre_sweeps, post_sweeps, max_levels)
     (; coarse_size, pre_sweeps, post_sweeps, max_levels) = multigrid
-    symmetric_coarse = _staggered_shift_is_symmetric(operator.diffusion_operator.x) &&
-        _staggered_shift_is_symmetric(operator.diffusion_operator.y)
     plan = _TreeCoarseningPlan(
         operator.mesh, pruning, coarse_size, max_levels, Val(:staggered),
     )
@@ -430,7 +428,6 @@ function TreeStaggeredGeometricMultigridPreconditioner(
             elliptic_operators,
             _staggered_coarse_operator(
                 coarse_diffusion, operator.reaction, operator.diffusion,
-                symmetric_coarse,
             ),
         )
         current_mesh = coarse_mesh
@@ -447,7 +444,6 @@ function TreeStaggeredGeometricMultigridPreconditioner(
                 elliptic_operators,
                 _staggered_coarse_operator(
                     old_diffusion, operator.reaction, operator.diffusion,
-                    symmetric_coarse,
                 ),
             )
         end
@@ -457,13 +453,13 @@ function TreeStaggeredGeometricMultigridPreconditioner(
     end
     x = _tree_staggered_component(
         diffusion_operators, elliptic_operators, prolongations, Val(1);
-        pre_sweeps, post_sweeps, pruning, symmetric_coarse,
+        pre_sweeps, post_sweeps, pruning,
         reuse = isnothing(reuse) ? nothing : reuse.x,
         reused_new_start, reused_old_start,
     )
     y = _tree_staggered_component(
         diffusion_operators, elliptic_operators, prolongations, Val(2);
-        pre_sweeps, post_sweeps, pruning, symmetric_coarse,
+        pre_sweeps, post_sweeps, pruning,
         reuse = isnothing(reuse) ? nothing : reuse.y,
         reused_new_start, reused_old_start,
     )
@@ -659,8 +655,7 @@ function _refresh_tree_staggered_component!(
         )
         preconditioner.operators[index] = _refresh_staggered_component!(
             preconditioner.operators[index], diffusion_component,
-            operator.reaction, operator.diffusion;
-            symmetric_coarse = preconditioner.symmetric_coarse,
+            operator.reaction, operator.diffusion; coarse = true,
         )
     end
     for index in eachindex(preconditioner.levels)
