@@ -1,7 +1,8 @@
 # Brief: Phase 4E.4 — threading
 
 Owner decision (2026-11-11): run this as **one Opus agent on high effort**
-(`model = "anthropic/claude-opus-5-5:high"`, `effort = "hi"`), started by the
+(`model = "anthropic/claude-opus-5-5:high"` and **no `effort` parameter**: `effort = "hi"`
+overrides the suffix and runs the model at max reasoning, verified 2026-11-11), started by the
 orchestrator without further owner approval once the prerequisites below are met.
 
 ## Start condition (orchestrator checks, no owner approval needed)
