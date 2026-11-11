@@ -124,7 +124,7 @@ end
     @test operator.volumes == operator_volumes
 
     # Initialization stays transactional now that the level set runs serially.
-    fraction = copy(interface.fraction.blocks)
+    fraction = copy.(interface.fraction.blocks)
     failing_levelset(x, y) = x > 0.7 ? error("level set failed") : y - 0.5
     @test_throws "level set failed" initialize!(interface, failing_levelset; lipschitz = 1)
     @test interface.fraction.blocks == fraction
