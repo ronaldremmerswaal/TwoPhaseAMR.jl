@@ -803,10 +803,6 @@ the chapters state and that are tracked by issues open at the audited commit;
     Lax--Wendroff and limited face states next to a solid can see a dual
       Courant number above one
       & \issue{72} & \cref{sec:momentum:cfl}\\
-    In one phase \apifun{stable_timestep} accepts a CFL number up to one, but
-      \apifun{step!} checks at $\half$, so \apifun{simulate!} with
-      \code{cfl} above $\half$ stops at its first advection-limited step
-      & \issue{121} & \cref{sec:stab:bounds}\\
     \multicolumn{3}{@{}l}{\emph{Forces and projection}}\\
     The mimetic projection does not preserve hydrostatic rest; the cause is
       not derived

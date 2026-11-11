@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- One-phase `step!` now checks the advective bound at the top of the accepted `cfl` range (`cfl = 1`) rather than at `cfl = 1/2`, so `simulate!(…; cfl = 0.8)` no longer stops at its first advection-limited step and any step `stable_timestep` returns is accepted (#121). `simulate!` and the flow-level `stable_timestep` reject a `cfl` outside `(0, 1]` (one phase) or `(0, 1/2]` (two phases) up front, also when a prescribed `dt` makes it unused.
 - `step!(flow, dt)` now performs a complete flow step, including time and counter updates, post-step adaptivity, diagnostics, and the `:step` observer event; `simulate!` repeats these steps and retains run lifecycle events and continuation.
 - `FlowSimulation` accepts `force` and stores it as `flow.force`, the default body acceleration for its stepping and simulation calls. Field-level `step!` remains available for the physical solve alone.
 - Prevented CG from using asymmetric multigrid V-cycles and selected CG for volume-weighted symmetric embedded viscous systems (#128).

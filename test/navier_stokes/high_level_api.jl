@@ -196,11 +196,46 @@ end
     mesh = BlockTreeMesh(block_size = (4, 4))
     physics = SinglePhase(density = 1.0, dynamic_viscosity = 0.01)
     moving = FlowSimulation(mesh, physics; velocity = (1.0, 0.0))
-    bound = stable_timestep(moving; cfl = 0.5)
+    # One phase admits cfl in (0, 1]; the step check uses the top of that range,
+    # so the largest admissible step is the bound at cfl = 1 (#121).
+    bound = stable_timestep(moving; cfl = 1)
+    @test bound ≈ 2stable_timestep(moving; cfl = 0.5) rtol = 8eps()
+    range_error = try
+        stable_timestep(moving; cfl = 1.01)
+        nothing
+    catch error
+        error
+    end
+    @test range_error isa ArgumentError
+    @test occursin("(0, 1]", sprint(showerror, range_error))
     @test_throws ArgumentError step!(
         moving.velocity, moving.pressure, moving.system, 1.01bound,
         moving.workspace,
     )
+    # A step above the bound at cfl = 1/2 is admissible: the reported cfl
+    # decides, and `simulate!` with cfl above 1/2 no longer stops (#121).
+    relaxed = FlowSimulation(mesh, physics; velocity = (1.0, 0.0))
+    @test step!(
+        relaxed.velocity, relaxed.pressure, relaxed.system, 0.75bound,
+        relaxed.workspace,
+    ).converged
+    fast = FlowSimulation(mesh, physics; velocity = (1.0, 0.0))
+    target = 4stable_timestep(fast; cfl = 0.8)
+    result = simulate!(fast, target; cfl = 0.8, tolerance = 1.0e-10, max_cycles = 50)
+    @test result.steps == 4
+    @test result.time == target
+    # `simulate!` reports an out-of-range cfl even when a prescribed dt makes it
+    # unused, and two phases keep the (0, 1/2] range.
+    fixed = FlowSimulation(mesh, physics; velocity = (1.0, 0.0))
+    @test_throws ArgumentError simulate!(fixed, 0.01; dt = 0.001, cfl = 1.01)
+    @test simulate!(fixed, 0.01; dt = 0.001, cfl = 1.0).steps == 10
+    interface = InterfaceField(mesh, (x, y) -> y - 0.43)
+    two = FlowSimulation(
+        mesh,
+        TwoPhase(interface; density = (2.0, 1.0), dynamic_viscosity = (0.0, 0.0)),
+    )
+    @test_throws ArgumentError stable_timestep(two; cfl = 0.6)
+    @test_throws ArgumentError simulate!(two, 0.01; dt = 0.001, cfl = 0.6)
     @test_throws ArgumentError step!(
         moving.velocity, moving.pressure, moving.system, 0.01,
         moving.workspace; _reference_dt = 0.005,
