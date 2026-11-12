@@ -78,6 +78,33 @@ function _phase_face_average!(
 end
 
 """
+Outflow limiter of one phase's draining control volumes
+(`eq:momentum:own-coefficient`, issue #70): the fraction of its outflow that
+leaves at the mean of the entering values (`excess`), that mean (`flush`), and
+the unknowns for which it can be positive (`suspect`, a level transition).
+"""
+mutable struct PhaseDrainLimiter{T}
+    excess::Vector{T}
+    flush::Vector{T}
+    suspect::BitVector
+end
+
+function PhaseDrainLimiter(::Type{T}, count, workspace) where {T}
+    return PhaseDrainLimiter(
+        zeros(T, count), zeros(T, count), _overdrain_suspects(workspace),
+    )
+end
+
+function _resize_drain_limiter!(limiter::PhaseDrainLimiter{T}, count, workspace) where {T}
+    for values in (limiter.excess, limiter.flush)
+        resize!(values, count)
+        fill!(values, zero(T))
+    end
+    limiter.suspect = _overdrain_suspects(workspace)
+    return limiter
+end
+
+"""
     PhaseFaceScalar{Axis}(interface; liquid=1, gas=1)
 
 Intrinsic scalar values on staggered dual volumes, one value per phase. Pass
@@ -93,10 +120,14 @@ struct PhaseFaceAdvectionScratch{T}
     values::Vector{T}
     increment::Vector{T}
     rates::Vector{T}
+    limiter::PhaseDrainLimiter{T}
 end
 
-function PhaseFaceAdvectionScratch(::Type{T}, count) where {T}
-    return PhaseFaceAdvectionScratch(ntuple(_ -> zeros(T, count), 7)...)
+function PhaseFaceAdvectionScratch(::Type{T}, count, workspace) where {T}
+    return PhaseFaceAdvectionScratch(
+        ntuple(_ -> zeros(T, count), 7)...,
+        PhaseDrainLimiter(T, count, workspace),
+    )
 end
 
 """
@@ -146,6 +177,8 @@ struct MomentumComponentWorkspace{Axis, T, M <: BlockTreeMesh, W}
     sources::Vector{T}
     delta::Vector{T}
     rates::Vector{T}
+    liquid_limiter::PhaseDrainLimiter{T}
+    gas_limiter::PhaseDrainLimiter{T}
 end
 
 @inline function _pack_phase_faces!(destination, source::FaceField)
