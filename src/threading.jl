@@ -442,21 +442,32 @@ function _csr_offsets(counts, offsets = Vector{Int}(undef, length(counts) + 1))
     return offsets
 end
 
-"""Group contribution indices by a one-based output index."""
+"""
+    _grouped_output_schedule(targets, outputs)
+
+Group contribution indices by a one-based output index: return `offsets` and
+`indices` such that `indices[offsets[k]:(offsets[k + 1] - 1)]` lists the
+contributions with `targets[i] == k` in increasing order, i.e.
+`indices == sortperm(targets)` (a stable counting sort).
+"""
 function _grouped_output_schedule(targets::AbstractVector{Int}, outputs::Int)
-    permutation = sortperm(targets)
-    offsets = Vector{Int}(undef, outputs + 1)
-    contribution = 1
-    for output in 1:outputs
-        offsets[output] = contribution
-        while contribution <= length(permutation) &&
-                targets[permutation[contribution]] == output
-            contribution += 1
-        end
+    offsets = zeros(Int, outputs + 1)
+    for target in targets
+        1 <= target <= outputs || throw(
+            ArgumentError("contribution target lies outside output range"),
+        )
+        @inbounds offsets[target + 1] += 1
     end
-    offsets[end] = contribution
-    contribution == length(permutation) + 1 || throw(
-        ArgumentError("contribution target lies outside output range"),
-    )
-    return offsets, permutation
+    offsets[1] = 1
+    for output in 1:outputs
+        @inbounds offsets[output + 1] += offsets[output]
+    end
+    next = offsets[1:outputs]
+    indices = Vector{Int}(undef, length(targets))
+    for (index, target) in pairs(targets)
+        position = @inbounds next[target]
+        @inbounds indices[position] = index
+        @inbounds next[target] = position + 1
+    end
+    return offsets, indices
 end

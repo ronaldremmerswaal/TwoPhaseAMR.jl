@@ -228,16 +228,9 @@ function _variable_staggered_diffusion(
     stiffness_factors = isnothing(reuse) ? T[] : reuse.stiffness_factors
     stiffness_refresh_offsets = isnothing(reuse) ? Int[] :
         reuse.stiffness_refresh_offsets
-    for values in (stiffness_pointers, stiffness_stresses, stiffness_factors)
-        empty!(values)
-    end
-    stiffness = _complete_symmetric_stiffness(strain, weights)
-    stiffness_pointers, stiffness_stresses, stiffness_factors,
-        stiffness_refresh_offsets =
-        _stiffness_refresh_map!(
+    stiffness = _symmetric_stiffness!(
         stiffness_pointers, stiffness_stresses, stiffness_factors,
-        stiffness_refresh_offsets,
-        cache.stiffness_entries, strain, stiffness,
+        stiffness_refresh_offsets, cache, strain, strain_transpose, weights,
     )
     volumes = isnothing(reuse) ? T[] : reuse.volumes
     resize!(volumes, length(mesh.faces))
