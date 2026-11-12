@@ -56,9 +56,9 @@ of the simulation mesh: its permanent roots are not changed.
 
 Coarsening stops once the target `coarse_size` or `max_levels` is reached, or
 when either root-block count cannot be halved. Each periodic axis must also
-retain at least four cells: with two cells, opposite centres are separated by
-exactly half a period, and the current wrapped face displacement can make the
-gradient metric's vertex patches degenerate. A nonperiodic axis may coarsen to
+retain at least four cells: the gradient resolves a two-cell direction (the
+face orientation settles the half-period tie of the seam displacement), but the
+coarsest level keeps this resolution floor. A nonperiodic axis may coarsen to
 two cells. Consequently, the last mesh can have more than `coarse_size` cells
 when no further base coarsening is available.
 

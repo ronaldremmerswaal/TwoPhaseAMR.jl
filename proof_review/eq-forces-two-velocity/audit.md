@@ -110,7 +110,49 @@ interface on a grid line; the loss is a property of its fitted jump rows (\issue
 - Cause of the mimetic imbalance (fitted jump rows, `correction_cap`, active-mass set): not derived; chapter 10 is not written. The localisation (uniform: faces adjacent to mixed cells) and the grid-line result (≈1, worse) are the data for it. For the caller: issue #76 first and third bullets are explained (CMDGFM), the second (mimetic) is not due to the map.
 - The code fix suggested in F1 changes the semantics of the two-velocity predictor (the increment would then be the gradient of the two-velocity map); momentum-conservation consequences were not examined.
 
+## Re-verification on current main, after the removal of the mimetic projection (2026-11-12)
+
+**Why.** Issue #76 was reopened on 2026-11-11 for its CMDGFM half, after the
+mimetic projection was removed in #137. The code fix of PR #81 (`497a401`) is
+an ancestor of main, so this re-checks the CMDGFM claims only, with a script
+that runs on the current tree.
+
+**New script.** `scripts/code_05_current_map.jl` (CMDGFM only; no mimetic):
+
+| Check | Content | Result |
+|---|---|---|
+| M1 | the two maps of the two-velocity step, on random face jumps: `R^1 = A^{1/2} R^tv A^{1/2}` entrywise (`A = diag aperture`), and `R^1 = A R^tv` exactly at a face whose row of the inverse metric `K` is diagonal (all rows uniform, 1162/1240 on the composite fixtures) | `<= 1e-14` relative |
+| M2 | `E = R^1 J - R^tv (D p*)`, `p*` the least-squares cell function: the part of the one-velocity increment that no pressure gradient of the projection can remove | `<= 1e-8` on the conforming and no-solid fixtures, `1.1e-2` (solid in the gas) and `1.2e-2` (in the liquid) composite, `3.1e-3` for the drop on the cut mesh |
+| P1 | the code's increment (the projection's cached map, i.e. `_phase_force_pressure_operator!` as `_phase_force_substep!` evaluates it) projected by CMDGFM | `<= 1e-9` of the increment in every fixture (measured `1e-11` at tolerance `1e-12`) |
+| P2 | the former increment of the same jumps through the one-velocity map | `1.5e-2` of `max|R^1 J|` on the composite mesh with a solid (`2.9e-2` of `dt |g|`, the issue's `0.029`), `1.3e-2` for the cut-mesh drop (the issue's `0.013`), `<= 1e-8` elsewhere |
+
+**Confirmed.** F1 and F2 hold on the current code: with `xi = 0` CMDGFM acts as
+the one-velocity projection of the coefficient `a/rho`, the one-velocity
+cut-cell map is `A^{1/2} R^tv A^{1/2}`, and it is not removable at a level
+transition that couples a cut face (`a = 0.8`) to the faces carrying the jump;
+the full step's `simulate!` numbers of the chapter reproduce (`9.1e-11`
+uniform no solid, `2.9e-10` composite with a solid, `1.1e-12` drop on the cut
+mesh, `2.2e-7` one velocity).
+
+**Refuted / corrected.** The chapter's earlier "the two maps differ by the
+factor `a_f` on every cut face" was too strong; the text now states the
+criterion `R^1 J in range(R^tv D)`, which at a diagonal row reduces to
+`a_f J_f` being the jump of a cell function. The map relation is unchanged.
+
+**Stale scripts (not fixed here).** `code_01_map_relation.jl`,
+`code_02_hydrostatic_projection.jl`, `code_04_full_step.jl` and
+`sharp_01_condition_cases.jl` still construct `MimeticProjectionSolver` /
+`MimeticProjection()`, removed in #137, so `run_code.jl` (and `run_all.jl`)
+cannot run them; the CMDGFM part of the audit is checked by
+`code_05_current_map.jl` until the mimetic rows are cut. The mimetic verdicts
+F3 and the `:joint_face` rows above are the record of the removed projection
+and have no counterpart in the code any more.
+
 ## History
 
 - 2026-11-09 (later): re-audit after the merge of the force-map fix (`266c7f8`): scripts updated (`:code` rows, `code_04_full_step.jl`), CMDGFM assertions now require balance, mimetic assertions kept as the open defect; `run_all.jl` PASS (97 tests).
 - 2026-11-09: first audit (`code_01_map_relation.jl`, `code_02_hydrostatic_projection.jl`, `code_03_drop_tension.jl`, `sharp_01_condition_cases.jl`). `run_all.jl`: PASS. The scripts assert the *current* behaviour including the defects of issue #76 (CMDGFM with a solid on a composite mesh fails; mimetic fails): after a code fix the corresponding `@test`s (marked `expected_failure` / `P3` / `P4`) must be inverted.
+- 2026-11-12: re-verification of the CMDGFM half on current main
+  (`code_05_current_map.jl`, 4 groups): map congruence, the residual `E` per
+  fixture and both increments through CMDGFM. The mimetic scripts of the first
+  audit no longer load after #137; documented, not rewritten.

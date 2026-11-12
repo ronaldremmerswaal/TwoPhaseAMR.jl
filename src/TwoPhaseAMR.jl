@@ -82,6 +82,7 @@ export harmonic_face_coefficients, weighted_gradient!
 export TreeGeometricMultigridPreconditioner
 export EllipticSolver
 export LinearSolverStats, solve!, residual_norms
+export ProjectionRunStats
 export algebraic_multigrid_preconditioner, incomplete_lu_preconditioner
 export incomplete_cholesky_preconditioner
 export ProjectionWorkspace, project!
@@ -148,6 +149,7 @@ include("solvers/multigrid/cycles.jl")
 include("solvers/multigrid/elliptic_solver.jl")
 # navier_stokes
 include("navier_stokes/projection.jl")
+include("navier_stokes/projection_stats.jl")
 include("navier_stokes/implicit_diffusion.jl")
 # interface
 include("interface/height_functions.jl")

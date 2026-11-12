@@ -610,16 +610,16 @@ end
         )
         @test stats.converged
         @test _phase_storage_contract(velocity, interface)
-        # The exact discrete hydrostatic state is at rest; allow 1e-8 of
-        # the gravity impulse for the iterative projection and round-off.
+        # The exact discrete hydrostatic state is at rest; the leftover is the
+        # 1e-12 projection tolerance and round-off, not a force-map mismatch.
         for phase in 1:2
             interior = _phase_interior_indices(interface, phase)
             boundary = _phase_boundary_indices(interface, phase)
             @test !isempty(interior)
             @test maximum(abs, velocity[phase].interior[interior]) <=
-                1.0e-8 * dt * hypot(gravity...)
+                1.0e-9 * dt * hypot(gravity...)
             @test maximum(abs, velocity[phase].boundary[boundary]; init = 0.0) <=
-                1.0e-8 * dt * hypot(gravity...)
+                1.0e-9 * dt * hypot(gravity...)
         end
         first_pressure = copy(pressure)
         pressure_scale = maximum(
@@ -649,6 +649,69 @@ end
             end
         end
     end
+end
+
+@testset "CMDGFM balance needs the projection's force map (#76)" begin
+    # On a composite mesh with a solid the one-velocity cut-cell coefficient
+    # (aperture)^2/rho and the two-velocity coefficient aperture/rho differ by
+    # the aperture on every cut face, and the inverse metric couples the cut
+    # face at the level transition to faces that carry the gravity jump. A
+    # projection removes gradients of its own map only, so the increment has
+    # to be evaluated with that map (PR #81); this pins both halves.
+    gravity = (0.0, -1.0)
+    density = (1000.0, 1.0)
+    dt = 1.0e-3
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (4, 4), extent = (8.0, 8.0),
+        periodic = (false, false), max_level = 1,
+        refine = (key, origin, extent) -> key.level == 0 && key.i >= 2,
+    )
+    geometry = GeometryField(
+        mesh, (x, y) -> 7.1 - 0.1x - y; lipschitz = hypot(1, 0.1),
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> y - 4.6; geometry, contact_angle = pi / 2, lipschitz = 1,
+    )
+    solver = CMDGFMProjectionSolver(interface; density)
+    two_velocity = CMD._phase_force_pressure_operator!(
+        solver, CMDGFMProjectionWorkspace(solver),
+    )
+    one_velocity = PoissonOperator(interface, geometry; density)
+    @test any(a -> 0 < a < 1, geometry.aperture)
+    # The coefficients are the hypothesis: a^2/rho against a/rho.
+    for index in eachindex(geometry.aperture)
+        aperture = geometry.aperture[index]
+        @test one_velocity.face_coefficient[index] ≈
+            aperture * two_velocity.face_coefficient[index] rtol = 128eps()
+    end
+    function leftover(operator)
+        acceleration = FaceVelocity(mesh)
+        gravity!(
+            acceleration, interface, operator, EllipticWorkspace(operator);
+            density, gravity,
+        )
+        scale = dt * maximum(abs, acceleration.interior)
+        @test scale > 0
+        phases = (FaceVelocity(mesh), FaceVelocity(mesh))
+        for phase in phases
+            phase.interior .= dt .* acceleration.interior
+        end
+        CMD._mark_inactive_phase_velocities!(phases, interface)
+        stats = project!(
+            phases, CellField(mesh), solver, dt,
+            CMDGFMProjectionWorkspace(solver);
+            tolerance = 1.0e-12, max_iterations = 6000,
+        )
+        @test stats.converged
+        worst = 0.0
+        for phase in phases, index in eachindex(phase.interior)
+            value = phase.interior[index]
+            isnan(value) || (worst = max(worst, abs(value)))
+        end
+        return worst / scale
+    end
+    @test leftover(two_velocity) <= 1.0e-9
+    @test leftover(one_velocity) > 1.0e-3
 end
 
 @testset "CMDGFM dimensionless jump and residual defects" begin
