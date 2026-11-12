@@ -878,6 +878,166 @@ end
     end
 end
 
+@testset "Cut coarse-fine phase-schedule consistency" begin
+    interface, _ = cut_momentum_fixture()
+    mesh = interface.mesh
+    # The staggered phase scalars and the two-velocity momentum share one phase
+    # schedule, whose divergence must commute with the open-strip interpolation
+    # of the staggered fraction exactly as the one-velocity one does: the
+    # geometric side fractions of a split coarse side do not.
+    velocity = (
+        FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? 0.3 : -0.2),
+        FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? -0.1 : 0.25),
+    )
+    two_velocity = MomentumAdvectionWorkspace(interface, velocity)
+    for (axis, schedule) in (
+            (1, PhaseFaceScalar{1}(interface).workspace.schedule),
+            (2, PhaseFaceScalar{2}(interface).workspace.schedule),
+            (1, two_velocity.x.workspace.schedule),
+            (2, two_velocity.y.workspace.schedule),
+        )
+        @test cut_momentum_identity_defect(interface, schedule, Val(axis), axis) <= 2.0e-13
+    end
+    geometric = TP._geometry_phase_schedule(interface.geometry, Val(1))
+    @test cut_momentum_identity_defect(interface, geometric, Val(1), 1) > 1.0e-4
+end
+
+@testset "Dual Courant number next to a solid" begin
+    # eq:momentum:cfl: with a solid the cut-donor strip bound limits every
+    # outgoing flux by its donor's open strip, and the phase schedules weigh
+    # the fluxes by those same strips, so the dual Courant number stays at most
+    # nu^dagger also where the open dual volumes are small (#72). This is a
+    # regression guard on one fixture (it passes on the pre-#71 schedule too);
+    # the evidence for the bound is the sweep over random cut meshes recorded
+    # in the issue and in sec:momentum:cfl.
+    interface, carrier = cut_momentum_fixture()
+    momentum = MomentumAdvectionWorkspace(interface)
+    scalars = ntuple(axis -> PhaseFaceScalar{axis}(interface), 2)
+    for cfl in (0.5, 0.2)
+        field = copy(interface)
+        work = WYAdvectionWorkspace(field)
+        dt = stable_timestep(carrier, work; cfl)
+        reconstruct!(field)
+        for axis in (1, 2)
+            TP._compute_directional_wy_fluxes!(field, carrier, dt, work, axis)
+        end
+        for axis in (1, 2), flux in (
+                    work.open_flux, work.liquid_flux, work.gas_flux,
+                )
+            schedules = (
+                (axis == 1 ? momentum.x : momentum.y).advection.schedule,
+                scalars[axis].workspace.schedule,
+            )
+            for schedule in schedules
+                worst = 0.0
+                for face in schedule.faces
+                    face.axis == axis || continue
+                    rate = TP._phase_dual_flux(face, schedule, flux, field.mesh)
+                    worst = max(
+                        worst,
+                        abs(rate) / min(
+                            schedule.volumes[face.minus],
+                            schedule.volumes[face.plus],
+                        ),
+                    )
+                end
+                @test worst <= cfl * (1 + 1.0e-12)
+            end
+        end
+    end
+end
+
+@testset "Staggered transport stays bounded at a hanging segment" begin
+    # #70: the phase volume leaving an unknown of a hanging side can exceed the
+    # phase volume its staggered content holds, so the conservative fluctuation
+    # form was not a convex combination there and a staggered value 0 among
+    # neighbours 1 became 1.98.
+    mesh = BlockTreeMesh(
+        base_mesh = (12, 12), block_size = (4, 4), extent = (12.0, 12.0),
+        periodic = (true, true), max_level = 1,
+        refine = (key, origin, extent) -> key == BlockKey(0, 1, 1),
+    )
+    function band_stream_velocity()
+        velocity = FaceVelocity(mesh)
+        psi(x, y) = sinpi(2x / 12) * sinpi(2y / 12)
+        for (index, face) in pairs(mesh.faces)
+            x, y = face.center
+            h = face.area / 2
+            flux = face.axis == 1 ?
+                psi(x, y + h) - psi(x, y - h) :
+                -(psi(x + h, y) - psi(x - h, y))
+            velocity.interior[index] = flux / face.area
+        end
+        return velocity
+    end
+    for (cx, cy, r, direction, at) in (
+            (4.15, 5.2, 0.16, -1.0, (4.0, 5.25)),
+            (4.05, 5.2, 0.1, 1.0, (4.0, 5.75)),
+        )
+        levelset(x, y) = hypot(x - cx, y - cy) - r
+        zero_at(x, y) = hypot(x - at[1], y - at[2]) < 1.0e-9 ? 0.0 : 1.0
+        uniform_velocity = FaceVelocity(
+            mesh, (x, y, t, axis) -> axis == 1 ? direction : 0.0,
+        )
+        velocity = uniform_velocity
+
+        field = InterfaceField(mesh, levelset; lipschitz = 1)
+        reconstruct!(field)
+        work = WYAdvectionWorkspace(field)
+        dt = stable_timestep(velocity, work)
+        q = PhaseFaceScalar{1}(field; liquid = zero_at, gas = 1.0)
+        amount = integrate(q, :liquid)
+        advect!(
+            field, velocity, dt, work; staggered_scalars = (q,),
+            scheme = Upwind(), amr_interface_scheme = Upwind(),
+        )
+        @test minimum(q.liquid.interior) >= -1.0e-12
+        @test maximum(q.liquid.interior) <= 1 + 1.0e-12
+        @test integrate(q, :liquid) ≈ amount atol = 1.0e-12 * max(abs(amount), 1)
+
+        # The same two experiments with the CTU switch effectively off (the
+        # bulk branch, whose face state moves the net volume at one value) and
+        # with a non-uniform, discretely solenoidal velocity, whose hanging
+        # dual faces carry partial volumes of both signs.
+        for (velocity, ctu_threshold) in (
+                (uniform_velocity, 1.0e-12),
+                (band_stream_velocity(), 1.0e-12),
+                (band_stream_velocity(), 0.5),
+            )
+            field = InterfaceField(mesh, levelset; lipschitz = 1)
+            reconstruct!(field)
+            work = WYAdvectionWorkspace(field; ctu_threshold)
+            dt = stable_timestep(velocity, work)
+            q = PhaseFaceScalar{1}(field; liquid = zero_at, gas = 1.0)
+            amount = integrate(q, :liquid)
+            advect!(
+                field, velocity, dt, work; staggered_scalars = (q,),
+                scheme = Upwind(), amr_interface_scheme = Upwind(),
+            )
+            @test minimum(q.liquid.interior) >= -1.0e-12
+            @test maximum(q.liquid.interior) <= 1 + 1.0e-12
+            @test integrate(q, :liquid) ≈ amount atol =
+                1.0e-12 * max(abs(amount), 1)
+        end
+
+        field = InterfaceField(mesh, levelset; lipschitz = 1)
+        reconstruct!(field)
+        work = WYAdvectionWorkspace(field)
+        dt = stable_timestep(velocity, work)
+        source = FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? zero_at(x, y) : 0.0)
+        destination = FaceVelocity(mesh)
+        advect!(
+            field, velocity, dt, work; momentum = destination,
+            density = (1000.0, 1.0),
+            momentum_workspace = MomentumAdvectionWorkspace(field),
+            momentum_source = source,
+            scheme = Upwind(), amr_interface_scheme = Upwind(),
+        )
+        @test minimum(destination.interior) >= -1.0e-12
+        @test maximum(destination.interior) <= 1 + 1.0e-12
+    end
+end
+
 function wy_cut_hanging_counterexample(parameters)
     mesh = BlockTreeMesh(
         base_mesh = (4, 4), block_size = (2, 2), extent = (4.0, 4.0),

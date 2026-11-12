@@ -691,11 +691,21 @@ bound holds on every $2{:}1$-balanced mesh without solid, periodic or with
 walls: a hanging fine control volume is smaller, but the volumes through the
 faces of its small cell are capped by its own volume (checked as exact linear
 programs over every local configuration of random meshes, not proved here).
-With a solid it can fail, because the open volumes are small: $\mathcfl_g$
-reached $3.3\,\wycflval$ in random cut meshes (\code{proof_review/sec-momentum-cfl/}).
-The regular dual faces next to a solid use the selected scheme
-(\cref{sec:momentum:flux-rules}), so a Lax--Wendroff or limited state may
-there see a Courant number above one; no bound is claimed for it (\issue{72}).
+With a solid the open volumes are small, and the argument above fails. The
+cut-donor bound of \cref{sec:vof:cfl} restores it: it limits every outgoing
+flux by its donor's open strip, the same strip whose half the staggered
+volume of the receiving unknown interpolates, and the phase schedules weigh
+the fluxes by those strips (\cref{eq:momentum:open-fractions}). Over $25$
+random $2{:}1$ cut meshes with a solid and a level transition, swept with the
+\apitype{Upwind}, \apitype{LaxWendroff} and \apitype{MonotonizedCentral}
+states and both directional sweeps, at $\wycflval=\half$ and
+$\wycflval=0.3$, $\mathcfl_g/\wycflval$ stayed at $1.000000000000000$, and
+\testsym{test/two_phase/transport.jl}{Dual Courant number next to a solid}
+holds the bound on the cut fixture; the supremum over the states the older
+per-cell bound admits reached $3.3$ before that bound was in place
+(\code{proof_review/sec-momentum-cfl/}, \issue{72}). So the selected scheme's
+Lax--Wendroff or limited state stays a convex combination of its two
+neighbours next to a solid as well.
 
 \begin{implnote}
 \apifun{stable_timestep}\code{(velocity, workspace; cfl=0.9)} for a
@@ -860,7 +870,9 @@ in it, and the coefficient of the old value in the
 update stays non-negative: the update of a draining control volume is
 bounded by the cell-wise outflow bound, as in the thesis
 lemmas~\thesis{Lemmas~6.2 and 6.3}, and not by the switch. At a segment of a
-hanging side this fails (\cref{dev:momentum:ctu-hanging}).
+hanging side the cell-wise bound does not reach the code's factorization and
+the coefficient of~\cref{eq:momentum:own-coefficient} can be negative; the
+transport limits the outflow there (\cref{dev:momentum:ctu-hanging}).
 
 \emph{Boundaries and solids.} In a bounded domain and with a solid the phase
 schedule~\cref{eq:momentum:volumes} includes the boundary unknowns (whose
@@ -909,24 +921,56 @@ the bulk state is the directional one of \cref{sec:momentum:states},
 and a dilation term with frozen values completes the split update.
 \end{deviation}
 
-\begin{deviation}{CTU flux at hanging segments}\label{dev:momentum:ctu-hanging}
+\begin{deviation}{Outflow limiter at hanging segments}\label{dev:momentum:ctu-hanging}
 The thesis' lemmas bound the CTU update of a draining staggered control
-volume~\thesis{Lemmas~6.2 and 6.3}. At a segment $f$ of a hanging side they
-do not carry over to the code's form. Let the own flux of $f$, from
-$\cminus{f}$ into $\cplus{f}$, be the only non-zero flux, all of the phase of
-$\cminus{f}$ lie in its donating region and $\cplus{f}$ be empty: rule~(N)
-passes $\half(2-\sidefrac{\cplus{f}}{f})$ of this flux out of the control
-volume of $f$, which holds only $\half\sidefrac{\cminus{f}}{f}$ of it, and the
-coefficient of the old value in the update of $f$ is
+volume~\thesis{Lemmas~6.2 and 6.3} through the cell-wise outflow bound. At a
+segment $f$ of a hanging side that bound does not reach the code's
+factorization (rule~(N), \cref{eq:momentum:weights}). Let the own flux of
+$f$, from $\cminus{f}$ into $\cplus{f}$, be the only non-zero flux, all of
+the phase of $\cminus{f}$ lie in its donating region and $\cplus{f}$ be
+empty: rule~(N) passes $\half(2-\sidefrac{\cplus{f}}{f})$ of this flux out
+of the control volume of $f$, which holds only
+$\half\sidefrac{\cminus{f}}{f}$ of it, and the coefficient of the old value
+in the update of $f$ would be
 \begin{equation}\label{eq:momentum:own-coefficient}
   \owncoef{f}=-\frac{2-\sidefrac{\cminus{f}}{f}-\sidefrac{\cplus{f}}{f}}{\sidefrac{\cplus{f}}{f}},
 \end{equation}
 zero on a conforming patch but $-\half$ from a coarse into a fine cell and
-$-1$ from a fine into a coarse cell. The update then leaves the range of the
-old values: in one step a staggered phase scalar $0$ among neighbours $1$
-became $1.98$, and a one-velocity momentum $1.95$ at the density ratio $1000$
-(derivation audit, \code{proof_review/eq-momentum-ctu/}); upwinding the net
-volume does not avoid this. Open: \issue{70}.
+$-1$ from a fine into a coarse cell, for every face state including the
+net-volume upwind one. Left alone the update leaves the range of the old
+values: in one step a staggered phase scalar $0$ among neighbours $1$ became
+$1.98$, and a one-velocity momentum $1.95$ at the density ratio $1000$
+(derivation audit, \code{proof_review/eq-momentum-ctu/}).
+The transport limits the outflow instead of the state
+(\srcsym{src/two_phase/phase_face_transport.jl}{_phase_drain_limit!}). Where
+the phase volume $O_f$ leaving an unknown exceeds the phase volume
+$\stagvol{f}\stagfrac{\phase}{f}$ its staggered content holds at the start
+of the sweep, the excess $O_f-\stagvol{f}\stagfrac{\phase}{f}$ leaves at
+the volume-weighted mean of the values that enter the unknown, over the
+$I_f$ that enter, rather than at its own value. Every partial volume carries one value, for its
+sender and its receiver alike, so the update stays the conservative one
+of~\cref{eq:momentum:one-velocity} (the excess redistributes the value the
+flux carries, not the flux), and with the excess fraction
+$\xi_f=\max(0,1-\stagvol{f}\stagfrac{\phase}{f}/O_f)$ the coefficients of
+the old value, $\max(0,\stagvol{f}\stagfrac{\phase}{f}-O_f)$, and of the
+entering values, $I_f-\xi_f O_f$, are both non-negative and sum to the new
+content $\stagvol{f}\stagfrac{\phase}{f}-O_f+I_f$. The mean is taken over the
+values the neighbouring unknowns carry at the start of the sweep, not over
+their limited ones, so where a neighbour is itself limited the mean is a
+convex combination of the raw values: the coefficients above stay
+non-negative, but no new extremum appeared in $3000$ random hanging
+configurations only up to $5\times10^{-14}$, i.e.\ as observed behaviour, not
+as a proved property of that case. A limited unknown takes the term-wise flux
+of~\cref{eq:momentum:ctu-exchange} in both branches of the switch: the bulk
+state moves the net volume of a face at one value, while the limiter counts
+the partial volumes by sign, so the two agree on the outflow of a limited
+unknown only when every partial is upwinded. On a conforming patch the
+cell-wise bound keeps
+$O_f\le\stagvol{f}\stagfrac{\phase}{f}$, so $\xi_f=0$ and the
+transport is unchanged; the limiter acts only at level transitions, where
+\testsym{test/two_phase/transport.jl}{Staggered transport stays bounded at a hanging segment}
+holds the range of the old values and the phase amount for both the staggered
+phase scalar and the one-velocity momentum (\issue{70}).
 \end{deviation}
 
 \begin{implnote}
@@ -934,7 +978,9 @@ volume does not avoid this. Open: \issue{70}.
 \apifun{advect!}\code{(interface, velocity, dt, work; momentum=destination, density=(rho_l, rho_g), momentum_workspace, scheme, amr_interface_scheme)}
 with a \apitype{WYAdvectionWorkspace}\code{(interface; ctu_threshold=0.5)};
 \apifun{mixture_density}~\cref{eq:momentum:density}. Schedule
-\srcsym{src/two_phase/momentum_workspace.jl}{_momentum_advection_workspace}~\cref{eq:momentum:open-fractions};
+\srcsym{src/two_phase/phase_face_transport.jl}{_open_strip_phase_schedule}~\cref{eq:momentum:open-fractions},
+shared by the one-velocity momentum, the two-velocity momentum and the
+staggered phase scalars;
 update \srcsym{src/two_phase/momentum_workspace.jl}{_advect_momentum_component!}~\cref{eq:momentum:one-velocity},
 modified interpolant \srcsym{src/two_phase/phase_face_transport.jl}{_phase_transport}
 and \srcsym{src/two_phase/phase_face_transport.jl}{_ctu_phase_transport}~\cref{eq:momentum:ctu};
@@ -956,8 +1002,12 @@ The two-velocity model stores intrinsic phase velocities, and a
 \apitype{PhaseFaceScalar} stores intrinsic liquid and gas values on the
 faces of one axis; both are transported by the same update, per phase, with
 the phase volumes of the carrier of \cref{sec:vof:two-velocity}, on the phase
-schedule of \cref{sec:momentum:dual} with the side fractions $\sidefrac{c}{f}$
-(not those of~\cref{eq:momentum:open-fractions}). Before the
+schedule of \cref{sec:momentum:dual} with the open-strip fractions
+of~\cref{eq:momentum:open-fractions}, as for the one-velocity momentum: the
+divergence of that factorization commutes with the staggered fractions
+$\stagfrac{\phase}{f}$ of~\cref{eq:momentum:interpolation} also in a cut
+coarse cell whose side carries two segments, which the geometric side
+fractions do not (\issue{71}). Before the
 sweeps, a value is \emph{absent} where its phase has no open staggered
 volume ($\stagvol{f}$ of~\cref{eq:momentum:volumes} zero, or
 $\operatorname{clamp}(\stagfrac{\liq}{f},0,1)=0$ for the liquid, $=1$ for
@@ -1001,9 +1051,8 @@ to the frozen dilation,
   \sum_f\stagvol{f}\stagfrac{\phase}{f}\avarstag^{\phase}_f\Big|^{\timelevel{n+1}}_{\timelevel{n}}
   =\sum_{j=1}^{2}\sum_f\stagvol{f}\roundpar{\interpolantsbp\big[\indicator{\phase}\sweepdiv{\splitlevel{j}}{}\big]}_f\avarstag^{\phase,\timelevel{n}}_f
 \end{equation}
-under condition (a) of \cref{sec:momentum:one-velocity} and, because this
-schedule keeps the side fractions, condition (b) (\issue{71}), without snapping and with
-every updated unknown above the floor; the dilation sum vanishes for a
+under condition (a) of \cref{sec:momentum:one-velocity}, without snapping and
+with every updated unknown above the floor; the dilation sum vanishes for a
 carrier that is solenoidal in every cell (the mixture constraint on the
 frozen apertures).
 
@@ -1033,7 +1082,8 @@ projected carrier of the thesis is not implemented.
 \code{momentum}, \code{momentum_workspace} and \code{staggered_scalars};
 \apifun{integrate}\code{(q::PhaseFaceScalar, phase)}. Schedule
 \srcsym{src/two_phase/phase_face_transport.jl}{_phase_advection_workspace}
-(side fractions); preparation
+with \srcsym{src/two_phase/phase_face_transport.jl}{_open_strip_phase_schedule}
+(\cref{eq:momentum:open-fractions}); preparation
 \srcsym{src/two_phase/two_velocity/momentum_workspace.jl}{_prepare_phase_momentum_values!}
 with \srcsym{src/two_phase/two_velocity/velocity_fields.jl}{_extend_phase_face_values!}~\cref{eq:momentum:extension};
 update \srcsym{src/two_phase/phase_face_transport.jl}{_advect_phase_faces_workspace!}~\cref{eq:momentum:two-velocity};
@@ -1044,7 +1094,11 @@ Tests: \testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Compatibl
 \testsym{test/two_phase/transport.jl}{bounded two-velocity staggered schemes}
 and \testsym{test/two_phase/transport.jl}{bounded staggered schemes with both phases present}
 (selected scheme on bounded and cut schedules, equal to the single-phase transport away from the interface),
-\testsym{test/two_phase/transport.jl}{two-velocity transport near a sloped solid}.
+\testsym{test/two_phase/transport.jl}{two-velocity transport near a sloped solid},
+\testsym{test/two_phase/transport.jl}{Cut coarse-fine phase-schedule consistency}
+(the divergence of the phase schedule commutes with the open-strip
+interpolation of the staggered fraction at a split coarse cut side, to
+$2\times10^{-13}$; the geometric side fractions miss by $1\times10^{-1}$).
 \end{implnote}
 
 \section{Which flux on which dual face}\label{sec:momentum:flux-rules}
