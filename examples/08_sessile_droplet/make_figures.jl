@@ -40,7 +40,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     )
     export_animation(
         joinpath(outdir, "relaxation.gif"), store; field = :velocity_magnitude,
-        camera = (0.0, 1.0, 0.0, 0.5), diagnostics = [:kinetic_energy], framerate = 10,
+        camera = (0.0, 1.0, 0.0, 0.5), diagnostics = [:kinetic_energy], fps = 10, duration = 4.0,
         size = (1100, 380)
     )
 

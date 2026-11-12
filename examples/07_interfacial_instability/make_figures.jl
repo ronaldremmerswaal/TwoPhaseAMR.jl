@@ -58,7 +58,7 @@ function readme_animations(outdir; level = 5)
         path, recorder;
         field = :velocity_x, camera = (0.0, 1.0, -0.4, 0.4), colorrange = (-0.6, 0.6),
         colormap = cgrad(colormap, levels; categorical = true), blocks = true,
-        title = frame -> @sprintf("t = %.2f", frame.time), framerate = 12,
+        title = frame -> @sprintf("t = %.2f", frame.time), fps = 12, duration = 40 / 12,
         size = (640, 480), kwargs...
     )
     animation(joinpath(outdir, "readme_light.gif"), :balance)
@@ -119,7 +119,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     export_animation(
         joinpath(outdir, "instability.gif"), two_store; field = :velocity_x,
         camera = window, diagnostics = [:amplitude],
-        references = Dict(:amplitude => :analytical_amplitude), framerate = 10,
+        references = Dict(:amplitude => :analytical_amplitude), fps = 10, duration = 5.4,
         size = (1150, 340)
     )
     readme_animations(outdir)

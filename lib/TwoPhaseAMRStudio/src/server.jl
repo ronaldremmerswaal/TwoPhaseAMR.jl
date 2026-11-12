@@ -115,28 +115,38 @@ does not stop the solver. `wait(app)` waits for the server to stop. With no
 independent Julia thread, network I/O runs cooperatively at solver yields and
 stored rendering is deferred until the solver is idle.
 
-A `recording` WebSocket command with action `start` accepts source `live` or
-`stored`, `path`, `field`, and a `diagnostics` name array; `stop` freezes a
-stored session's selection or stops the bounded live subscription. Action
-`export` starts a one-shot stored export immediately; `cancel` cooperatively
-cancels an active stored job. Stored jobs accept `frames` (`keyframes` or
-`all`), an inclusive `window` `[t0,t1]`, and `every`.
+A `recording` WebSocket command with action `start` records a live stream:
+source `live`, `path`, `field`, and a `diagnostics` name array, until `stop`
+closes its bounded subscription and finalizes the file. Action `export` starts
+a one-shot stored export immediately; `cancel` cooperatively cancels an active
+stored job. Stored jobs accept `frames` (`keyframes` or `all`), an inclusive
+`window` `[t0,t1]`, and `duration` in seconds; `fps` sets the frame rate.
 Both sources accept `camera` (`fit` or `[xmin,xmax,ymin,ymax]`), `colorrange`
 (`auto` or `[min,max]`; stored also accepts `global`), `colormap`,
 `phase_rendering` (`cell` or `plic`), `size` `[width,height]` with positive even
-integer dimensions, positive integer `framerate`,
-and boolean `interface`, `geometry`, and `blocks`. The diagnostics
-`arrangement` is `right` (default) or `below`. Optional `diagnostic_options`
-is an array of `{names, scale, hidden}` objects, at most one per selected
-diagnostic group. `names` is the nonempty array of exact selected diagnostic
-names in that group, `scale` is `linear` or `log`, and `hidden` is an array of
-`{name, component}` objects with one-based component indices. Unlisted groups
-keep their metadata scale; hidden components and their reference lines do not
-enter the legend or automatic limits. Nonpositive values are omitted on log
-axes. Duplicate groups, names, components, or JSON object keys, unknown keys,
-and invalid component indices are rejected.
-Live also accepts queue `capacity` and `every`; stored accepts `theme` (`light`
-or `dark`). Unrecognized or unsupported options are rejected.
+integer dimensions, positive integer `fps`, and boolean `interface`,
+`geometry`, and `blocks`. The diagnostics `arrangement` is `right` (default) or
+`below`. Optional `diagnostic_options` is an array of `{names, scale, hidden}`
+objects, at most one per selected diagnostic group. `names` is the nonempty
+array of exact selected diagnostic names in that group, `scale` is `linear` or
+`log`, and `hidden` is an array of `{name, component}` objects with one-based
+component indices. Unlisted groups keep their metadata scale; hidden components
+and their reference lines do not enter the legend or automatic limits.
+Nonpositive values are omitted on log axes. Duplicate groups, names,
+components, or JSON object keys, unknown keys, and invalid component indices
+are rejected.
+Both sources accept `theme` (`light` or `dark`). Live also accepts queue
+`capacity` and `sim_per_second`, the simulation time covered by one second of
+video; its output times are `t_start + k · sim_per_second / fps`, so video time
+advances linearly in simulation time and frames repeat or are skipped. Stored
+exports use the same uniform grid over the window (default: the whole
+recording) and repeat or skip candidate frames. Unrecognized or unsupported
+options are rejected.
+
+Action `schedule` validates a stored command without starting a job and replies
+`recording_schedule` with the output `frames`, `distinct` candidates,
+`repeats`, `sparse` flag, `window`, `fps`, `duration`, uniform `spacing`,
+`sim_per_second`, and the `first_frame` id the time line selects first.
 
 For a single-frame preview, send `action: "preview"`, a required request id
 and stored `frame` id, and the same stored export settings (the optional `path`
@@ -149,10 +159,10 @@ rejected while any Studio recording or encoding is active, and new recordings
 or previews are rejected while a preview is rendering.
 
 All clients receive the same run-level `recording` state, independent of their
-timelines. It contains a job `id`, `status`, actual `encoded`/`dropped`/`skipped`
-counts, `total`, and an `error` if it failed. Stored `progress` is the fraction
-of selected frames submitted to the encoder; it is null until the total is
-known and may be 1 while finalization is still in progress. Live progress is
+timelines. It contains a job `id`, `source`, `status`, actual `encoded` and
+`dropped` counts, `total`, and an `error` if it failed. Stored `progress` is the
+fraction of output frames submitted to the encoder; it is null until the total
+is known and may be 1 while finalization is still in progress. Live progress is
 null until completion. Cancellation goes through `cancelling` to `cancelled`, but a
 job already committing its result may complete first. Once complete, `url` is
 an authenticated relative download URL; it is null before completion, on
@@ -623,6 +633,8 @@ function _command(app, socket, message)
         action = get(message, "action", nothing)
         if action == "preview"
             return _start_preview!(app, socket, message)
+        elseif action == "schedule"
+            return _recording_schedule(app, socket, message)
         elseif action == "start" || action == "export"
             _start_recording!(app, message; one_shot = action == "export")
         elseif action == "stop" || action == "cancel"

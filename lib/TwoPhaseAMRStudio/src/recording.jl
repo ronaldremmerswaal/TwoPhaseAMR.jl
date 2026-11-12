@@ -12,19 +12,19 @@ mutable struct RecordingJob
     error::Union{Nothing, String}
     encoded::Int
     dropped::Int
-    skipped::Int
     total::Union{Nothing, Int}
     stop_requested::Bool
     cancel_requested::Bool
     selection::Union{Nothing, Vector{TwoPhaseAMR.Frame}}
     diagnostic_counts::Union{Nothing, Vector{Int}}
     handle::Any
+    times::Union{Nothing, Vector{Float64}}
     task::Union{Nothing, Task}
 end
 
 RecordingJob() = RecordingJob(
     false, nothing, nothing, nothing, nothing, Symbol[], (;), :idle,
-    nothing, 0, 0, 0, nothing, false, false, nothing, nothing, nothing, nothing
+    nothing, 0, 0, nothing, false, false, nothing, nothing, nothing, nothing, nothing
 )
 
 # CairoMakie previews must not overlap Studio encoders (including jobs owned
@@ -72,9 +72,8 @@ end
 function _live_counts(handle)
     subscription = getfield(handle, :subscription)
     encoded = getfield(handle, :encoded, :sequentially_consistent)
-    skipped = getfield(handle, :skipped, :sequentially_consistent)
     dropped = Base.@lock subscription.condition subscription.dropped
-    return encoded, dropped, skipped
+    return encoded, dropped
 end
 
 function _recording_state(app)
@@ -83,22 +82,22 @@ function _recording_state(app)
         (;
             job.active, job.id, source = isnothing(job.source) ? nothing : string(job.source),
             field = isnothing(job.field) ? nothing : string(job.field), job.path,
-            job.encoded, job.dropped, job.skipped, job.total,
+            job.encoded, job.dropped, job.total, job.times,
             status = string(job.status), job.error, handle = job.handle,
             url = job.status === :completed ? "/download/$(job.id)?token=$(app.token)" : nothing,
         )
     end
-    encoded, dropped, skipped = state.encoded, state.dropped, state.skipped
+    encoded, dropped = state.encoded, state.dropped
     if !isnothing(state.handle)
-        encoded, dropped, skipped = _live_counts(state.handle)
+        encoded, dropped = _live_counts(state.handle)
     end
     # This is frame-submission progress, not file-finalization progress.
     progress = state.status == "completed" ? 1.0 :
         state.source == "stored" && !isnothing(state.total) && state.total > 0 ?
         encoded / state.total : nothing
     return (;
-        state.active, state.id, state.source, state.field, state.path, encoded, dropped, skipped, state.total,
-        state.status, state.error, progress, state.url,
+        state.active, state.id, state.source, state.field, state.path, encoded, dropped, state.total,
+        state.status, state.error, progress, state.url, times = state.times,
     )
 end
 
@@ -186,11 +185,15 @@ function _diagnostic_options(app, value, selected)
     return TwoPhaseAMR._validated_diagnostic_options(configs, groups, counts)
 end
 
+# Stored exports scale their play time with the number of candidate frames,
+# between two and twenty seconds; a live export derives its rate from the run.
+_default_export_duration(count::Integer, fps::Integer) = clamp(count / fps, 2.0, 20.0)
+
 function _validate_recording(app, message, one_shot)
     allowed = (
         "type", "protocol", "request", "action", "source", "path", "field", "diagnostics", "diagnostic_options",
-        "frames", "window", "every", "capacity", "camera", "colorrange", "colormap",
-        "phase_rendering", "size", "framerate", "theme", "arrangement",
+        "frames", "window", "duration", "fps", "sim_per_second", "capacity", "camera", "colorrange", "colormap",
+        "phase_rendering", "size", "theme", "arrangement",
         "interface", "geometry", "blocks",
     )
     for key in keys(message)
@@ -201,6 +204,8 @@ function _validate_recording(app, message, one_shot)
         throw(ArgumentError("recording source must be stored or live"))
     one_shot && source != "stored" &&
         throw(ArgumentError("one-shot export requires source stored"))
+    one_shot || source == "live" ||
+        throw(ArgumentError("stored frames export in one shot; send action export"))
     path = get(message, "path", nothing)
     path isa AbstractString && !isempty(path) && !occursin('\0', path) ||
         throw(ArgumentError("recording path must be a nonempty filename"))
@@ -230,7 +235,20 @@ function _validate_recording(app, message, one_shot)
         window = _numeric_tuple(window, 2, "window")
         window[1] <= window[2] || throw(ArgumentError("window must have increasing bounds"))
     end
-    every = _positive_integer(get(message, "every", 1), "every")
+    duration = get(message, "duration", nothing)
+    if !isnothing(duration)
+        source == "stored" || throw(ArgumentError("duration applies only to stored recordings"))
+        duration = _number(duration, "duration")
+        duration > 0 || throw(ArgumentError("duration must be positive"))
+    end
+    # Makie rounds noninteger frame rates; do not silently change a client's FPS.
+    fps = _positive_integer(get(message, "fps", 20), "fps")
+    sim_per_second = get(message, "sim_per_second", nothing)
+    if !isnothing(sim_per_second)
+        source == "live" || throw(ArgumentError("sim_per_second applies only to live recordings"))
+        sim_per_second = _number(sim_per_second, "sim_per_second")
+        sim_per_second > 0 || throw(ArgumentError("sim_per_second must be positive"))
+    end
     capacity = _positive_integer(get(message, "capacity", 32), "capacity")
     source == "stored" && haskey(message, "capacity") &&
         throw(ArgumentError("capacity applies only to live recordings"))
@@ -268,12 +286,14 @@ function _validate_recording(app, message, one_shot)
         all(iseven, size) ||
             throw(ArgumentError("size width and height must be even to avoid encoder padding"))
     end
-    # Makie rounds noninteger frame rates; do not silently change a client's FPS.
-    framerate = _positive_integer(get(message, "framerate", 12), "framerate")
     theme = get(message, "theme", nothing)
     if !isnothing(theme)
         theme in ("light", "dark") || throw(ArgumentError("theme must be light or dark"))
-        source == "stored" || throw(ArgumentError("theme is not supported for live recording"))
+        # The live figure is created lazily on the encoder task, outside the
+        # caller's with_theme block, so only stored exports can apply one.
+        source == "stored" || throw(
+            ArgumentError("theme applies only to stored exports; the live figure is built while encoding"),
+        )
         theme = Symbol(theme)
     end
     arrangement = get(message, "arrangement", "right")
@@ -285,8 +305,8 @@ function _validate_recording(app, message, one_shot)
     all(value -> value isa Bool, (interface, geometry, blocks)) ||
         throw(ArgumentError("interface, geometry, and blocks must be booleans"))
     options = (;
-        frames = Symbol(frames), window, every, capacity, camera, colorrange, colormap,
-        phase_rendering = Symbol(phase), size, framerate, theme, arrangement = Symbol(arrangement),
+        frames = Symbol(frames), window, duration, fps, sim_per_second, capacity, camera, colorrange,
+        colormap, phase_rendering = Symbol(phase), size, theme, arrangement = Symbol(arrangement),
         interface, geometry, blocks, diagnostic_options,
     )
     return Symbol(source), abspath(path), name, selected, options
@@ -294,6 +314,8 @@ end
 
 # Pin selected immutable frame objects at the command boundary. In particular,
 # retaining just preview ids would race store thinning before the encoder runs.
+# `frames = :keyframes` excludes previews; the time-linear mapping only uses
+# these candidates.
 function _freeze_selection(store, diagnostics, options)
     selected, counts = Base.@lock store.lock begin
         selected = TwoPhaseAMR.Frame[]
@@ -310,23 +332,15 @@ function _freeze_selection(store, diagnostics, options)
         end
         (selected, counts)
     end
-    return selected[1:options.every:end], counts
+    return selected, counts
 end
 
-# Phase 2 selects only keyframes. For an explicit "all" export, promote
-# previews in this private store only; the original store is never modified.
+# The export reads a private snapshot of the frozen frames, so later thinning,
+# promotion and diagnostic samples cannot change it.
 function _stored_snapshot(store, diagnostics, selection, diagnostic_counts)
     snapshot = TwoPhaseAMR.SnapshotStore(store.retention)
     for frame in selection
-        info = frame.info
-        if info.kind === :preview
-            info = TwoPhaseAMR.FrameInfo(
-                info.id, info.time, info.step, :keyframe, info.wall_time,
-                info.topology, info.requested_times,
-            )
-            frame = TwoPhaseAMR._with_info(frame, info)
-        end
-        push!(snapshot.records, info)
+        push!(snapshot.records, frame.info)
         snapshot.frames[frame.id] = frame
     end
     for (name, count) in zip(diagnostics, diagnostic_counts)
@@ -365,14 +379,20 @@ function _export_options(job)
     kwargs = (;
         diagnostics = isempty(job.diagnostics) ? nothing : job.diagnostics, options.diagnostic_options,
         options.camera, colorrange, options.colormap, options.phase_rendering,
-        options.framerate, options.arrangement, options.interface, options.geometry, options.blocks,
+        options.fps, options.arrangement, options.interface, options.geometry, options.blocks,
     )
     isnothing(options.size) || (kwargs = merge(kwargs, (; options.size)))
     if options.theme === :dark
         kwargs = merge(kwargs, (; interfacecolor = :white, blockcolor = (:white, 0.2)))
     end
     if job.source === :live
-        kwargs = merge(kwargs, (; options.every, options.capacity))
+        kwargs = merge(
+            kwargs, (; sim_per_second = options.sim_per_second, capacity = options.capacity),
+        )
+    else
+        kwargs = merge(
+            kwargs, (; window = options.window, frames = options.frames, duration = options.duration),
+        )
     end
     return kwargs
 end
@@ -383,7 +403,12 @@ function _preview_image(snapshot, frame, job, directory)
     extension = Base.get_extension(TwoPhaseAMR, :TwoPhaseAMRMakieExt)
     isnothing(extension) && throw(ArgumentError("the Makie export extension is not loaded"))
     options = _export_options(job)
-    panels = (; (key => value for (key, value) in pairs(options) if key !== :framerate)...)
+    panels = (;
+        (
+            key => value for (key, value) in pairs(options)
+                if !(key in (:fps, :duration, :sim_per_second, :capacity))
+        )...,
+    )
     render() = begin
         animation = Base.invokelatest(extension._animation_scene, snapshot, job.field; panels...)
         Base.invokelatest(setindex!, animation.frame, frame)
@@ -407,6 +432,52 @@ function _cleanup_preview_directory!(app, directory)
         end
     end
     return nothing
+end
+
+"""
+Compute the stored export's output-frame plan without starting a job: the
+output frame count, the number of distinct candidate frames it shows, and the
+uniform simulation-time spacing. The dialog uses it to show the resulting
+video summary and warn about a sparse recording before exporting.
+"""
+function _recording_schedule(app, socket, message)
+    request = _optional_request(message)
+    isnothing(request) && throw(ArgumentError("schedule requires a request id"))
+    command = Dict{String, Any}(key => value for (key, value) in pairs(message))
+    delete!(command, "action")
+    get!(command, "path", "schedule.gif") # Validated but never written.
+    _, _, _, _, options = _validate_recording(app, command, true)
+    ids = Int[]
+    times = Float64[]
+    Base.@lock app.store.lock begin
+        for info in app.store.records
+            options.frames === :keyframes && info.kind === :preview && continue
+            if !isnothing(options.window) && !(options.window[1] <= info.time <= options.window[2])
+                continue
+            end
+            push!(ids, info.id)
+            push!(times, info.time)
+        end
+    end
+    isempty(times) && throw(ArgumentError("no stored frames match the selection"))
+    duration = something(options.duration, _default_export_duration(length(times), options.fps))
+    t_start, t_end = isnothing(options.window) ? (first(times), last(times)) :
+        (options.window[1], options.window[2])
+    schedule = TwoPhaseAMR.video_frame_schedule(
+        times, t_start, t_end; fps = options.fps, duration,
+    )
+    count = length(schedule)
+    distinct = length(unique(schedule.indices))
+    spacing = count > 1 ? (t_end - t_start) / (count - 1) : 0.0
+    return _send(
+        socket, (;
+            type = "recording_schedule", request, frames = count, distinct,
+            repeats = count - distinct, sparse = 2 * distinct < count,
+            window = [t_start, t_end], fps = options.fps, duration,
+            spacing, sim_per_second = spacing * options.fps,
+            first_frame = ids[first(schedule.indices)],
+        )
+    )
 end
 
 function _start_preview!(app, socket, message)
@@ -492,15 +563,14 @@ function _start_preview!(app, socket, message)
     return nothing
 end
 
-function _complete_job!(app, job, encoded, dropped, skipped)
+function _complete_job!(app, job, encoded, dropped)
     isfile(job.path) && filesize(job.path) > 0 ||
         throw(ArgumentError("the encoder did not write an output file"))
     Base.@lock app.lock begin
         app.downloads[job.id] = job.path
         job.encoded = encoded
         job.dropped = dropped
-        job.skipped = skipped
-        # Release pinned previews as soon as encoding finishes.
+        # Release pinned previews/keys as soon as encoding finishes.
         job.selection = nothing
         job.diagnostic_counts = nothing
         job.handle = nothing
@@ -513,7 +583,7 @@ end
 
 function _job_set!(
         app, job; active = nothing, status = nothing,
-        error = nothing, encoded = nothing, dropped = nothing, skipped = nothing
+        error = nothing, encoded = nothing, dropped = nothing
     )
     Base.@lock app.lock begin
         isnothing(active) || (job.active = active)
@@ -521,7 +591,6 @@ function _job_set!(
         isnothing(error) || (job.error = error)
         isnothing(encoded) || (job.encoded = encoded)
         isnothing(dropped) || (job.dropped = dropped)
-        isnothing(skipped) || (job.skipped = skipped)
         if active === false
             job.selection = nothing
             job.diagnostic_counts = nothing
@@ -555,6 +624,9 @@ end
 # open until the run finishes; closing it early would start encoding on the
 # solver's sole thread. The app reports :stopping until finalization finishes.
 function _stop_live_subscription!(app, handle)
+    # Freeze the simulation time at stop before the run takes further steps, so
+    # the finalized output never extends past the moment the recording stopped.
+    _freeze_live_stop_time!(handle)
     subscription = getfield(handle, :subscription)
     single = Threads.nthreads(:interactive) == 0 && Threads.nthreads(:default) == 1
     if single && TwoPhaseAMR.run_state(app.recorder) in (:running, :pause_requested, :paused, :stopping)
@@ -572,22 +644,24 @@ function _stop_live_subscription!(app, handle)
     return nothing
 end
 
+# The stop time belongs to the handle, which the Makie extension owns; call its
+# capture through the extension so no Makie package is required by Studio.
+function _freeze_live_stop_time!(handle)
+    extension = Base.get_extension(TwoPhaseAMR, :TwoPhaseAMRMakieExt)
+    isnothing(extension) || Base.invokelatest(extension._freeze_stop_time!, handle)
+    return nothing
+end
+
 function _record_job!(app, job)
     handle = nothing
     try
         if job.source === :stored
-            # A stored session freezes its selection at stop; a one-shot job
-            # froze it at submission. Neither consults a browser playhead.
-            while !(Base.@lock app.lock job.stop_requested)
-                sleep(0.05)
-            end
-            if _cancel_requested(app, job)
-                return _finish_cancelled!(app, job)
-            end
+            _cancel_requested(app, job) && return _finish_cancelled!(app, job)
             # Without an independent thread defer rendering until the solver
-            # is idle. The selected frame index is already frozen at stop.
+            # stops stepping; a paused run is idle, so its export renders right
+            # away. The selected candidate frames are already frozen.
             if Threads.nthreads(:interactive) == 0 && Threads.nthreads(:default) == 1
-                while TwoPhaseAMR.run_state(app.recorder) in (:running, :pause_requested, :paused, :stopping)
+                while TwoPhaseAMR.run_state(app.recorder) in (:running, :pause_requested, :stopping)
                     _cancel_requested(app, job) && return _finish_cancelled!(app, job)
                     sleep(0.05)
                 end
@@ -605,12 +679,13 @@ function _record_job!(app, job)
             selection, counts = Base.@lock app.lock (job.selection, job.diagnostic_counts)
             isempty(selection) && throw(ArgumentError("no stored frames match the selection"))
             snapshot = _stored_snapshot(app.store, job.diagnostics, selection, counts)
-            count = length(snapshot.records)
+            count = TwoPhaseAMR.video_frame_count(job.options.fps, job.options.duration)
             ready = Base.@lock app.lock begin
                 if job.cancel_requested
                     false
                 else
                     job.status = :exporting
+                    job.total = count
                     true
                 end
             end
@@ -631,7 +706,7 @@ function _record_job!(app, job)
             else
                 Base.invokelatest(CairoMakie.with_theme, render, CairoMakie.Theme())
             end
-            isnothing(result) ? _finish_cancelled!(app, job) : _complete_job!(app, job, count, 0, 0)
+            isnothing(result) ? _finish_cancelled!(app, job) : _complete_job!(app, job, count, 0)
         else
             # Phase 2 chooses the *opposite* pool to its caller. Start the
             # live handle on :default so it uses :interactive when available.
@@ -650,9 +725,11 @@ function _record_job!(app, job)
             # Flush/finalize the phase-2 stream and preserve its accounting.
             Base.invokelatest(close, handle)
             _unsubscribe(app.store, getfield(handle, :subscription))
-            encoded, dropped, skipped = _live_counts(handle)
+            encoded, dropped = _live_counts(handle)
             encoded > 0 || throw(ArgumentError("live recording produced no frames"))
-            _complete_job!(app, job, encoded, dropped, skipped)
+            shown = handle.times
+            Base.@lock(app.lock, job.times = shown)
+            _complete_job!(app, job, encoded, dropped)
         end
     catch err
         if !isnothing(handle)
@@ -662,8 +739,8 @@ function _record_job!(app, job)
         if isnothing(handle)
             _job_set!(app, job; active = false, status = :error, error = message)
         else
-            encoded, dropped, skipped = _live_counts(handle)
-            _job_set!(app, job; active = false, status = :error, error = message, encoded, dropped, skipped)
+            encoded, dropped = _live_counts(handle)
+            _job_set!(app, job; active = false, status = :error, error = message, encoded, dropped)
         end
     finally
         _release_recording_render!()
@@ -683,16 +760,19 @@ function _start_recording!(app, message; one_shot = false)
     selection, counts = if one_shot
         selection, counts = _freeze_selection(app.store, diagnostics, options)
         isempty(selection) && throw(ArgumentError("no stored frames match the selection"))
+        options = merge(
+            options,
+            (; duration = something(options.duration, _default_export_duration(length(selection), options.fps))),
+        )
         (selection, counts)
     else
         (nothing, nothing)
     end
     id = bytes2hex(Random.rand(Random.RandomDevice(), UInt8, 16))
+    total = one_shot ? TwoPhaseAMR.video_frame_count(options.fps, options.duration) : nothing
     job = RecordingJob(
-        true, id, source, field, path, diagnostics, options,
-        one_shot ? :starting : source === :stored ? :recording : :starting,
-        nothing, 0, 0, 0, isnothing(selection) ? nothing : length(selection),
-        one_shot, false, selection, counts, nothing, nothing,
+        true, id, source, field, path, diagnostics, options, :starting,
+        nothing, 0, 0, total, false, false, selection, counts, nothing, nothing, nothing,
     )
     Base.@lock app.lock begin
         app.status === :started || throw(ArgumentError("Studio is closed"))
@@ -722,6 +802,12 @@ function _start_recording!(app, message; one_shot = false)
 end
 
 function _stop_recording!(app; closing = false)
+    job = Base.@lock app.lock app.recording
+    if job.active && job.source === :stored
+        closing || throw(ArgumentError("stored exports are cancelled, not stopped"))
+        Base.@lock app.lock job.cancel_requested = true
+        return nothing
+    end
     job = Base.@lock app.lock begin
         job = app.recording
         if !job.active || job.stop_requested
@@ -730,18 +816,11 @@ function _stop_recording!(app; closing = false)
         end
         job
     end
-    # Pin frame references and diagnostic lengths together at stop. Later
-    # thinning, promotions and samples cannot change the exported selection.
-    selection, counts = job.source === :stored ?
-        _freeze_selection(app.store, job.diagnostics, job.options) : (nothing, nothing)
     handle = Base.@lock app.lock begin
         if app.recording !== job || !job.active || job.stop_requested
             closing && return nothing
             throw(ArgumentError("recording already stopped"))
         end
-        job.selection = selection
-        job.diagnostic_counts = counts
-        job.total = isnothing(selection) ? nothing : length(selection)
         job.stop_requested = true
         job.status = :stopping
         job.handle

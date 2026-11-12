@@ -7,7 +7,8 @@ using TwoPhaseAMR: BlockTreeMesh, ViewCamera, DiagnosticCollection, DiagnosticGr
     DiagnosticInfo, FieldStats, FlowSimulation, Frame, FrameInfo, PhysicalDimension, Recorder,
     SnapshotStore, TopologySnapshot, VisualizationFieldRegistry,
     diagnostic_groups, diagnostic_history, diagnostic_info, diagnostic_names,
-    frame_at, keyframes, newest_frame, rasterize, snapshot_store, visible_rect
+    frame_at, keyframes, newest_frame, rasterize, snapshot_store, video_frame_schedule,
+    LiveVideoSampler, push_live_frame!, flush_live_frames!, visible_rect
 
 const _automatic = Makie.automatic
 
@@ -707,8 +708,11 @@ end
 # ---------------------------------------------------------------------------
 # Export
 
-function _stored_frames(store::SnapshotStore, window, name::Symbol)
-    selected = Frame[store[info] for info in keyframes(store)]
+function _stored_frames(store::SnapshotStore, window, name::Symbol, selection::Symbol)
+    selection in (:all, :keyframes) ||
+        throw(ArgumentError("frames must be :all or :keyframes, got $selection"))
+    infos = selection === :all ? TwoPhaseAMR.frames(store) : keyframes(store)
+    selected = Frame[store[info] for info in infos]
     if !isnothing(window)
         first_time, last_time = Float64(window[1]), Float64(window[2])
         first_time <= last_time ||
@@ -717,8 +721,9 @@ function _stored_frames(store::SnapshotStore, window, name::Symbol)
     end
     isempty(selected) && throw(
         ArgumentError(
-            isnothing(window) ? "the store holds no keyframes" :
-                "the store holds no keyframes in the window $window",
+            isnothing(window) ?
+                "the store holds no $(selection === :all ? "frames" : "keyframes")" :
+                "the store holds no $(selection === :all ? "frames" : "keyframes") in the window $window",
         )
     )
     for frame in selected
@@ -837,62 +842,137 @@ function _export_scene(
     return (; figure, field_axes, plot, diagnostic_axes)
 end
 
-# Animation of stored keyframes; the figure is built once.
-function _animation_scene(source, field; window = nothing, kwargs...)
+# Stored exports default to 20 frames per second and a play time that scales
+# with the candidate count, between two and twenty seconds.
+const _EXPORT_FPS = 20
+const _EXPORT_DURATION_MIN = 2.0
+const _EXPORT_DURATION_MAX = 20.0
+_default_duration(count::Integer, fps::Real) =
+    clamp(count / fps, _EXPORT_DURATION_MIN, _EXPORT_DURATION_MAX)
+
+# Nearest-frame sampling over the stored frames of the window. The output
+# times are uniform in simulation time, so stored frames repeat or are skipped.
+function _video_schedule(times, window, fps, duration, nframes)
+    isnothing(duration) || isnothing(nframes) ||
+        throw(ArgumentError("give at most one of duration and nframes"))
+    t_start, t_end = isnothing(window) ? (first(times), last(times)) :
+        (Float64(window[1]), Float64(window[2]))
+    isnothing(duration) && isnothing(nframes) &&
+        (duration = _default_duration(length(times), fps))
+    return isnothing(nframes) ?
+        video_frame_schedule(times, t_start, t_end; fps, duration) :
+        video_frame_schedule(times, t_start, t_end; fps, nframes)
+end
+
+# Animation of stored frames on a uniformly sampled simulation-time line; the
+# figure is built once.
+function _animation_scene(
+        source, field; window = nothing, frames::Symbol = :keyframes,
+        fps::Real = _EXPORT_FPS,
+        duration::Union{Nothing, Real} = nothing,
+        nframes::Union{Nothing, Integer} = nothing, kwargs...,
+    )
     options = _panel_options(; kwargs...)
     store = _store(source)
     name = Symbol(field)
-    selected = _stored_frames(store, window, name)
+    selected = _stored_frames(store, window, name, frames)
+    schedule = _video_schedule(
+        [frame.time for frame in selected], window, fps, duration, nframes,
+    )
+    shown = selected[schedule.indices]
     colorrange, colormap = _frames_colorrange(selected, name, options)
-    current = Makie.Observable(first(selected))
+    current = Makie.Observable(first(shown))
     scene = _export_scene(
         store, [current], name, colorrange, colormap, options;
         cursor = Makie.lift(frame -> frame.time, current),
     )
-    return (; scene..., frame = current, frames = selected)
+    return (; scene..., frame = current, frames = shown, schedule)
 end
 
 """
 Handle of a live recording started by `export_animation(path, recorder;
 source = :live)`. `close` it after the run: it stops receiving frames, encodes
-the queued ones, writes the file, and reports the counts. `encoded`,
-`dropped` (frames lost because the encoder fell behind), and `skipped` (frames
-left out by `every`) count frames.
+the remaining output frames, writes the file, and reports the counts.
+`encoded` counts the frames written, `dropped` counts frames lost because the
+encoder fell behind, and `ids` and `times` list the ids and simulation times
+of the frames written, in output order. `ids`, `times`, and `stop_time` are
+snapshots taken under the recording's lock, so they are safe to read while the
+encoder appends; `stop_time` is the simulation time frozen by `close` before
+the queue drained, and `nothing` until then.
 """
 mutable struct LiveRecording
     const path::String
+    const store::TwoPhaseAMR.SnapshotStore
     const subscription::TwoPhaseAMR.FrameSubscription
+    const lock::ReentrantLock
     task::Union{Nothing, Task}
+    const ids::Vector{Int}
+    const times::Vector{Float64}
+    stop_captured::Bool
+    stop_time::Union{Nothing, Float64}
     @atomic encoded::Int
-    @atomic skipped::Int
 end
 
 function Base.getproperty(recording::LiveRecording, name::Symbol)
     if name === :dropped
         subscription = getfield(recording, :subscription)
         return Base.@lock subscription.condition subscription.dropped
+    elseif name === :ids || name === :times
+        # The encoder appends while the recording runs; hand out a copy so a
+        # reader never observes a partially written vector.
+        return Base.@lock getfield(recording, :lock) copy(getfield(recording, name))
+    elseif name === :stop_time
+        # `nothing` until the stop time is frozen, and never a torn read.
+        return Base.@lock getfield(recording, :lock) (
+            getfield(recording, :stop_captured) ? getfield(recording, :stop_time) : nothing
+        )
     end
     return getfield(recording, name)
 end
 
 Base.propertynames(::LiveRecording, private::Bool = false) =
-    (:path, :encoded, :dropped, :skipped)
+    (:path, :encoded, :dropped, :ids, :times, :stop_time)
 
 Base.isopen(recording::LiveRecording) = isopen(getfield(recording, :subscription))
 
 function Base.show(io::IO, recording::LiveRecording)
     return print(
         io, "LiveRecording(", repr(recording.path), ", encoded=", recording.encoded,
-        ", dropped=", recording.dropped, ", skipped=", recording.skipped,
-        isopen(recording) ? ", open)" : ", closed)",
+        ", dropped=", recording.dropped, isopen(recording) ? ", open)" : ", closed)",
     )
 end
 
+# Freeze the simulation time at which the recording stops. Reading it after the
+# queue drains would also include steps the run takes while the encoder
+# finishes, and the output would extend past the stop time.
+function _freeze_stop_time!(recording::LiveRecording)
+    Base.@lock getfield(recording, :lock) begin
+        getfield(recording, :stop_captured) && return getfield(recording, :stop_time)
+        times = TwoPhaseAMR.step_log(getfield(recording, :store)).time
+        recording.stop_time = isempty(times) ? nothing : Float64(last(times))
+        recording.stop_captured = true
+        return recording.stop_time
+    end
+end
+
+# Simulation time the output covers: the time frozen at stop, or, when the
+# stream ended without an explicit stop (the run completed), the store's last
+# step at the flush.
+function _flush_time(recording::LiveRecording, sampler)
+    captured, stop = Base.@lock getfield(recording, :lock) (
+        getfield(recording, :stop_captured), getfield(recording, :stop_time),
+    )
+    captured && return isnothing(stop) ? sampler.left_time : stop
+    times = TwoPhaseAMR.step_log(getfield(recording, :store)).time
+    return isempty(times) ? sampler.left_time : Float64(last(times))
+end
+
 function Base.close(recording::LiveRecording)
+    _freeze_stop_time!(recording)
     close(getfield(recording, :subscription))
     wait(getfield(recording, :task)::Task)
     @info "Live recording wrote $(recording.encoded) frames to $(recording.path); " *
-        "$(recording.dropped) dropped, $(recording.skipped) skipped by `every`."
+        "$(recording.dropped) dropped."
     return nothing
 end
 
@@ -911,54 +991,116 @@ _solver_running(recorder) =
 
 const _VIDEO_FORMATS = ("gif", "mp4", "mkv", "webm")
 
-function _encode_live!(recording, recorder, name, options, format, framerate, px_per_unit, every, deferred)
+# Last-resort live default when the run and the store give no time span.
+const _LIVE_SIM_PER_SECOND = 1.0
+
+# Aim at ten seconds of video for the run's remaining simulation time, or for
+# the span of the stored frames when the run's end is unknown.
+function _live_default_rate(recorder, store)
+    times = TwoPhaseAMR.step_log(store).time
+    stored = TwoPhaseAMR.frames(store)
+    t_start = isempty(times) ? (isempty(stored) ? nothing : newest_frame(store).time) : last(times)
+    isnothing(t_start) && return _LIVE_SIM_PER_SECOND
+    driver = Base.@lock recorder.lock recorder.driver
+    t_final = driver isa TwoPhaseAMR.StudioDriver ? driver.final_time : nothing
+    isnothing(t_final) && (t_final = isempty(stored) ? nothing : last(stored).time)
+    isnothing(t_final) && return _LIVE_SIM_PER_SECOND
+    span = t_final - t_start
+    return span > 0 ? span / 10 : _LIVE_SIM_PER_SECOND
+end
+
+# Encode output frames on a uniform simulation-time grid. The arrival of a
+# frame decides every output time up to its own time, using that frame and the
+# previously arrived one; the nearest wins and ties keep the earlier frame.
+# This repeats frames for sparse streams and skips them for dense streams, and
+# it needs no buffer beyond the two frames involved.
+function _encode_live!(
+        recording, recorder, name, options, format, fps, px_per_unit,
+        sim_per_second, t_start, seed, seed_id, deferred,
+    )
     subscription = getfield(recording, :subscription)
     store = snapshot_store(recorder)
     stream = nothing
     current = colorrange = stats = entry = colormap = nothing
     growing = false
-    received = 0
+    sampler = isnothing(t_start) ? nothing :
+        LiveVideoSampler{Frame}(t_start, sim_per_second / fps)
+
+    function show!(frame)
+        if isnothing(stream)
+            entry = TwoPhaseAMR._frame_entry(frame, name)
+            colormap = _resolve_colormap(entry, options.colormap)
+            stats = frame.stats[name]
+            # The range of the frames recorded so far, which only grows.
+            growing = !_requested(options.colorrange) && !(entry.colorrange isa Tuple)
+            colorrange = Makie.Observable(
+                _resolve_colorrange(entry, stats, options.colorrange, colormap),
+            )
+            current = Makie.Observable(frame)
+            cursor = Makie.lift(f -> f.time, current)
+            scene = _export_scene(
+                store, [current], name, colorrange, colormap, options;
+                cursor, until = cursor,
+            )
+            stream = Makie.VideoStream(
+                scene.figure; format, framerate = fps, px_per_unit, visible = false,
+            )
+        else
+            if growing
+                stats = merge(stats, frame.stats[name])
+                widened = _automatic_colorrange(stats, _symmetric(entry, colormap))
+                widened == colorrange[] || (colorrange[] = widened)
+            end
+            current[] = frame
+        end
+        Makie.recordframe!(stream)
+        Base.@lock getfield(recording, :lock) begin
+            push!(getfield(recording, :ids), frame.id)
+            push!(getfield(recording, :times), Float64(frame.time))
+        end
+        @atomic recording.encoded += 1
+        return nothing
+    end
+
+    function decide!(frames)
+        for frame in frames
+            haskey(frame, name) ||
+                throw(ArgumentError("frame $(frame.id) has no field :$name"))
+            show!(frame)
+        end
+        return nothing
+    end
+
     try
+        # Deferred mode shares the solver's only thread: wait until the run
+        # leaves the stepping states before rendering anything, including the
+        # seed frame.
+        while deferred && _solver_running(recorder) && isopen(subscription)
+            sleep(0.05)
+        end
+        isnothing(seed) || decide!(push_live_frame!(sampler, seed, seed.time))
         while (frame = take!(subscription)) !== nothing
             # Without a thread of its own, the encoder waits for the run to end.
             while deferred && _solver_running(recorder) && isopen(subscription)
                 sleep(0.05)
             end
-            received += 1
-            if !haskey(frame, name) || (received - 1) % every != 0
-                @atomic recording.skipped += 1
-                continue
+            frame.id <= seed_id && continue
+            if isnothing(sampler)
+                # The store held no frame when the recording started.
+                sampler = LiveVideoSampler{Frame}(frame.time, sim_per_second / fps)
             end
-            if isnothing(stream)
-                entry = TwoPhaseAMR._frame_entry(frame, name)
-                colormap = _resolve_colormap(entry, options.colormap)
-                stats = frame.stats[name]
-                # The range of the frames recorded so far, which only grows.
-                growing = !_requested(options.colorrange) && !(entry.colorrange isa Tuple)
-                colorrange = Makie.Observable(
-                    _resolve_colorrange(entry, stats, options.colorrange, colormap),
-                )
-                current = Makie.Observable(frame)
-                cursor = Makie.lift(f -> f.time, current)
-                scene = _export_scene(
-                    store, [current], name, colorrange, colormap, options;
-                    cursor, until = cursor,
-                )
-                stream = Makie.VideoStream(
-                    scene.figure; format, framerate, px_per_unit, visible = false,
-                )
-            else
-                if growing
-                    stats = merge(stats, frame.stats[name])
-                    widened = _automatic_colorrange(stats, _symmetric(entry, colormap))
-                    widened == colorrange[] || (colorrange[] = widened)
-                end
-                current[] = frame
-            end
-            Makie.recordframe!(stream)
-            @atomic recording.encoded += 1
+            decide!(push_live_frame!(sampler, frame, frame.time))
         end
-        isnothing(stream) || Makie.save(getfield(recording, :path), stream)
+        if !isnothing(sampler)
+            # Hold the last arrived frame through the simulation time at stop,
+            # so sparse streams still cover the elapsed time. The stop time is
+            # frozen by `close` before the queue drains; reading the step log
+            # here would also take steps the run takes while it drains.
+            decide!(flush_live_frames!(sampler, _flush_time(recording, sampler)))
+        end
+        isnothing(stream) &&
+            throw(ArgumentError("the live recording produced no output frames"))
+        Makie.save(getfield(recording, :path), stream)
     catch
         close(subscription)
         rethrow()
@@ -966,13 +1108,27 @@ function _encode_live!(recording, recorder, name, options, format, framerate, px
     return nothing
 end
 
-function _record_live(path, recorder::Recorder, name, options; framerate, px_per_unit, every, capacity)
-    every isa Integer && every >= 1 || throw(ArgumentError("every must be a positive integer"))
+function _record_live(
+        path, recorder::Recorder, name, options;
+        fps, sim_per_second, px_per_unit, capacity,
+    )
     format = lowercase(lstrip(last(splitext(path)), '.'))
     format in _VIDEO_FORMATS ||
         throw(ArgumentError("a live recording writes one of $(_VIDEO_FORMATS), got $path"))
     subscription = TwoPhaseAMR.subscribe(snapshot_store(recorder); capacity)
-    recording = LiveRecording(String(path), subscription, nothing, 0, 0)
+    # Capture the simulation time and seed at job creation, before the encoder
+    # task can start late and observe a later store state.
+    store = snapshot_store(recorder)
+    stored = TwoPhaseAMR.frames(store)
+    seed = isempty(stored) ? nothing : TwoPhaseAMR.newest_frame(store)
+    step_times = TwoPhaseAMR.step_log(store).time
+    t_start = isempty(step_times) ? (isnothing(seed) ? nothing : seed.time) :
+        last(step_times)
+    seed_id = isnothing(seed) ? 0 : seed.id
+    recording = LiveRecording(
+        String(path), store, subscription, ReentrantLock(), nothing,
+        Int[], Float64[], false, nothing, 0,
+    )
     pool = _encoder_threadpool()
     deferred = isnothing(pool)
     deferred && @info "Live recording: no thread besides the solver's is available, so " *
@@ -980,7 +1136,8 @@ function _record_live(path, recorder::Recorder, name, options; framerate, px_per
         "with an interactive thread (the default since Julia 1.12 unless `-t 1`) to " *
         "encode while the solver runs."
     encode() = _encode_live!(
-        recording, recorder, name, options, format, framerate, px_per_unit, every, deferred,
+        recording, recorder, name, options, format, fps, px_per_unit,
+        sim_per_second, t_start, seed, seed_id, deferred,
     )
     recording.task = pool === :interactive ? Threads.@spawn(:interactive, encode()) :
         Threads.@spawn(:default, encode())
@@ -997,10 +1154,10 @@ end
 # Makie.record does not close its VideoStream when its callback throws. Own
 # the stream for cooperative jobs so cancellation and callback failures close
 # and reap FFmpeg, release the tick filter, and remove the temporary video.
-function _record_stored(animation, path; framerate, px_per_unit, progress, cancel)
+function _record_stored(animation, path; fps, px_per_unit, progress, cancel)
     _export_cancelled(cancel) && return nothing
     format = lstrip(last(splitext(path)), '.')
-    stream = Makie.VideoStream(animation.figure; format, framerate, px_per_unit)
+    stream = Makie.VideoStream(animation.figure; format, framerate = fps, px_per_unit)
     try
         total = length(animation.frames)
         for (index, frame) in enumerate(animation.frames)
@@ -1040,31 +1197,38 @@ end
 
 function TwoPhaseAMR.export_animation(
         path::AbstractString, recording::Union{SnapshotStore, Recorder};
-        field, source::Symbol = :stored, window = nothing, framerate::Real = 12,
-        px_per_unit::Real = 1, every = nothing, capacity = nothing,
+        field, source::Symbol = :stored, window = nothing, frames::Symbol = :keyframes,
+        fps::Real = _EXPORT_FPS,
+        duration::Union{Nothing, Real} = nothing,
+        nframes::Union{Nothing, Integer} = nothing, sim_per_second::Union{Nothing, Real} = nothing,
+        px_per_unit::Real = 1, capacity = nothing,
         progress = nothing, cancel = nothing, kwargs...,
     )
+    TwoPhaseAMR._positive_finite(fps, "fps")
     if source === :stored
-        isnothing(every) && isnothing(capacity) ||
-            throw(ArgumentError("`every` and `capacity` apply to source = :live"))
+        isnothing(capacity) ||
+            throw(ArgumentError("`capacity` applies to source = :live"))
+        isnothing(sim_per_second) ||
+            throw(ArgumentError("`sim_per_second` applies to source = :live"))
         isnothing(progress) || applicable(progress, 1, 1) ||
             throw(ArgumentError("progress must be callable as progress(i, n)"))
         isnothing(cancel) || applicable(cancel) ||
             throw(ArgumentError("cancel must be a zero-argument predicate"))
-        animation = _animation_scene(recording, field; window, kwargs...)
-        if isnothing(progress) && isnothing(cancel)
-            Makie.record(animation.figure, path, animation.frames; framerate, px_per_unit) do frame
-                animation.frame[] = frame
-            end
-            return path
-        end
-        return _record_stored(animation, path; framerate, px_per_unit, progress, cancel)
+        animation = _animation_scene(
+            recording, field; window, frames, fps, duration, nframes, kwargs...,
+        )
+        return _record_stored(animation, path; fps, px_per_unit, progress, cancel)
     elseif source === :live
         recording isa Recorder ||
             throw(ArgumentError("source = :live records the frames of a running Recorder"))
         isnothing(window) || throw(ArgumentError("`window` applies to source = :stored"))
+        frames === :keyframes || throw(ArgumentError("`frames` applies to source = :stored"))
+        isnothing(duration) && isnothing(nframes) ||
+            throw(ArgumentError("`duration` and `nframes` apply to source = :stored"))
         isnothing(progress) && isnothing(cancel) ||
             throw(ArgumentError("progress and cancel apply only to source = :stored"))
+        rate = something(sim_per_second, _live_default_rate(recording, snapshot_store(recording)))
+        TwoPhaseAMR._positive_finite(rate, "sim_per_second")
         options = _panel_options(; kwargs...)
         if !isnothing(options.diagnostics) && !isnothing(options.diagnostic_options)
             isnothing(recording.diagnostics) &&
@@ -1078,8 +1242,8 @@ function TwoPhaseAMR.export_animation(
             options = merge(options, (; diagnostic_options = selection.configs))
         end
         return _record_live(
-            path, recording, Symbol(field), options; framerate,
-            px_per_unit, every = something(every, 1), capacity = something(capacity, 32),
+            path, recording, Symbol(field), options; fps,
+            sim_per_second = rate, px_per_unit, capacity = something(capacity, 32),
         )
     end
     throw(ArgumentError("source must be :stored or :live"))

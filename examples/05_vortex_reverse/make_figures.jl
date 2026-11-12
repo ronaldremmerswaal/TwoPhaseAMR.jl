@@ -63,7 +63,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     save(joinpath(outdir, "recovery.png"), figure)
     export_animation(
         joinpath(outdir, "reversal.gif"), store; field = :volume_fraction,
-        framerate = 6, size = (520, 450)
+        fps = 10, duration = 2.0, size = (520, 450)
     )
     return nothing
 end

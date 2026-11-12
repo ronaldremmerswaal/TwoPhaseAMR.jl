@@ -73,7 +73,7 @@ function make_figures(;
     export_animation(
         joinpath(outdir, "impact.gif"), store; field = :velocity_vorticity,
         window = (first(times), last(times)), blocks = true, diagnostics = [:kinetic_energy],
-        framerate = 8, size = (900, 355), colorrange = (-limit, limit)
+        fps = 8, duration = 5.0, size = (900, 355), colorrange = (-limit, limit)
     )
     return (; flow, result, recorder, store)
 end
