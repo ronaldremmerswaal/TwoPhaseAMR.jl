@@ -10,7 +10,7 @@ rather than a time-dependent flow.
 | 01 | [Taylor–Green vortex](01_taylor_green/) | Periodic vortex decay | Single phase | Level 2, T=0.2; 7 steps, 0.13 s warm |
 | 02 | [Lid-driven cavity](02_lid_driven_cavity/) | Moving-wall recirculation | Single phase | Level 1, T=15; 1900 automatic steps, 2.41 s warm |
 | 03 | [Decaying turbulence](03_decaying_turbulence/) | Random vortices and adaptive refinement | Single phase | Level 4, T=10; 18213 steps, 106.4 s |
-| 04 | [Cylinder flow](04_cylinder_flow/) | Cut-cell wake and drag | Single phase | Level 3, T=40; unmeasured (gallery T=50: 83169 steps, 930.7 s) |
+| 04 | [Cylinder flow](04_cylinder_flow/) | Cut-cell wake and drag | Single phase | Level 3, T=40; unmeasured (gallery level 4, T=50: 333117 steps, 4487 s) |
 | 05 | [Vortex reversal](05_vortex_reverse/) | Geometric VOF transport | Prescribed velocity | Level 5, T=8; unmeasured |
 | 06 | [Capillary wave](06_capillary_wave/) | Viscous wave damping | One velocity | Level 4, one period; 75.49 s, two velocities 119.34 s |
 | 07 | [Interfacial instability](07_interfacial_instability/) | Kelvin–Helmholtz and Rayleigh–Taylor growth | Two velocity | Level 4, until doubled amplitude; 68.58 s, one velocity 19.79 s |
