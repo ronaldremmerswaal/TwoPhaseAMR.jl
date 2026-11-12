@@ -59,7 +59,7 @@ jobs:
         # on both the oldest supported Julia and the current stable one, so the
         # minimum version cannot rot outside PR checks.
         julia: ['1.11', '1.12']
-        shard: [A, B, C]
+        shard: [A, B, C, D]
     name: unit / ${{ matrix.shard }} (julia ${{ matrix.julia }})
     steps:
       - uses: actions/checkout@v7
