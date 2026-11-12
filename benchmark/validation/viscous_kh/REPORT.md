@@ -167,6 +167,20 @@ Results: `ctu_threshold/results.md`, `ctu_threshold/jump_vs_h.png` (produced by 
 batch, see §8). **Future work (owner):** a robust scheme needs a high-order extension
 of CTU — high order wherever possible as long as boundedness is guaranteed.
 
+**CTU results** (`ctu_threshold/results.md`, `jump_vs_h.png`). Reproducer: after 160
+steps the jump is smallest with Upwind/MC at θ ≥ 0.1 (≈ 0.25/0.19/0.12); lowering the
+threshold makes the high-order bulk flux unstable at the interface: LaxWendroff at
+θ = 0.01 overshoots to |u| = 1.77 (initial 0.5), LaxWendroff at θ = 10⁻¹² blows up
+(|u| ≈ 10³, all δ/h; run aborted by the advective step bound) and MC at θ = 10⁻¹² fails
+at δ/h = 1.6 (|u| = 8.7) and overshoots to 1.02 at δ/h = 3.2, i.e. the bulk branch near
+empty phases is not bounded (uniform mesh, so not a hanging-face effect). KH r1_thin,
+two-velocity: **MC in the bulk at the default threshold removes most of the
+resolved-regime error** — growth error +6 % / −3.7 % / −4.4 % and |η̂(T)|/ref
+1.18 / 0.93 / 0.90 at λ/h = 64 / 128 / 256, vs LaxWendroff +1.8 % / −45 % / −17 % and
+1.09 / 0.44 / 0.71; θ = 10⁻¹² gives the same numbers (≤ 0.3 %) and stays bounded here
+(|u| ≤ 0.54). The cut-face jump itself is unchanged (0.67, 0.39 at λ/h = 128, 256), so MC
+improves how the jump feeds back on the instability rather than removing it.
+
 **MC vs LaxWendroff bulk flux (both models, all cases).** `mc_compare.jl` runs every
 case with `MonotonizedCentral()` at the default threshold 0.5 for λ/h = 32–256 and
 tabulates |η̂(T)|/ref and the growth-rate error against the LaxWendroff runs of §4,
