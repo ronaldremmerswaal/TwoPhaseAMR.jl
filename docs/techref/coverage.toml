@@ -2399,6 +2399,7 @@ check = "solv_cmdgfm_cases"
 "src/operators/gradient.jl" = { class = "equation", chapters = ["ch:discrete-setting"] }
 "src/operators/elliptic.jl" = { class = "equation", chapters = ["ch:discrete-setting", "ch:viscosity", "ch:projection", "ch:solvers"] }
 "src/operators/staggered_diffusion.jl" = { class = "equation", chapters = ["ch:viscosity", "ch:projection"] }
+"src/operators/viscosity_averaging.jl" = { class = "equation", chapters = ["ch:viscosity"] }
 "src/operators/advection/cell_advection.jl" = { class = "equation", chapters = ["ch:mesh-amr", "ch:discrete-setting", "ch:momentum-transport"] }
 "src/operators/advection/staggered_fluxes.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
 "src/operators/advection/staggered_schedules.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:momentum-transport"] }
