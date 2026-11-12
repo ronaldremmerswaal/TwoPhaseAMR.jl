@@ -167,6 +167,15 @@ Results: `ctu_threshold/results.md`, `ctu_threshold/jump_vs_h.png` (produced by 
 batch, see §8). **Future work (owner):** a robust scheme needs a high-order extension
 of CTU — high order wherever possible as long as boundedness is guaranteed.
 
+**MC vs LaxWendroff bulk flux (both models, all cases).** `mc_compare.jl` runs every
+case with `MonotonizedCentral()` at the default threshold 0.5 for λ/h = 32–256 and
+tabulates |η̂(T)|/ref and the growth-rate error against the LaxWendroff runs of §4,
+with robustness flags (failure, incomplete run, ±Inf, f ∉ [0, 1], |u| > ΔU):
+`results/mc_compare.md`, figure `figures/mc_vs_lw.png` (colour = case, solid = one-,
+dashed = two-velocity, filled = LW, open = MC). Produced by the detached batch
+`results/logs/chain2.sh` after the main batch; not yet inspected at the time of
+writing, so no conclusion on "MC consistently better" is drawn here.
+
 ## 7. Conclusions
 
 * **Unresolved shear layer (δ ≪ h):** the two-velocity model is clearly better. The
