@@ -31,9 +31,21 @@ function check_registry()
     return nothing
 end
 
+"""
+Groups that run in their own CI job instead of the sharded default suite:
+`performance` (allocation contracts, `contracts` job) and
+`threading_equivalence` (fresh 1-, 2- and 4-thread processes,
+`threading-equivalence` job). The registry check requires every other group
+to be in exactly one unit shard.
+"""
+const SEPARATE_GROUPS = ("performance", "threading_equivalence")
+
 default_groups() = [
     "registry";
-    filter(name -> !startswith(name, "integration/") && name != "performance", first.(TEST_GROUPS))
+    filter(
+        name -> !startswith(name, "integration/") && !(name in SEPARATE_GROUPS),
+        first.(TEST_GROUPS),
+    )
 ]
 
 function selected_groups(args)
