@@ -78,6 +78,10 @@ struct InterfaceField{T, M <: BlockTreeMesh, G} <: AbstractMeshField{T}
     contact_angles::NTuple{4, Union{Nothing, T}}
     geometry::G
     embedded_contact_angle::Union{Nothing, T}
+    # Number of PLIC reconstructions of this field. A geometry's revision adds
+    # it (`_interface_geometry_revision`), so a cache that reads the planes
+    # sees a re-initialized or reconstructed solid.
+    reconstructions::Base.RefValue{UInt}
 end
 placement(::InterfaceField) = Cell()
 Base.eltype(::InterfaceField{T}) where {T} = T
@@ -132,6 +136,7 @@ function InterfaceField(
         floor,
         reconstruction_method, angles,
         geometry, isnothing(embedded) ? nothing : T(embedded),
+        Ref(UInt(0)),
     )
     return reconstruct!(field)
 end
@@ -360,8 +365,16 @@ function _resize_interface_cache!(field::CellField)
     return resize!(field.blocks, nblocks(field.mesh))
 end
 
+"""Version of a geometry's reconstructed state for every revision-keyed cache.
+
+`geometry.revision` counts `refresh_geometry!` calls (regrids); the fixed
+solid's own reconstruction count adds every rebuild of its PLIC planes, so a
+re-initialized or reconstructed solid is a new version even without a refresh.
+Both counters only grow, so the sum grows with either of them.
+"""
 @inline _interface_geometry_revision(geometry) =
-    isnothing(geometry) ? UInt(0) : UInt(geometry.revision)
+    isnothing(geometry) ? UInt(0) :
+    UInt(geometry.revision) + geometry.solid.reconstructions[]
 
 """Whether stored PLIC data still describe the exact current input state."""
 function _reconstruction_is_current(field::InterfaceField)
@@ -401,6 +414,7 @@ function _mark_reconstruction_current!(field::InterfaceField)
     field.reconstructed_geometry_revision[] =
         _interface_geometry_revision(field.geometry)
     field.geometry_is_valid[] = true
+    field.reconstructions[] += UInt(1)
     return field
 end
 

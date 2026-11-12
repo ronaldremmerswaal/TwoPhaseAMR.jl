@@ -552,8 +552,11 @@ end
         _pressure_reuse_velocity(mesh)
     )
     pc = CPR._cmdgfm_preconditioner(solver, assembled, work)
+    row_form = CPR._cmdgfm_row_form!(work, assembled.matrix)
     fill!(work.solution, 0.0)
-    @test CPR._cmdgfm_initial_solution!(work, assembled, previous_increment, 0.02, pc)
+    @test CPR._cmdgfm_initial_solution!(
+        work, assembled, previous_increment, 0.02, pc, row_form,
+    )
     @test norm(work.correction_rhs) < 1.0e-8 * norm(assembled.right_hand_side)
     for invalid_guess in (NaN, 1.0e30)
         # An invalid or grossly inaccurate increment guess must not enter the
@@ -563,7 +566,9 @@ end
             values .= invalid_guess .* reshape(1:length(values), size(values))
         end
         fill!(work.solution, 0.0)
-        @test !CPR._cmdgfm_initial_solution!(work, assembled, previous_increment, 0.02, pc)
+        @test !CPR._cmdgfm_initial_solution!(
+            work, assembled, previous_increment, 0.02, pc, row_form,
+        )
         @test all(iszero, work.solution)
         @test work.correction_rhs == assembled.right_hand_side
     end
@@ -573,10 +578,13 @@ end
         solver, work, 0.02,
         _pressure_reuse_velocity(mesh)
     )
+    row_form = CPR._cmdgfm_row_form!(work, assembled.matrix)
     resize!(work.solution, length(assembled.right_hand_side))
     resize!(work.correction_rhs, length(assembled.right_hand_side))
     fill!(work.solution, 0.0)
-    @test !CPR._cmdgfm_initial_solution!(work, assembled, previous_increment, 0.02, nothing)
+    @test !CPR._cmdgfm_initial_solution!(
+        work, assembled, previous_increment, 0.02, nothing, row_form,
+    )
     @test all(iszero, work.solution)
     @test work.correction_rhs == assembled.right_hand_side
 end
@@ -592,6 +600,7 @@ end
     CPR._mark_inactive_phase_velocities!(velocity, interface)
     assembled = CPR._assemble_cmdgfm_system!(solver, work, 0.02, velocity)
     pc = CPR._cmdgfm_preconditioner(solver, assembled, work)
+    row_form = CPR._cmdgfm_row_form!(work, assembled.matrix)
     np, nx = length(assembled.pressure_indices), length(assembled.mixed_faces)
     @test nx > 0
 
@@ -606,7 +615,7 @@ end
     fill!(work.jump, 1.0e6)
     zero_defect = maximum(CPR._cmdgfm_residual_defects(assembled.right_hand_side, assembled, 0.02))
     zero_l2 = norm(assembled.right_hand_side)
-    @test CPR._cmdgfm_initial_solution!(work, assembled, nothing, 0.02, pc)
+    @test CPR._cmdgfm_initial_solution!(work, assembled, nothing, 0.02, pc, row_form)
     residual = assembled.right_hand_side - assembled.matrix * work.solution
     @test work.correction_rhs ≈ residual rtol = 1.0e-12 atol = 1.0e-12
     @test maximum(CPR._cmdgfm_residual_defects(residual, assembled, 0.02)) < 0.95zero_defect
@@ -614,7 +623,7 @@ end
     candidate = copy(work.solution)
     fill!(work.solution, 0)
     fill!(work.jump, -1.0e6)
-    @test CPR._cmdgfm_initial_solution!(work, assembled, nothing, 0.02, pc)
+    @test CPR._cmdgfm_initial_solution!(work, assembled, nothing, 0.02, pc, row_form)
     @test work.solution ≈ candidate rtol = 1.0e-12 atol = 1.0e-12
 end
 

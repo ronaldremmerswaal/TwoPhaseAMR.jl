@@ -25,7 +25,7 @@ C_{D,p}=\frac{F_{p,x}}{\tfrac12\rho U^2D}=2F_{p,x}
 \quad (\rho=U=D=1).
 ```
 
-The analogous `:pressure_lift` uses the vertical force. Neither diagnostic includes viscous stresses. See the [method reference](../../docs/src/method.md) for cut cells, pressure projection and refinement criteria.
+The analogous `:pressure_lift` uses the vertical force. Neither diagnostic includes viscous stresses. Both sum over the cut cells' wall segments, which the example collects once per geometry revision instead of searching every cell at every step; every regrid and every re-initialized solid bumps that revision. See the [method reference](../../docs/src/method.md) for cut cells, pressure projection and refinement criteria.
 
 ## Run
 

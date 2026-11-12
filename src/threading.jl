@@ -365,6 +365,72 @@ function _parallel_csr_row_mul!(
     return destination
 end
 
+"""Accumulation step of SparseArrays' serial `mul!(y, A, x)` for a
+`SparseMatrixCSC` `A`: `muladd(a, x, y)` from Julia 1.12 on, a separate
+multiply and add (`y + a * x`) on Julia 1.11. The version gate is safe because
+`test/threading.jl` compares the threaded product against SparseArrays' `mul!`
+on whichever Julia version runs it."""
+@inline function _sparsearrays_accumulate(value, coefficient, source)
+    @static if VERSION >= v"1.12"
+        return muladd(coefficient, source, value)
+    else
+        return value + coefficient * source
+    end
+end
+
+"""
+    _parallel_sparsearrays_mul!(destination, matrix_transpose, source)
+
+`destination = transpose(matrix_transpose) * source`, threaded over the
+output rows, with the arithmetic of SparseArrays' serial `mul!` on the
+untransposed matrix `A`: that product fills the output with zero and walks the
+columns of `A` in increasing order, so each output row starts from zero and
+accumulates its entries in increasing column order with
+`_sparsearrays_accumulate`. Column `r` of `matrix_transpose` lists row `r` of
+`A` in that order, so the result is bitwise SparseArrays' serial product on
+every supported Julia version and for every thread count.
+"""
+function _parallel_sparsearrays_mul!(
+        destination::AbstractVector{T},
+        matrix_transpose::SparseMatrixCSC{T, Int},
+        source::AbstractVector{T},
+    ) where {T}
+    length(destination) == size(matrix_transpose, 2) ||
+        throw(DimensionMismatch("sparse output size differs"))
+    length(source) == size(matrix_transpose, 1) ||
+        throw(DimensionMismatch("sparse input size differs"))
+    column_pointers = matrix_transpose.colptr
+    columns = rowvals(matrix_transpose)
+    matrix_values = nonzeros(matrix_transpose)
+    @_parallel for output in 1:length(destination)
+        value = zero(T)
+        for pointer in column_pointers[output]:(column_pointers[output + 1] - 1)
+            @inbounds value = _sparsearrays_accumulate(
+                value, matrix_values[pointer], source[columns[pointer]],
+            )
+        end
+        @inbounds destination[output] = value
+    end
+    return destination
+end
+
+"""
+    _RowForm(matrix_transpose)
+
+The sparse matrix `transpose(matrix_transpose)`, held by its stored transpose
+so that `mul!(destination, form, source)` owns its output rows and threads
+(`_parallel_sparsearrays_mul!`, bitwise SparseArrays' serial `mul!`).
+"""
+struct _RowForm{T}
+    matrix_transpose::SparseMatrixCSC{T, Int}
+end
+
+Base.size(form::_RowForm) = reverse(size(form.matrix_transpose))
+Base.size(form::_RowForm, dimension::Integer) = size(form)[dimension]
+Base.eltype(::_RowForm{T}) where {T} = T
+mul!(destination::AbstractVector, form::_RowForm, source::AbstractVector) =
+    _parallel_sparsearrays_mul!(destination, form.matrix_transpose, source)
+
 
 """Build one-based CSR offsets from per-row counts."""
 function _csr_offsets(counts, offsets = Vector{Int}(undef, length(counts) + 1))

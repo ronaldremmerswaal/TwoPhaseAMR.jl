@@ -488,13 +488,50 @@ function _cmdgfm_cell_flux!(result, data, interface, velocity)
     return result
 end
 
-function _cmdgfm_matrix_asymmetry(matrix::SparseMatrixCSC{T}) where {T}
-    # Sorted CSC lookup avoids allocating A-A' just for a scalar diagnostic.
+"""Largest `abs(A[r, c] - A[c, r])` over the stored entries of `A = matrix`
+(zero for none). Column `c` of the stored transpose `matrix_transpose` is row
+`c` of `A`, so each column merges two sorted lists instead of searching
+`A[c, r]`; columns run in fixed chunks whose maxima (`partials`, grown to the
+chunk count) fold in chunk order. `max` is exact, so the result is the serial
+maximum (up to the `NaN` payload) for every thread count."""
+function _cmdgfm_matrix_asymmetry(
+        matrix::SparseMatrixCSC{T}, matrix_transpose::SparseMatrixCSC{T}, partials,
+    ) where {T}
+    size(matrix_transpose) == reverse(size(matrix)) ||
+        throw(DimensionMismatch("transpose size differs"))
+    number_of_columns = size(matrix, 2)
+    chunks = _reduction_chunks(number_of_columns)
+    _reduction_partials!(partials, number_of_columns)
+    column_pointers, matrix_rows, matrix_values = matrix.colptr, rowvals(matrix), nonzeros(matrix)
+    mirror_pointers = matrix_transpose.colptr
+    mirror_columns, mirror_values = rowvals(matrix_transpose), nonzeros(matrix_transpose)
+    @_parallel work = _REDUCTION_CHUNK for chunk in 1:chunks
+        @inbounds partials[chunk] = _asymmetry_columns(
+            column_pointers, matrix_rows, matrix_values,
+            mirror_pointers, mirror_columns, mirror_values,
+            _reduction_range(chunk, number_of_columns),
+        )
+    end
+    return _fold_chunk_maxima(zero(T), partials, chunks)
+end
+
+@inline function _asymmetry_columns(
+        column_pointers, matrix_rows, matrix_values,
+        mirror_pointers, mirror_columns, mirror_values, column_range,
+    )
+    T = eltype(matrix_values)
     result = zero(T)
-    for column in 1:size(matrix, 2)
-        for pointer in nzrange(matrix, column)
-            row = rowvals(matrix)[pointer]
-            result = max(result, abs(nonzeros(matrix)[pointer] - matrix[column, row]))
+    for column in column_range
+        mirror = @inbounds mirror_pointers[column]
+        mirror_end = @inbounds mirror_pointers[column + 1] - 1
+        for pointer in @inbounds(column_pointers[column]):(@inbounds(column_pointers[column + 1]) - 1)
+            row = @inbounds matrix_rows[pointer]
+            while mirror <= mirror_end && @inbounds(mirror_columns[mirror]) < row
+                mirror += 1
+            end
+            transposed = mirror <= mirror_end && @inbounds(mirror_columns[mirror]) == row ?
+                @inbounds(mirror_values[mirror]) : zero(T)
+            result = max(result, _canonical_nan(abs(@inbounds(matrix_values[pointer]) - transposed)))
         end
     end
     return result

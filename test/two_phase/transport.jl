@@ -141,9 +141,14 @@ end
     reconstruct!(cut)
     @test cut_values[open_indices[1]] == 0
     @test cut_values[open_indices[2]] == open[open_indices[2]]
-    previous_revision = cut.reconstructed_geometry_revision[]
+    # The phase interface recorded the geometry's version at its last
+    # reconstruction; refreshing the geometry must move that version past it
+    # so the stale cache is detected.
+    @test cut.reconstructed_geometry_revision[] ==
+        TP._interface_geometry_revision(geometry)
     refresh_geometry!(geometry)
-    @test geometry.revision > previous_revision
+    @test TP._interface_geometry_revision(geometry) >
+        cut.reconstructed_geometry_revision[]
     @test !TP._reconstruction_is_current(cut)
     reconstruct!(cut)
     @test TP._reconstruction_is_current(cut)

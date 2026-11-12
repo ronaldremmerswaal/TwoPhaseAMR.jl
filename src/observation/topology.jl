@@ -134,7 +134,8 @@ function _solid_snapshot(geometry::GeometryField{T}) where {T}
         end
     end
     return SolidSnapshot{T}(
-        full, cut, planes, geometry.revision, plic_solid_geometry(geometry),
+        full, cut, planes, _interface_geometry_revision(geometry),
+        plic_solid_geometry(geometry),
     )
 end
 
@@ -158,13 +159,14 @@ function _topology_snapshot(
 end
 
 # A snapshot remains valid while the leaf set (the mesh topology-cache
-# generation, which changes exactly on schedule rebuilds) and every solid
-# reconstruction revision are unchanged.
+# generation, which changes exactly on schedule rebuilds) and every solid's
+# reconstructed state (`_interface_geometry_revision`, refreshes plus plane
+# rebuilds) are unchanged.
 function _topology_current(topology::TopologySnapshot, mesh, geometries)
     topology.generation == mesh.topology_cache.generation || return false
     length(topology.solids) == length(geometries) || return false
     for (solid, geometry) in zip(topology.solids, geometries)
-        solid.revision == geometry.revision || return false
+        solid.revision == _interface_geometry_revision(geometry) || return false
     end
     return true
 end
