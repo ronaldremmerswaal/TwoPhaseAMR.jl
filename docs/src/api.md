@@ -113,6 +113,10 @@ extension points for custom observers. See
 [Recording and visualization](visualization.md#recording) for schedules,
 retention, controls, and examples.
 
+Video time is sampled linearly in simulation time with
+[`video_frame_schedule`](@ref) and [`video_frame_count`](@ref), or
+incrementally with [`LiveVideoSampler`](@ref). `export_animation` uses the same
+rule for stored and live frames.
 The separately installed [Studio](visualization.md#studio) subpackage opens a
 browser workspace with `studio(recorder)`. With a Makie backend loaded,
 [`export_figure`](@ref) and [`export_animation`](@ref) produce static output;

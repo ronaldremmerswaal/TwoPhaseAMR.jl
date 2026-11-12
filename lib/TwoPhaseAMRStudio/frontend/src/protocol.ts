@@ -64,6 +64,16 @@ export function decodeField(buffer: ArrayBuffer, expectedRequest: number, expect
   return { request, encoding, scale, offset, values };
 }
 
+/** A live recording reports one finite simulation time per encoded frame. */
+function checkRecordingTimes(value: unknown): void {
+  const times = (value as Record<string, unknown>).times;
+  if (times === undefined || times === null) return;
+  if (!Array.isArray(times) ||
+      !times.every(time => typeof time === 'number' && Number.isFinite(time))) {
+    throw new Error('Invalid recording frame times');
+  }
+}
+
 /** Parse the supported JSON messages and reject incompatible handshakes. */
 export function parseServerMessage(text: string): ServerMessage {
   let value: unknown;
@@ -74,9 +84,11 @@ export function parseServerMessage(text: string): ServerMessage {
     case 'hello':
       if (message.protocol !== PROTOCOL_VERSION) throw new Error(`Unsupported Studio protocol version: ${String(message.protocol)}`);
       if (!Array.isArray(message.runs) || !Array.isArray(message.frames) || !message.recording) throw new Error('Invalid hello message');
+      checkRecordingTimes(message.recording);
       break;
     case 'state':
       if (typeof message.run_state !== 'string' || !message.recording) throw new Error('Invalid state message');
+      checkRecordingTimes(message.recording);
       if (message.resumable !== undefined && typeof message.resumable !== 'boolean') throw new Error('Invalid resumable flag');
       if (message.suggested_final_time !== undefined && message.suggested_final_time !== null &&
           (typeof message.suggested_final_time !== 'number' || !Number.isFinite(message.suggested_final_time))) {
@@ -100,6 +112,33 @@ export function parseServerMessage(text: string): ServerMessage {
         throw new Error('Invalid data request id');
       }
       break;
+    case 'recording_schedule': {
+      if (typeof message.request !== 'number' || !Number.isInteger(message.request) || message.request < 0 ||
+          message.request > MAX_UINT32) throw new Error('Invalid recording schedule request');
+      const count = (key: string): number => {
+        const value = message[key];
+        if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+          throw new Error(`Invalid recording schedule ${key}`);
+        }
+        return value;
+      };
+      count('frames'); count('distinct'); count('repeats'); count('fps');
+      for (const key of ['duration', 'spacing', 'sim_per_second']) {
+        const value = message[key];
+        if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+          throw new Error(`Invalid recording schedule ${key}`);
+        }
+      }
+      const window = message.window;
+      if (!Array.isArray(window) || window.length !== 2 ||
+          !window.every(value => typeof value === 'number' && Number.isFinite(value)) ||
+          window[0] > window[1]) throw new Error('Invalid recording schedule window');
+      if (typeof message.sparse !== 'boolean') throw new Error('Invalid recording schedule sparse flag');
+      if ((typeof message.first_frame !== 'number' && typeof message.first_frame !== 'string')) {
+        throw new Error('Invalid recording schedule frame');
+      }
+      break;
+    }
     case 'recording_preview':
       if (typeof message.request !== 'number' || !Number.isInteger(message.request) || message.request < 0 ||
           message.request > MAX_UINT32 || typeof message.url !== 'string' || !message.url.startsWith('/') || message.url.startsWith('//')) {
