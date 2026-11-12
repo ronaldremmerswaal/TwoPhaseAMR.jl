@@ -55,6 +55,7 @@ export AbstractWallBoundaryCondition, NoSlip, FreeSlip
 export VelocityBoundaryConditions, Inflow, Outflow, ZeroGradientVelocity
 export enforce_velocity_boundary!
 export StaggeredDiffusionOperator, diffusion!
+export AbstractViscosityAveraging, HarmonicViscosityAveraging, GeometricViscosityAveraging
 export LinearSolverOptions, MultigridOptions
 export AdvectionOptions, NavierStokesOptions, Adaptivity
 export SinglePhase, TwoPhase, SurfaceTension
@@ -135,6 +136,8 @@ include("operators/advection/staggered_schemes.jl")
 include("operators/advection/staggered_schedules.jl")
 include("operators/advection/staggered_fluxes.jl")
 include("operators/advection/staggered_update.jl")
+# operators
+include("operators/viscosity_averaging.jl")
 # navier_stokes
 include("navier_stokes/options.jl")
 # operators

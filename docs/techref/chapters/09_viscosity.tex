@@ -10,9 +10,11 @@ dual-face contacts and a symmetric dissipative stiffness at level transitions;
 a cut-cell variant adds the embedded walls. Two phases have the
 coupled variable stress $\divergence(2\visc\strainrate)$, assembled as
 $\strainmat^{\transpose}\stressw\strainmat$ from normal-stress rows in the
-cells, shear rows at the cell corners and wall rows, with the geometric mean
-of the phase viscosities; the two-velocity model diffuses the mass-weighted
-mixture velocity and gives both phases the same increment. This chapter
+cells, shear rows at the cell corners and wall rows, with a mixture of the
+phase viscosities that is harmonic (series) by default and geometric as an
+option; the two-velocity model diffuses the mass-weighted mixture velocity with
+the same operator and gives both phases the same increment, so the rule applies
+to both velocity models. This chapter
 states the continuous model, the semi-discrete operators with their walls,
 the fully discrete midpoint solves with their stopping criteria, and the
 exact identities that hold for them: dissipation of the mass-weighted
@@ -34,7 +36,10 @@ The one-velocity model has a single velocity with the piecewise constant
 $\dens$ and $\visc$~\thesis{eq.~(2.9)}; the thesis replaces the sharp
 viscosity by the volume-fraction-weighted geometric mean of the phase
 viscosities, a diffuse model chosen so that the one- and two-velocity
-formulations share it~\thesis{\S7.5.1}. With stationary no-slip or free-slip
+formulations share it~\thesis{\S7.5.1}. The code implements that rule and, as
+the default, the volume-fraction-weighted harmonic mean, the series
+conductance across the interface that a centred shear difference needs;
+\cref{sec:viscosity:stress} states both and the deviation. With stationary no-slip or free-slip
 walls, or periodic boundaries, the viscous term dissipates kinetic energy,
 \begin{equation}\label{eq:viscosity:dissipation}
   \frac{\dd}{\dd\timevar}\integral{\domain^{\open}}{\tfrac12\dens\abs{\Velo}^2}{V}
@@ -361,12 +366,19 @@ and \testsym{test/operators/staggered_diffusion.jl}{domain-wall diffusion uses o
 
 \section{Two-phase stress operator}\label{sec:viscosity:stress}
 The two-phase operator discretises $\divergence(2\visc\strainrate)$ as the
-negative adjoint of a strain-rate map. Its viscosity is, in every cell, the
-geometric mean of the phase viscosities with the conditional
-fraction~\thesis{\S7.5.1},
+negative adjoint of a strain-rate map. Its viscosity is, in every cell, a
+mixture of the phase viscosities with the conditional fraction
+$\condfrac{\liq}{c}$~\thesis{\S7.5.1}. The default is the harmonic (series)
+mixture and the thesis' geometric mixture is the
+\apitype{GeometricViscosityAveraging} option,
 \begin{equation}\label{eq:viscosity:viscosity}
-  \visc_c=(\visc^{\liq})^{\condfrac{\liq}{c}}(\visc^{\gas})^{1-\condfrac{\liq}{c}}
-  =\exp\roundpar{\condfrac{\liq}{c}\log\visc^{\liq}+(1-\condfrac{\liq}{c})\log\visc^{\gas}} .
+  \visc_c=\begin{cases}
+    \roundpar{\dfrac{\condfrac{\liq}{c}}{\visc^{\liq}}+\dfrac{1-\condfrac{\liq}{c}}{\visc^{\gas}}}^{-1}
+      & \text{(harmonic, default)},\\[8pt]
+    (\visc^{\liq})^{\condfrac{\liq}{c}}(\visc^{\gas})^{1-\condfrac{\liq}{c}}
+    =\exp\roundpar{\condfrac{\liq}{c}\log\visc^{\liq}+(1-\condfrac{\liq}{c})\log\visc^{\gas}}
+      & \text{(geometric, \apitype{GeometricViscosityAveraging})}.
+  \end{cases}
 \end{equation}
 The rows of the strain map $\strainmat:\facespace\to\mathbb{R}^{\text{rows}}$
 are of three kinds:
@@ -435,13 +447,24 @@ remaining rows times the viscosity there,
   \begin{gathered}
   \stressw=\diag{2\meas{\opencell{c}}\visc_c,\ \ \meas{\vertdual{v}}\visc_v,\ \ \wallcond{w}\visc_{c(w)},\ \ 1_{\mathrm{prescribed}}},\\
   \meas{\vertdual{v}}=\sum_{c\ni v,\ c\notin\mathcal W_v}\tfrac14\openfrac{c}\meas{c},\qquad
-  \log\visc_v=\frac{1}{\meas{\vertdual{v}}}\sum_{c\ni v,\ c\notin\mathcal W_v,\ \openfrac{c}>0}\tfrac14\openfrac{c}\meas{c}\log\visc_c,
+  \frac{1}{\visc_v}=\frac{1}{\meas{\vertdual{v}}}\sum_{c\ni v,\ c\notin\mathcal W_v,\ \openfrac{c}>0}\tfrac14\openfrac{c}\meas{c}\frac{1}{\visc_c},
   \end{gathered}
 \end{equation}
-so that $\visc_v$ is the geometric mean at the open-volume average of the
-conditional fractions. At a sharp viscosity jump perpendicular to a shear
-difference this mean is not the harmonic coefficient required for exact
-traction transmission. Cartesian embedded-wall rows use the owned segment
+so that $\visc_v$ is the open-volume-weighted harmonic mean of the viscosities
+of the cell quarters the vertex spans. This is the series conductance across
+those quarters: the centred difference
+\cref{eq:viscosity:shear} differences two velocities through cells that lie in
+series, so their traction $\visc\partial_t\velo_k$ is transmitted exactly only
+if the coefficient is the harmonic mean. For a layer aligned with the shear and
+$\visc=(2,1)$ the vertex coefficient is $4/3$; the geometric mean
+$\sqrt{2}$ overestimates the flux by $2\sqrt{\visc_1\visc_2}/(\visc_1+\visc_2)$,
+$6.07\,\%$ there, and the 1-D shear across such a layer converges with order
+$0.8$--$1.0$ instead of $2$ (\issue{113}). With
+\apitype{GeometricViscosityAveraging} the operator uses the thesis'
+$\prod_c\visc_c^{w_c}$, the geometric mean at the open-volume fraction, and
+reproduces that behaviour; both rules keep $\visc_v>0$, so the stiffness
+remains symmetric positive semidefinite and the energy balance of
+\cref{sec:viscosity:time} holds for either. Cartesian embedded-wall rows use the owned segment
 length divided by the wall-normal distance as in the componentwise operator;
 a non-Cartesian PLIC wall retains the earlier midpoint-distance conductance,
 half the open fraction of the face times the segment length divided by the
@@ -491,7 +514,18 @@ stencils are restored from a cache keyed by their local face geometry.
 
 \input{figures/viscosity}
 
-\emph{Checks} (\code{stress_rows_check}, \code{affine_strain_check}). An
+\emph{Checks} (\code{stress_rows_check}, \code{affine_strain_check}).
+The 1-D shear $\visc(y)\velo_1'(y)=-\cos(2\pi y)$ across an interface aligned
+with $y=1/2$, whose tangential traction is continuous and whose velocity
+derivative jumps by the viscosity ratio, converges at order $2.03$, $2.01$,
+$2.00$ and $2.00$ ($\visc=(2,1)$, $n=16\to128$; the equal-viscosity solve gives
+the same orders), while \apitype{GeometricViscosityAveraging} reproduces the
+reported first-order rates below $1.2$
+(\testsym{test/two_phase/variable_staggered_diffusion.jl}{Aligned viscosity jump transmits the tangential traction (#113)},
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{Geometric mixture keeps the first-order aligned shear (#113)}).
+Both rules keep the stiffness symmetric and the implicit midpoint step
+dissipative on a composite mesh with an aligned jump
+(\testsym{test/two_phase/variable_staggered_diffusion.jl}{Harmonic vertex viscosity stays dissipative (#113)}). An
 independent assembly of the normal rows~\cref{eq:viscosity:rows} equals the
 code's to $\chkViscNormalDiff$ on the composite, cut and periodic composite
 drop fixtures ($\visc=(0.1,0.002)$); the independent
@@ -511,14 +545,25 @@ corners with the open quarter-cell volumes, and replaces the two-point
 difference by the least-squares stencil~\cref{eq:viscosity:shear} where a
 side of the line through a corner has no unknown, as at hanging vertices;
 it closes no-slip walls by one-sided differences and adds wall rows for the
-embedded solid. The geometric mean is the thesis' one.
+embedded solid. The cell and vertex mixtures are harmonic (series) by default,
+\cref{eq:viscosity:viscosity,eq:viscosity:weights}; the thesis'
+volume-fraction-weighted geometric mean remains available as
+\apitype{GeometricViscosityAveraging} through the \code{viscosity_averaging}
+option of \apitype{NavierStokesOptions}, because it is a diffuse model whose
+vertex coefficient does not transmit the tangential traction across an aligned
+interface at second order (\issue{113}).
 \end{deviation}
 
 \begin{implnote}
 \apitype{VariableStaggeredDiffusionOperator}, built by
 \apitype{StaggeredDiffusionOperator}\code{(interface; viscosity=(mu_l, mu_g), boundary=NoSlip())}
 in \srcsym{src/two_phase/diffusion/variable_diffusion_operator.jl}{_variable_staggered_diffusion}~\cref{eq:viscosity:rows,eq:viscosity:weights};
-\apifun{dynamic_viscosity}~\cref{eq:viscosity:viscosity}; vertices
+\apifun{dynamic_viscosity} and \apitype{AbstractViscosityAveraging}
+(\srcsym{src/operators/viscosity_averaging.jl}{HarmonicViscosityAveraging},
+\srcsym{src/operators/viscosity_averaging.jl}{GeometricViscosityAveraging})
+~\cref{eq:viscosity:viscosity}; stress-row mixtures
+\srcsym{src/two_phase/diffusion/variable_diffusion_operator.jl}{_fill_stress_weights!}~\cref{eq:viscosity:weights};
+vertices
 \srcsym{src/two_phase/diffusion/variable_diffusion_geometry.jl}{_stress_vertices!},
 shear stencils \srcsym{src/two_phase/diffusion/variable_diffusion_geometry.jl}{_vertex_derivative}
 (cached by \srcsym{src/two_phase/diffusion/variable_diffusion_geometry.jl}{_cached_vertex_derivative!})~\cref{eq:viscosity:shear};
@@ -527,7 +572,7 @@ stiffness \srcsym{src/two_phase/diffusion/variable_diffusion_geometry.jl}{_compl
 refresh \srcsym{src/two_phase/diffusion/variable_diffusion_operator.jl}{_update_dynamic_viscosity!};
 action \srcsym{src/two_phase/diffusion/variable_diffusion_operator.jl}{_factorized_variable_stiffness_mul!}.
 Tests: \testsym{test/two_phase/variable_staggered_diffusion.jl}{Factorized variable-stress action matches assembled operator},
-\testsym{test/two_phase/variable_staggered_diffusion.jl}{Thesis geometric dynamic-viscosity mixture},
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{Phase-viscosity averaging rules (#113)},
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable coupled stress diffusion},
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable stress manufactured bulk convergence},
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{variable diffusion is independent of base-root partitioning},
@@ -631,8 +676,9 @@ $\velo^{\timelevel{n}}$ and therefore has no such balance when these
 velocities differ.
 
 \emph{Two velocities.} The two-velocity step diffuses the mass-weighted
-mixture of the transported intrinsic velocities and gives both phases the
-same increment~\thesis{\S7.5.2, step T3.II}:
+mixture of the transported intrinsic velocities with the operator
+of~\cref{eq:viscosity:operator}, including its viscosity mixture, and gives
+both phases the same increment~\thesis{\S7.5.2, step T3.II}:
 \begin{equation}\label{eq:viscosity:two-velocity}
   \begin{gathered}
   \onevelo^{\stage{1}}_f=\frac{\dens^{\liq}\clampfrac{f}\,\velo^{\liq,\stage{1}}_f+\dens^{\gas}(1-\clampfrac{f})\,\velo^{\gas,\stage{1}}_f}{\stagdens_f},

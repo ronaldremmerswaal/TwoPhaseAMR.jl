@@ -134,6 +134,7 @@ end
     @test_throws ArgumentError AdvectionOptions(:bogus, Upwind())
     @test_throws ArgumentError NavierStokesOptions(
         :bogus, LinearSolverOptions(), LinearSolverOptions(), MultigridOptions(),
+        HarmonicViscosityAveraging(),
     )
     @test_throws ArgumentError TwoVelocityModel(CSF())
     @test_throws ArgumentError TwoVelocityModel(:cmdgfm)
