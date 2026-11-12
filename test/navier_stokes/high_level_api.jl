@@ -1403,10 +1403,32 @@ end
             sizes = shortened ? (dt, dt, dt / 2) : (dt, dt, dt, dt)
             expected_times = cumsum(collect(sizes))
             manual_stats = []
+            expected_solves = 0
+            expected_iterations = 0
+            expected_without = 0
+            expected_max = 0
+            expected_converged = true
+            expected_last_iterations = 0
+            expected_last_initial = 0.0
+            expected_last_final = 0.0
             for size in sizes
                 stats = step!(manual, size; observer, options...)
                 @test stats.converged
                 push!(manual_stats, _full_step_stats(stats))
+                count = TwoPhaseAMR.iterations(stats)
+                initial = TwoPhaseAMR.initial_residual(stats)
+                final = TwoPhaseAMR.final_residual(stats)
+                expected_solves += 1
+                expected_iterations += count
+                expected_max = max(expected_max, count)
+                expected_converged &= stats.converged
+                if iszero(count) && !(final < initial)
+                    expected_without += 1
+                else
+                    expected_last_iterations = count
+                    expected_last_initial = initial
+                    expected_last_final = final
+                end
             end
             result = simulate!(simulated, sum(sizes); dt, options...)
 
@@ -1435,6 +1457,15 @@ end
                 model === :two_velocity ? CMDGFMProjectionStats : LinearSolverStats
             )
             @test isequal(last(manual_stats), _full_step_stats(result.pressure))
+            projection = result.projection
+            @test projection.solves == expected_solves == length(sizes)
+            @test projection.iterations == expected_iterations
+            @test projection.without_iterations == expected_without
+            @test projection.max_iterations == expected_max
+            @test projection.converged == expected_converged
+            @test projection.last_iterations == expected_last_iterations
+            @test projection.last_initial_residual == expected_last_initial
+            @test projection.last_final_residual == expected_last_final
             @test result.steps == result.total_steps == manual.steps == length(sizes)
             @test result.mesh_updates == result.total_mesh_updates == manual.mesh_updates == 1
             @test result.unresolved_curvature_faces ==
@@ -1487,6 +1518,9 @@ end
             continued = simulate!(simulated, simulated.time + dt; dt, options...)
             @test continuation_stats.converged && continued.pressure.converged
             @test continued.steps == 1
+            @test continued.projection.solves == 1
+            @test continued.projection.iterations ==
+                TwoPhaseAMR.iterations(continued.pressure)
             @test continued.total_steps == manual.steps == length(sizes) + 1
             @test continued.mesh_updates == 0
             @test continued.total_mesh_updates == manual.mesh_updates == 1

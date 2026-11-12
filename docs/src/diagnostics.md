@@ -97,8 +97,18 @@ print_simulation_summary(flow, result)
 An `IO` may be supplied first when the report should be captured in a file or
 buffer.
 
-The report uses the latest pressure solver statistics. For two-velocity
-projections, `CMDGFMProjectionStats` reports the dimensionless
+The report uses the accumulated projection statistics of the `simulate!` call,
+`result.projection`. It counts the projected steps (one per physical step), sums
+their iterations, counts the solves that did no work, and repeats the iteration
+count and residual pair of the most recent solve that did work — one that
+iterated or reduced its residual. The type-specific fields describe the latest
+solve. A developed flow usually starts a solve within its absolute target
+`tolerance / dt^2`, so the last step alone often reports `iterations: 0` with an
+unchanged residual and does not describe the run's projection work (#158). A
+two-velocity warm start can reduce the residual without an iteration, and the
+extra two-velocity projection after a regrid is not part of this accounting.
+
+For two-velocity projections, `CMDGFMProjectionStats` reports the dimensionless
 `mixture_volume_defect = dt * max(abs(div(u_mix)))` and
 `normal_velocity_defect = max(dt * abs(normal_jump) / h)`. The latter is not
 a divergence: it measures the normal-jump row of the projected state. A

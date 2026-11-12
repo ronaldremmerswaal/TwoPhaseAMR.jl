@@ -341,11 +341,43 @@ function hydrostatic_step(kind::Symbol, model; solid = :none, dt = 0.01)
     return two_maxabs(flow.velocity) / dt
 end
 
+# The pre-#76 increment: the same gravity jumps through the one-velocity map,
+# whose coefficient is (aperture)^2/rho instead of the projection's
+# aperture/rho. Projection only, as a counterfactual: on the composite mesh
+# with a solid the cut face at the level transition is coupled by the inverse
+# metric to faces that carry the jump, so CMDGFM cannot remove it (#76).
+function hydrostatic_former_step(kind::Symbol; solid = :gas, dt = 0.01)
+    field = gravity_fixture(kind; solid)
+    geometry = field.geometry
+    isnothing(geometry) && return 0.0
+    operator = PoissonOperator(field, geometry; density = FORCE_DENSITY)
+    solver = CMDGFMProjectionSolver(field; density = FORCE_DENSITY)
+    force = FaceVelocity(field.mesh)
+    gravity!(
+        force, field, operator, EllipticWorkspace(operator);
+        density = FORCE_DENSITY, gravity = (0.0, -1.0),
+    )
+    phases = (FaceVelocity(field.mesh), FaceVelocity(field.mesh))
+    for phase in phases
+        phase.interior .= dt .* force.interior
+    end
+    AMR._mark_inactive_phase_velocities!(phases, field)
+    stats = project!(
+        phases, CellField(field.mesh), solver, dt,
+        CMDGFMProjectionWorkspace(solver);
+        tolerance = 1.0e-12, max_iterations = 4000,
+    )
+    @assert stats.converged
+    return two_maxabs(phases) / dt
+end
+
 # A drop with prescribed constant curvature: the CSF tension force, added to
 # both phase velocities and projected by CMDGFM. As in the two-velocity step
 # (_phase_force_substep!), the force uses the pressure map of the projection:
 # the coefficient a/rho with a solid, the one-velocity map without one.
-function two_velocity_tension(kind::Symbol, projection::Symbol; dt = 0.01)
+function two_velocity_tension(
+        kind::Symbol, projection::Symbol; dt = 0.01, formulation = CSF(),
+    )
     field = force_drop_fixture(kind)
     solver = projection == :one ? nothing :
         projection == :cmdgfm ? CMDGFMProjectionSolver(field; density = FORCE_DENSITY) :
@@ -354,7 +386,7 @@ function two_velocity_tension(kind::Symbol, projection::Symbol; dt = 0.01)
     force = FaceVelocity(field.mesh)
     surface_tension!(
         force, field, operator, EllipticWorkspace(operator);
-        sigma = FORCE_SIGMA, formulation = CSF(), curvature = 1 / FORCE_DROP.radius
+        sigma = FORCE_SIGMA, formulation, curvature = 1 / FORCE_DROP.radius
     )
     scale = maximum(abs, force.interior)
     isnothing(solver) && return project_force(field, operator, force) / scale
@@ -483,12 +515,23 @@ function force_outputs(write_output)
     @assert one_steps <= 1.0e-6
     # The two-velocity force stage uses the projection's pressure map (#76):
     # CMDGFM keeps the rest state with a solid in either phase, and the
-    # constant-curvature drop on the cut mesh.
+    # constant-curvature drop on the cut mesh, while the former one-velocity
+    # increment of the same jumps is not balanced on the composite mesh.
     cmdgfm_solid = Dict(
         kind => maximum(steps[(kind, solid, :cmdgfm)] for solid in (:gas, :liquid))
             for kind in (:uniform, :amr)
     )
-    @assert maximum(values(cmdgfm_solid)) <= 1.0e-8 && tension_two[(:cut, :cmdgfm)] <= 1.0e-8
+    former = maximum(
+        hydrostatic_former_step(kind; solid)
+            for kind in (:uniform, :amr) for solid in (:gas, :liquid)
+    )
+    @assert maximum(values(cmdgfm_solid)) <= 1.0e-9
+    @assert tension_two[(:cut, :cmdgfm)] <= 1.0e-9
+    @assert former > 1.0e-3
+    # The conservative jump of CGFM stays off that cut face, so it was always
+    # balanced on the cut mesh (contrast of the CSF row above).
+    cgfm_cut = two_velocity_tension(:cut, :cmdgfm; formulation = CGFM())
+    @assert cgfm_cut <= 1.0e-9
 
     return Any[
         ("chkForceCurvDiff", sci(curvature_worst)),
@@ -516,8 +559,10 @@ function force_outputs(write_output)
         ("chkStepCmdgfm", sci(max(steps[(:uniform, :none, :cmdgfm)], steps[(:amr, :none, :cmdgfm)]))),
         ("chkStepCmdgfmSolidUniform", sci(cmdgfm_solid[:uniform])),
         ("chkStepCmdgfmSolidAmr", sci(cmdgfm_solid[:amr])),
+        ("chkStepCmdgfmFormer", sci(former)),
         ("chkTensionTwoOne", sci(maximum(tension_two[(k, :one)] for k in (:uniform, :amr, :cut)))),
         ("chkTensionTwoCmdgfm", sci(max(tension_two[(:uniform, :cmdgfm)], tension_two[(:amr, :cmdgfm)]))),
         ("chkTensionTwoCmdgfmCut", sci(tension_two[(:cut, :cmdgfm)])),
+        ("chkTensionTwoCgfmCut", sci(cgfm_cut)),
     ]
 end

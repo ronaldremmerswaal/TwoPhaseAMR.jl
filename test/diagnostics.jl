@@ -522,3 +522,67 @@ end
     @test length(unique(collect(zip(history.times, history.steps)))) ==
         length(history)
 end
+
+@testset "run summary reports the projection work of the whole run" begin
+    # A developed flow usually starts a projection solve within its absolute
+    # target `tolerance / dt^2`: that solve reports no iterations and leaves
+    # its residual unchanged, so the final step alone says nothing about the
+    # projection work of the run (#158).
+    viscosity = inv(50.0)
+    mesh = BlockTreeMesh(
+        block_size = (12, 12), extent = (2pi, 2pi), max_level = 1,
+        refine = (key, origin, extent) ->
+        key.level == 0 || (key.level < 1 && key.i == 0 && key.j == 0),
+    )
+    velocity = (x, y, time, axis) -> exp(-2viscosity * time) *
+        (axis == 1 ? sin(x) * cos(y) : -cos(x) * sin(y))
+    flow = FlowSimulation(
+        mesh, SinglePhase(density = 1.0, dynamic_viscosity = viscosity);
+        velocity, boundary = FreeSlip(),
+    )
+    result = simulate!(flow, 0.01; dt = 1.0e-3)
+    @test result.steps == 10
+    # The last solve needed no iteration and reported no residual change.
+    @test TwoPhaseAMR.iterations(result.pressure) == 0
+    @test TwoPhaseAMR.final_residual(result.pressure) ==
+        TwoPhaseAMR.initial_residual(result.pressure)
+    # The run as a whole projected, so its accumulated statistics report work.
+    @test result.projection.solves == result.steps
+    @test result.projection.iterations > 0
+    @test result.projection.without_iterations > 0
+    @test result.projection.without_iterations < result.projection.solves
+    @test result.projection.max_iterations >= result.projection.last_iterations
+    @test result.projection.last_iterations > 0
+    @test result.projection.last_final_residual <
+        result.projection.last_initial_residual
+    @test result.projection.converged
+
+    report = IOBuffer()
+    @test isnothing(print_simulation_summary(report, flow, result))
+    @test occursin(
+        "iterations this run: $(result.projection.iterations)",
+        String(take!(report)),
+    )
+
+    # Every call accumulates its own run, not the flow's history.
+    continued = simulate!(flow, 0.012; dt = 1.0e-3)
+    @test continued.projection.solves == continued.steps == 2
+
+    # A flow that starts every solve within its target reports no residual
+    # reduction at all, and the summary still describes it.
+    resting = FlowSimulation(
+        BlockTreeMesh(block_size = (4, 4)),
+        SinglePhase(density = 1.0, dynamic_viscosity = 0.01);
+        boundary = FreeSlip(),
+    )
+    resting_result = simulate!(resting, 3.0e-3; dt = 1.0e-3)
+    @test resting_result.projection.solves == resting_result.steps == 3
+    @test resting_result.projection.iterations == 0
+    @test resting_result.projection.without_iterations == resting_result.steps
+    @test resting_result.projection.last_iterations == 0
+    @test resting_result.projection.last_initial_residual ==
+        resting_result.projection.last_final_residual == 0
+    @test isnothing(
+        print_simulation_summary(IOBuffer(), resting, resting_result),
+    )
+end
