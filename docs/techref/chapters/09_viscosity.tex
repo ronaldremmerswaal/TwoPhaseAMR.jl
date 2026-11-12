@@ -12,8 +12,9 @@ coupled variable stress $\divergence(2\visc\strainrate)$, assembled as
 $\strainmat^{\transpose}\stressw\strainmat$ from normal-stress rows in the
 cells, shear rows at the cell corners and wall rows, with a mixture of the
 phase viscosities that is harmonic (series) by default and geometric as an
-option; the two-velocity model diffuses the mass-weighted mixture velocity and
-gives both phases the same increment. This chapter
+option; the two-velocity model diffuses the mass-weighted mixture velocity with
+the same operator and gives both phases the same increment, so the rule applies
+to both velocity models. This chapter
 states the continuous model, the semi-discrete operators with their walls,
 the fully discrete midpoint solves with their stopping criteria, and the
 exact identities that hold for them: dissipation of the mass-weighted
@@ -634,8 +635,9 @@ $\velo^{\timelevel{n}}$ and therefore has no such balance when these
 velocities differ.
 
 \emph{Two velocities.} The two-velocity step diffuses the mass-weighted
-mixture of the transported intrinsic velocities and gives both phases the
-same increment~\thesis{\S7.5.2, step T3.II}:
+mixture of the transported intrinsic velocities with the operator
+of~\cref{eq:viscosity:operator}, including its viscosity mixture, and gives
+both phases the same increment~\thesis{\S7.5.2, step T3.II}:
 \begin{equation}\label{eq:viscosity:two-velocity}
   \begin{gathered}
   \onevelo^{\stage{1}}_f=\frac{\dens^{\liq}\clampfrac{f}\,\velo^{\liq,\stage{1}}_f+\dens^{\gas}(1-\clampfrac{f})\,\velo^{\gas,\stage{1}}_f}{\stagdens_f},

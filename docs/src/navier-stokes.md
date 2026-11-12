@@ -207,7 +207,10 @@ intrinsic velocities first form
 ```
 
 The existing one-velocity two-phase midpoint solver advances this field using
-the same variable-density inertia and phase-viscosity mixture.
+the same variable-density inertia and the same phase-viscosity mixture: the
+`viscosity_averaging` rule of `NavierStokesOptions` governs the one stress
+operator that both velocity models share, so it applies to two-velocity flows
+as well.
 Both phases then receive the common increment
 
 ```math

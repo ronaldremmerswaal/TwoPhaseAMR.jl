@@ -45,10 +45,14 @@ Numerical configuration for the incompressible Navier--Stokes equation
 system. Physics, velocity-model choices, runtime AMR fields, and evolving
 simulation state are deliberately configured elsewhere.
 
-`viscosity_averaging` selects how the one-velocity `div(2 mu D(u))` operator
-mixes the two phase viscosities, in the cells and at the stress vertices: a
+`viscosity_averaging` selects how the two-phase stress operator
+`div(2 mu D(u))` mixes the two phase viscosities, in the cells (the
+normal-stress and wall rows) and at the shear-stress vertices: a
 [`HarmonicViscosityAveraging`](@ref) or a
-[`GeometricViscosityAveraging`](@ref) rule.
+[`GeometricViscosityAveraging`](@ref) rule. Both velocity models share this
+operator: the two-velocity step diffuses the mass-weighted mixture velocity
+with it and gives both phases the common increment, so the rule applies to
+one- and two-velocity flows alike.
 """
 struct NavierStokesOptions{
         A <: AdvectionOptions,

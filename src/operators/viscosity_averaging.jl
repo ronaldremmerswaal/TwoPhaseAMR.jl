@@ -1,10 +1,12 @@
-"""Abstract supertype of a phase-viscosity averaging rule for the one-velocity
-`div(2 mu D(u))` operator.
+"""Abstract supertype of a phase-viscosity averaging rule for the two-phase
+stress operator `div(2 mu D(u))`.
 
 The rule averages the phase viscosities at two places: in every cell, from the
-conditional liquid fraction, and at every stress location, from the cells that
-the stress row spans. See [`HarmonicViscosityAveraging`](@ref) and
-[`GeometricViscosityAveraging`](@ref).
+conditional liquid fraction (the normal-stress and wall rows), and at every
+shear-stress vertex, from the cell quarters that the vertex row spans. Both
+velocity models share the operator (the two-velocity step diffuses the
+mass-weighted mixture velocity with it), so one rule covers both. See
+[`HarmonicViscosityAveraging`](@ref) and [`GeometricViscosityAveraging`](@ref).
 """
 abstract type AbstractViscosityAveraging end
 
