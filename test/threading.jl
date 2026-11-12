@@ -601,6 +601,34 @@ const BOTH_PATHS = (1, typemax(Int))
         @test_throws DimensionMismatch refresh!(sprand(700, 1800, 0.003))
     end
 
+    # A stored transpose built with its map is `copy(transpose(A))`, also for
+    # rectangular and empty matrices, and the map is recorded: the next
+    # refresh on the same pattern is a hit.
+    for grain in BOTH_PATHS, (m, n) in ((1800, 700), (700, 1800), (0, 0), (5, 0), (0, 5))
+        matrix = sprand(m, n, 0.004)
+        nonzeros(matrix)[1:3:end] .= -0.0
+        stored, transpose_map = with_parallel_grain(() -> TwoPhaseAMR._stored_transpose(matrix), grain)
+        expected = copy(transpose(matrix))
+        @test size(stored) == size(expected) && stored.colptr == expected.colptr &&
+            rowvals(stored) == rowvals(expected) && isequal(nonzeros(stored), nonzeros(expected))
+        @test with_parallel_grain(() -> TwoPhaseAMR._recorded_pattern(transpose_map, matrix), grain)
+    end
+
+    # A level refresh with another matrix size is rejected before the level
+    # changes.
+    level_matrix = sparse([1, 2, 3, 1, 2, 3], [1, 2, 3, 2, 3, 1], [4.0, 5.0, 6.0, -1.0, -1.0, -1.0], 3, 3)
+    level = TwoPhaseAMR._multigrid_level(level_matrix, ones(3), nothing)
+    @test level.matrix_transpose == copy(transpose(level_matrix))
+    @test TwoPhaseAMR._recorded_pattern(level.transpose_map, level_matrix)
+    transpose_before = copy(level.matrix_transpose)
+    failure = thrown_exception() do
+        TwoPhaseAMR._refresh_multigrid_level!(level, sparse(1:4, 1:4, ones(4)), ones(4), nothing)
+    end
+    @test failure[1] isa ArgumentError &&
+        failure[2] == "ArgumentError: multigrid row-form size changed on fixed topology"
+    @test level.matrix === level_matrix
+    @test level.matrix_transpose == transpose_before
+
     # The gathered factorized roundoff floor equals the former face scatter,
     # with the diagonal (uniform) and the sparse (two-level) Riesz map.
     for mesh in (
@@ -826,4 +854,87 @@ end
         end
     end
     @test messages[1] == messages[2] == "ArgumentError: active gas velocity must be finite"
+end
+
+@testset "phase face average is bitwise serial" begin
+    # Mixed-level periodic/wall mesh with a cut solid: both axes, plain and
+    # embedded, more faces than the grain-1 threaded path needs.
+    mesh = BlockTreeMesh(
+        base_mesh = (24, 24), block_size = (4, 4), extent = (12.0, 12.0),
+        periodic = (true, false), max_level = 2,
+        refine = (key, origin, extent) -> key.level < 2 && origin[1] < 6 && origin[2] < 7,
+    )
+    geometry = GeometryField(mesh, (x, y) -> hypot(x - 8.07, y - 6.33) - 1.55; lipschitz = 1)
+    source = CellField(mesh)
+    for block in 1:nblocks(mesh)
+        cells = interior(source, block)
+        for j in axes(cells, 2), i in axes(cells, 1)
+            x, y = cellcenter(mesh, block, i, j)
+            cells[i, j] = sin(1.3x + 0.1block) * cos(0.7y) + 0.01i * j
+        end
+    end
+    for (Axis, solid) in Iterators.product((1, 2), (nothing, geometry))
+        averages = map((SERIAL_GRAIN, 1)) do grain
+            destination = FaceField{Axis}(mesh)
+            with_parallel_grain(grain) do
+                TwoPhaseAMR._phase_face_average!(destination, source, solid)
+            end
+            destination
+        end
+        @test isequal(averages[1].interior, averages[2].interior)
+        @test isequal(averages[1].boundary, averages[2].boundary)
+        isnothing(solid) || continue
+        # The plain average is the spacing-weighted mean of the two cells.
+        axis_faces = filter(face -> face.axis == Axis, mesh.faces)
+        expected = map(axis_faces) do face
+            hm = mesh.blocks[face.minus.block].spacing[Axis]
+            hp = mesh.blocks[face.plus.block].spacing[Axis]
+            (hm * TwoPhaseAMR._get(source, face.minus) + hp * TwoPhaseAMR._get(source, face.plus)) / (hm + hp)
+        end
+        @test isequal(averages[2].interior, expected)
+    end
+end
+
+@testset "face component copies are range copies" begin
+    # The serial face-filter mapping the range copies replace.
+    function filtered_component(velocity, Axis)
+        interior_values = [velocity.interior[k] for (k, face) in pairs(velocity.mesh.faces) if face.axis == Axis]
+        boundary_values = [velocity.boundary[k] for (k, face) in pairs(velocity.mesh.boundary_faces) if face.axis == Axis]
+        return interior_values, boundary_values
+    end
+    for periodic in ((true, true), (true, false), (false, false))
+        mesh = BlockTreeMesh(
+            base_mesh = (24, 24), block_size = (4, 4), extent = (12.0, 12.0),
+            periodic = periodic, max_level = 2,
+            refine = (key, origin, extent) -> key.level < 2 && origin[1] < 6 && origin[2] < 7,
+        )
+        velocity = FaceVelocity(mesh, (x, y, time, axis) -> axis * sin(x) + cos(1.7y))
+        for Axis in (1, 2), grain in (1, SERIAL_GRAIN)
+            expected_interior, expected_boundary = filtered_component(velocity, Axis)
+            component = FaceField{Axis}(mesh)
+            with_parallel_grain(() -> copyto!(component, velocity), grain)
+            @test isequal(component.interior, expected_interior)
+            @test isequal(component.boundary, expected_boundary)
+            all(periodic) && @test isempty(component.boundary)
+            # Back into a velocity: only the faces of `Axis` change.
+            component.interior .*= -2
+            component.boundary .*= -2
+            target = copy(velocity)
+            with_parallel_grain(() -> copyto!(target, component), grain)
+            @test isequal(filtered_component(target, Axis), (component.interior, component.boundary))
+            @test isequal(filtered_component(target, 3 - Axis), filtered_component(velocity, 3 - Axis))
+        end
+    end
+    destination = zeros(3000)
+    source = collect(1.0:3000.0)
+    for grain in (1, SERIAL_GRAIN)
+        fill!(destination, 0)
+        with_parallel_grain(() -> TwoPhaseAMR._parallel_copyto!(destination, 10, source, 500, 2400), grain)
+        @test destination[11:2410] == source[501:2900]
+        @test iszero(destination[1:10]) && iszero(destination[2411:end])
+        @test with_parallel_grain(() -> TwoPhaseAMR._parallel_copyto!(destination, 3000, source, 3000, 0), grain) === destination
+        @test_throws BoundsError TwoPhaseAMR._parallel_copyto!(destination, 2000, source, 0, 1001)
+        @test_throws BoundsError TwoPhaseAMR._parallel_copyto!(destination, 0, source, 2001, 1000)
+        @test_throws ArgumentError TwoPhaseAMR._parallel_copyto!(destination, 0, source, 0, -1)
+    end
 end
