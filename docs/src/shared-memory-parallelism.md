@@ -32,6 +32,40 @@ task model documented by Polyester:
 - [Julia PSA on task migration and thread-local state](https://julialang.org/blog/2023/07/PSA-dont-use-threadid/)
 - [Polyester.jl](https://github.com/JuliaSIMD/Polyester.jl)
 
+## Errors and user callbacks
+
+A threaded loop body never throws. Polyester rethrows an exception raised in
+the calling thread's index range as itself, but one raised in a worker's range
+as a `TaskFailedException`, while the other ranges keep running; the error a
+user sees would depend on the thread count. Two patterns keep the error
+thread-count independent:
+
+- A check on data the loop already holds is fused into the loop. The body
+  records the failure in an owned, preallocated output — one flag per
+  iteration or per block column, never `push!` — and the caller throws after
+  the launch, naming the offending cell, block or face. The WY and conditional
+  fraction bounds, the variable-diffusion diagonal and the AMR face transfer
+  use this pattern, so none of them costs a serial pass over the mesh per step.
+- A check on fixed topology runs once, when that topology is built. The
+  elliptic matrix locates its diagonal slots at assembly and every coefficient
+  refresh indexes them, so no threaded body searches the sparse pattern.
+
+Only cheap input checks still run serially before a loop. A rejected input
+leaves the state unchanged where the old serial code did, except where the
+check shares its pass with the update it guards: the conditional-fraction
+refresh has already clamped the cells it visited before the recorded failure.
+
+User callbacks (`initialize!` functions, `FaceVelocity`/`set_velocities!`
+initializers, level sets, `PhaseScalar` initializers, `Dirichlet` halo and
+inflow values, wall velocities, body forces and diagnostics) are evaluated
+serially on the calling task, in a fixed order. They need not be thread-safe,
+their exceptions propagate unchanged, and a callback with side effects (a
+random perturbation, a counter) gives the same result for every thread count.
+A `Dirichlet` halo is filled before the threaded halo pass only to keep its
+callback off the workers: every halo donor is an interior cell, so the ordering
+cannot change the result. That pre-pass iterates a list of the physical halo
+entries collected once per topology, not the whole halo schedule.
+
 ## Blocks and tiles
 
 The public mesh remains a tree of fixed-size blocks. Kernels over block-backed

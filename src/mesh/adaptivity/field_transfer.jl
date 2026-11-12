@@ -91,6 +91,23 @@ function _transfer_cell_field!(
     resize!(workspace.reused_old_blocks, length(workspace.old_blocks))
     fill!(workspace.reused_old_blocks, false)
 
+    h = workspace.mesh.halo
+    # Validate before the buffer is taken apart and before the threaded
+    # transfer, whose body must not throw: a rejected topology leaves the field
+    # untouched.
+    for block in workspace.mesh.blocks
+        haskey(workspace.old_indices, block.key) && continue
+        block.key.level > 0 &&
+            haskey(workspace.old_indices, _parent_key(block.key)) && continue
+        all(child -> haskey(workspace.old_indices, child), _child_keys(block.key)) ||
+            throw(
+            ArgumentError(
+                "mesh adaptation changed by more than one level in one update: " *
+                    "no old data brackets block $(block.key)",
+            )
+        )
+    end
+
     for block in workspace.mesh.blocks
         old_index = get(workspace.old_indices, block.key, 0)
         if !iszero(old_index)
@@ -100,8 +117,6 @@ function _transfer_cell_field!(
             push!(field.blocks, _acquire_cell_block!(buffer))
         end
     end
-
-    h = workspace.mesh.halo
     _prepare_parallel_prolongation!(buffer.prolongation, workspace)
     _parallel_for(
         nblocks(workspace.mesh); work = _block_work(),
@@ -122,11 +137,6 @@ function _transfer_cell_field!(
         children = _child_keys(block.key)
         child_indices = ntuple(
             index -> get(workspace.old_indices, children[index], 0), 4
-        )
-        all(index -> !iszero(index), child_indices) || throw(
-            ArgumentError(
-                "mesh adaptation changed by more than one level in one update"
-            )
         )
         _restrict_parent!(
             buffer.prolongation, field.blocks[new_index],
@@ -329,6 +339,8 @@ function _line_point_value(
     return value + slope * (tangent - _segment_center(segment))
 end
 
+# Transferred value of a new face, or `nothing` when no old face data brackets
+# it; the threaded caller records that and throws after its loop.
 function _face_transfer_value(
         workspace::AMRWorkspace,
         buffer::FaceAMRFieldBuffer, face
@@ -371,7 +383,7 @@ function _face_transfer_value(
     elseif !isnothing(upper_value)
         return upper_value
     end
-    throw(ArgumentError("could not locate old face data for a new face"))
+    return nothing
 end
 
 @inline function _dual_face_volume(blocks, face)
@@ -467,6 +479,30 @@ function _conserve_face_momentum!(field, axis, target, mesh)
     return field
 end
 
+"""Throw the recorded face-transfer gap, naming the first unlocated face.
+
+The threaded transfer only sets `unlocated`; this runs on the calling task
+after the launch, so the exception is the package's own for every thread
+count.
+"""
+function _throw_unlocated_face!(unlocated, faces)
+    index = 0
+    for candidate in eachindex(unlocated)
+        if @inbounds unlocated[candidate]
+            index = candidate
+            break
+        end
+    end
+    iszero(index) && return nothing
+    face = @inbounds faces[index]
+    throw(
+        ArgumentError(
+            "could not locate old face data for a new face: face $index " *
+                "at $(face.center) with axis $(face.axis)",
+        ),
+    )
+end
+
 function _transfer_face_field!(
         buffer::FaceAMRFieldBuffer,
         workspace::AMRWorkspace
@@ -489,15 +525,22 @@ function _transfer_face_field!(
         workspace.interior_face_local_indices[global_index] =
             local_indices[axis]
     end
+    unlocated = zeros(Bool, length(mesh.faces))
     _parallel_for(length(mesh.faces); work = 2) do global_index
         face = mesh.faces[global_index]
         face.axis in _field_axes(field) || return nothing
         value = _face_transfer_value(workspace, buffer, face)
+        if isnothing(value)
+            unlocated[global_index] = true
+            return nothing
+        end
         _set_transferred_interior!(
             field, global_index,
             workspace.interior_face_local_indices[global_index], value
         )
+        return nothing
     end
+    _throw_unlocated_face!(unlocated, mesh.faces)
     resize!(workspace.boundary_face_local_indices, length(mesh.boundary_faces))
     local_indices = (0, 0)
     for (global_index, face) in pairs(mesh.boundary_faces)
@@ -508,15 +551,22 @@ function _transfer_face_field!(
         workspace.boundary_face_local_indices[global_index] =
             local_indices[axis]
     end
+    unlocated = zeros(Bool, length(mesh.boundary_faces))
     _parallel_for(length(mesh.boundary_faces); work = 2) do global_index
         face = mesh.boundary_faces[global_index]
         face.axis in _field_axes(field) || return nothing
         value = _face_transfer_value(workspace, buffer, face)
+        if isnothing(value)
+            unlocated[global_index] = true
+            return nothing
+        end
         _set_transferred_boundary!(
             field, global_index,
             workspace.boundary_face_local_indices[global_index], value
         )
+        return nothing
     end
+    _throw_unlocated_face!(unlocated, mesh.boundary_faces)
     field isa FaceVelocity &&
         _preserve_refined_divergence!(field, buffer, workspace)
     for (index, axis) in pairs(_field_axes(field))

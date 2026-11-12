@@ -36,10 +36,16 @@ are the package's only launch primitives.
 
 Every index must own its outputs: results may not depend on which thread or in
 which order indices run, so the serial and threaded paths are bitwise
-identical. Reductions use fixed chunk schedules instead. `f` must not throw;
-record failures in owned outputs and throw after the launch. Polyester runs
-`f` on its worker threads, so any user callback reached from `f` must be
-thread-safe.
+identical. Reductions use fixed chunk schedules instead.
+
+`f` must not throw: Polyester rethrows an exception from the calling thread's
+range as itself but one from a worker's range as a `TaskFailedException`,
+while the other ranges keep running. A check whose outcome depends on the data
+is therefore fused into the loop: the body records the failure in an owned,
+preallocated output (one slot per iteration or per chunk, never `push!`) and
+the caller throws after the launch. Cheap input checks may instead run serially
+before the loop. User callbacks are never called from `f`; they run serially on
+the calling task.
 
 Polyester passes a closure that captures arrays to its workers in a heap box
 (a few dozen bytes per threaded launch); per-cell loops therefore use
@@ -87,7 +93,8 @@ and the `Polyester.@batch` loop of the threaded path, which captures the
 body's arrays directly, so neither path allocates. `continue` skips an
 element; `break` and `return` are rejected. Assigning a variable of the
 enclosing function from the body is a race on the threaded path; bodies only
-write owned array entries.
+write owned array entries, including a preallocated failure flag that the
+caller inspects after the launch.
 """
 macro _parallel(arguments...)
     isempty(arguments) && throw(ArgumentError("@_parallel requires a for loop"))
@@ -151,6 +158,8 @@ blocks per thread, the columns of each block are split into tiles so that a
 one-block uniform mesh still uses all threads.
 
 `f(block, first_j, last_j)` must own every output in the supplied column range.
+A check whose outcome depends on the data records its result in such an output,
+one slot per column, and the caller throws after the launch.
 """
 function _parallel_block_columns(f::F, mesh) where {F}
     nx, ny = mesh.block_size

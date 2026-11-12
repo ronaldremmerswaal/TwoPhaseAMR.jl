@@ -43,14 +43,14 @@ phase_flux_diagnostics(workspace) = workspace.diagnostics
 function PhaseScalar(interface::InterfaceField{T}; liquid = 1, gas = 1) where {T}
     mesh = interface.mesh
     q = PhaseScalar(interface, CellField(mesh, T), CellField(mesh, T))
-    nx, _ = mesh.block_size
+    nx, ny = mesh.block_size
     h = mesh.halo
-    _parallel_block_columns(mesh) do b, first_j, last_j
+    # Serial: `liquid` and `gas` may be user callbacks.
+    for (b, block) in pairs(mesh.blocks)
         liquid_values = @inbounds q.liquid.blocks[b]
         gas_values = @inbounds q.gas.blocks[b]
-        block = @inbounds mesh.blocks[b]
         dx, dy = block.spacing
-        @inbounds for j in first_j:last_j, i in 1:nx
+        @inbounds for j in 1:ny, i in 1:nx
             x = block.origin[1] + (i - 1 / 2) * dx
             y = block.origin[2] + (j - 1 / 2) * dy
             l = liquid isa Number ? liquid : liquid(x, y)
