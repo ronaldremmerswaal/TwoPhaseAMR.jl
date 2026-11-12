@@ -8,7 +8,7 @@ import RegionTrees
 import Krylov
 import Polyester
 import IncompleteLU
-import LinearAlgebra: issymmetric, ldiv!, mul!, transpose!
+import LinearAlgebra: issymmetric, ldiv!, mul!
 import SparseArrays: nnz
 using LinearAlgebra: ColumnNorm, Diagonal, I, Symmetric, diag, dot, isposdef,
     cholesky, eigen, lu, norm, nullspace, qr, qr!, rank, tr, svdvals

@@ -1,20 +1,38 @@
-"""Volume-weighted interpolation from centred cells to staggered dual volumes."""
+"""Volume-weighted interpolation from centred cells to staggered dual volumes.
+
+The interior faces of `Axis` are a contiguous range of the axis-major
+`mesh.faces` (`_axis_face_offset`); each face owns its output, so the threaded
+loop is bitwise serial. The few boundary faces stay serial."""
 function _phase_face_average!(destination::FaceField{Axis}, source::CellField) where {Axis}
     destination.mesh === source.mesh || throw(ArgumentError("fields must share a mesh"))
     mesh = source.mesh
-    index = 0
-    for face in mesh.faces
-        face.axis == Axis || continue
-        index += 1
-        hm = mesh.blocks[face.minus.block].spacing[Axis]
-        hp = mesh.blocks[face.plus.block].spacing[Axis]
-        destination.interior[index] = (hm * _get(source, face.minus) + hp * _get(source, face.plus)) / (hm + hp)
+    axis = Axis
+    interior_values = destination.interior
+    faces = mesh.faces
+    leaf_blocks = mesh.blocks
+    source_blocks = source.blocks
+    halo = mesh.halo
+    offset = _axis_face_offset(faces, axis, length(interior_values))
+    @_parallel for local_index in 1:length(interior_values)
+        face = @inbounds faces[offset + local_index]
+        minus, plus = face.minus, face.plus
+        hm = @inbounds leaf_blocks[minus.block].spacing[axis]
+        hp = @inbounds leaf_blocks[plus.block].spacing[axis]
+        @inbounds interior_values[local_index] = (
+            hm * source_blocks[minus.block][minus.i + halo, minus.j + halo] +
+                hp * source_blocks[plus.block][plus.i + halo, plus.j + halo]
+        ) / (hm + hp)
     end
-    index = 0
-    for face in mesh.boundary_faces
-        face.axis == Axis || continue
-        index += 1
-        destination.boundary[index] = _get(source, face.cell)
+    _phase_face_boundary_average!(destination, source)
+    return destination
+end
+
+function _phase_face_boundary_average!(destination::FaceField{Axis}, source::CellField) where {Axis}
+    boundary_faces = source.mesh.boundary_faces
+    offset = _axis_face_offset(boundary_faces, Axis, length(destination.boundary))
+    for local_index in eachindex(destination.boundary)
+        @inbounds destination.boundary[local_index] =
+            _get(source, boundary_faces[offset + local_index].cell)
     end
     return destination
 end
@@ -30,37 +48,32 @@ function _phase_face_average!(
         ArgumentError("fields and geometry must share a mesh"),
     )
     mesh = source.mesh
-    local_index = 0
-    for face in mesh.faces
-        face.axis == Axis || continue
-        local_index += 1
+    interior_values = destination.interior
+    faces = mesh.faces
+    leaf_blocks = mesh.blocks
+    extent, periodic = mesh.extent, mesh.periodic
+    source_blocks = source.blocks
+    halo = mesh.halo
+    solid = geometry.solid
+    offset = _axis_face_offset(faces, Axis, length(interior_values))
+    # Captures the solid interface (one small box per threaded launch).
+    @_parallel for local_index in 1:length(interior_values)
+        face = @inbounds faces[offset + local_index]
         weighted = volume = zero(T)
         for ref in (face.minus, face.plus)
-            tangent = 3 - Axis
-            center = cellcenter(mesh, ref.block, ref.i, ref.j)
-            spacing = mesh.blocks[ref.block].spacing[tangent]
-            lo = _wrapped_delta(
-                face.center[tangent] - face.area / 2 - center[tangent],
-                mesh.extent[tangent], mesh.periodic[tangent],
-            ) / spacing
-            hi = lo + face.area / spacing
+            lo, hi = _face_local_tangent_interval(leaf_blocks, extent, periodic, ref, face)
             bounds = Axis == 1 ? (-0.5, 0.5, lo, hi) :
                 (lo, hi, -0.5, 0.5)
-            contribution = T(0.5) * _open_subcell_area(
-                geometry.solid, ref, bounds...,
-            ) * mesh.blocks[ref.block].volume
-            weighted += contribution * _get(source, ref)
+            contribution = T(0.5) * _open_subcell_area(solid, ref, bounds...) *
+                @inbounds(leaf_blocks[ref.block].volume)
+            weighted += contribution *
+                @inbounds(source_blocks[ref.block][ref.i + halo, ref.j + halo])
             volume += contribution
         end
-        @inbounds destination.interior[local_index] = volume > zero(T) ?
+        @inbounds interior_values[local_index] = volume > zero(T) ?
             weighted / volume : zero(T)
     end
-    local_index = 0
-    for face in mesh.boundary_faces
-        face.axis == Axis || continue
-        local_index += 1
-        @inbounds destination.boundary[local_index] = _get(source, face.cell)
-    end
+    _phase_face_boundary_average!(destination, source)
     return destination
 end
 

@@ -49,10 +49,17 @@ end
 TransferRowSchedule(::Type{S}) where {S} =
     TransferRowSchedule{S}(nothing, Int[], Int[], Int[])
 
-function _transfer_row_schedule!(schedule::TransferRowSchedule, matrix::SparseMatrixCSC)
-    schedule.source === matrix &&
-        length(schedule.entries) == nnz(matrix) && return schedule
-    offsets = resize!(schedule.offsets, size(matrix, 1) + 1)
+"""
+    _csc_row_pattern!(offsets, columns, entries, matrix)
+
+Write the row form of `matrix`: row `r` holds the slots
+`offsets[r]:(offsets[r + 1] - 1)`, which list its stored entries in increasing
+column order, with their `columns` and their pointers `entries` into
+`nonzeros(matrix)`. `offsets` and `columns` are the CSC pattern of
+`transpose(matrix)`. Serial: a counting sort by row.
+"""
+function _csc_row_pattern!(offsets, columns, entries, matrix::SparseMatrixCSC)
+    resize!(offsets, size(matrix, 1) + 1)
     fill!(offsets, 0)
     rows = rowvals(matrix)
     for pointer in 1:nnz(matrix)
@@ -62,8 +69,8 @@ function _transfer_row_schedule!(schedule::TransferRowSchedule, matrix::SparseMa
     for row in 1:size(matrix, 1)
         @inbounds offsets[row + 1] += offsets[row]
     end
-    columns = resize!(schedule.columns, nnz(matrix))
-    entries = resize!(schedule.entries, nnz(matrix))
+    resize!(columns, nnz(matrix))
+    resize!(entries, nnz(matrix))
     for column in axes(matrix, 2), pointer in nzrange(matrix, column)
         row = @inbounds rows[pointer]
         slot = @inbounds offsets[row]
@@ -75,8 +82,97 @@ function _transfer_row_schedule!(schedule::TransferRowSchedule, matrix::SparseMa
         @inbounds offsets[row + 1] = offsets[row]
     end
     offsets[1] = 1
+    return offsets
+end
+
+function _transfer_row_schedule!(schedule::TransferRowSchedule, matrix::SparseMatrixCSC)
+    schedule.source === matrix &&
+        length(schedule.entries) == nnz(matrix) && return schedule
+    _csc_row_pattern!(schedule.offsets, schedule.columns, schedule.entries, matrix)
     schedule.source = matrix
     return schedule
+end
+
+"""Value map of the stored transpose of a multigrid level matrix.
+
+`colptr` and `rowval` copy the CSC pattern of the matrix the map was built
+for, and the transpose's value `slot` is `nonzeros(matrix)[entries[slot]]`.
+Every refresh compares the matrix's pattern with the copy, so a new matrix
+object with another pattern, or a pattern changed in place, rebuilds the map.
+`mismatches` holds one flag per fixed chunk of that comparison.
+"""
+struct SparseTransposeMap
+    colptr::Vector{Int}
+    rowval::Vector{Int}
+    entries::Vector{Int}
+    mismatches::Vector{Bool}
+end
+
+SparseTransposeMap() = SparseTransposeMap(Int[], Int[], Int[], Bool[])
+
+"""Whether `matrix` has the CSC pattern recorded in `transpose_map`: a
+threaded comparison in fixed chunks of the row indices and column pointers."""
+function _recorded_pattern(transpose_map::SparseTransposeMap, matrix::SparseMatrixCSC)
+    stored = nnz(matrix)
+    column_pointers = matrix.colptr
+    pattern_columns = transpose_map.colptr
+    pattern_rows = transpose_map.rowval
+    length(pattern_columns) == length(column_pointers) &&
+        length(pattern_rows) == stored || return false
+    rows = rowvals(matrix)
+    pointer_count = length(column_pointers)
+    row_chunks = _reduction_chunks(stored)
+    chunks = row_chunks + _reduction_chunks(pointer_count)
+    mismatches = transpose_map.mismatches
+    length(mismatches) < chunks && resize!(mismatches, chunks)
+    @_parallel work = _REDUCTION_CHUNK for chunk in 1:chunks
+        differ = false
+        if chunk <= row_chunks
+            for slot in _reduction_range(chunk, stored)
+                differ |= @inbounds rows[slot] != pattern_rows[slot]
+            end
+        else
+            for slot in _reduction_range(chunk - row_chunks, pointer_count)
+                differ |= @inbounds column_pointers[slot] != pattern_columns[slot]
+            end
+        end
+        @inbounds mismatches[chunk] = differ
+    end
+    for chunk in 1:chunks
+        @inbounds mismatches[chunk] && return false
+    end
+    return true
+end
+
+"""
+    _refresh_matrix_transpose!(matrix_transpose, transpose_map, matrix)
+
+Set `matrix_transpose` to `transpose(matrix)`: the pattern and values that
+`transpose!` writes, bitwise. On the pattern recorded in `transpose_map`
+(compared in full on every call) the values are a threaded gather through
+`transpose_map.entries`; otherwise the pattern of `matrix_transpose` and the
+map are rebuilt serially first.
+"""
+function _refresh_matrix_transpose!(
+        matrix_transpose::SparseMatrixCSC, transpose_map::SparseTransposeMap,
+        matrix::SparseMatrixCSC,
+    )
+    size(matrix_transpose) == reverse(size(matrix)) ||
+        throw(DimensionMismatch("transpose size differs"))
+    stored = nnz(matrix)
+    entries = transpose_map.entries
+    if !_recorded_pattern(transpose_map, matrix)
+        copyto!(resize!(transpose_map.colptr, length(matrix.colptr)), matrix.colptr)
+        copyto!(resize!(transpose_map.rowval, stored), 1, rowvals(matrix), 1, stored)
+        _csc_row_pattern!(matrix_transpose.colptr, rowvals(matrix_transpose), entries, matrix)
+        resize!(nonzeros(matrix_transpose), stored)
+    end
+    source_values = nonzeros(matrix)
+    transpose_values = nonzeros(matrix_transpose)
+    @_parallel for slot in 1:stored
+        @inbounds transpose_values[slot] = source_values[entries[slot]]
+    end
+    return matrix_transpose
 end
 
 # Each fine output is one row of the prolongation, accumulated from zero with
@@ -133,6 +229,8 @@ mutable struct MultigridLevel{T, P, M, R}
     # CSC stores columns.  This row-form mirror lets output rows be owned by
     # parallel workers for general (including nonsymmetric) sparse operators.
     matrix_transpose::R
+    # Pattern-checked value map of `matrix` into `matrix_transpose`.
+    transpose_map::SparseTransposeMap
     volumes::Vector{T}
     prolongation::P
     # Row form of `prolongation` for the threaded prolongation.
@@ -386,7 +484,8 @@ function _factorized_elliptic_level(operator, prolongation, stencil)
     )
     number_of_cells = length(operator.volumes)
     return MultigridLevel(
-        action, nothing, operator.volumes, prolongation,
+        action, nothing, SparseTransposeMap(),
+        operator.volumes, prolongation,
         TransferRowSchedule(typeof(prolongation)),
         copy(stencil.inverse_diagonal), stencil.relaxation_weight,
         zeros(T, number_of_cells), zeros(T, number_of_cells),
@@ -706,7 +805,8 @@ function _multigrid_level(
     )
     number_of_cells = size(matrix, 1)
     return MultigridLevel(
-        matrix, matrix_transpose, volumes, prolongation,
+        matrix, matrix_transpose, SparseTransposeMap(),
+        volumes, prolongation,
         TransferRowSchedule(typeof(prolongation)),
         inverse_diagonal, relaxation_weight,
         zeros(T, number_of_cells), zeros(T, number_of_cells),

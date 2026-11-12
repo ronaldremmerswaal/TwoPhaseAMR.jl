@@ -824,7 +824,10 @@ end
     return 1 <= ref.block <= nblocks && 1 <= ref.i <= nx && 1 <= ref.j <= ny
 end
 
-"""Validate owned-cell references and axes before using a face schedule."""
+"""Validate owned-cell references and axes before using a face schedule.
+
+Both lists are axis-major: every axis-1 face precedes every axis-2 face, so
+the faces of one axis are a contiguous range (see `_axis_face_offset`)."""
 function _check_face_schedules(faces, boundaries, nblocks, block_size)
     nx, ny = block_size
     for (index, face) in pairs(faces)
@@ -846,8 +849,16 @@ function _check_face_schedules(faces, boundaries, nblocks, block_size)
             )
         end
     end
+    issorted(faces; by = face -> face.axis) &&
+        issorted(boundaries; by = face -> face.axis) ||
+        error("face schedules must list every axis-1 face before every axis-2 face")
     return nothing
 end
+
+"""Global index of the face before the first face of `axis` in the axis-major
+face list `faces` (see `_check_face_schedules`), which holds `count` faces of
+`axis`: the face of local (per-axis field) index `k` is `faces[offset + k]`."""
+@inline _axis_face_offset(faces, axis, count) = axis == 1 ? 0 : length(faces) - count
 
 function _build_face_schedules(
         blocks, base_mesh, block_size, origin, extent, periodic,
@@ -1124,13 +1135,12 @@ function isbalanced(mesh::BlockTreeMesh)
 end
 
 """Return the physical centre of local cell `(i, j)` in an active block."""
-@inline function cellcenter(
-        mesh::BlockTreeMesh, block_index::Integer,
-        i::Integer, j::Integer
-    )
-    block = mesh.blocks[block_index]
-    return (
-        block.origin[1] + (i - 1 / 2) * block.spacing[1],
-        block.origin[2] + (j - 1 / 2) * block.spacing[2],
-    )
-end
+@inline cellcenter(mesh::BlockTreeMesh, block_index::Integer, i::Integer, j::Integer) =
+    _leaf_cell_center(mesh.blocks[block_index], i, j)
+
+"""Centre of local cell `(i, j)` of one leaf block (the plain-data form of
+`cellcenter` that threaded loops use)."""
+@inline _leaf_cell_center(block, i, j) = (
+    block.origin[1] + (i - 1 / 2) * block.spacing[1],
+    block.origin[2] + (j - 1 / 2) * block.spacing[2],
+)
