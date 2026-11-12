@@ -1,3 +1,4 @@
+using LinearAlgebra: Symmetric, eigvals, isposdef
 using Random
 
 @testset "placements and block tree" begin
@@ -470,5 +471,182 @@ end
             )
             @test topology_signature(mesh) == topology_signature(reference)
         end
+    end
+end
+
+@testset "periodic direction resolved by exactly two cells" begin
+    function positive_definite_metric(metric)
+        metric isa TwoPhaseAMR.SparseInverseFaceMetric &&
+            return isposdef(Symmetric(metric.matrix))
+        return all(>(0), metric.diagonal)
+    end
+    # A periodic direction with two cells gives a centre-to-centre difference of
+    # +-L/2, and both periodic images are equally long: the wrapped difference
+    # alone is a tie, which `round(-0.5) == -0.0` used to settle in favour of
+    # the negative image (a reversed seam displacement). The documented rule is
+    # that the face orientation decides the normal sign -- the plus cell always
+    # lies on the +axis side of the shared face -- and that the magnitude is the
+    # shortest periodic image. The tangential component keeps its wrapped sign,
+    # which stays unambiguous because the tangential offset of two centres is at
+    # most half a coarse cell.
+    for (base, periodic) in (
+            ((2, 4), (true, false)),
+            ((4, 2), (false, true)),
+            ((2, 2), (true, true)),
+        )
+        mesh = BlockTreeMesh(
+            base_mesh = base, block_size = (2, 2),
+            extent = (Float64(base[1]), Float64(base[2])), periodic = periodic,
+        )
+        for (index, face) in pairs(mesh.faces)
+            displacement = TwoPhaseAMR._face_displacement(mesh, face)
+            normal = face.axis
+            @test displacement[normal] ==
+                (
+                mesh.blocks[face.minus.block].spacing[normal] +
+                    mesh.blocks[face.plus.block].spacing[normal]
+            ) / 2
+            @test displacement[3 - normal] == 0
+        end
+        # The seam face and the interior face of a two-cell direction carry the
+        # same displacement, so neither is singled out by the metric.
+        for axis in 1:2
+            @test unique(
+                TwoPhaseAMR._face_displacement(mesh, face)[axis]
+                    for face in mesh.faces if face.axis == axis
+            ) == [mesh.extent[axis] / base[axis]]
+        end
+
+        operator = GradientOperator(mesh)
+        @test positive_definite_metric(operator.inverse_metric)
+        pressure = CellField(mesh)
+        initialize!(pressure, (x, y) -> sinpi(x) + 0.3cospi(2y) - 0.2sinpi(3y))
+        numerical = FaceVelocity(mesh)
+        gradient!(numerical, pressure, operator)
+        for (index, face) in pairs(mesh.faces)
+            distance = TwoPhaseAMR._face_displacement(mesh, face)[face.axis]
+            expected = (
+                TwoPhaseAMR._get(pressure, face.plus) -
+                    TwoPhaseAMR._get(pressure, face.minus)
+            ) / distance
+            @test numerical.interior[index] ≈ expected atol = 8eps() rtol = 8eps()
+        end
+        # The area-weighted pressure jumps of an affine field must map to its
+        # face-normal gradient; a reversed seam displacement breaks this.
+        jump = similar(operator.pressure_jump)
+        result = similar(jump)
+        for coordinate_axis in 1:2
+            for (index, face) in pairs(mesh.faces)
+                jump[index] = face.area *
+                    TwoPhaseAMR._face_displacement(mesh, face)[coordinate_axis]
+            end
+            TwoPhaseAMR._mul_inverse_metric!(
+                result, operator.inverse_metric, jump
+            )
+            for (index, face) in pairs(mesh.faces)
+                expected = face.axis == coordinate_axis ? 1.0 : 0.0
+                @test result[index] ≈ expected atol = 2.0e-13 rtol = 2.0e-13
+            end
+        end
+    end
+
+    # The operator built from the corrected seam displacement is the ordinary
+    # MAC operator of that grid: symmetric, semidefinite, and with exactly the
+    # constant pressure null mode.
+    mesh = BlockTreeMesh(base_mesh = (2, 2), block_size = (2, 2), extent = (2.0, 2.0))
+    operator = GradientOperator(mesh)
+    numerical = FaceVelocity(mesh)
+    divergence = CellField(mesh)
+    basis = CellField(mesh)
+    nx, ny = mesh.block_size
+    refs = [
+        TwoPhaseAMR.CellRef(block, i, j)
+            for block in eachindex(mesh.blocks) for j in 1:ny for i in 1:nx
+    ]
+    pressure_matrix = zeros(length(refs), length(refs))
+    for (column, source) in pairs(refs)
+        for block in eachindex(mesh.blocks)
+            fill!(interior(basis, block), 0)
+        end
+        TwoPhaseAMR._set!(basis, 1.0, source)
+        gradient!(numerical, basis, operator)
+        divergence!(divergence, numerical)
+        for (row, target) in pairs(refs)
+            volume = mesh.blocks[target.block].volume
+            pressure_matrix[row, column] =
+                -volume * TwoPhaseAMR._get(divergence, target)
+        end
+    end
+    @test pressure_matrix ≈ transpose(pressure_matrix) atol = 2.0e-13 rtol = 2.0e-13
+    eigenvalues = eigvals(Symmetric(pressure_matrix))
+    spectral_tolerance = 2.0e-12 * maximum(abs, eigenvalues)
+    @test first(eigenvalues) >= -spectral_tolerance
+    @test count(value -> abs(value) <= spectral_tolerance, eigenvalues) == 1
+
+    # Non-dyadic extents put the centre difference at +-L/2 up to round-off, so
+    # the tie must not depend on which side of the half period the floating
+    # point difference lands on.
+    for extent in ((1.2, 0.8), (0.7, 3.3))
+        non_dyadic = BlockTreeMesh(
+            base_mesh = (2, 2), block_size = (2, 2), extent = extent,
+            periodic = (true, true),
+        )
+        non_dyadic_operator = GradientOperator(non_dyadic)
+        @test positive_definite_metric(non_dyadic_operator.inverse_metric)
+        for face in non_dyadic.faces
+            normal = face.axis
+            @test TwoPhaseAMR._face_displacement(non_dyadic, face)[normal] ≈
+                (
+                non_dyadic.blocks[face.minus.block].spacing[normal] +
+                    non_dyadic.blocks[face.plus.block].spacing[normal]
+            ) / 2 rtol = 8eps()
+        end
+        jump = similar(non_dyadic_operator.pressure_jump)
+        result = similar(jump)
+        for coordinate_axis in 1:2
+            for (index, face) in pairs(non_dyadic.faces)
+                jump[index] = face.area *
+                    TwoPhaseAMR._face_displacement(non_dyadic, face)[coordinate_axis]
+            end
+            TwoPhaseAMR._mul_inverse_metric!(
+                result, non_dyadic_operator.inverse_metric, jump
+            )
+            for (index, face) in pairs(non_dyadic.faces)
+                expected = face.axis == coordinate_axis ? 1.0 : 0.0
+                @test result[index] ≈ expected atol = 2.0e-13 rtol = 2.0e-13
+            end
+        end
+    end
+
+    # Refining one of the two roots leaves level-0 cells in the other, so the
+    # two-cell tie survives beside coarse--fine faces: the coarse seam faces
+    # keep the covering-space displacement, the patch metric is no longer
+    # diagonal, and it stays positive definite.
+    refined = BlockTreeMesh(
+        base_mesh = (2, 4), block_size = (2, 2), extent = (2.0, 4.0),
+        periodic = (true, false), max_level = 1,
+        refine = (key, origin, extent) -> key.level == 0 && key.j == 0,
+    )
+    levels = [block.key.level for block in refined.blocks]
+    @test 0 in levels && 1 in levels
+    tie = [
+        face for face in refined.faces
+            if face.axis == 1 &&
+            refined.blocks[face.minus.block].key.level == 0 &&
+            refined.blocks[face.plus.block].key.level == 0
+    ]
+    @test !isempty(tie)
+    @test all(face -> TwoPhaseAMR._face_displacement(refined, face)[1] == 1.0, tie)
+    refined_operator = GradientOperator(refined)
+    @test refined_operator.inverse_metric isa
+        TwoPhaseAMR.SparseInverseFaceMetric
+    @test isposdef(Symmetric(refined_operator.inverse_metric.matrix))
+    for (index, face) in pairs(refined.faces)
+        normal = face.axis
+        @test TwoPhaseAMR._face_displacement(refined, face)[normal] ==
+            (
+            refined.blocks[face.minus.block].spacing[normal] +
+                refined.blocks[face.plus.block].spacing[normal]
+        ) / 2
     end
 end

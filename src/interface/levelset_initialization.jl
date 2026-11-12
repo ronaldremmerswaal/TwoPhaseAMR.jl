@@ -43,6 +43,36 @@ function _levelset_quadrature(f, a, b, tol, depth, whole = _levelset_gauss(f, a,
         _levelset_quadrature(f, mid, b, tol / 2, depth - 1, right)
 end
 
+# Antiderivative of `sqrt(radius^2 - x^2)`, the disk's upper boundary.
+function _levelset_disk_segment(x::Float64, radius::Float64)
+    return (
+        x * sqrt(max(radius * radius - x * x, 0.0)) +
+            radius * radius * asin(min(x / radius, 1.0))
+    ) / 2
+end
+# Area of {0 <= x <= width, 0 <= y <= height} intersected with the disk of
+# radius `radius` about the origin, by integrating that boundary.
+function _levelset_quadrant_area(width::Float64, height::Float64, radius::Float64)
+    width > 0 && height > 0 && radius > 0 || return 0.0
+    stop = min(width, radius)
+    # x where the disk boundary falls below the rectangle's top edge.
+    full = min(stop, sqrt(max(radius * radius - height * height, 0.0)))
+    return height * full +
+        _levelset_disk_segment(stop, radius) - _levelset_disk_segment(full, radius)
+end
+# Area of the rectangle with the given sides within distance `radius` of the
+# point (sx, sy), which must lie in the rectangle.
+function _levelset_disk_area(
+        left::Float64, right::Float64, bottom::Float64, top::Float64,
+        sx::Float64, sy::Float64, radius::Float64,
+    )
+    total = 0.0
+    for (xlo, xhi) in ((left, sx), (sx, right)), (ylo, yhi) in ((bottom, sy), (sy, top))
+        total += _levelset_quadrant_area(xhi - xlo, yhi - ylo, radius)
+    end
+    return total
+end
+
 function _levelset_height_area(phi, lo, hi, axis, tol, maxdepth)
     tangent = 3 - axis
     a, b = lo[tangent], hi[tangent]
@@ -87,9 +117,36 @@ function _levelset_height_area(phi, lo, hi, axis, tol, maxdepth)
     return result
 end
 
-function _levelset_area(phi, lo, hi, tol, depth, maxdepth, lipschitz, min_depth)
+# Certified upper bound on the area of the rectangle [lo, hi] that declaring it
+# pure with the sign of `fc` can misattribute. A sample `s` of that sign proves,
+# through the Lipschitz bound, that the ball of radius `abs(phi(s))/lipschitz`
+# about `s` lies wholly in that phase, so the other phase lies outside the union
+# of those balls; the largest ball alone bounds what is left.
+function _levelset_unresolved_area(lo, hi, xs, ys, values, fc, lipschitz::Float64)
+    declared = fc < 0
+    left, right, bottom, top =
+        Float64(lo[1]), Float64(hi[1]), Float64(lo[2]), Float64(hi[2])
+    pure = 0.0
+    for j in 1:3,i in 1:3
+        v = values[i, j]
+        (v < 0) == declared || continue
+        pure = max(
+            pure,
+            _levelset_disk_area(
+                left, right, bottom, top, Float64(xs[i]), Float64(ys[j]),
+                abs(Float64(v)) / lipschitz,
+            ),
+        )
+    end
+    # Rounding may inflate `pure` by an ulp; keep the bound conservative.
+    return max((right - left) * (top - bottom) - pure * (1 - 64eps(Float64)), 0.0)
+end
+function _levelset_area(phi, lo, hi, cell_tolerance, depth, maxdepth, lipschitz, min_depth)
     mid = ((lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2)
     widths = (hi[1] - lo[1], hi[2] - lo[2]);area = prod(widths)
+    # This box's share of the cell's tolerance, which is divided by four on
+    # every refinement; the acceptance below spends the cell's own tolerance.
+    tol = cell_tolerance / 4^depth
     fc = _levelset_value(phi, mid...)
     if !isnothing(lipschitz) && abs(fc) >= lipschitz * hypot(widths...) / 2
         return fc < 0 ? area : zero(area)
@@ -137,17 +194,26 @@ function _levelset_area(phi, lo, hi, tol, depth, maxdepth, lipschitz, min_depth)
             return _levelset_height_area(phi, lo, hi, axis, tol, maxdepth)
         end
     end
-    # A Lipschitz bound prevents classifying an unobserved enclosed component
-    # as pure. An unresolved box contributes at most its entire area.
-    if area <= tol
-        return fc <= 0 ? area : zero(area)
+    # A box that neither certifying test nor the height graph resolves is
+    # accepted by the sign of its centre once the area it could misattribute is
+    # within the cell's absolute tolerance.
+    if !isnothing(lipschitz)
+        unresolved = _levelset_unresolved_area(
+            lo, hi, xs, ys, values, fc, Float64(lipschitz),
+        )
+        if unresolved <= cell_tolerance
+            return fc < 0 ? area : zero(area)
+        end
     end
     depth < maxdepth || error("level-set geometry remains unresolved; increase maxdepth or supply a better-resolved level set")
     total = zero(area)
     for j in 1:2,i in 1:2
         childlo = (i == 1 ? lo[1] : mid[1], j == 1 ? lo[2] : mid[2])
         childhi = (i == 1 ? mid[1] : hi[1], j == 1 ? mid[2] : hi[2])
-        total += _levelset_area(phi, childlo, childhi, tol / 4, depth + 1, maxdepth, lipschitz, min_depth)
+        total += _levelset_area(
+            phi, childlo, childhi, cell_tolerance, depth + 1, maxdepth,
+            lipschitz, min_depth,
+        )
     end
     return total
 end
@@ -165,15 +231,21 @@ cannot be represented as one height graph is subdivided. `atol` is the target
 absolute error in each cell's fraction, not in the domain volume.
 
 An optional global Lipschitz bound (`lipschitz=1` for a signed distance) gives a
-certified pure-cell test and searches same-sign boxes for enclosed components.
-Without a bound, purity/monotonicity tests are sampled and assume resolved,
-smooth geometry. Arbitrarily small or oscillatory features cannot be guaranteed
-from finitely many function samples; `min_depth` forces a finer initial search.
-Quadrature error estimates are numerical, not interval-certified error bounds.
-Failures to resolve geometry or quadrature throw rather than silently accepting
-an inaccurate fraction. Initialization is transactional: failed quadrature does
-not modify the existing fraction field. This is an initialization operation;
-mesh adaptation uses geometric PLIC transfer instead of resampling the level set.
+certified pure-cell test, searches same-sign boxes for enclosed components, and
+bounds what a box that no test resolves may misattribute: a sample with the
+accepted sign rules out a ball of radius `abs(phi)/lipschitz` around itself for
+the other phase, so the largest such ball bounds that phase's area in the box.
+Such a box is accepted by the sign of its centre once the bound is within `atol`
+of the cell's volume, which adds at most `atol` to the cell's fraction; a box
+still unresolved at `maxdepth` throws. Without a bound, purity/monotonicity
+tests are sampled and assume resolved, smooth geometry. Arbitrarily small or
+oscillatory features cannot be guaranteed from finitely many function samples;
+`min_depth` forces a finer initial search. Quadrature error estimates are
+numerical, not interval-certified error bounds. Failures to resolve geometry or
+quadrature throw rather than silently accepting an inaccurate fraction.
+Initialization is transactional: failed quadrature does not modify the existing
+fraction field. This is an initialization operation; mesh adaptation uses
+geometric PLIC transfer instead of resampling the level set.
 The level set, like every user callback, is evaluated serially on the calling
 task.
 """
