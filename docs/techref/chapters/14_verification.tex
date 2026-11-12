@@ -708,11 +708,14 @@ that could fail for valid input, is fixed by the certified acceptance
 of~\cref{sec:interface:init}; and \issue{36} is fixed: a periodic direction
 with two cells is resolved by the face orientation, whose normal component
 fixes the sign of the seam displacement, while the multigrid coarsest level
-still keeps four cells per periodic axis (\cref{sec:solvers:hierarchy}). The
-others are open. Open
-investigations: unbounded CTU fluxes at hanging dual faces (\issue{70}), dual
-Courant numbers above one next to a solid (\issue{72}), and the fallback for
-orphaned edges at open walls (\issue{99}).
+still keeps four cells per periodic axis (\cref{sec:solvers:hierarchy});
+\issue{70} is fixed by the outflow limiter of
+\cref{dev:momentum:ctu-hanging}, \issue{71} by the open-strip phase schedule
+of~\cref{sec:momentum:two-velocity}, and \issue{72} no longer reproduces: the
+cut-donor bound keeps the dual Courant number at or below its limit next to a
+solid (\cref{sec:momentum:cfl}). The
+others are open. The open investigation is the fallback for orphaned edges at
+open walls (\issue{99}).
 
 \emph{Order in time.} No test asserts an order in time
 (\cref{sec:stab:accuracy}). The temporal series at a fixed mesh, with the

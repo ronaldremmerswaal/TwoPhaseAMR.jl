@@ -868,7 +868,9 @@ in it, and the coefficient of the old value in the
 update stays non-negative: the update of a draining control volume is
 bounded by the cell-wise outflow bound, as in the thesis
 lemmas~\thesis{Lemmas~6.2 and 6.3}, and not by the switch. At a segment of a
-hanging side this fails (\cref{dev:momentum:ctu-hanging}).
+hanging side the cell-wise bound does not reach the code's factorization and
+the coefficient of~\cref{eq:momentum:own-coefficient} can be negative; the
+transport limits the outflow there (\cref{dev:momentum:ctu-hanging}).
 
 \emph{Boundaries and solids.} In a bounded domain and with a solid the phase
 schedule~\cref{eq:momentum:volumes} includes the boundary unknowns (whose
@@ -917,24 +919,46 @@ the bulk state is the directional one of \cref{sec:momentum:states},
 and a dilation term with frozen values completes the split update.
 \end{deviation}
 
-\begin{deviation}{CTU flux at hanging segments}\label{dev:momentum:ctu-hanging}
+\begin{deviation}{Outflow limiter at hanging segments}\label{dev:momentum:ctu-hanging}
 The thesis' lemmas bound the CTU update of a draining staggered control
-volume~\thesis{Lemmas~6.2 and 6.3}. At a segment $f$ of a hanging side they
-do not carry over to the code's form. Let the own flux of $f$, from
-$\cminus{f}$ into $\cplus{f}$, be the only non-zero flux, all of the phase of
-$\cminus{f}$ lie in its donating region and $\cplus{f}$ be empty: rule~(N)
-passes $\half(2-\sidefrac{\cplus{f}}{f})$ of this flux out of the control
-volume of $f$, which holds only $\half\sidefrac{\cminus{f}}{f}$ of it, and the
-coefficient of the old value in the update of $f$ is
+volume~\thesis{Lemmas~6.2 and 6.3} through the cell-wise outflow bound. At a
+segment $f$ of a hanging side that bound does not reach the code's
+factorization (rule~(N), \cref{eq:momentum:weights}). Let the own flux of
+$f$, from $\cminus{f}$ into $\cplus{f}$, be the only non-zero flux, all of
+the phase of $\cminus{f}$ lie in its donating region and $\cplus{f}$ be
+empty: rule~(N) passes $\half(2-\sidefrac{\cplus{f}}{f})$ of this flux out
+of the control volume of $f$, which holds only
+$\half\sidefrac{\cminus{f}}{f}$ of it, and the coefficient of the old value
+in the update of $f$ would be
 \begin{equation}\label{eq:momentum:own-coefficient}
   \owncoef{f}=-\frac{2-\sidefrac{\cminus{f}}{f}-\sidefrac{\cplus{f}}{f}}{\sidefrac{\cplus{f}}{f}},
 \end{equation}
 zero on a conforming patch but $-\half$ from a coarse into a fine cell and
-$-1$ from a fine into a coarse cell. The update then leaves the range of the
-old values: in one step a staggered phase scalar $0$ among neighbours $1$
-became $1.98$, and a one-velocity momentum $1.95$ at the density ratio $1000$
-(derivation audit, \code{proof_review/eq-momentum-ctu/}); upwinding the net
-volume does not avoid this. Open: \issue{70}.
+$-1$ from a fine into a coarse cell, for every face state including the
+net-volume upwind one. Left alone the update leaves the range of the old
+values: in one step a staggered phase scalar $0$ among neighbours $1$ became
+$1.98$, and a one-velocity momentum $1.95$ at the density ratio $1000$
+(derivation audit, \code{proof_review/eq-momentum-ctu/}).
+The transport limits the outflow instead of the state
+(\srcsym{src/two_phase/phase_face_transport.jl}{_phase_drain_limit!}). Where
+the phase volume $O_f$ leaving an unknown exceeds the phase volume
+$\stagvol{f}\stagfrac{\phase}{f}$ its staggered content holds at the start
+of the sweep, the excess $O_f-\stagvol{f}\stagfrac{\phase}{f}$ leaves at
+the volume-weighted mean of the values that enter the unknown, over the
+$I_f$ that enter, rather than at its own value. Every partial volume carries one value, for its
+sender and its receiver alike, so the update stays the conservative one
+of~\cref{eq:momentum:one-velocity} (the excess redistributes the value the
+flux carries, not the flux), and with the excess fraction
+$\xi_f=\max(0,1-\stagvol{f}\stagfrac{\phase}{f}/O_f)$ the coefficients of
+the old value, $\max(0,\stagvol{f}\stagfrac{\phase}{f}-O_f)$, and of the
+entering values, $I_f-\xi_f O_f$, are both non-negative and sum to the new
+content $\stagvol{f}\stagfrac{\phase}{f}-O_f+I_f$: the update is again a
+convex combination. On a conforming patch the cell-wise bound keeps
+$O_f\le\stagvol{f}\stagfrac{\phase}{f}$, so $\xi_f=0$ and the
+transport is unchanged; the limiter acts only at level transitions, where
+\testsym{test/two_phase/transport.jl}{Staggered transport stays bounded at a hanging segment}
+holds the range of the old values and the phase amount for both the staggered
+phase scalar and the one-velocity momentum (\issue{70}).
 \end{deviation}
 
 \begin{implnote}

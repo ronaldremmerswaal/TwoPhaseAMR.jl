@@ -35,7 +35,9 @@ function _momentum_component_workspace(
     return MomentumComponentWorkspace(
         value, FaceField{Axis}(mesh, T),
         FaceField{Axis}(mesh, T), FaceField{Axis}(mesh, T), FaceField{Axis}(mesh, T),
-        advection, ntuple(_ -> zeros(T, face_count), 6)...
+        advection, ntuple(_ -> zeros(T, face_count), 6)...,
+        PhaseDrainLimiter(T, face_count, advection),
+        PhaseDrainLimiter(T, face_count, advection),
     )
 end
 
@@ -82,11 +84,14 @@ function _reconfigure_momentum_component!(
         resize!(values, face_count)
         fill!(values, zero(T))
     end
+    _resize_drain_limiter!(component.liquid_limiter, face_count, advection)
+    _resize_drain_limiter!(component.gas_limiter, face_count, advection)
     return MomentumComponentWorkspace(
         component.value, component.source, component.fraction,
         component.predicted_fraction, component.increment, advection,
         component.old_fraction, component.new_fraction,
         component.values, component.sources, component.delta, component.rates,
+        component.liquid_limiter, component.gas_limiter,
     )
 end
 
@@ -187,11 +192,20 @@ function _advect_momentum_component!(
     sources = _pack_phase_faces!(component.sources, component.source)
     delta = component.delta
     schedule = component.advection.schedule
+    for (flux, liquid, limiter) in (
+            (work.liquid_flux, true, component.liquid_limiter),
+            (work.gas_flux, false, component.gas_limiter),
+        )
+        _phase_drain_limit!(
+            limiter.excess, limiter.flush, limiter.suspect,
+            component.advection, schedule, flux, values, oldc, liquid, axis,
+        )
+    end
     @_parallel for output in 1:length(values)
         value = zero(eltype(delta))
-        for (rho, flux, liquid) in (
-                (density[1], work.liquid_flux, true),
-                (density[2], work.gas_flux, false),
+        for (rho, flux, liquid, limiter) in (
+                (density[1], work.liquid_flux, true, component.liquid_limiter),
+                (density[2], work.gas_flux, false, component.gas_limiter),
             )
             for pointer in component.advection.dual_offsets[output]:(
                     component.advection.dual_offsets[output + 1] - 1
@@ -208,6 +222,7 @@ function _advect_momentum_component!(
                     face, schedule, flux, mesh, values,
                     cm, cp, nm, np, ctu_threshold,
                     scheme, amr_interface_scheme,
+                    limiter.excess, limiter.flush,
                 )
                 sign = @inbounds component.advection.dual_signs[pointer]
                 value += rho * sign * (

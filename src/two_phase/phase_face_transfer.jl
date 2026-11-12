@@ -58,5 +58,6 @@ function _finish_phase_face_transfer!(q::PhaseFaceScalar{Axis, T}) where {Axis, 
         q.interface.geometry, Ref(true); reuse_flux = q.workspace.dual_flux
     )
     q.workspace = work
+    _resize_drain_limiter!(q.scratch.limiter, count, work)
     return q
 end

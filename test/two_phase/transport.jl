@@ -944,6 +944,58 @@ end
     end
 end
 
+@testset "Staggered transport stays bounded at a hanging segment" begin
+    # #70: the phase volume leaving an unknown of a hanging side can exceed the
+    # phase volume its staggered content holds, so the conservative fluctuation
+    # form was not a convex combination there and a staggered value 0 among
+    # neighbours 1 became 1.98.
+    mesh = BlockTreeMesh(
+        base_mesh = (12, 12), block_size = (4, 4), extent = (12.0, 12.0),
+        periodic = (true, true), max_level = 1,
+        refine = (key, origin, extent) -> key == BlockKey(0, 1, 1),
+    )
+    for (cx, cy, r, direction, at) in (
+            (4.15, 5.2, 0.16, -1.0, (4.0, 5.25)),
+            (4.05, 5.2, 0.1, 1.0, (4.0, 5.75)),
+        )
+        levelset(x, y) = hypot(x - cx, y - cy) - r
+        velocity = FaceVelocity(
+            mesh, (x, y, t, axis) -> axis == 1 ? direction : 0.0,
+        )
+        zero_at(x, y) = hypot(x - at[1], y - at[2]) < 1.0e-9 ? 0.0 : 1.0
+
+        field = InterfaceField(mesh, levelset; lipschitz = 1)
+        reconstruct!(field)
+        work = WYAdvectionWorkspace(field)
+        dt = stable_timestep(velocity, work)
+        q = PhaseFaceScalar{1}(field; liquid = zero_at, gas = 1.0)
+        amount = integrate(q, :liquid)
+        advect!(
+            field, velocity, dt, work; staggered_scalars = (q,),
+            scheme = Upwind(), amr_interface_scheme = Upwind(),
+        )
+        @test minimum(q.liquid.interior) >= -1.0e-12
+        @test maximum(q.liquid.interior) <= 1 + 1.0e-12
+        @test integrate(q, :liquid) ≈ amount atol = 1.0e-12 * max(abs(amount), 1)
+
+        field = InterfaceField(mesh, levelset; lipschitz = 1)
+        reconstruct!(field)
+        work = WYAdvectionWorkspace(field)
+        dt = stable_timestep(velocity, work)
+        source = FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? zero_at(x, y) : 0.0)
+        destination = FaceVelocity(mesh)
+        advect!(
+            field, velocity, dt, work; momentum = destination,
+            density = (1000.0, 1.0),
+            momentum_workspace = MomentumAdvectionWorkspace(field),
+            momentum_source = source,
+            scheme = Upwind(), amr_interface_scheme = Upwind(),
+        )
+        @test minimum(destination.interior) >= -1.0e-12
+        @test maximum(destination.interior) <= 1 + 1.0e-12
+    end
+end
+
 function wy_cut_hanging_counterexample(parameters)
     mesh = BlockTreeMesh(
         base_mesh = (4, 4), block_size = (2, 2), extent = (4.0, 4.0),
