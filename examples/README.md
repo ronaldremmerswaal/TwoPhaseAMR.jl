@@ -17,7 +17,7 @@ rather than a time-dependent flow.
 | 08 | [Sessile droplet](08_sessile_droplet/) | Contact-angle relaxation | One velocity | Level 3, eight capillary times; 34.55 s |
 | 09 | [Sloped sessile droplet](09_sloped_sessile_droplet/) | Embedded inclined wall | One velocity | Level 2, four capillary times; unmeasured at this size (level-3 gallery run 119.50 s) |
 | 10 | [Stokes wave](10_stokes3_wave/) | Nonlinear free-surface wave | One velocity | Level 5, one period; unmeasured |
-| 11 | [Large gas-pocket impact](11_lgpi/) | Gravity wave over bathymetry | One velocity | Level 4, 1.2 gravity periods; unmeasured |
+| 11 | [Large gas-pocket impact](11_lgpi/) | Gravity wave over bathymetry | One velocity | Level 4, 1.2 gravity periods; unmeasured (gallery level-3 run 6197.5 s) |
 | 12 | [Manufactured Poisson](12_manufactured_poisson/) | Pressure projection with density jump | Two velocity | 32×32; 10.5 s setup and solve |
 
 Warm timings are second calls in one process; first-call compilation is
