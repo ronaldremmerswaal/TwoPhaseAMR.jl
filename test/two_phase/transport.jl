@@ -878,6 +878,30 @@ end
     end
 end
 
+@testset "Cut coarse-fine phase-schedule consistency" begin
+    interface, _ = cut_momentum_fixture()
+    mesh = interface.mesh
+    # The staggered phase scalars and the two-velocity momentum share one phase
+    # schedule, whose divergence must commute with the open-strip interpolation
+    # of the staggered fraction exactly as the one-velocity one does: the
+    # geometric side fractions of a split coarse side do not.
+    velocity = (
+        FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? 0.3 : -0.2),
+        FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? -0.1 : 0.25),
+    )
+    two_velocity = MomentumAdvectionWorkspace(interface, velocity)
+    for (axis, schedule) in (
+            (1, PhaseFaceScalar{1}(interface).workspace.schedule),
+            (2, PhaseFaceScalar{2}(interface).workspace.schedule),
+            (1, two_velocity.x.workspace.schedule),
+            (2, two_velocity.y.workspace.schedule),
+        )
+        @test cut_momentum_identity_defect(interface, schedule, Val(axis), axis) <= 2.0e-13
+    end
+    geometric = TP._geometry_phase_schedule(interface.geometry, Val(1))
+    @test cut_momentum_identity_defect(interface, geometric, Val(1), 1) > 1.0e-4
+end
+
 function wy_cut_hanging_counterexample(parameters)
     mesh = BlockTreeMesh(
         base_mesh = (4, 4), block_size = (2, 2), extent = (4.0, 4.0),

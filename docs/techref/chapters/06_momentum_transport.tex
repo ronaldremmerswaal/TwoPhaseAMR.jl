@@ -934,7 +934,9 @@ volume does not avoid this. Open: \issue{70}.
 \apifun{advect!}\code{(interface, velocity, dt, work; momentum=destination, density=(rho_l, rho_g), momentum_workspace, scheme, amr_interface_scheme)}
 with a \apitype{WYAdvectionWorkspace}\code{(interface; ctu_threshold=0.5)};
 \apifun{mixture_density}~\cref{eq:momentum:density}. Schedule
-\srcsym{src/two_phase/momentum_workspace.jl}{_momentum_advection_workspace}~\cref{eq:momentum:open-fractions};
+\srcsym{src/two_phase/phase_face_transport.jl}{_open_strip_phase_schedule}~\cref{eq:momentum:open-fractions},
+shared by the one-velocity momentum, the two-velocity momentum and the
+staggered phase scalars;
 update \srcsym{src/two_phase/momentum_workspace.jl}{_advect_momentum_component!}~\cref{eq:momentum:one-velocity},
 modified interpolant \srcsym{src/two_phase/phase_face_transport.jl}{_phase_transport}
 and \srcsym{src/two_phase/phase_face_transport.jl}{_ctu_phase_transport}~\cref{eq:momentum:ctu};
@@ -956,8 +958,12 @@ The two-velocity model stores intrinsic phase velocities, and a
 \apitype{PhaseFaceScalar} stores intrinsic liquid and gas values on the
 faces of one axis; both are transported by the same update, per phase, with
 the phase volumes of the carrier of \cref{sec:vof:two-velocity}, on the phase
-schedule of \cref{sec:momentum:dual} with the side fractions $\sidefrac{c}{f}$
-(not those of~\cref{eq:momentum:open-fractions}). Before the
+schedule of \cref{sec:momentum:dual} with the open-strip fractions
+of~\cref{eq:momentum:open-fractions}, as for the one-velocity momentum: the
+divergence of that factorization commutes with the staggered fractions
+$\stagfrac{\phase}{f}$ of~\cref{eq:momentum:interpolation} also in a cut
+coarse cell whose side carries two segments, which the geometric side
+fractions do not (\issue{71}). Before the
 sweeps, a value is \emph{absent} where its phase has no open staggered
 volume ($\stagvol{f}$ of~\cref{eq:momentum:volumes} zero, or
 $\operatorname{clamp}(\stagfrac{\liq}{f},0,1)=0$ for the liquid, $=1$ for
@@ -1001,9 +1007,8 @@ to the frozen dilation,
   \sum_f\stagvol{f}\stagfrac{\phase}{f}\avarstag^{\phase}_f\Big|^{\timelevel{n+1}}_{\timelevel{n}}
   =\sum_{j=1}^{2}\sum_f\stagvol{f}\roundpar{\interpolantsbp\big[\indicator{\phase}\sweepdiv{\splitlevel{j}}{}\big]}_f\avarstag^{\phase,\timelevel{n}}_f
 \end{equation}
-under condition (a) of \cref{sec:momentum:one-velocity} and, because this
-schedule keeps the side fractions, condition (b) (\issue{71}), without snapping and with
-every updated unknown above the floor; the dilation sum vanishes for a
+under condition (a) of \cref{sec:momentum:one-velocity}, without snapping and
+with every updated unknown above the floor; the dilation sum vanishes for a
 carrier that is solenoidal in every cell (the mixture constraint on the
 frozen apertures).
 
@@ -1033,7 +1038,8 @@ projected carrier of the thesis is not implemented.
 \code{momentum}, \code{momentum_workspace} and \code{staggered_scalars};
 \apifun{integrate}\code{(q::PhaseFaceScalar, phase)}. Schedule
 \srcsym{src/two_phase/phase_face_transport.jl}{_phase_advection_workspace}
-(side fractions); preparation
+with \srcsym{src/two_phase/phase_face_transport.jl}{_open_strip_phase_schedule}
+(\cref{eq:momentum:open-fractions}); preparation
 \srcsym{src/two_phase/two_velocity/momentum_workspace.jl}{_prepare_phase_momentum_values!}
 with \srcsym{src/two_phase/two_velocity/velocity_fields.jl}{_extend_phase_face_values!}~\cref{eq:momentum:extension};
 update \srcsym{src/two_phase/phase_face_transport.jl}{_advect_phase_faces_workspace!}~\cref{eq:momentum:two-velocity};
@@ -1044,7 +1050,11 @@ Tests: \testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Compatibl
 \testsym{test/two_phase/transport.jl}{bounded two-velocity staggered schemes}
 and \testsym{test/two_phase/transport.jl}{bounded staggered schemes with both phases present}
 (selected scheme on bounded and cut schedules, equal to the single-phase transport away from the interface),
-\testsym{test/two_phase/transport.jl}{two-velocity transport near a sloped solid}.
+\testsym{test/two_phase/transport.jl}{two-velocity transport near a sloped solid},
+\testsym{test/two_phase/transport.jl}{Cut coarse-fine phase-schedule consistency}
+(the divergence of the phase schedule commutes with the open-strip
+interpolation of the staggered fraction at a split coarse cut side, to
+$2\times10^{-13}$; the geometric side fractions miss by $1\times10^{-1}$).
 \end{implnote}
 
 \section{Which flux on which dual face}\label{sec:momentum:flux-rules}
