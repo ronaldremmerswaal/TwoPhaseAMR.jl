@@ -135,8 +135,15 @@ end
 # advanced alongside the run); the timer does not use it.
 TwoPhaseAMR._observer_step_procedure(::StepTimes, solver, force, options, workspace) = nothing
 
-run_steps!(flow, dt, steps; observer = NoObserver()) =
-    simulate!(flow, flow.time + steps * dt; dt, observer)
+# One `simulate!` call per step: a multi-step call can end on a shortened step
+# (accumulated time round-off), whose new dt rebuilds the dt-dependent
+# preconditioners and would put a ~100 ms outlier into every window.
+function run_steps!(flow, dt, steps; observer = NoObserver())
+    for _ in 1:steps
+        simulate!(flow, flow.time + dt; dt, observer)
+    end
+    return flow
+end
 
 function state_checksum(flow)
     context = SHA.SHA256_CTX()
