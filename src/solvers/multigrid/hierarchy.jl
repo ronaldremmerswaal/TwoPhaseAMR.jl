@@ -29,13 +29,100 @@ function _jacobi_weight!(
     return clamp_weight ? min(one(T), weight) : weight
 end
 
-function _prolongate!(destination, prolongation::SparseMatrixCSC, source)
-    mul!(destination, prolongation, source)
+"""Row access to a CSC transfer matrix whose sparsity is fixed per object.
+
+Row `r` lists its stored entries (`entries`, pointers into `nonzeros(P)`) and
+their `columns` in increasing column order. The values are read from `P` on
+every product, so in-place value refreshes need no update. The cache key is the
+matrix object's identity and its `nnz`; the schedule therefore assumes that an
+object's sparsity pattern is never changed in place at constant `nnz` (moving
+an entry from one column to another would keep a stale schedule). Refreshing
+values in place is fine, and a different matrix object rebuilds the schedule.
+"""
+mutable struct TransferRowSchedule{S}
+    source::Union{Nothing, S}
+    offsets::Vector{Int}
+    columns::Vector{Int}
+    entries::Vector{Int}
+end
+
+TransferRowSchedule(::Type{S}) where {S} =
+    TransferRowSchedule{S}(nothing, Int[], Int[], Int[])
+
+function _transfer_row_schedule!(schedule::TransferRowSchedule, matrix::SparseMatrixCSC)
+    schedule.source === matrix &&
+        length(schedule.entries) == nnz(matrix) && return schedule
+    offsets = resize!(schedule.offsets, size(matrix, 1) + 1)
+    fill!(offsets, 0)
+    rows = rowvals(matrix)
+    for pointer in 1:nnz(matrix)
+        @inbounds offsets[rows[pointer] + 1] += 1
+    end
+    offsets[1] = 1
+    for row in 1:size(matrix, 1)
+        @inbounds offsets[row + 1] += offsets[row]
+    end
+    columns = resize!(schedule.columns, nnz(matrix))
+    entries = resize!(schedule.entries, nnz(matrix))
+    for column in axes(matrix, 2), pointer in nzrange(matrix, column)
+        row = @inbounds rows[pointer]
+        slot = @inbounds offsets[row]
+        @inbounds columns[slot] = column
+        @inbounds entries[slot] = pointer
+        @inbounds offsets[row] = slot + 1
+    end
+    for row in size(matrix, 1):-1:1
+        @inbounds offsets[row + 1] = offsets[row]
+    end
+    offsets[1] = 1
+    schedule.source = matrix
+    return schedule
+end
+
+# Each fine output is one row of the prolongation, accumulated from zero with
+# `muladd` in increasing column order. This kernel is the definition of the
+# product for every thread count; it deliberately does not fall back to
+# SparseArrays' serial `mul!`, whose arithmetic depends on the Julia version
+# (fused from 1.12, unfused before), which would make one thread differ from
+# several. The row schedule is built on this first product, whatever the
+# thread count.
+function _prolongate!(destination, level, source)
+    prolongation = level.prolongation
+    schedule = _transfer_row_schedule!(level.prolongation_rows, prolongation)
+    offsets = schedule.offsets
+    columns = schedule.columns
+    entries = schedule.entries
+    prolongation_values = nonzeros(prolongation)
+    @_parallel for row in 1:length(destination)
+        value = zero(eltype(destination))
+        for slot in offsets[row]:(offsets[row + 1] - 1)
+            @inbounds value = muladd(prolongation_values[entries[slot]], source[columns[slot]], value)
+        end
+        @inbounds destination[row] = value
+    end
     return destination
 end
 
+# Each coarse output is one CSC column of the prolongation: a threaded
+# column dot product that starts from zero with `muladd` in stored order and
+# adds the zero output at the end (which maps -0.0 to 0.0). As for the
+# prolongation this kernel is the definition of the product for every thread
+# count, so no version-dependent serial `mul!` fast path is taken.
 function _restrict!(destination, prolongation::SparseMatrixCSC, source)
-    mul!(destination, transpose(prolongation), source)
+    length(destination) == size(prolongation, 2) ||
+        throw(DimensionMismatch("restriction output size differs"))
+    length(source) == size(prolongation, 1) ||
+        throw(DimensionMismatch("restriction input size differs"))
+    column_pointers = prolongation.colptr
+    rows = rowvals(prolongation)
+    prolongation_values = nonzeros(prolongation)
+    @_parallel for column in 1:length(destination)
+        value = zero(eltype(destination))
+        for pointer in column_pointers[column]:(column_pointers[column + 1] - 1)
+            @inbounds value = muladd(prolongation_values[pointer], source[rows[pointer]], value)
+        end
+        @inbounds destination[column] = value + zero(eltype(destination))
+    end
     return destination
 end
 
@@ -48,6 +135,8 @@ mutable struct MultigridLevel{T, P, M, R}
     matrix_transpose::R
     volumes::Vector{T}
     prolongation::P
+    # Row form of `prolongation` for the threaded prolongation.
+    prolongation_rows::TransferRowSchedule{P}
     inverse_diagonal::Vector{T}
     relaxation_weight::T
     solution::Vector{T}
@@ -59,6 +148,8 @@ mutable struct MultigridLevel{T, P, M, R}
     component_indices::Vector{Int}
     component_volumes::Vector{T}
     component_sums::Vector{T}
+    # Per-chunk component sums of the fixed-chunk reduction.
+    component_partials::Vector{T}
 end
 
 function _refresh_multigrid_components!(
@@ -91,44 +182,43 @@ end
 # volume-weighted solution mean and Q' projects an integrated RHS.  Keeping
 # both sides of a coarse correction projected preserves symmetry on the
 # compatible subspace even when coarsening merges or splits components.
-# Component-indexed sums are scatter reductions and must remain serial; after
-# normalization, each cell update owns its output and can run in parallel.
-function _multigrid_remove_component_means!(values, level::MultigridLevel)
-    sums = level.component_sums
-    fill!(sums, zero(eltype(sums)))
-    for cell in eachindex(values)
-        component = @inbounds level.component_indices[cell]
-        iszero(component) && continue
-        @inbounds sums[component] += level.volumes[cell] * values[cell]
-    end
+# Component sums use fixed reduction chunks (thread-count independent); after
+# normalization, each cell update owns its output.
+_multigrid_component_sums!(level::MultigridLevel, values, mode::Val) =
+    _chunked_slot_sums!(
+    level.component_sums, level.component_partials, level.component_indices,
+    values, level.volumes, mode,
+)
+
+# The threaded updates capture the level's arrays, not the level (a struct
+# capture would allocate on every launch).
+function _multigrid_remove_component_means!(cell_values, level::MultigridLevel)
+    sums = _multigrid_component_sums!(level, cell_values, Val(:weighted))
     for component in eachindex(sums)
         @inbounds sums[component] /= level.component_volumes[component]
     end
-    @_parallel for cell in eachindex(values)
-        component = @inbounds level.component_indices[cell]
+    indices = level.component_indices
+    @_parallel for cell in eachindex(cell_values)
+        component = @inbounds indices[cell]
         iszero(component) && continue
-        @inbounds values[cell] -= sums[component]
+        @inbounds cell_values[cell] -= sums[component]
     end
-    return values
+    return cell_values
 end
 
-function _multigrid_project_component_rhs!(values, level::MultigridLevel)
-    sums = level.component_sums
-    fill!(sums, zero(eltype(sums)))
-    for cell in eachindex(values)
-        component = @inbounds level.component_indices[cell]
-        iszero(component) && continue
-        @inbounds sums[component] += values[cell]
-    end
+function _multigrid_project_component_rhs!(cell_values, level::MultigridLevel)
+    sums = _multigrid_component_sums!(level, cell_values, Val(:plain))
     for component in eachindex(sums)
         @inbounds sums[component] /= level.component_volumes[component]
     end
-    @_parallel for cell in eachindex(values)
-        component = @inbounds level.component_indices[cell]
+    indices = level.component_indices
+    volumes = level.volumes
+    @_parallel for cell in eachindex(cell_values)
+        component = @inbounds indices[cell]
         iszero(component) && continue
-        @inbounds values[cell] -= level.volumes[cell] * sums[component]
+        @inbounds cell_values[cell] -= volumes[cell] * sums[component]
     end
-    return values
+    return cell_values
 end
 
 function _multigrid_levels(::Type{T}, matrix_free_fine::Bool) where {T}
@@ -297,10 +387,11 @@ function _factorized_elliptic_level(operator, prolongation, stencil)
     number_of_cells = length(operator.volumes)
     return MultigridLevel(
         action, nothing, operator.volumes, prolongation,
+        TransferRowSchedule(typeof(prolongation)),
         copy(stencil.inverse_diagonal), stencil.relaxation_weight,
         zeros(T, number_of_cells), zeros(T, number_of_cells),
         zeros(T, number_of_cells), zeros(T, number_of_cells),
-        Int[], T[], T[],
+        Int[], T[], T[], T[],
     )
 end
 
@@ -616,9 +707,10 @@ function _multigrid_level(
     number_of_cells = size(matrix, 1)
     return MultigridLevel(
         matrix, matrix_transpose, volumes, prolongation,
+        TransferRowSchedule(typeof(prolongation)),
         inverse_diagonal, relaxation_weight,
         zeros(T, number_of_cells), zeros(T, number_of_cells),
         zeros(T, number_of_cells), zeros(T, number_of_cells),
-        Int[], T[], T[],
+        Int[], T[], T[], T[],
     )
 end

@@ -1,6 +1,7 @@
 using LinearAlgebra: diag
 using SparseArrays: sparse
 using TwoPhaseAMR: @_parallel, _parallel_for, _parallel_block_columns, _PARALLEL_GRAIN
+using SparseArrays: nonzeros, nzrange, rowvals, sprand
 
 # Run `f` with every loop above `grain` work units threaded.
 function with_parallel_grain(f, grain)
@@ -370,4 +371,232 @@ end
         stable_timestep(velocity, workspace; cfl = 0.2), workspace,
     )
     @test integrate(scalar) ≈ initial_mass atol = 64eps()
+end
+
+# The strong residual maximum over unit volumes, with and without partials.
+threaded_maximum(values, partials) =
+    TwoPhaseAMR._strong_residual_maximum(values, ones(length(values)), partials)
+
+# The former serial scatter form of the factorized roundoff floor.
+function scatter_roundoff_floor(action, solution, right_hand_side, volumes)
+    operator = action.operator
+    T = eltype(solution)
+    nx, ny = operator.mesh.block_size
+    square_root = operator.square_root_face_coefficient
+    face_input = similar(action.face_input)
+    for (face_index, face) in pairs(operator.mesh.faces)
+        minus = TwoPhaseAMR._cell_index(face.minus, nx, ny)
+        plus = TwoPhaseAMR._cell_index(face.plus, nx, ny)
+        face_input[face_index] = square_root[face_index] * face.area *
+            (abs(solution[minus]) + abs(solution[plus]))
+    end
+    metric = operator.gradient_operator.inverse_metric
+    face_output = zeros(T, length(face_input))
+    if metric isa TwoPhaseAMR.DiagonalInverseFaceMetric
+        face_output .= abs.(metric.diagonal) .* face_input
+    else
+        rows = TwoPhaseAMR.rowvals(metric.matrix)
+        values = nonzeros(metric.matrix)
+        for column in axes(metric.matrix, 2), pointer in TwoPhaseAMR.nzrange(metric.matrix, column)
+            face_output[rows[pointer]] += abs(values[pointer]) * face_input[column]
+        end
+    end
+    temporary = (
+        abs(operator.reaction) .* volumes .+
+            abs(operator.diffusion) .* operator.boundary_diagonal .+ operator.constraints
+    ) .* abs.(solution)
+    for (face_index, face) in pairs(operator.mesh.faces)
+        bound = abs(operator.diffusion) * face.area *
+            square_root[face_index] * face_output[face_index]
+        temporary[TwoPhaseAMR._cell_index(face.minus, nx, ny)] += bound
+        temporary[TwoPhaseAMR._cell_index(face.plus, nx, ny)] += bound
+    end
+    scale = one(T)
+    for index in eachindex(temporary)
+        volumes[index] > zero(T) || continue
+        scale = max(scale, temporary[index] / volumes[index], abs(right_hand_side[index] / volumes[index]))
+    end
+    return T(128) * eps(T) * scale, temporary
+end
+
+# Grain 1 threads every loop; `typemax(Int)` runs every loop serially.
+const BOTH_PATHS = (1, typemax(Int))
+
+@testset "threaded reductions and transfers are bitwise serial" begin
+    # Fixed-chunk maximum: the serial maximum, and canonical NaN bits
+    # whichever NaN terms occur, with partials (threaded) and without.
+    values = randn(5000)
+    values[1:7:end] .= -0.0
+    withnan = copy(values)
+    withnan[3777] = -NaN
+    withnan[11] = reinterpret(Float64, reinterpret(UInt64, NaN) | 0x01)
+    partials = TwoPhaseAMR._reduction_partials!(Float64[], 5000)
+    @test length(partials) == 5
+    for grain in BOTH_PATHS, scratch in (partials, nothing)
+        @test with_parallel_grain(() -> threaded_maximum(values, scratch), grain) === maximum(abs, values)
+        @test with_parallel_grain(() -> threaded_maximum(withnan, scratch), grain) === NaN
+        @test with_parallel_grain(() -> threaded_maximum(fill(-0.0, 3000), scratch), grain) === 0.0
+    end
+    # Undersized reduction scratch is rejected, not written past its end.
+    failure = thrown_exception(() -> threaded_maximum(values, Float64[]))
+    @test isa(failure, Tuple{ArgumentError, String})
+    @test occursin("reduction scratch has 0 entries", message_of(failure))
+
+    # Fixed-chunk slot sums: one chunk is the index-order sum; more chunks
+    # are summed per chunk and folded in chunk order, at every grain.
+    for items in (1000, 5000)
+        slots = rand(0:3, items)
+        terms, weights = randn(items), rand(items)
+        expected = zeros(3)
+        for chunk in 1:cld(items, 1024)
+            partial = zeros(3)
+            for item in ((chunk - 1) * 1024 + 1):min(items, chunk * 1024)
+                iszero(slots[item]) || (partial[slots[item]] += weights[item] * terms[item])
+            end
+            expected .+= partial
+        end
+        for grain in BOTH_PATHS
+            sums = with_parallel_grain(grain) do
+                TwoPhaseAMR._chunked_slot_sums!(zeros(3), Float64[], slots, terms, weights, Val(:weighted))
+            end
+            @test sums == expected
+        end
+    end
+
+    # Three slots: the padded chunk stride is layout only, so the serial and
+    # threaded sums are bitwise equal, and the scratch holds whole cache
+    # lines per chunk (8 Float64) so that no two chunks share one.
+    slots = rand(0:3, 3000)
+    terms, weights = randn(3000), rand(3000)
+    serial_sums = with_parallel_grain(SERIAL_GRAIN) do
+        TwoPhaseAMR._chunked_slot_sums!(
+            zeros(3), Float64[], slots, terms, weights, Val(:weighted),
+        )
+    end
+    scratch = Float64[]
+    threaded_sums = with_parallel_grain(1) do
+        TwoPhaseAMR._chunked_slot_sums!(zeros(3), scratch, slots, terms, weights, Val(:weighted))
+    end
+    @test isequal(threaded_sums, serial_sums)
+    @test length(scratch) == (cld(3000, 1024) - 1) * 8 + 3
+
+    # Multigrid transfers: row-scheduled prolongation and column-dot
+    # restriction equal their serial references, signed zeros included. The
+    # references repeat the documented arithmetic (`muladd` in stored order,
+    # zero start, and for restriction the added zero that maps -0.0 to 0.0);
+    # they are not SparseArrays' `mul!`, whose fusion depends on the Julia
+    # version and which the kernels therefore never use.
+    prolongation = sprand(3000, 800, 0.004)
+    nonzeros(prolongation)[1:3:end] .*= -1
+    nonzeros(prolongation)[2:7:end] .= -0.0
+    coarse = randn(800)
+    coarse[1:5:end] .= -0.0
+    fine = randn(3000)
+    fine[1:4:end] .= -0.0
+    level = (;
+        prolongation,
+        prolongation_rows = TwoPhaseAMR.TransferRowSchedule(typeof(prolongation)),
+    )
+    # Serial reference of the prolongation: the documented row schedule
+    # (entries of each row in increasing column order, values read fresh from
+    # the matrix), gathered row by row with `muladd` from a zero start.
+    function scheduled_prolongation(matrix, source)
+        schedule = TwoPhaseAMR.TransferRowSchedule(typeof(matrix))
+        TwoPhaseAMR._transfer_row_schedule!(schedule, matrix)
+        offsets = schedule.offsets
+        columns = schedule.columns
+        entries = schedule.entries
+        values = nonzeros(matrix)
+        reference = zeros(size(matrix, 1))
+        for row in 1:size(matrix, 1)
+            value = 0.0
+            for slot in offsets[row]:(offsets[row + 1] - 1)
+                value = muladd(values[entries[slot]], source[columns[slot]], value)
+            end
+            reference[row] = value
+        end
+        return reference
+    end
+    function column_order_restriction(matrix, source)
+        reference = zeros(size(matrix, 2))
+        for column in 1:size(matrix, 2)
+            value = 0.0
+            for pointer in nzrange(matrix, column)
+                value = muladd(
+                    nonzeros(matrix)[pointer], source[rowvals(matrix)[pointer]], value,
+                )
+            end
+            reference[column] = value + 0.0
+        end
+        return reference
+    end
+    for grain in BOTH_PATHS
+        prolongated = with_parallel_grain(() -> TwoPhaseAMR._prolongate!(zeros(3000), level, coarse), grain)
+        @test isequal(prolongated, scheduled_prolongation(prolongation, coarse))
+        restricted = with_parallel_grain(() -> TwoPhaseAMR._restrict!(zeros(800), prolongation, fine), grain)
+        @test isequal(restricted, column_order_restriction(prolongation, fine))
+    end
+    # One thread and the threaded path agree bitwise (the kernels have a
+    # single arithmetic, so no `mul!` fast path can differ by version).
+    serial_prolongated = with_parallel_grain(
+        () -> TwoPhaseAMR._prolongate!(zeros(3000), level, coarse), SERIAL_GRAIN,
+    )
+    serial_restricted = with_parallel_grain(
+        () -> TwoPhaseAMR._restrict!(zeros(800), prolongation, fine), SERIAL_GRAIN,
+    )
+    @test isequal(
+        with_parallel_grain(() -> TwoPhaseAMR._prolongate!(zeros(3000), level, coarse), 1),
+        serial_prolongated,
+    )
+    @test isequal(
+        with_parallel_grain(() -> TwoPhaseAMR._restrict!(zeros(800), prolongation, fine), 1),
+        serial_restricted,
+    )
+    # The schedule reads refreshed values from the matrix it was built for.
+    nonzeros(prolongation) .*= 3
+    @test isequal(
+        TwoPhaseAMR._prolongate!(zeros(3000), level, coarse),
+        scheduled_prolongation(prolongation, coarse),
+    )
+
+    # The gathered factorized roundoff floor equals the former face scatter,
+    # with the diagonal (uniform) and the sparse (two-level) Riesz map.
+    for mesh in (
+            BlockTreeMesh(base_mesh = (32, 32), block_size = (8, 8), periodic = (false, false)),
+            BlockTreeMesh(
+                block_size = (8, 8), max_level = 2, periodic = (false, false),
+                refine = (key, origin, extent) -> key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
+            ),
+        )
+        volumes = TwoPhaseAMR._cell_volumes(mesh, Float64)
+        operator = EllipticOperator(
+            mesh; face_coefficient = 0.5 .+ rand(length(mesh.faces)), reaction = 0.75,
+            active_cells = trues(ncells(mesh)), volumes,
+        )
+        action = TwoPhaseAMR.FactorizedEllipticOperator(operator)
+        solution, rhs = randn(ncells(mesh)), randn(ncells(mesh))
+        solution[1:9:end] .= -0.0
+        floor, temporary = scatter_roundoff_floor(action, solution, rhs, operator.volumes)
+        for grain in BOTH_PATHS
+            gathered = zeros(ncells(mesh))
+            @test with_parallel_grain(grain) do
+                TwoPhaseAMR._roundoff_residual_floor!(
+                    action, solution, rhs, operator.volumes, gathered,
+                    TwoPhaseAMR._reduction_partials!(Float64[], ncells(mesh)),
+                )
+            end === floor
+            @test isequal(gathered, temporary)
+            @test TwoPhaseAMR._roundoff_residual_floor!(
+                action, solution, rhs, operator.volumes, zeros(ncells(mesh)),
+            ) === floor
+        end
+        # Undersized reduction scratch is rejected, not written past its end.
+        failure = thrown_exception() do
+            TwoPhaseAMR._roundoff_residual_floor!(
+                action, solution, rhs, operator.volumes, zeros(ncells(mesh)), Float64[],
+            )
+        end
+        @test isa(failure, Tuple{ArgumentError, String})
+        @test occursin("reduction scratch has 0 entries", message_of(failure))
+    end
 end

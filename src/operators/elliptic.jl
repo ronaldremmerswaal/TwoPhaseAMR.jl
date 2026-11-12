@@ -322,9 +322,14 @@ mutable struct EllipticComponentWorkspace{T}
     anchors::Vector{Int}
     volumes::Vector{T}
     sums::Vector{T}
-    scales::Vector{T}
     ungauged::BitVector
     count::Int
+    # Per cell: index of its ungauged component in `anchors`, or zero. The
+    # mean removal sums per slot in fixed reduction chunks (`partials`).
+    slots::Vector{Int}
+    slot_sums::Vector{T}
+    slot_scales::Vector{T}
+    partials::Vector{T}
 end
 
 """

@@ -66,7 +66,7 @@ function _vcycle!(solver::AbstractGeometricMultigridPreconditioner, level_index:
     _restrict!(coarse.right_hand_side, level.prolongation, level.residual)
     fill!(coarse.solution, zero(eltype(coarse.solution)))
     _vcycle!(solver, level_index + 1)
-    _prolongate!(level.temporary, level.prolongation, coarse.solution)
+    _prolongate!(level.temporary, level, coarse.solution)
     solution = level.solution
     @_parallel for index in 1:length(solution)
         @inbounds solution[index] += temporary[index]
@@ -80,7 +80,7 @@ end
 function _roundoff_residual_floor!(
         matrix::SparseMatrixCSC{T}, solution,
         right_hand_side, volumes,
-        temporary
+        temporary, partials = nothing,
     ) where {T}
     fill!(temporary, zero(T))
     rows = rowvals(matrix)
@@ -102,16 +102,21 @@ function _roundoff_residual_floor!(
     return T(128) * eps(T) * scale
 end
 
+# Each cell gathers its face bounds in increasing face order (the order of the
+# cell-face incidence), which is the order in which a face loop scatters them:
+# the threaded floor is bitwise the serial one.
 function _roundoff_residual_floor!(
         action::FactorizedEllipticOperator{T}, solution,
-        right_hand_side, volumes, temporary,
+        right_hand_side, volumes, temporary, partials = nothing,
     ) where {T}
     operator = action.operator
     face_input = action.face_input
     face_output = action.face_output
     square_root = operator.square_root_face_coefficient
+    faces = operator.mesh.faces
     nx, ny = operator.mesh.block_size
-    for (face_index, face) in pairs(operator.mesh.faces)
+    @_parallel for face_index in 1:length(faces)
+        face = @inbounds faces[face_index]
         minus = _cell_index(face.minus, nx, ny)
         plus = _cell_index(face.plus, nx, ny)
         @inbounds face_input[face_index] = square_root[face_index] * face.area *
@@ -119,59 +124,139 @@ function _roundoff_residual_floor!(
     end
     metric = operator.gradient_operator.inverse_metric
     if metric isa DiagonalInverseFaceMetric
-        for index in eachindex(face_output)
-            @inbounds face_output[index] =
-                abs(metric.diagonal[index]) * face_input[index]
+        diagonal = metric.diagonal
+        @_parallel for index in 1:length(face_output)
+            @inbounds face_output[index] = abs(diagonal[index]) * face_input[index]
         end
     else
-        fill!(face_output, zero(T))
-        rows = rowvals(metric.matrix)
-        values = nonzeros(metric.matrix)
-        for column in axes(metric.matrix, 2), pointer in nzrange(metric.matrix, column)
-            @inbounds face_output[rows[pointer]] +=
-                abs(values[pointer]) * face_input[column]
+        # The Riesz map is symmetric: row `r` of |M| is its column `r`, read in
+        # increasing row order as the serial column scatter adds it.
+        matrix = metric.matrix
+        column_pointers = matrix.colptr
+        rows = rowvals(matrix)
+        metric_values = nonzeros(matrix)
+        @_parallel for row in 1:length(face_output)
+            bound = zero(T)
+            for pointer in column_pointers[row]:(column_pointers[row + 1] - 1)
+                @inbounds bound += abs(metric_values[pointer]) * face_input[rows[pointer]]
+            end
+            @inbounds face_output[row] = bound
         end
     end
-    for index in eachindex(temporary)
-        @inbounds temporary[index] =
-            (
-            abs(operator.reaction) * volumes[index] +
-                abs(operator.diffusion) * operator.boundary_diagonal[index] +
-                operator.constraints[index]
-        ) * abs(solution[index])
-    end
-    for (face_index, face) in pairs(operator.mesh.faces)
-        bound = abs(operator.diffusion) * face.area *
+    # The face inputs are consumed; reuse them for the face bounds.
+    diffusion = abs(operator.diffusion)
+    @_parallel for face_index in 1:length(faces)
+        @inbounds face_input[face_index] = diffusion * faces[face_index].area *
             square_root[face_index] * face_output[face_index]
-        minus = _cell_index(face.minus, nx, ny)
-        plus = _cell_index(face.plus, nx, ny)
-        @inbounds temporary[minus] += bound
-        @inbounds temporary[plus] += bound
     end
-    scale = one(T)
-    for index in eachindex(temporary)
-        @inbounds volumes[index] > zero(T) || continue
-        @inbounds scale = max(
-            scale, temporary[index] / volumes[index],
-            abs(right_hand_side[index] / volumes[index]),
+    reaction = abs(operator.reaction)
+    boundary_diagonal = operator.boundary_diagonal
+    constraints = operator.constraints
+    offsets = action.cell_face_offsets
+    cell_faces = action.cell_faces
+    number_of_cells = length(temporary)
+    isnothing(partials) && return T(128) * eps(T) * max(
+        one(T), _floor_cell_bounds!(
+            temporary, 1:number_of_cells, solution, right_hand_side, volumes, reaction,
+            diffusion, boundary_diagonal, constraints, offsets, cell_faces, face_input,
+        ),
+    )
+    chunks = _reduction_chunks(number_of_cells)
+    length(partials) >= chunks || throw(
+        ArgumentError(
+            "reduction scratch has $(length(partials)) entries, " *
+                "but the roundoff floor needs $chunks",
+        ),
+    )
+    @_parallel work = _REDUCTION_CHUNK for chunk in 1:chunks
+        @inbounds partials[chunk] = _floor_cell_bounds!(
+            temporary, _reduction_range(chunk, number_of_cells), solution,
+            right_hand_side, volumes, reaction, diffusion, boundary_diagonal,
+            constraints, offsets, cell_faces, face_input,
         )
     end
-    return T(128) * eps(T) * scale
+    return T(128) * eps(T) * _fold_chunk_maxima(one(T), partials, chunks)
 end
 
-function _integrated_residual_norms(residual, volumes)
+# Cell bounds of `cells` (diagonal term plus the face bounds in incidence
+# order) into `temporary`; returns their largest strong scale (zero if none).
+@inline function _floor_cell_bounds!(
+        temporary, cells, solution, right_hand_side, volumes, reaction, diffusion,
+        boundary_diagonal, constraints, offsets, cell_faces, face_bounds,
+    )
+    T = eltype(temporary)
+    scale = zero(T)
+    for index in cells
+        bound = @inbounds (
+            reaction * volumes[index] + diffusion * boundary_diagonal[index] +
+                constraints[index]
+        ) * abs(solution[index])
+        for slot in @inbounds(offsets[index]):(@inbounds(offsets[index + 1]) - 1)
+            @inbounds bound += face_bounds[cell_faces[slot]]
+        end
+        @inbounds temporary[index] = bound
+        volume = @inbounds volumes[index]
+        volume > zero(T) || continue
+        scale = max(
+            scale, _canonical_nan(bound / volume),
+            _canonical_nan(abs(@inbounds(right_hand_side[index])) / volume),
+        )
+    end
+    return scale
+end
+
+"""Integrated L2 norm and strong maximum of a residual (`partials`: the
+solver's reduction scratch, see `_strong_residual_maximum`)."""
+function _integrated_residual_norms(residual, volumes, partials = nothing)
     T = eltype(residual)
     squared = zero(T)
-    maximum_norm = zero(T)
     total_volume = zero(T)
     for index in eachindex(residual)
         @inbounds volumes[index] > zero(T) || continue
         @inbounds strong = residual[index] / volumes[index]
         @inbounds squared += volumes[index] * strong^2
-        maximum_norm = max(maximum_norm, abs(strong))
         @inbounds total_volume += volumes[index]
     end
-    return sqrt(squared / total_volume), maximum_norm
+    return sqrt(squared / total_volume), _strong_residual_maximum(residual, volumes, partials)
+end
+
+"""Largest `abs(residual[i] / volumes[i])` over the cells of positive volume
+(zero if there are none). With `partials` (at least
+`_reduction_chunks(length(residual))` entries, `_reduction_partials!`) it is a
+threaded fixed-chunk maximum, allocation-free and equal to the old serial
+maximum up to the `NaN` payload (`NaN` terms are canonicalised, so the bits of
+the returned `NaN` do not depend on which term came first or on the thread
+count); without, it runs serially."""
+function _strong_residual_maximum(residual, volumes, partials = nothing)
+    T = eltype(residual)
+    number_of_cells = length(residual)
+    isnothing(partials) && return _strong_cells_maximum(residual, volumes, 1:number_of_cells)
+    chunks = _reduction_chunks(number_of_cells)
+    length(partials) >= chunks || throw(
+        ArgumentError(
+            "reduction scratch has $(length(partials)) entries, " *
+                "but the residual maximum needs $chunks",
+        ),
+    )
+    @_parallel work = _REDUCTION_CHUNK for chunk in 1:chunks
+        @inbounds partials[chunk] = _strong_cells_maximum(
+            residual, volumes, _reduction_range(chunk, number_of_cells),
+        )
+    end
+    return _fold_chunk_maxima(zero(T), partials, chunks)
+end
+
+@inline function _strong_cells_maximum(residual, volumes, cells)
+    T = eltype(residual)
+    maximum_norm = zero(T)
+    for index in cells
+        volume = @inbounds volumes[index]
+        volume > zero(T) || continue
+        maximum_norm = max(
+            maximum_norm, _canonical_nan(abs(@inbounds(residual[index])) / volume),
+        )
+    end
+    return maximum_norm
 end
 
 function _apply_vcycle_preconditioner!(

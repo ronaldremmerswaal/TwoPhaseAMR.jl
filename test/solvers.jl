@@ -1135,6 +1135,7 @@ end
             action = matrix, krylov = workspace, preconditioner = nothing,
             krylov_options = (;), solution = zeros(2),
             right_hand_side = [1.0, -1.0], residual = zeros(2), product = zeros(2),
+            reduction_partials = Float64[],
             stats = TwoPhaseAMR.LinearSolverStats(Float64),
         )
         initial_floor = TwoPhaseAMR._roundoff_residual_floor!(
@@ -1166,6 +1167,7 @@ end
             action = matrix, krylov = workspace, preconditioner = nothing,
             krylov_options = (;), solution = zeros(2),
             right_hand_side = [1.0, -1.0], residual = zeros(2), product = zeros(2),
+            reduction_partials = Float64[],
             stats = TwoPhaseAMR.LinearSolverStats(Float64),
         )
         stats = TwoPhaseAMR._solve_krylov_with_stats!(
@@ -1188,6 +1190,7 @@ end
             action = matrix, krylov = workspace, preconditioner = nothing,
             krylov_options = (;), solution = copy(initial),
             right_hand_side = T[1, -1], residual = zeros(T, 2), product = zeros(T, 2),
+            reduction_partials = T[],
             stats = TwoPhaseAMR.LinearSolverStats(T),
         )
         stats = TwoPhaseAMR._solve_krylov_with_stats!(

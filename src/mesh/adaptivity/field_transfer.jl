@@ -503,6 +503,13 @@ function _throw_unlocated_face!(unlocated, faces)
     )
 end
 
+function _unlocated_face_flags!(workspace::AMRWorkspace, number_of_faces)
+    flags = workspace.unlocated_faces
+    resize!(flags, number_of_faces)
+    fill!(flags, false)
+    return flags
+end
+
 function _transfer_face_field!(
         buffer::FaceAMRFieldBuffer,
         workspace::AMRWorkspace
@@ -525,13 +532,13 @@ function _transfer_face_field!(
         workspace.interior_face_local_indices[global_index] =
             local_indices[axis]
     end
-    unlocated = zeros(Bool, length(mesh.faces))
+    unlocated_interior = _unlocated_face_flags!(workspace, length(mesh.faces))
     _parallel_for(length(mesh.faces); work = 2) do global_index
         face = mesh.faces[global_index]
         face.axis in _field_axes(field) || return nothing
         value = _face_transfer_value(workspace, buffer, face)
         if isnothing(value)
-            unlocated[global_index] = true
+            unlocated_interior[global_index] = true
             return nothing
         end
         _set_transferred_interior!(
@@ -540,7 +547,7 @@ function _transfer_face_field!(
         )
         return nothing
     end
-    _throw_unlocated_face!(unlocated, mesh.faces)
+    _throw_unlocated_face!(unlocated_interior, mesh.faces)
     resize!(workspace.boundary_face_local_indices, length(mesh.boundary_faces))
     local_indices = (0, 0)
     for (global_index, face) in pairs(mesh.boundary_faces)
@@ -551,13 +558,13 @@ function _transfer_face_field!(
         workspace.boundary_face_local_indices[global_index] =
             local_indices[axis]
     end
-    unlocated = zeros(Bool, length(mesh.boundary_faces))
+    unlocated_boundary = _unlocated_face_flags!(workspace, length(mesh.boundary_faces))
     _parallel_for(length(mesh.boundary_faces); work = 2) do global_index
         face = mesh.boundary_faces[global_index]
         face.axis in _field_axes(field) || return nothing
         value = _face_transfer_value(workspace, buffer, face)
         if isnothing(value)
-            unlocated[global_index] = true
+            unlocated_boundary[global_index] = true
             return nothing
         end
         _set_transferred_boundary!(
@@ -566,7 +573,7 @@ function _transfer_face_field!(
         )
         return nothing
     end
-    _throw_unlocated_face!(unlocated, mesh.boundary_faces)
+    _throw_unlocated_face!(unlocated_boundary, mesh.boundary_faces)
     field isa FaceVelocity &&
         _preserve_refined_divergence!(field, buffer, workspace)
     for (index, axis) in pairs(_field_axes(field))

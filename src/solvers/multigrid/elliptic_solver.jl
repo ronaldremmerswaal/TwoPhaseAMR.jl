@@ -2,8 +2,8 @@ function EllipticComponentWorkspace(operator::EllipticOperator{T}) where {T}
     mesh = operator.mesh
     components = EllipticComponentWorkspace(
         spzeros(T, length(mesh.faces), ncells(mesh)), Int[], Int[], Int[],
-        falses(0), falses(0), nothing, zero(UInt), Int[], T[], T[], T[],
-        falses(0), 0,
+        falses(0), falses(0), nothing, zero(UInt), Int[], T[], T[],
+        falses(0), 0, Int[], T[], T[], T[],
     )
     _rebuild_elliptic_components!(components, operator)
     return _refresh_elliptic_components!(components, operator)
@@ -27,7 +27,7 @@ function _rebuild_elliptic_components!(components, operator)
         components.labels, components.stack, components.incidence, mesh,
         components.active, components.open_faces,
     )
-    for values in (components.volumes, components.sums, components.scales)
+    for values in (components.volumes, components.sums)
         resize!(values, length(operator.volumes))
     end
     resize!(components.ungauged, length(operator.volumes))
@@ -102,31 +102,52 @@ function _refresh_elliptic_components!(components, operator)
             push!(components.anchors, index)
         end
     end
+    _refresh_component_slots!(components)
     components === operator.components &&
         (operator.singular = !isempty(components.anchors))
     return components
 end
 
+# `slots[cell]` is the position in `anchors` of the cell's ungauged component
+# (zero otherwise), so component sums use compact fixed-chunk reductions.
+function _refresh_component_slots!(components)
+    labels = components.labels
+    slots = resize!(components.slots, length(labels))
+    fill!(slots, 0)
+    for (slot, root) in pairs(components.anchors)
+        @inbounds slots[root] = slot
+    end
+    # Roots already hold their slot; every other cell reads its root's.
+    @_parallel for cell in eachindex(slots)
+        root = @inbounds labels[cell]
+        (iszero(root) || root == cell) && continue
+        @inbounds slots[cell] = slots[root]
+    end
+    resize!(components.slot_sums, length(components.anchors))
+    resize!(components.slot_scales, length(components.anchors))
+    return components
+end
+
 """Remove an independent volume-weighted constant from each active component."""
-function _remove_component_volume_means!(values, volumes, components)
-    fill!(components.sums, zero(eltype(components.sums)))
-    for index in eachindex(values)
-        root = @inbounds components.labels[index]
-        (iszero(root) || !(@inbounds components.ungauged[root])) && continue
-        @inbounds components.sums[root] += volumes[index] * values[index]
+function _remove_component_volume_means!(cell_values, volumes, components)
+    slots = components.slots
+    sums = _chunked_slot_sums!(
+        components.slot_sums, components.partials, slots, cell_values, volumes,
+        Val(:weighted),
+    )
+    for (slot, root) in pairs(components.anchors)
+        @inbounds sums[slot] /= components.volumes[root]
     end
-    for root in components.anchors
-        @inbounds components.sums[root] /= components.volumes[root]
-    end
-    for index in eachindex(values)
-        root = @inbounds components.labels[index]
-        if iszero(root)
-            @inbounds values[index] = zero(eltype(values))
-        elseif @inbounds components.ungauged[root]
-            @inbounds values[index] -= components.sums[root]
+    labels = components.labels
+    @_parallel for index in eachindex(cell_values)
+        if iszero(@inbounds labels[index])
+            @inbounds cell_values[index] = zero(eltype(cell_values))
+        else
+            slot = @inbounds slots[index]
+            iszero(slot) || (@inbounds cell_values[index] -= sums[slot])
         end
     end
-    return values
+    return cell_values
 end
 
 function _project_component_rhs!(solver, compatibility)
@@ -134,20 +155,19 @@ function _project_component_rhs!(solver, compatibility)
     volumes = solver.operator.volumes
     rhs = solver.right_hand_side
     T = eltype(rhs)
-    fill!(components.sums, zero(T))
-    fill!(components.scales, zero(T))
-    for index in eachindex(rhs)
-        root = @inbounds components.labels[index]
-        (iszero(root) || !(@inbounds components.ungauged[root])) && continue
-        value = @inbounds rhs[index]
-        @inbounds components.sums[root] += value
-        @inbounds components.scales[root] += abs(value)
-    end
+    slots = components.slots
+    sums = _chunked_slot_sums!(
+        components.slot_sums, components.partials, slots, rhs, nothing, Val(:plain),
+    )
+    scales = _chunked_slot_sums!(
+        components.slot_scales, components.partials, slots, rhs, nothing,
+        Val(:absolute),
+    )
     total_sum = zero(T)
     total_volume = zero(T)
-    for root in components.anchors
-        sum_value = @inbounds components.sums[root]
-        tolerance = T(256) * eps(T) * max(one(T), @inbounds(components.scales[root]))
+    for (slot, root) in pairs(components.anchors)
+        sum_value = @inbounds sums[slot]
+        tolerance = T(256) * eps(T) * max(one(T), @inbounds(scales[slot]))
         compatibility === :error && abs(sum_value) > tolerance && throw(
             ArgumentError("Poisson right-hand side has nonzero volume mean on component rooted at cell $root"),
         )
@@ -157,14 +177,14 @@ function _project_component_rhs!(solver, compatibility)
     stats = solver.stats
     copyto!(resize!(stats.removed_rhs_component_anchors, length(components.anchors)), components.anchors)
     resize!(stats.removed_rhs_component_means, length(components.anchors))
-    for (component, root) in pairs(components.anchors)
-        @inbounds components.sums[root] /= components.volumes[root]
-        @inbounds stats.removed_rhs_component_means[component] = components.sums[root]
+    for (slot, root) in pairs(components.anchors)
+        @inbounds sums[slot] /= components.volumes[root]
+        @inbounds stats.removed_rhs_component_means[slot] = sums[slot]
     end
-    for index in eachindex(rhs)
-        root = @inbounds components.labels[index]
-        (iszero(root) || !(@inbounds components.ungauged[root])) && continue
-        @inbounds rhs[index] -= components.sums[root] * volumes[index]
+    @_parallel for index in eachindex(rhs)
+        slot = @inbounds slots[index]
+        iszero(slot) && continue
+        @inbounds rhs[index] -= sums[slot] * volumes[index]
     end
     return iszero(total_volume) ? zero(T) : total_sum / total_volume
 end
@@ -198,6 +218,8 @@ mutable struct EllipticSolver{T, O, A, K, P, Q}
     right_hand_side::Vector{T}
     residual::Vector{T}
     product::Vector{T}
+    # Chunk maxima of the threaded residual norms (`_reduction_partials!`).
+    reduction_partials::Vector{T}
     components::Union{Nothing, EllipticComponentWorkspace{T}}
     stats::LinearSolverStats{T}
 end
@@ -220,7 +242,7 @@ function EllipticSolver(
         operator, FactorizedEllipticOperator(operator),
         krylov, preconditioner, krylov_options,
         zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
-        zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
+        zeros(T, number_of_unknowns), zeros(T, number_of_unknowns), T[],
         isnothing(operator.components) ? nothing : EllipticComponentWorkspace(operator),
         LinearSolverStats(
             T; method,
@@ -247,7 +269,7 @@ function EllipticSolver(
         operator, operator.matrix,
         krylov, preconditioner, krylov_options,
         zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
-        zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
+        zeros(T, number_of_unknowns), zeros(T, number_of_unknowns), T[],
         nothing,
         LinearSolverStats(
             T; method,
@@ -343,17 +365,17 @@ function _krylov_method(workspace)
     return isnothing(traits) ? Symbol(nameof(typeof(workspace))) : traits.method
 end
 
-struct StrongResidualCallback{T, V}
+# `partials` is the solver's reduction scratch (or `nothing`: serial).
+struct StrongResidualCallback{T, V, P}
     target::T
     volumes::V
+    partials::P
 end
 
-function (callback::StrongResidualCallback)(workspace)
-    _, maximum_norm = _integrated_residual_norms(
-        workspace.r, callback.volumes
-    )
-    return maximum_norm <= callback.target
-end
+StrongResidualCallback(target, volumes) = StrongResidualCallback(target, volumes, nothing)
+
+(callback::StrongResidualCallback)(workspace) =
+    _strong_residual_maximum(workspace.r, callback.volumes, callback.partials) <= callback.target
 
 # GMRES does not expose the current true residual to callbacks until the end
 # of an Arnoldi pass. Since the Krylov residual is the integrated residual for
@@ -368,20 +390,36 @@ function _gmres_absolute_tolerance(target, volumes)
     return target * minimum_positive
 end
 
+_run_krylov!(
+    workspace, matrix, right_hand_side, initial_solution,
+    preconditioner, target, volumes, max_iterations, options,
+) = _run_krylov!(
+    workspace, matrix, right_hand_side, initial_solution,
+    preconditioner, target, volumes, max_iterations, options, nothing,
+)
+
+# The solvers call this form with their reduction scratch. An external
+# workspace extends the form without `partials`, which it then receives.
 function _run_krylov!(
         workspace, matrix, right_hand_side, initial_solution,
-        preconditioner, target, volumes, max_iterations, options
+        preconditioner, target, volumes, max_iterations, options, partials,
     )
     traits = _krylov_traits(workspace)
-    isnothing(traits) && throw(
-        ArgumentError(
-            "unsupported Krylov workspace $(typeof(workspace)); extend " *
-                "TwoPhaseAMR._run_krylov! for this external solver"
+    if isnothing(traits)
+        isnothing(partials) && throw(
+            ArgumentError(
+                "unsupported Krylov workspace $(typeof(workspace)); extend " *
+                    "TwoPhaseAMR._run_krylov! for this external solver"
+            )
         )
-    )
+        return _run_krylov!(
+            workspace, matrix, right_hand_side, initial_solution,
+            preconditioner, target, volumes, max_iterations, options,
+        )
+    end
     _validate_krylov_preconditioner(workspace, preconditioner, options)
     settings = if traits.callback
-        callback = StrongResidualCallback(target, volumes)
+        callback = StrongResidualCallback(target, volumes, partials)
         merge(
             options, (;
                 atol = zero(target), rtol = zero(target),
@@ -428,7 +466,7 @@ end
 """Accept an iterate-dependent roundoff floor only after meaningful progress."""
 function _guarded_roundoff_target!(
         matrix, solution, right_hand_side, volumes, temporary,
-        target, initial_linf, current_linf,
+        target, initial_linf, current_linf, partials = nothing,
     )
     if !(
             isfinite(initial_linf) && isfinite(current_linf) &&
@@ -437,7 +475,7 @@ function _guarded_roundoff_target!(
         return target
     end
     floor = _roundoff_residual_floor!(
-        matrix, solution, right_hand_side, volumes, temporary,
+        matrix, solution, right_hand_side, volumes, temporary, partials,
     )
     # A huge nullspace iterate can make |A||x| arbitrarily large even while
     # the residual decreases slightly. A floor must itself be small relative
@@ -449,7 +487,7 @@ end
 function _run_krylov_reliably!(
         workspace, matrix, right_hand_side, solution, preconditioner,
         target, initial_linf, volumes, max_iterations, options, residual, product,
-        components,
+        components, partials = nothing,
     )
     total_iterations = 0
     final_linf = oftype(target, Inf)
@@ -457,7 +495,7 @@ function _run_krylov_reliably!(
         _run_krylov!(
             workspace, matrix, right_hand_side, solution,
             preconditioner, target, volumes,
-            max_iterations - total_iterations, options,
+            max_iterations - total_iterations, options, partials,
         )
         iterations = Krylov.iteration_count(workspace)
         total_iterations += iterations
@@ -472,14 +510,14 @@ function _run_krylov_reliably!(
         # tolerance. Restarting from the current iterate replaces the
         # recurrence residual by b-A*x without changing the discretization.
         mul!(product, matrix, solution)
-        for index in eachindex(residual)
+        @_parallel for index in eachindex(residual)
             @inbounds residual[index] =
                 right_hand_side[index] - product[index]
         end
-        _, final_linf = _integrated_residual_norms(residual, volumes)
+        final_linf = _strong_residual_maximum(residual, volumes, partials)
         effective_target = _guarded_roundoff_target!(
             matrix, solution, right_hand_side, volumes, product,
-            target, initial_linf, final_linf,
+            target, initial_linf, final_linf, partials,
         )
         final_linf <= effective_target && break
         (!isfinite(final_linf) || iszero(iterations)) && break
@@ -492,7 +530,7 @@ function _true_residual!(solver)
         solver.action.operator = solver.operator
     end
     mul!(solver.product, solver.action, solver.solution)
-    for index in eachindex(solver.residual)
+    @_parallel for index in eachindex(solver.residual)
         @inbounds solver.residual[index] =
             solver.right_hand_side[index] - solver.product[index]
     end
@@ -520,11 +558,12 @@ function _solve_krylov_with_stats!(
     T = eltype(solver.solution)
     removed_mean = prepare!()
     _true_residual!(solver)
+    partials = _reduction_partials!(solver.reduction_partials, length(solver.residual))
     initial_l2, initial_linf =
-        _integrated_residual_norms(solver.residual, volumes)
+        _integrated_residual_norms(solver.residual, volumes, partials)
     roundoff_floor = _roundoff_residual_floor!(
         matrix, solver.solution, solver.right_hand_side,
-        volumes, solver.product,
+        volumes, solver.product, partials,
     )
     if relative_to_rhs
         residual_scale = _strong_maximum(solver.right_hand_side, volumes)
@@ -541,17 +580,17 @@ function _solve_krylov_with_stats!(
             solver.krylov, matrix,
             solver.right_hand_side, solver.solution, solver.preconditioner,
             target, initial_linf, volumes, max_cycles, solver.krylov_options,
-            solver.residual, solver.product, components,
+            solver.residual, solver.product, components, partials,
         )
     end
     isnothing(components) ||
         _remove_component_volume_means!(solver.solution, volumes, components)
     _true_residual!(solver)
     final_l2, final_linf =
-        _integrated_residual_norms(solver.residual, volumes)
+        _integrated_residual_norms(solver.residual, volumes, partials)
     target = _guarded_roundoff_target!(
         matrix, solver.solution, solver.right_hand_side, volumes, solver.product,
-        target, initial_linf, final_linf,
+        target, initial_linf, final_linf, partials,
     )
     copy_solution!(solver.solution)
 

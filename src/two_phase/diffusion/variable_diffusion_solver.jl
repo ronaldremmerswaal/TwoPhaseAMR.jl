@@ -15,6 +15,8 @@ mutable struct VariableStaggeredDiffusionSolver{
     right_hand_side::Vector{T}
     residual::Vector{T}
     product::Vector{T}
+    # Chunk maxima of the threaded residual norms (`_reduction_partials!`).
+    reduction_partials::Vector{T}
     stats::LinearSolverStats{T}
 end
 
@@ -146,7 +148,7 @@ function VariableStaggeredDiffusionSolver(
         preconditioner_options, multigrid, matrix, action, krylov_workspace,
         built_preconditioner, inertia, zeros(T, length(inertia)),
         right_hand_side, zeros(T, length(inertia)),
-        zeros(T, length(inertia)),
+        zeros(T, length(inertia)), T[],
         LinearSolverStats(
             T; method = _krylov_method(krylov_workspace),
             preconditioner = _preconditioner_name(built_preconditioner)

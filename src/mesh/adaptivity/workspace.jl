@@ -84,6 +84,9 @@ mutable struct AMRWorkspace{T, M <: BlockTreeMesh{T}, N}
     new_cell_flux::Vector{T}
     interior_face_local_indices::Vector{Int}
     boundary_face_local_indices::Vector{Int}
+    # Per-face "no old data found" flags of a threaded face transfer; a
+    # Vector{Bool} (not a BitVector) so that each face owns its entry.
+    unlocated_faces::Vector{Bool}
     refined_parents::Set{BlockKey}
     # Registrations can contain independently typed phase fields; preserve
     # that heterogeneity while bounding the registry to mesh-field triples.
@@ -109,7 +112,7 @@ function AMRWorkspace(mesh::M, fields...) where {T, M <: BlockTreeMesh{T}}
             Vector{FaceTransferSegment}[],
             Vector{FaceTransferSegment}[],
         ),
-        (Int[], Int[]), Dict{NTuple{4, Int}, Int}(), T[], T[], Int[], Int[],
+        (Int[], Int[]), Dict{NTuple{4, Int}, Int}(), T[], T[], Int[], Int[], Bool[],
         Set{BlockKey}(), Tuple{FaceVelocity, FaceVelocity, AbstractMeshField}[],
         PhaseTransferScratch(T), VorticityWorkspace(T)
     )

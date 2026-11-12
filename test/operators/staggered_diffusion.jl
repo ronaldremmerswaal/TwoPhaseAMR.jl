@@ -1384,7 +1384,7 @@ end
         coarse = collect(range(-0.2, 0.7; length = size(transfer, 2)))
         prolonged = similar(fine)
         restricted = similar(coarse)
-        TwoPhaseAMR._prolongate!(prolonged, transfer, coarse)
+        TwoPhaseAMR._prolongate!(prolonged, first(levels), coarse)
         TwoPhaseAMR._restrict!(restricted, transfer, fine)
         @test dot(fine, prolonged) ≈ dot(restricted, coarse)
     end

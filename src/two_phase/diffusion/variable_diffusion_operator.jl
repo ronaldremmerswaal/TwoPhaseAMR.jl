@@ -449,7 +449,7 @@ end
 
 function _roundoff_residual_floor!(
         action::FactorizedVariableDiffusionOperator{T}, solution,
-        right_hand_side, volumes, temporary,
+        right_hand_side, volumes, temporary, partials = nothing,
     ) where {T}
     operator = action.operator
     strain = operator.strain
