@@ -871,6 +871,45 @@ end
     @test refreshed_statistics.cycles <= 2maximum(control_cycles)
 end
 
+@testset "Geometry revision tracks the solid's PLIC planes" begin
+    mesh = BlockTreeMesh(
+        block_size = (4, 4), max_level = 1, periodic = (false, false),
+    )
+    geometry_version(geometry) = TwoPhaseAMR._interface_geometry_revision(geometry)
+    geometry = GeometryField(mesh, (x, y) -> hypot(x, y) - 0.4)
+    revision = geometry_version(geometry)
+    refresh_geometry!(geometry)
+    @test geometry_version(geometry) != revision
+    # Re-initializing the solid changes the stored planes without refreshing
+    # the open metrics. Every cache that reads those planes keys on the
+    # combined revision, so it must change with them.
+    revision = geometry_version(geometry)
+    initialize!(geometry.solid, (1.0, 0.0), 0.1)
+    @test geometry_version(geometry) != revision
+    # A forced reconstruction also bumps it, even when the planes are equal.
+    revision = geometry_version(geometry)
+    reconstruct!(geometry.solid; force = true)
+    @test geometry_version(geometry) != revision
+    # An up-to-date solid is not reconstructed, so its version stays put.
+    revision = geometry_version(geometry)
+    reconstruct!(geometry.solid)
+    @test geometry_version(geometry) == revision
+    initialize!(geometry.solid, (1.0, 0.0), 0.1)
+    @test geometry_version(geometry) == revision
+
+    # Two geometries over one solid both see the solid change: the version is
+    # a function of the solid's state, not a per-geometry back-reference.
+    shared = InterfaceField(mesh)
+    initialize!(shared, (0.0, 1.0), 0.1)
+    first_geometry = GeometryField(shared)
+    second_geometry = GeometryField(shared)
+    first_version = geometry_version(first_geometry)
+    second_version = geometry_version(second_geometry)
+    initialize!(shared, (1.0, 0.0), -0.1)
+    @test geometry_version(first_geometry) != first_version
+    @test geometry_version(second_geometry) != second_version
+end
+
 @testset "Geometry hierarchy is rebuilt consistently after AMR" begin
     mesh = BlockTreeMesh(
         block_size = (4, 4), max_level = 1,

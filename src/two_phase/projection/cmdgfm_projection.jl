@@ -1272,7 +1272,12 @@ size changed, which the moving jump set makes the common case).
 function _cmdgfm_row_form!(workspace, matrix::SparseMatrixCSC)
     matrix_transpose = workspace.matrix_transpose
     if size(matrix_transpose) != reverse(size(matrix))
-        # A size change is a pattern change: the map rebuilds the pattern.
+        # A size change is a pattern change: empty the recorded pattern so it
+        # cannot be compared against, then rebuild both here and below.
+        transpose_map = workspace.transpose_map
+        empty!(transpose_map.colptr)
+        empty!(transpose_map.rowval)
+        empty!(transpose_map.entries)
         column_pointers = fill!(resize!(matrix_transpose.colptr, size(matrix, 1) + 1), 1)
         matrix_transpose = SparseMatrixCSC(
             size(matrix, 2), size(matrix, 1), column_pointers,
@@ -1321,8 +1326,7 @@ function _cmdgfm_apply_increment!(solution, columns, rhs_scale, increment, flags
 end
 
 function _cmdgfm_initial_solution!(
-        work, assembled, previous_increment, dt, preconditioner,
-        row_form = _cmdgfm_row_form!(work, assembled.matrix),
+        work, assembled, previous_increment, dt, preconditioner, row_form,
     )
     # Guesses are increments, not the input physical pressure. The zero
     # solution is always available as the robust fallback.

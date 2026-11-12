@@ -1,6 +1,72 @@
 using TwoPhaseAMR
 
 """
+    CutCellPressureForce(geometry)
+
+Pressure force on the fixed solid's wall segments, for the drag and lift
+diagnostics. `cache(state, axis)` returns `2F_axis` (the coefficient `C = 2F` for
+`rho = U = D = 1`) at the state's `pressure`; `refresh!(cache)` collects the cut
+cells again. The wall segments are collected once per
+`TwoPhaseAMR._interface_geometry_revision(geometry)` and reused while it is
+unchanged, so a step visits the cut cells only instead of searching every cell;
+a regrid refreshes the geometry and an `initialize!` or `reconstruct!` of
+`geometry.solid` rebuilds its planes, and both change that revision. The first,
+impulsive-start sample (`time == 0`) is `NaN`: it is not a developed force.
+"""
+struct CutCellPressureForce{G, T}
+    geometry::G
+    # (cell, per-axis normal, its norm, wall segment length in physical units)
+    cut_cells::Vector{Tuple{CellRef, NTuple{2, T}, T, T}}
+    revision::Base.RefValue{UInt}
+end
+
+function CutCellPressureForce(geometry)
+    T = eltype(geometry.solid)
+    return refresh!(
+        CutCellPressureForce(
+            geometry, Tuple{CellRef, NTuple{2, T}, T, T}[], Ref(typemax(UInt)),
+        ),
+    )
+end
+
+"""Collect the cut cells' wall segments of `force.geometry`, in cell order."""
+function refresh!(force::CutCellPressureForce{G, T}) where {G, T}
+    mesh, solid, cut_cells = force.geometry.mesh, force.geometry.solid, force.cut_cells
+    empty!(cut_cells)
+    nx, ny = mesh.block_size
+    for block in eachindex(mesh.blocks), j in 1:ny, i in 1:nx
+        ref = CellRef(block, i, j)
+        segment = TwoPhaseAMR._local_plic_segment(solid, ref)
+        isnothing(segment) && continue
+        (first, last), spacing = segment, mesh.blocks[block].spacing
+        segment_length = hypot(
+            (last[1] - first[1]) * spacing[1],
+            (last[2] - first[2]) * spacing[2],
+        )
+        normal = (
+            TwoPhaseAMR._get(solid.normal_x, ref) / spacing[1],
+            TwoPhaseAMR._get(solid.normal_y, ref) / spacing[2],
+        )
+        scale = hypot(normal...)
+        iszero(scale) || push!(cut_cells, (ref, normal, scale, segment_length))
+    end
+    force.revision[] = TwoPhaseAMR._interface_geometry_revision(force.geometry)
+    return force
+end
+
+function (force::CutCellPressureForce{G, T})(state, axis) where {G, T}
+    iszero(state.time) && return T(NaN)
+    force.revision[] ==
+        TwoPhaseAMR._interface_geometry_revision(force.geometry) || refresh!(force)
+    total = zero(T)
+    for (ref, normal, scale, segment_length) in force.cut_cells
+        total -= TwoPhaseAMR._get(state.pressure, ref) * normal[axis] / scale *
+            segment_length
+    end
+    return 2total
+end
+
+"""
     run_example(; reynolds=100, max_level=3, final_time=40, perturbation=0,
                 start_studio=nothing, recorder_options=(;), kwargs...)
 
@@ -91,42 +157,7 @@ function run_example(;
         kwargs...,
     )
     flow = FlowSimulation(mesh, physics; flow_options...)
-    # Wall segments of the cut cells (cell, normal, its norm, length), kept
-    # for one geometry revision: every regrid refreshes the geometry, which
-    # bumps it. The force diagnostics then visit the cut cells only.
-    cut_cells = Tuple{CellRef, NTuple{2, Float64}, Float64, Float64}[]
-    cut_revision = Ref(typemax(UInt))
-    function current_cut_cells()
-        cut_revision[] == geometry.revision && return cut_cells
-        empty!(cut_cells)
-        nx, ny = mesh.block_size
-        for block in eachindex(mesh.blocks), j in 1:ny, i in 1:nx
-            ref = CellRef(block, i, j)
-            segment = TwoPhaseAMR._local_plic_segment(geometry.solid, ref)
-            isnothing(segment) && continue
-            (first, last), spacing = segment, mesh.blocks[block].spacing
-            length = hypot((last[1] - first[1]) * spacing[1], (last[2] - first[2]) * spacing[2])
-            normal = (
-                TwoPhaseAMR._get(geometry.solid.normal_x, ref) / spacing[1],
-                TwoPhaseAMR._get(geometry.solid.normal_y, ref) / spacing[2],
-            )
-            scale = hypot(normal...)
-            iszero(scale) || push!(cut_cells, (ref, normal, scale, length))
-        end
-        cut_revision[] = geometry.revision
-        return cut_cells
-    end
-    function pressure_force(state, axis)
-        # The impulsive-start sample is not a developed force. At the first
-        # t=1e-6 step the smoke test measured raw force 691362 (>100), so a
-        # magnitude cutoff would also discard valid completed-step samples.
-        iszero(state.time) && return NaN
-        force = 0.0
-        for (ref, normal, scale, length) in current_cut_cells()
-            force -= TwoPhaseAMR._get(state.pressure, ref) * normal[axis] / scale * length
-        end
-        return 2force
-    end
+    pressure_force = CutCellPressureForce(geometry)
     add_diagnostic!(flow, :pressure_drag, state -> pressure_force(state, 1))
     add_diagnostic!(flow, :pressure_lift, state -> pressure_force(state, 2))
     fields = VisualizationFieldRegistry()

@@ -27,8 +27,10 @@ mutable struct GeometryField{
     boundary_dual_volumes::NTuple{2, Vector{T}}
     active_cells::Vector{Bool}
     levelset::Any
-    # Incremented whenever the fixed solid's reconstructed open geometry
-    # changes; phase-interface PLIC caches record this revision.
+    # Incremented by every `refresh_geometry!`. Caches that read the solid's
+    # PLIC data key on `_interface_geometry_revision(geometry)`, which adds the
+    # solid's own reconstruction count, because `initialize!`/`reconstruct!`
+    # rebuild the planes without a refresh.
     revision::UInt
 end
 
@@ -268,7 +270,15 @@ function _geometry_boundary_dual_volumes(
     return volumes
 end
 
-"""Reconstruct the fixed solid and refresh all open cut-cell metrics."""
+"""
+    refresh_geometry!(geometry)
+
+Reconstruct the fixed solid, refresh all open cut-cell metrics, and bump
+`geometry.revision`. Caches that read the solid's PLIC planes key on
+`_interface_geometry_revision(geometry)`, which adds the solid's own
+reconstruction count: `initialize!` or `reconstruct!` on `geometry.solid` rebuild
+the planes without a refresh and change that version too.
+"""
 function refresh_geometry!(geometry::GeometryField{T}) where {T}
     solid = reconstruct!(geometry.solid)
     mesh = geometry.mesh

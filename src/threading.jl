@@ -367,7 +367,9 @@ end
 
 """Accumulation step of SparseArrays' serial `mul!(y, A, x)` for a
 `SparseMatrixCSC` `A`: `muladd(a, x, y)` from Julia 1.12 on, a separate
-multiply and add (`y + a * x`) on Julia 1.11."""
+multiply and add (`y + a * x`) on Julia 1.11. The version gate is safe because
+`test/threading.jl` compares the threaded product against SparseArrays' `mul!`
+on whichever Julia version runs it."""
 @inline function _sparsearrays_accumulate(value, coefficient, source)
     @static if VERSION >= v"1.12"
         return muladd(coefficient, source, value)

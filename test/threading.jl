@@ -2,6 +2,11 @@ using LinearAlgebra: diag, mul!
 using SparseArrays: sparse
 using TwoPhaseAMR: @_parallel, _parallel_for, _parallel_block_columns, _PARALLEL_GRAIN
 using SparseArrays: SparseMatrixCSC, nnz, nonzeros, nzrange, rowvals, sprand, sprandn, spzeros
+using Random: MersenneTwister
+
+# One seeded stream for this file's fixtures, so their values depend neither on
+# the thread count nor on how much randomness the other test files drew.
+const THREADING_RNG = MersenneTwister(0)
 
 # Run `f` with every loop above `grain` work units threaded.
 function with_parallel_grain(f, grain)
@@ -116,7 +121,7 @@ expand_parallel(loop) = macroexpand(TwoPhaseAMR, :(@_parallel $loop))
 
     # The loop form launches its body without a closure argument, so a warm
     # launch allocates nothing on either path.
-    destination, source = zeros(4096), rand(4096)
+    destination, source = zeros(4096), rand(THREADING_RNG, 4096)
     for grain in (1, _PARALLEL_GRAIN[])
         with_parallel_grain(grain) do
             scaled_copy!(destination, source)
@@ -425,7 +430,7 @@ const BOTH_PATHS = (1, typemax(Int))
 @testset "threaded reductions and transfers are bitwise serial" begin
     # Fixed-chunk maximum: the serial maximum, and canonical NaN bits
     # whichever NaN terms occur, with partials (threaded) and without.
-    values = randn(5000)
+    values = randn(THREADING_RNG, 5000)
     values[1:7:end] .= -0.0
     withnan = copy(values)
     withnan[3777] = -NaN
@@ -445,8 +450,8 @@ const BOTH_PATHS = (1, typemax(Int))
     # Fixed-chunk slot sums: one chunk is the index-order sum; more chunks
     # are summed per chunk and folded in chunk order, at every grain.
     for items in (1000, 5000)
-        slots = rand(0:3, items)
-        terms, weights = randn(items), rand(items)
+        slots = rand(THREADING_RNG, 0:3, items)
+        terms, weights = randn(THREADING_RNG, items), rand(THREADING_RNG, items)
         expected = zeros(3)
         for chunk in 1:cld(items, 1024)
             partial = zeros(3)
@@ -466,8 +471,8 @@ const BOTH_PATHS = (1, typemax(Int))
     # Three slots: the padded chunk stride is layout only, so the serial and
     # threaded sums are bitwise equal, and the scratch holds whole cache
     # lines per chunk (8 Float64) so that no two chunks share one.
-    slots = rand(0:3, 3000)
-    terms, weights = randn(3000), rand(3000)
+    slots = rand(THREADING_RNG, 0:3, 3000)
+    terms, weights = randn(THREADING_RNG, 3000), rand(THREADING_RNG, 3000)
     serial_sums = with_parallel_grain(SERIAL_GRAIN) do
         TwoPhaseAMR._chunked_slot_sums!(
             zeros(3), Float64[], slots, terms, weights, Val(:weighted),
@@ -486,12 +491,12 @@ const BOTH_PATHS = (1, typemax(Int))
     # zero start, and for restriction the added zero that maps -0.0 to 0.0);
     # they are not SparseArrays' `mul!`, whose fusion depends on the Julia
     # version and which the kernels therefore never use.
-    prolongation = sprand(3000, 800, 0.004)
+    prolongation = sprand(THREADING_RNG, 3000, 800, 0.004)
     nonzeros(prolongation)[1:3:end] .*= -1
     nonzeros(prolongation)[2:7:end] .= -0.0
-    coarse = randn(800)
+    coarse = randn(THREADING_RNG, 800)
     coarse[1:5:end] .= -0.0
-    fine = randn(3000)
+    fine = randn(THREADING_RNG, 3000)
     fine[1:4:end] .= -0.0
     level = (;
         prolongation,
@@ -564,7 +569,7 @@ const BOTH_PATHS = (1, typemax(Int))
     # object all give `copy(transpose(A))` (pattern and value bits, signed
     # zeros included), on the serial and the threaded gather.
     for grain in BOTH_PATHS
-        matrix = sprand(1800, 700, 0.004)
+        matrix = sprand(THREADING_RNG, 1800, 700, 0.004)
         nonzeros(matrix)[2:5:end] .= -0.0
         matrix_transpose = copy(transpose(matrix))
         transpose_map = TwoPhaseAMR.SparseTransposeMap()
@@ -580,7 +585,7 @@ const BOTH_PATHS = (1, typemax(Int))
         end
         refresh!(matrix)
         @test same_transpose(matrix)
-        nonzeros(matrix) .= randn(nnz(matrix))
+        nonzeros(matrix) .= randn(THREADING_RNG, nnz(matrix))
         nonzeros(matrix)[3:7:end] .= -0.0
         refresh!(matrix)
         @test same_transpose(matrix)
@@ -595,17 +600,17 @@ const BOTH_PATHS = (1, typemax(Int))
         rowvals(matrix)[last(nzrange(matrix, moved))] = last_row
         refresh!(matrix)
         @test same_transpose(matrix)
-        other = sprand(1800, 700, 0.003)
+        other = sprand(THREADING_RNG, 1800, 700, 0.003)
         refresh!(other)
         @test same_transpose(other)
-        @test_throws DimensionMismatch refresh!(sprand(700, 1800, 0.003))
+        @test_throws DimensionMismatch refresh!(sprand(THREADING_RNG, 700, 1800, 0.003))
     end
 
     # A stored transpose built with its map is `copy(transpose(A))`, also for
     # rectangular and empty matrices, and the map is recorded: the next
     # refresh on the same pattern is a hit.
     for grain in BOTH_PATHS, (m, n) in ((1800, 700), (700, 1800), (0, 0), (5, 0), (0, 5))
-        matrix = sprand(m, n, 0.004)
+        matrix = sprand(THREADING_RNG, m, n, 0.004)
         nonzeros(matrix)[1:3:end] .= -0.0
         stored, transpose_map = with_parallel_grain(() -> TwoPhaseAMR._stored_transpose(matrix), grain)
         expected = copy(transpose(matrix))
@@ -640,11 +645,11 @@ const BOTH_PATHS = (1, typemax(Int))
         )
         volumes = TwoPhaseAMR._cell_volumes(mesh, Float64)
         operator = EllipticOperator(
-            mesh; face_coefficient = 0.5 .+ rand(length(mesh.faces)), reaction = 0.75,
+            mesh; face_coefficient = 0.5 .+ rand(THREADING_RNG, length(mesh.faces)), reaction = 0.75,
             active_cells = trues(ncells(mesh)), volumes,
         )
         action = TwoPhaseAMR.FactorizedEllipticOperator(operator)
-        solution, rhs = randn(ncells(mesh)), randn(ncells(mesh))
+        solution, rhs = randn(THREADING_RNG, ncells(mesh)), randn(THREADING_RNG, ncells(mesh))
         solution[1:9:end] .= -0.0
         floor, temporary = scatter_roundoff_floor(action, solution, rhs, operator.volumes)
         for grain in BOTH_PATHS
@@ -686,30 +691,30 @@ end
     function cmdgfm_shaped(np)
         rows, columns, entries = Int[], Int[], Float64[]
         for row in 1:np, (column, value) in (
-                    (row, 4.0 + rand()), (row - 1, -1.0), (row + 1, -1.0 + 1.0e-3randn()),
+                    (row, 4.0 + rand(THREADING_RNG)), (row - 1, -1.0), (row + 1, -1.0 + 1.0e-3randn(THREADING_RNG)),
                     (row - 37, -1.0), (row + 37, -0.999),
                 )
             1 <= column <= np || continue
-            push!(rows, row), push!(columns, column), push!(entries, value * exp10(rand(-3:3)))
+            push!(rows, row), push!(columns, column), push!(entries, value * exp10(rand(THREADING_RNG, -3:3)))
         end
         for jump in 1:(np ÷ 10)
             row = np + jump
-            push!(rows, row), push!(columns, row), push!(entries, 3.0 + randn())
-            for cell in rand(1:np, 4)
-                push!(rows, row), push!(columns, cell), push!(entries, 1.0e5randn())
-                push!(rows, cell), push!(columns, row), push!(entries, 1.0e-5randn())
+            push!(rows, row), push!(columns, row), push!(entries, 3.0 + randn(THREADING_RNG))
+            for cell in rand(THREADING_RNG, 1:np, 4)
+                push!(rows, row), push!(columns, cell), push!(entries, 1.0e5randn(THREADING_RNG))
+                push!(rows, cell), push!(columns, row), push!(entries, 1.0e-5randn(THREADING_RNG))
             end
         end
         return sparse(rows, columns, entries, np + np ÷ 10, np + np ÷ 10)
     end
-    rectangular = sprandn(3000, 1700, 0.002)
+    rectangular = sprandn(THREADING_RNG, 3000, 1700, 0.002)
     nonzeros(rectangular)[2:9:end] .= -0.0
     matrices = [
-        spzeros(0, 0), spzeros(0, 4), spzeros(4, 0), sprandn(1, 1, 1.0), sprandn(7, 3, 0.4),
-        rectangular, sprandn(2500, 2500, 0.0), cmdgfm_shaped(4000),
+        spzeros(0, 0), spzeros(0, 4), spzeros(4, 0), sprandn(THREADING_RNG, 1, 1, 1.0), sprandn(THREADING_RNG, 7, 3, 0.4),
+        rectangular, sprandn(THREADING_RNG, 2500, 2500, 0.0), cmdgfm_shaped(4000),
     ]
     for matrix in matrices, grain in BOTH_PATHS
-        source = randn(size(matrix, 2)) .* exp10.(rand(-8:8, size(matrix, 2)))
+        source = randn(THREADING_RNG, size(matrix, 2)) .* exp10.(rand(THREADING_RNG, -8:8, size(matrix, 2)))
         source[1:7:end] .= -0.0
         expected = mul!(fill(NaN, size(matrix, 1)), matrix, source)
         row_form = TwoPhaseAMR._RowForm(copy(transpose(matrix)))
@@ -726,7 +731,7 @@ end
         workspace = RowFormWorkspace(spzeros(0, 0), TwoPhaseAMR.SparseTransposeMap())
         same_pattern = cmdgfm_shaped(2000)
         renewed = copy(same_pattern)
-        nonzeros(renewed) .= randn(nnz(renewed))
+        nonzeros(renewed) .= randn(THREADING_RNG, nnz(renewed))
         nonzeros(renewed)[1:11:end] .= -0.0
         for matrix in (cmdgfm_shaped(3000), cmdgfm_shaped(2000), same_pattern, renewed)
             form = with_parallel_grain(() -> TwoPhaseAMR._cmdgfm_row_form!(workspace, matrix), grain)
@@ -745,7 +750,7 @@ end
         end
     end
     for grain in BOTH_PATHS, unchanged in (false, true)
-        solution, columns, increment = randn(5000), rand(5000), randn(5000)
+        solution, columns, increment = randn(THREADING_RNG, 5000), rand(THREADING_RNG, 5000), randn(THREADING_RNG, 5000)
         unchanged && fill!(increment, 0.0)
         expected = solution .+ columns .* (0.25 .* increment)
         flags = Bool[]
@@ -756,6 +761,75 @@ end
         @test isequal(solution, expected)
         @test length(flags) == cld(5000, 1024)
     end
+end
+
+@testset "CMDGFM projection is bitwise serial" begin
+    # A full projection (assembly, scaled operator and block preconditioner,
+    # the reduced-pressure `ldiv!`, the jump ILU and two successive BiCGSTAB
+    # solves) at the serial grain against grain 1: every reduction, scatter,
+    # gather and tri-diagonal solve is chunked independently of the grain, so
+    # the two states must agree bit for bit.
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (4, 4), periodic = (true, true),
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> y - 0.35 - 0.08sinpi(2x) * sinpi(2y); lipschitz = 1.01,
+    )
+    density = (1000.0, 1.0)
+    dt = 1.0e-2
+    liquid(x, y, time, axis) =
+        axis == 1 ? sinpi(2y) + 0.1cospi(2x) : -0.2sinpi(2x)
+    gas(x, y, time, axis) = axis == 1 ? 0.3cospi(2y) : sinpi(2x)
+    second_liquid(x, y, time, axis) =
+        axis == 1 ? 0.4cospi(2y) - 0.1 : 0.2sinpi(2x)
+    second_gas(x, y, time, axis) =
+        axis == 1 ? -0.2 : 0.5sinpi(2y) + 0.3cospi(2x)
+    function projected(grain)
+        velocity = (FaceVelocity(mesh, liquid), FaceVelocity(mesh, gas))
+        pressure = CellField(mesh)
+        solver = CMDGFMProjectionSolver(
+            interface; density, preconditioner = :block,
+        )
+        workspace = CMDGFMProjectionWorkspace(solver)
+        # Two projections: a new predictor makes the second one solve again
+        # while reusing the first one's pressure hierarchy, jump factor and
+        # previous increment.
+        stats = with_parallel_grain(grain) do
+            first = project!(
+                velocity, pressure, solver, dt, workspace;
+                tolerance = 1.0e-10, max_iterations = 4000,
+            )
+            set_velocities!(velocity[1], second_liquid)
+            set_velocities!(velocity[2], second_gas)
+            second = project!(
+                velocity, pressure, solver, dt, workspace;
+                tolerance = 1.0e-10, max_iterations = 4000,
+            )
+            (first, second)
+        end
+        return (; velocity, pressure, stats)
+    end
+    serial = projected(SERIAL_GRAIN)
+    threaded = projected(1)
+    @test serial.stats[1].converged && serial.stats[2].converged
+    # The fixture must actually solve: a zero initial residual builds no
+    # preconditioner and leaves the state untouched, so the comparisons below
+    # would pass without exercising anything.
+    for stats in serial.stats
+        @test stats.initial_residual > 0
+        @test stats.iterations > 0
+        @test stats.preconditioner === :cmdgfm_block
+        @test stats.jump_unknowns > 0
+    end
+    for (expected, actual) in zip(serial.stats, threaded.stats)
+        @test actual.iterations == expected.iterations
+        @test actual === expected
+    end
+    for phase in 1:2
+        @test isequal(threaded.velocity[phase].interior, serial.velocity[phase].interior)
+        @test isequal(threaded.velocity[phase].boundary, serial.velocity[phase].boundary)
+    end
+    @test isequal(threaded.pressure.blocks, serial.pressure.blocks)
 end
 
 @testset "two-phase face kernels are bitwise serial" begin
