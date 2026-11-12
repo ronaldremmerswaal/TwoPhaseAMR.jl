@@ -144,15 +144,16 @@ and benchmark flows; \code{performance} holds allocation contracts.
   \centering\footnotesize
   \caption{Tiers of continuous integration (workflow \code{CI}, and the
   technical-reference job of workflow \code{Documentation}). Julia ``1'' is
-  the current release; the unit and integration jobs run on two threads.
-  The \code{ci-ok} check of a pull request requires the five jobs of the
+  the current release; the \code{unit} shards run on Julia 1.11 (the lower
+  compat bound) and 1.12, and the unit and integration jobs run on two
+  threads. The \code{ci-ok} check of a pull request requires every job of the
   first row.}\label{tab:verif:tiers}
   \begin{tabular}{@{}>{\raggedright}p{2.0cm}>{\raggedright}p{3.2cm}>{\raggedright\arraybackslash}p{6.9cm}@{}}
     \toprule
     Tier & Trigger & Jobs and contents\\
     \midrule
-    Pull request & every pull request and push to \code{main} & \code{format} (Runic 1.10.0); \code{unit} shards A (\code{two_phase}), B (\code{registry}, \code{mesh}, \code{threading}, \code{indicators}, \code{operators}, \code{solvers}, \code{aqua}) and C (\code{navier_stokes}, \code{diagnostics}, \code{examples}, \code{recording}) with coverage; \code{makie} (visualisation extension); \code{studio} (Studio server, Julia 1.11 and 1.12); \code{frontend} (browser client tests and bundle check)\\
-    Main & push to \code{main} & \code{unit-minimum} (default suite on Julia 1.11, the lower compat bound); \code{contracts} (group \code{performance}, one thread); \code{benchmark} (one-sample smoke run of the benchmarks and the latency probe)\\
+    Pull request & every pull request and push to \code{main} & \code{format} (Runic 1.10.0); \code{unit} shards A (\code{two_phase}), B (\code{registry}, \code{mesh}, \code{threading}, \code{indicators}, \code{operators}, \code{solvers}, \code{aqua}), C (\code{navier_stokes}, \code{diagnostics}) and D (\code{examples}, \code{recording}) on Julia 1.11 (the lower compat bound) and 1.12, with coverage from the 1.12 shards; \code{makie} (visualisation extension); \code{studio} (Studio server, Julia 1.11 and 1.12); \code{frontend} (browser client tests and bundle check)\\
+    Main & push to \code{main} & \code{contracts} (group \code{performance}, one thread); \code{benchmark} (one-sample smoke run of the benchmarks and the latency probe)\\
     Integration & weekly (Monday 03:00 UTC), dispatch, or a pull request labelled \code{run-integration} & eleven integration groups in three shards: A \code{two_velocity_vortex}, \code{two_velocity_transport}, \code{staggered_wave_equation}; B \code{two_phase_waves}, \code{two_phase_droplet}, \code{wave_equation}, \code{amr_manufactured_flow}; C \code{two_phase_vortex}, \code{two_velocity_rotation}, \code{anisotropic_cells}, \code{two_phase_sessile_droplet}\\
     Heavy & monthly (1st, 04:00 UTC) or dispatch & \code{two_velocity_instabilities} and \code{single_phase_cylinder}; a failure does not fail the run (\code{continue-on-error})\\
     Browser & weekly and monthly schedule, dispatch & \code{studio-browser}: Studio smoke, live AMR and examples tests in Chromium\\

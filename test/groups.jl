@@ -32,7 +32,8 @@ const TEST_GROUPS = [
 const UNIT_SHARDS = [
     "A" => ["two_phase"],
     "B" => ["registry", "mesh", "threading", "indicators", "operators", "solvers", "aqua"],
-    "C" => ["navier_stokes", "diagnostics", "examples", "recording"],
+    "C" => ["navier_stokes", "diagnostics"],
+    "D" => ["examples", "recording"],
 ]
 
 const TEST_HELPERS = [

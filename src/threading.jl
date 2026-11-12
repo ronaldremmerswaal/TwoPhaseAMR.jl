@@ -122,7 +122,10 @@ Loop form of `_parallel_for` for a 1-based `AbstractVector` `range` (such as
 `1:n` or `eachindex(vector)`), with the same ownership rules and serial
 cut-off. The body is expanded twice: a plain `for` loop for the serial path
 and the `Polyester.@batch` loop of the threaded path, which captures the
-body's arrays directly, so neither path allocates. `continue` skips an
+body's arrays directly, so neither path allocates per item. The threaded path
+still pays whatever Polyester packs for a launch: on Julia 1.11 its closure
+argument is boxed (16-32 B measured per launch), while from 1.12 on a warm
+launch allocates nothing. `continue` skips an
 element; `break` and `return` are rejected. Assigning a variable of the
 enclosing function from the body is a race on the threaded path; bodies only
 write owned array entries, including a preallocated failure flag that the
@@ -316,6 +319,28 @@ end
 refinement indicators, block transfer): four blocks reach the grain, the
 threshold these loops used before the launch layer was unified."""
 @inline _block_work() = max(1, cld(_PARALLEL_GRAIN[], 4))
+
+"""
+    _parallel_copyto!(destination, destination_offset, source, source_offset, number_of_items)
+
+Set `destination[destination_offset + k] = source[source_offset + k]` for
+`k in 1:number_of_items` (offsets are shifts, `0` starts at the first
+element), threaded above the grain. The ranges are bounds-checked before the
+launch and must not overlap in memory: each `k` owns one output.
+"""
+function _parallel_copyto!(
+        destination::AbstractVector, destination_offset::Integer,
+        source::AbstractVector, source_offset::Integer, number_of_items::Integer,
+    )
+    number_of_items >= 0 || throw(ArgumentError("copy length must be nonnegative"))
+    iszero(number_of_items) && return destination
+    checkbounds(destination, (destination_offset + 1):(destination_offset + number_of_items))
+    checkbounds(source, (source_offset + 1):(source_offset + number_of_items))
+    @_parallel for index in 1:number_of_items
+        @inbounds destination[destination_offset + index] = source[source_offset + index]
+    end
+    return destination
+end
 
 """Multiply a sparse matrix from a stored transpose, one output row per task."""
 function _parallel_csr_row_mul!(
