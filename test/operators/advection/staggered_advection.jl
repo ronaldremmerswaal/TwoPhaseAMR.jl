@@ -625,6 +625,122 @@ end
 end
 
 
+"""Dict accumulation reference of the AMR dual flux weights: the builder before
+the count, prefix sum and fill rewrite."""
+function reference_amr_flux_weights(
+        mesh, Axis, ::Type{T}, incidences, global_to_local,
+    ) where {T}
+    nx, ny = mesh.block_size
+    coefficients = Dict{NTuple{3, Int}, T}()
+    for (flux_index, flux_face) in pairs(mesh.faces)
+        if flux_face.axis == Axis
+            centre = global_to_local[flux_index]
+            for (cell, sign) in
+                ((flux_face.minus, one(T)), (flux_face.plus, -one(T)))
+
+                for component_face in
+                    incidences[TwoPhaseAMR._cell_index(cell, nx, ny)]
+
+                    component_face.global_index == flux_index && continue
+                    coefficient = sign * component_face.fraction / 2
+                    add_amr_flux_weight!(
+                        coefficients, component_face.local_index, centre,
+                        flux_index, coefficient,
+                    )
+                end
+            end
+        else
+            minus_faces =
+                incidences[TwoPhaseAMR._cell_index(flux_face.minus, nx, ny)]
+            plus_faces =
+                incidences[TwoPhaseAMR._cell_index(flux_face.plus, nx, ny)]
+            for side in (-1, 1), minus_face in minus_faces,
+                    plus_face in plus_faces
+
+                minus_face.side == side == plus_face.side || continue
+                coefficient = minus_face.fraction * plus_face.fraction / 2
+                add_amr_flux_weight!(
+                    coefficients, minus_face.local_index, plus_face.local_index,
+                    flux_index, coefficient,
+                )
+            end
+        end
+    end
+    keys_in_order = sort!(
+        [key for key in keys(coefficients) if !iszero(coefficients[key])];
+        by = key -> (key[1], key[2], mesh.faces[key[3]].axis, key[3]),
+    )
+    return [
+        (key[1], key[2], key[3], coefficients[key]) for key in keys_in_order
+    ]
+end
+
+function add_amr_flux_weight!(coefficients, first, second, flux, coefficient)
+    first == second && throw(ArgumentError("degenerate AMR dual connection"))
+    key = first < second ? (first, second, flux) : (second, first, flux)
+    coefficient = first < second ? coefficient : -coefficient
+    coefficients[key] = get(coefficients, key, zero(coefficient)) + coefficient
+    return coefficients
+end
+
+"""Nonzero flux weights of `weights` as `(minus, plus, flux, value)` in the
+builder's storage order."""
+function amr_flux_weight_entries(weights, number_of_unknowns)
+    entries = Tuple{Int, Int, Int, eltype(weights.weights)}[]
+    for minus in 1:number_of_unknowns
+        for position in weights.offsets[minus]:(
+                weights.offsets[minus] + weights.counts[minus] - 1
+            )
+
+            weight = weights.weights[position]
+            iszero(weight) && continue
+            push!(
+                entries,
+                (minus, weights.plus[position], weights.flux[position], weight),
+            )
+        end
+    end
+    return entries
+end
+
+@testset "AMR dual flux weights match a Dict accumulation" begin
+    refine = (key, origin, extent) ->
+    key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0)
+    meshes = (
+        BlockTreeMesh(block_size = (4, 4), max_level = 2, refine = refine),
+        BlockTreeMesh(
+            block_size = (4, 4), periodic = (false, false), max_level = 2,
+            refine = refine,
+        ),
+    )
+    for mesh in meshes, Axis in (1, 2)
+        incidences, global_to_local, volumes = TwoPhaseAMR._component_incidences(
+            mesh, Val(Axis), Float64,
+        )
+        weights = TwoPhaseAMR._amr_flux_weights(
+            mesh, Val(Axis), Float64, incidences, global_to_local, length(volumes),
+        )
+        @test weights isa TwoPhaseAMR._AMRFluxWeights{Float64}
+        @test Base.return_types(
+            TwoPhaseAMR._amr_flux_weights,
+            (
+                typeof(mesh), Val{Axis}, Type{Float64}, typeof(incidences),
+                typeof(global_to_local), Int,
+            ),
+        ) == [TwoPhaseAMR._AMRFluxWeights{Float64}]
+        expected = reference_amr_flux_weights(
+            mesh, Axis, Float64, incidences, global_to_local,
+        )
+        @test !isempty(expected)
+        # Same keys in the same order, zero sums skipped, and bitwise
+        # identical sums.
+        @test amr_flux_weight_entries(weights, length(volumes)) == expected
+        @test_throws ArgumentError TwoPhaseAMR._amr_flux_weights(
+            mesh, Val(Axis), Float64, incidences, global_to_local, 0,
+        )
+    end
+end
+
 @testset "AMR staggered flux compatibility and stability" begin
     @test default_amr_interface_scheme(Upwind()) isa Upwind
     @test default_amr_interface_scheme(Centred()) isa MonotonizedCentral

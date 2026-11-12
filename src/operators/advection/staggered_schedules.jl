@@ -593,6 +593,13 @@ function _amr_flux_weights(
     end
     any(iszero, contribution_minus) &&
         throw(ArgumentError("degenerate AMR dual connection"))
+    # The group counts below are indexed without bounds checks. A lower
+    # unknown is a positive component-local index by construction; the
+    # degenerate zero was rejected above.
+    !isempty(contribution_minus) &&
+        maximum(contribution_minus) > number_of_unknowns && throw(
+        ArgumentError("AMR dual connection lies outside the dual unknowns"),
+    )
     # Stable counting sort by the lower unknown (`face_counts` is reused for
     # the contribution order).
     group_counts = zeros(Int, number_of_unknowns)
@@ -622,7 +629,7 @@ function _amr_flux_weights(
             )
         end
     end
-    return _AMRFluxWeights(offsets, group_counts, plus, flux, weights)
+    return _AMRFluxWeights{T}(offsets, group_counts, plus, flux, weights)
 end
 
 @inline _flux_weight_key(plus, flux, faces, position) =
