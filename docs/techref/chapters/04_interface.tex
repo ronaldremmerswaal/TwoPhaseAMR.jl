@@ -73,8 +73,21 @@ is an error, otherwise
   \end{cases}
 \end{equation}
 and $\condfrac{\liq}{c}$ is recomputed. Each snap changes the liquid volume by
-at most $\ffloor\meas{\opencell{c}}$, the clamp by round-off only; the halo slots of both fields are then
-filled with the zero-gradient rule of \cref{sec:mesh:halo}. A cell is
+at most $\ffloor\meas{\opencell{c}}$, the clamp by round-off only. The halo
+slots of both fields are then refilled from their donors
+(\cref{sec:mesh:halo}), with the zero-gradient rule on physical boundaries. A
+slot whose donors are finer than its block takes the ratio of the restricted
+liquid and open fractions with the donors' weights,
+$\condfrac{\liq}{s}=\bigl(\sum_d w_d\phasefrac{\liq}{d}\bigr)/\bigl(\sum_d w_d\openfrac{d}\bigr)$
+with a positive denominator, snapped by~\cref{eq:interface:floor}, and never
+the weighted mean of the per-cell ratios: a covered donor carries
+$\condfrac{\liq}{d}=0$ by construction, not gas, so the mean of ratios reads a
+nearly covered slot as mixed (three covered children and one liquid child give
+$0.25$ instead of one). Every stencil that reads a cut cell across a level
+jump---transport fluxes, the interface reconstruction and the surface-tension
+force---therefore sees the same conditional fraction as the coincident coarse
+cell, and the refinement criteria no longer treat a nearly covered block as
+bordering the interface (\issue{148}). A cell is
 \emph{mixed} if $0<\condfrac{\liq}{c}<1$ after snapping. Where the code needs a
 phase indicator (the frozen indicator of the transport,
 \cref{ch:vof-transport}, and the jump of the conservative ghost-fluid force,
@@ -104,6 +117,8 @@ with fields \code{fraction} $=\phasefrac{\liq}{}$, \code{conditional_fraction}
 $=\condfrac{\liq}{}$, \code{normal_x}, \code{normal_y}, \code{intercept},
 \code{curvature} and \code{reconstruction} (method code per cell). Snapping:
 \srcsym{src/interface/interface_field.jl}{_refresh_conditional_fraction!};
+restricted halo:
+\srcsym{src/interface/interface_field.jl}{_restrict_conditional_halo!};
 phase volumes
 \srcsym{src/two_phase/two_velocity/transport_geometry.jl}{_phase_cell_fractions};
 indicator: \srcsym{src/vof/fluxes.jl}{_advect_wy!} and
@@ -111,7 +126,9 @@ indicator: \srcsym{src/vof/fluxes.jl}{_advect_wy!} and
 \testsym{test/two_phase/transport.jl}{Global fraction floor} (floor, snapping
 in cut cells),
 \testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Two-phase cell, staggered and face geometry partitions}
-($\phasefrac{\liq}{c}+\phasefrac{\gas}{c}=\openfrac{c}$ on uniform and AMR meshes).
+($\phasefrac{\liq}{c}+\phasefrac{\gas}{c}=\openfrac{c}$ on uniform and AMR meshes) and
+\testsym{test/mesh/variables.jl}{conditional fraction halos restrict numerator and denominator}
+(level-jump restriction with covered donors).
 \end{implnote}
 
 \section{PLIC reconstruction}\label{sec:interface:plic}
