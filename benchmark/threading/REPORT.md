@@ -109,3 +109,36 @@ cylinder 2.3) and entries below 0.6 % each.
 - The cylinder is dominated by small meshes (2 944 cells, mostly below the
   1024-cell threading grain per loop) and serial example diagnostics; it is
   reported but has no target.
+
+## Final results (phase 4E.4 complete)
+
+`main` at `658cc33` (after #144–#147, #151, #154, #156, #159), measured
+2026-11-12 on the same host with no other jobs running, Julia 1.12.7, BLAS 1
+thread, one fresh process per point, 5 warm-up steps and 20 timed steps
+(`logs/final/all.log`). Times are the median of the steps without a mesh
+change; for Stokes-3 the regrid steps are listed separately. Checksums are
+identical at 1, 2, 4 and 8 threads for every case.
+
+| case | 1 | 2 | 4 | 8 | speed-up 4 | speed-up 8 | regrid step 1 → 4 → 8 |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `taylor_green` | 11.91 | 7.30 | 5.50 | 4.85 | 2.17 | 2.46 | – |
+| `taylor_green_fine` | 63.78 | 42.65 | 31.96 | 28.12 | 2.00 | 2.27 | – |
+| `capillary` | 40.67 | 28.14 | 19.97 | 17.26 | 2.04 | 2.36 | – |
+| `capillary_fine` | 81.40 | 53.60 | 39.21 | 30.88 | 2.08 | 2.64 | – |
+| `cylinder` | 2.62 | 1.97 | 1.92 | 1.68 | 1.37 | 1.57 | – |
+| `cylinder_fine` | 4.19 | 3.03 | 2.36 | 2.07 | 1.78 | 2.02 | – |
+| `stokes3_one` | 61.21 | 41.15 | 27.63 | 21.88 | 2.22 | 2.80 | 250 → 299 → 280 |
+| `stokes3_one_fine` | 171.66 | 110.58 | 78.28 | 61.92 | 2.19 | 2.77 | 855 → 695 → 681 |
+| `stokes3_two` | 67.43 | 47.89 | 32.77 | 27.22 | 2.06 | 2.48 | 304 → 295 → 307 |
+| `stokes3_two_fine` | 168.09 | 120.51 | 84.76 | 68.27 | 1.98 | 2.46 | 988 → 700 → 640 |
+
+- Hard target (4 threads ≥ 2×, at the default resolution or one level finer):
+  met for Taylor–Green, the capillary wave and Stokes-3 with one and two
+  velocities; missed for the cylinder (1.78× one level finer). Its steps take
+  2–4 ms on 3 000–4 700 cells, below the per-loop threading grain on most
+  multigrid levels.
+- Stretch target (8 threads ≥ 4×) is missed for every case (2.0–2.8×).
+- Steps that change the mesh barely scale (Stokes-3: 0.8–1.5× at 8 threads):
+  tree and topology rebuilds are serial by design, and they dominate those
+  steps. In the 20-step windows above, with three regrid steps each, the mean
+  step time scales by 1.4–1.6× at 4 threads.
