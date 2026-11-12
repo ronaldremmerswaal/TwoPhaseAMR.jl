@@ -123,33 +123,33 @@ steps = 10
 time = 0.01
 
     [cases.cylinder.diagnostics]
-    divergence_norm = 1.7797377929115927e-6
-    kinetic_energy = 54.617005025594985
+    divergence_norm = 3.075094168230735e-7
+    kinetic_energy = 54.6092227854761
     leaf_blocks = 112
-    linear_momentum = [108.83039734449159, 6.201685073591189e-9]
-    pressure_drag = 0.28483275313973244
-    pressure_lift = 6.9712179717462686e-6
+    linear_momentum = [108.82233855111572, -1.8152773132674782e-9]
+    pressure_drag = 1.2481795571736065
+    pressure_lift = 4.755726497607249e-7
 
     [cases.cylinder.fields.pressure]
     count = 1792
     finite_count = 1792
-    l2 = 2.9519264487488055
-    max = 1.0604462130891443
-    sha256 = "de0c0ae57aca9409a4183544e593ea077b0cb9499ea2e4da93d678ad5f979b6c"
+    l2 = 4.071569924800695
+    max = 1.7267692794670706
+    sha256 = "fe35effb224266ad6741d4026771ef39efd2f7303b4136f71b1a6ce194e58ca1"
 
     [cases.cylinder.fields.velocity_1]
     count = 1760
     finite_count = 1760
-    l2 = 41.792321082533945
-    max = 1.6570132906295956
-    sha256 = "4257e25628de4c28a7f93778129174b2d4389564e4a820aa80ab0d14d7a0cb17"
+    l2 = 41.785530054134426
+    max = 1.6509685795127467
+    sha256 = "ce824652cbfa2b6280b7aeffcfa23942012abfd1d37466f0d02b9d0dcd44bc37"
 
     [cases.cylinder.fields.velocity_2]
     count = 1736
     finite_count = 1736
-    l2 = 2.764178140345724
-    max = 0.623340833891757
-    sha256 = "1739f055890f7b6c5e2c6cca2280645ef918090e9df9ba74092e16d6fde62fe2"
+    l2 = 2.746830417461823
+    max = 0.6003265798353992
+    sha256 = "944fd660386d09f8ecee7363771616415e3032e2435aa456583629701c4e344c"
 
 [cases.sessile]
 steps = 10
