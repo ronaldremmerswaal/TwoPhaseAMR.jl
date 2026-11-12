@@ -11,8 +11,8 @@ A steep liquid front evolves over an embedded elliptical bathymetry in a scaled 
 | **Physics** | Liquid/gas densities `(1000, 1)`, dynamic viscosities `(10⁻³, 1.75×10⁻⁵)`, surface tension `0.073` and gravity `(0, -9.81)`. At `scale=20` the nonperiodic domain is `1 × 0.6`, with free-slip outer boundaries and an embedded elliptical solid. |
 | **Algorithms** | Two velocities by default (`TwoVelocityModel()`), with frozen-interface WY transport and `CMDGFMProjection()` (a block-preconditioned BiCGSTAB solve); WY geometric VOF, `:lhf` PLIC with WY fallback, CGFM surface tension, monotonized-central (`MonotonizedCentral()`) momentum advection, implicit-midpoint viscosity, and CG/tree-geometric multigrid for diffusion. The interface indicator targets `min(1,max_level)` and the liquid-velocity vorticity indicator refines up to `max_level` at `0.25` and coarsens below `0.25/3`. Both use `ymin=refinement_ymin`; AMR is checked every 5 steps with coarsen delay 10. |
 | **Worth varying** | `scale=20` by default; changing it rescales the prescribed domain and initial geometry while leaving the listed physical coefficients fixed. `max_level=4` changes the vorticity-refinement ceiling; `final_time=nothing` selects `1.2` gravity periods. `refinement_ymin` overrides the default solid-adjacent exclusion height; `velocity_model=OneVelocityModel()` selects a shared velocity; `numerics=NavierStokesOptions(advection=AdvectionOptions(scheme=LaxWendroff()))` selects Lax–Wendroff momentum advection, which can leave visible dispersive noise in the vorticity of this impact. Other supported `FlowSimulation` options can be passed as keywords. |
-| **Validation status** | In the documented level-3 run, liquid volume changes by `−2.83323×10⁻⁹` from about `0.182426` over the full simulation. There are 812 cumulative unresolved-curvature face events, and the finest blocks touching the solid are at level 1 at the final time; the later fragmented interface is not resolved well enough to validate entrainment. No experimental impact or interface-position error is claimed. |
-| **Cost** | The documented two-velocity run used `max_level=3`, `T≈0.961327` (1.2 gravity periods), 16647 steps, 2236 mesh updates and 10656 final cells; setup and simulation took 6154.9 s and the whole script 6197.5 s on one thread, including first-call compilation. The example default uses `max_level=4`. |
+| **Validation status** | In the documented level-3 run, liquid volume changes by `−3.79913×10⁻⁹` from about `0.182426` over the full simulation. There are 1312 cumulative unresolved-curvature face events, and the finest blocks touching the solid are at level 1 at the final time; the later fragmented interface is not resolved well enough to validate entrainment. No experimental impact or interface-position error is claimed. |
+| **Cost** | The documented two-velocity run used `max_level=3`, `T≈0.961327` (1.2 gravity periods), 16652 steps, 2200 mesh updates and 10128 final cells; setup and simulation took 5732.4 s and the whole script 5778.1 s on one thread, including first-call compilation. The example default uses `max_level=4`. |
 
 Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded.
 
@@ -90,9 +90,9 @@ filled bathymetry at three times from the level-3 run.
 
 The GIF shows the same run with block outlines and a synchronized
 kinetic-energy cursor; the energy plot includes the full simulation history.
-Vorticity uses a symmetric range of ±420.10, the 99.9th percentile of
+Vorticity uses a symmetric range of ±383.11, the 99.9th percentile of
 rasterized magnitudes in the displayed frames. Larger values saturate: the
-sampled peak is 2822.80 near `(x,y)=(0.00625,0.59875)` at `t≈0.5047`.
+sampled peak is 3814.59 near `(x,y)=(0.00625,0.59875)` at `t≈0.5047`.
 The final displayed frame is at `t≈0.9613`.
 
 The later fragmented interface and its wall interaction are under-resolved at

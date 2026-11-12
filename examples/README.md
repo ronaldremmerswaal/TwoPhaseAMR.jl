@@ -10,15 +10,15 @@ rather than a time-dependent flow.
 | 01 | [Taylor–Green vortex](01_taylor_green/) | Periodic vortex decay | Single phase | Level 2, T=0.2; 7 steps, 0.13 s warm |
 | 02 | [Lid-driven cavity](02_lid_driven_cavity/) | Moving-wall recirculation | Single phase | Level 1, T=15; 1900 automatic steps, 2.41 s warm |
 | 03 | [Decaying turbulence](03_decaying_turbulence/) | Random vortices and adaptive refinement | Single phase | Level 4, T=10; 18213 steps, 106.4 s |
-| 04 | [Cylinder flow](04_cylinder_flow/) | Cut-cell wake and drag | Single phase | Level 3, T=40; unmeasured (gallery T=50: 83169 steps, 899.6 s) |
+| 04 | [Cylinder flow](04_cylinder_flow/) | Cut-cell wake and drag | Single phase | Level 3, T=40; unmeasured (gallery T=50: 83169 steps, 930.7 s) |
 | 05 | [Vortex reversal](05_vortex_reverse/) | Geometric VOF transport | Prescribed velocity | Level 5, T=8; unmeasured |
-| 06 | [Capillary wave](06_capillary_wave/) | Viscous wave damping | One velocity | Level 4, one period; 78.24 s, two velocities 124.86 s |
-| 07 | [Interfacial instability](07_interfacial_instability/) | Kelvin–Helmholtz and Rayleigh–Taylor growth | Two velocity | Level 4, until doubled amplitude; 70.98 s, one velocity 18.67 s |
-| 08 | [Sessile droplet](08_sessile_droplet/) | Contact-angle relaxation | One velocity | Level 3, eight capillary times; 34.55 s |
-| 09 | [Sloped sessile droplet](09_sloped_sessile_droplet/) | Embedded inclined wall | One velocity | Level 2, four capillary times; unmeasured at this size (level-3 gallery run 119.50 s) |
+| 06 | [Capillary wave](06_capillary_wave/) | Viscous wave damping | One velocity | Level 4, one period; 75.49 s, two velocities 119.34 s |
+| 07 | [Interfacial instability](07_interfacial_instability/) | Kelvin–Helmholtz and Rayleigh–Taylor growth | Two velocity | Level 4, until doubled amplitude; 68.58 s, one velocity 19.79 s |
+| 08 | [Sessile droplet](08_sessile_droplet/) | Contact-angle relaxation | One velocity | Level 3, eight capillary times; 32.11 s |
+| 09 | [Sloped sessile droplet](09_sloped_sessile_droplet/) | Embedded inclined wall | One velocity | Level 2, four capillary times; unmeasured at this size (level-3 gallery run 127.77 s) |
 | 10 | [Stokes wave](10_stokes3_wave/) | Nonlinear free-surface wave | One velocity | Level 5, one period; unmeasured |
-| 11 | [Large gas-pocket impact](11_lgpi/) | Gravity wave over bathymetry | One velocity | Level 4, 1.2 gravity periods; unmeasured (gallery level-3 run 6197.5 s) |
-| 12 | [Manufactured Poisson](12_manufactured_poisson/) | Pressure projection with density jump | Two velocity | 32×32; 10.5 s setup and solve |
+| 11 | [Large gas-pocket impact](11_lgpi/) | Gravity wave over bathymetry | One velocity | Level 4, 1.2 gravity periods; unmeasured (gallery level-3 run 5778.1 s) |
+| 12 | [Manufactured Poisson](12_manufactured_poisson/) | Pressure projection with density jump | Two velocity | 32×32; 11.86 s setup and solve |
 
 Warm timings are second calls in one process; first-call compilation is
 additional. See each page for docs-size runs and validation details.
