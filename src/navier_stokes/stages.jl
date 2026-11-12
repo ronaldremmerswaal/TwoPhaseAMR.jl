@@ -3,7 +3,7 @@
 function _copy_velocity!(destination::FaceVelocity, source::FaceVelocity)
     destination.mesh === source.mesh ||
         throw(ArgumentError("velocities must share a mesh"))
-    copyto!(destination.interior, source.interior)
+    _parallel_copyto!(destination.interior, 0, source.interior, 0, length(source.interior))
     copyto!(destination.boundary, source.boundary)
     return destination
 end

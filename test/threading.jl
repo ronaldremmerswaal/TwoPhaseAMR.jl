@@ -880,3 +880,47 @@ end
         @test isequal(averages[2].interior, expected)
     end
 end
+
+@testset "face component copies are range copies" begin
+    # The serial face-filter mapping the range copies replace.
+    function filtered_component(velocity, Axis)
+        interior_values = [velocity.interior[k] for (k, face) in pairs(velocity.mesh.faces) if face.axis == Axis]
+        boundary_values = [velocity.boundary[k] for (k, face) in pairs(velocity.mesh.boundary_faces) if face.axis == Axis]
+        return interior_values, boundary_values
+    end
+    for periodic in ((true, true), (true, false), (false, false))
+        mesh = BlockTreeMesh(
+            base_mesh = (24, 24), block_size = (4, 4), extent = (12.0, 12.0),
+            periodic = periodic, max_level = 2,
+            refine = (key, origin, extent) -> key.level < 2 && origin[1] < 6 && origin[2] < 7,
+        )
+        velocity = FaceVelocity(mesh, (x, y, time, axis) -> axis * sin(x) + cos(1.7y))
+        for Axis in (1, 2), grain in (1, SERIAL_GRAIN)
+            expected_interior, expected_boundary = filtered_component(velocity, Axis)
+            component = FaceField{Axis}(mesh)
+            with_parallel_grain(() -> copyto!(component, velocity), grain)
+            @test isequal(component.interior, expected_interior)
+            @test isequal(component.boundary, expected_boundary)
+            all(periodic) && @test isempty(component.boundary)
+            # Back into a velocity: only the faces of `Axis` change.
+            component.interior .*= -2
+            component.boundary .*= -2
+            target = copy(velocity)
+            with_parallel_grain(() -> copyto!(target, component), grain)
+            @test isequal(filtered_component(target, Axis), (component.interior, component.boundary))
+            @test isequal(filtered_component(target, 3 - Axis), filtered_component(velocity, 3 - Axis))
+        end
+    end
+    destination = zeros(3000)
+    source = collect(1.0:3000.0)
+    for grain in (1, SERIAL_GRAIN)
+        fill!(destination, 0)
+        with_parallel_grain(() -> TwoPhaseAMR._parallel_copyto!(destination, 10, source, 500, 2400), grain)
+        @test destination[11:2410] == source[501:2900]
+        @test iszero(destination[1:10]) && iszero(destination[2411:end])
+        @test with_parallel_grain(() -> TwoPhaseAMR._parallel_copyto!(destination, 3000, source, 3000, 0), grain) === destination
+        @test_throws BoundsError TwoPhaseAMR._parallel_copyto!(destination, 2000, source, 0, 1001)
+        @test_throws BoundsError TwoPhaseAMR._parallel_copyto!(destination, 0, source, 2001, 1000)
+        @test_throws ArgumentError TwoPhaseAMR._parallel_copyto!(destination, 0, source, 0, -1)
+    end
+end

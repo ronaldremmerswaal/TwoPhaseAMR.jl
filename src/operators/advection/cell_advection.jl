@@ -39,47 +39,50 @@ function Base.copy(velocity::FaceVelocity{T, M}) where {T, M}
     return FaceVelocity{T, M}(velocity.mesh, copy(velocity.interior), copy(velocity.boundary))
 end
 
-"""Copy one directional component out of a `FaceVelocity`."""
+"""Copy one directional component out of a `FaceVelocity`.
+
+The faces of one axis are a contiguous range of the axis-major face lists
+(`_axis_face_offset`), so both copies are range copies; the interior one is
+threaded."""
 function Base.copyto!(
         destination::FaceField{Axis},
         source::FaceVelocity
     ) where {Axis}
     destination.mesh === source.mesh ||
         throw(ArgumentError("destination and source must share a mesh"))
-    local_index = 0
-    for (global_index, face) in pairs(source.mesh.faces)
-        face.axis == Axis || continue
-        local_index += 1
-        @inbounds destination.interior[local_index] = source.interior[global_index]
-    end
-    local_index = 0
-    for (global_index, face) in pairs(source.mesh.boundary_faces)
-        face.axis == Axis || continue
-        local_index += 1
-        @inbounds destination.boundary[local_index] = source.boundary[global_index]
-    end
+    mesh = source.mesh
+    interior_faces = length(destination.interior)
+    _parallel_copyto!(
+        destination.interior, 0, source.interior,
+        _axis_face_offset(mesh.faces, Axis, interior_faces), interior_faces,
+    )
+    boundary_faces = length(destination.boundary)
+    copyto!(
+        destination.boundary, 1, source.boundary,
+        _axis_face_offset(mesh.boundary_faces, Axis, boundary_faces) + 1, boundary_faces,
+    )
     return destination
 end
 
-"""Copy a directional `FaceField` into the corresponding velocity component."""
+"""Copy a directional `FaceField` into the corresponding velocity component
+(range copies, as for the reverse direction)."""
 function Base.copyto!(
         destination::FaceVelocity,
         source::FaceField{Axis}
     ) where {Axis}
     destination.mesh === source.mesh ||
         throw(ArgumentError("destination and source must share a mesh"))
-    local_index = 0
-    for (global_index, face) in pairs(destination.mesh.faces)
-        face.axis == Axis || continue
-        local_index += 1
-        @inbounds destination.interior[global_index] = source.interior[local_index]
-    end
-    local_index = 0
-    for (global_index, face) in pairs(destination.mesh.boundary_faces)
-        face.axis == Axis || continue
-        local_index += 1
-        @inbounds destination.boundary[global_index] = source.boundary[local_index]
-    end
+    mesh = destination.mesh
+    interior_faces = length(source.interior)
+    _parallel_copyto!(
+        destination.interior, _axis_face_offset(mesh.faces, Axis, interior_faces),
+        source.interior, 0, interior_faces,
+    )
+    boundary_faces = length(source.boundary)
+    copyto!(
+        destination.boundary, _axis_face_offset(mesh.boundary_faces, Axis, boundary_faces) + 1,
+        source.boundary, 1, boundary_faces,
+    )
     return destination
 end
 
