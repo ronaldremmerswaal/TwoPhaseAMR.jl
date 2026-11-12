@@ -42,7 +42,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     size in (:docs, :default) || throw(ArgumentError("size must be :docs or :default"))
     mkpath(outdir)
     started = time_ns()
-    max_level, final_time = size === :docs ? (3, 50.0) : (4, 50.0)
+    max_level, final_time = 4, 50.0
     window = (final_time - 20, final_time)
     flow = run_example(; reynolds = 200.0, max_level, final_time = 0.0, perturbation = 0.1).flow
     fields = VisualizationFieldRegistry()
@@ -89,9 +89,9 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     println("Setup + simulation: ", simulation_seconds, " s (package loading excluded)")
     export_figure(
         joinpath(outdir, "vorticity.png"), store; field = :vorticity,
-        blocks = true, title = "Vorticity at t = $final_time"
+        colorrange = (-3, 3), blocks = true, title = "Vorticity at t = $final_time"
     )
-    figure = Figure(size = (700, 420))
+    figure = Figure(size = size === :docs ? (700, 420) : (900, 540))
     axis = only(diagnosticsgrid!(figure[1, 1], store; names = [:pressure_drag]))
     xlims!(axis, window...)
     drag_values = [v for (t, v) in zip(drag.times, drag.values) if t >= window[1] && isfinite(v)]
