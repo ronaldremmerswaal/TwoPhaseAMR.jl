@@ -1999,7 +1999,7 @@ tests = [
   { file = "test/operators/staggered_diffusion.jl", testset = "composite implicit diffusion is energy contractive (#80)" },
   { file = "test/operators/staggered_diffusion.jl", testset = "cut-cell Helmholtz convergence at walls and level transitions (#87)" },
   { file = "test/operators/embedded_wall_rows.jl", testset = "grid-aligned embedded-wall Helmholtz convergence (#106)" },
-  { file = "test/operators/embedded_wall_rows.jl", testset = "inclined embedded-wall Helmholtz comparison (#106)" },
+  { file = "test/operators/embedded_wall_rows.jl", testset = "oblique embedded-wall Helmholtz convergence (#110)" },
   { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Variable stress manufactured bulk convergence" },
   { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Variable stress shifted solve on fixed and adapted trees" },
   { file = "test/operators/embedded_variable_wall_mms.jl", testset = "two-phase embedded-wall manufactured Helmholtz (#106)" },
