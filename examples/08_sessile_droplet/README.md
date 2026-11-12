@@ -57,7 +57,7 @@ The hero shows volume fraction and reconstructed interface near `0`, `4t_c` and 
 
 ![Speed and droplet interface during relaxation, with the kinetic energy](assets/relaxation.gif)
 
-The 41 retained states: speed and interface in the lower half of the domain, next to the kinetic energy with a cursor at the shown time.
+The GIF samples 41 output frames on a uniform simulation-time grid, each showing the nearest retained keyframe: speed and interface in the lower half of the domain, next to the kinetic energy with a cursor at the shown time.
 
 The final kinetic energy is `3.39393e-5` (peak `0.00786202`), and liquid volume changes by `-3.49632e-10` from its initial discrete value. These diagnose motion and conservation; no contact-angle error is claimed.
 
