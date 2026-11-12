@@ -1142,7 +1142,7 @@ sources = [
   { file = "src/two_phase/diffusion/variable_diffusion_operator.jl", symbol = "_update_dynamic_viscosity!" }
 ]
 tests = [
-  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Thesis geometric dynamic-viscosity mixture" }
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Phase-viscosity averaging rules (#113)" }
 ]
 check = "stress_rows_check"
 [[claims]]
@@ -1173,7 +1173,7 @@ sources = [
   { file = "src/two_phase/diffusion/variable_diffusion_operator.jl", symbol = "_update_log_dynamic_viscosity!" }
 ]
 tests = [
-  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Thesis geometric dynamic-viscosity mixture" }
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Phase-viscosity averaging rules (#113)" }
 ]
 check = "stress_rows_check"
 [[claims]]
