@@ -671,6 +671,7 @@ function _staggered_diffusion_operator(
         mesh::M, viscosity, boundary, T;
         construction_cache = nothing, reuse = nothing, cache_layer = 1,
         geometry = nothing,
+        averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     ) where {M <: BlockTreeMesh}
     isnothing(geometry) || throw(
         ArgumentError("geometry applies only to variable diffusion here"),
@@ -681,6 +682,7 @@ function _staggered_diffusion_operator(
             "construction_cache, reuse, and non-default cache_layer apply only to variable diffusion",
         ),
     )
+    # A constant viscosity has no phase mixture to average.
     _check_real_type(T, "staggered diffusion requires Float32 or Float64")
     viscosity_value = T(viscosity)
     viscosity_value > zero(T) ||
@@ -697,8 +699,11 @@ end
 function StaggeredDiffusionOperator(
         mesh::M; viscosity = 1, boundary = NoSlip(),
         T = eltype(mesh.origin),
+        averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     ) where {M <: BlockTreeMesh}
-    return _staggered_diffusion_operator(mesh; viscosity, boundary, T)
+    return _staggered_diffusion_operator(
+        mesh; viscosity, boundary, T, averaging,
+    )
 end
 
 @inline function _wall_value(boundary::NoSlip, connection, time, axis, ::Type{T}) where {T}

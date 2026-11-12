@@ -56,15 +56,22 @@ for a fixed `dt`, and LU appears only in the two geometric bottom solves.
 
 For two phases, the viscous term is the coupled stress divergence
 `div(2*mu*D(u))`. At cell-centred normal stresses and vertex-centred shear
-stresses, the dynamic viscosity is the geometric mixture
+stresses, the dynamic viscosity is a mixture of the phase viscosities with the
+liquid fraction `c` of the open part of a cell: harmonic (series) by default,
 
 ```math
-\bar\mu=(\mu^\ell)^c(\mu^g)^{1-c},
+\bar\mu=\left(\frac{c}{\mu^\ell}+\frac{1-c}{\mu^g}\right)^{-1},
 ```
 
-where `c` is interpolated to the stress location before evaluating the
-formula. Density appears in the staggered inertia matrix, not in this dynamic
-viscosity. The midpoint system is
+which transmits the tangential traction across an aligned interface. The
+thesis' geometric mixture `\bar\mu=(\mu^\ell)^c(\mu^g)^{1-c}` remains
+available through
+`NavierStokesOptions(viscosity_averaging = GeometricViscosityAveraging())`
+(`HarmonicViscosityAveraging()` is the default). A stress row that spans
+several cell quarters averages with the same rule: the weighted harmonic mean
+by default, and the geometric mean, evaluated with the interpolated fraction,
+for the geometric option. Density appears in the staggered inertia matrix, not
+in this dynamic viscosity. The midpoint system is
 
 ```math
 \left(M_\rho+\frac{\Delta t}{2}K_\mu\right)u^{**}
@@ -200,7 +207,10 @@ intrinsic velocities first form
 ```
 
 The existing one-velocity two-phase midpoint solver advances this field using
-the same variable-density inertia and geometric dynamic-viscosity average.
+the same variable-density inertia and the same phase-viscosity mixture: the
+`viscosity_averaging` rule of `NavierStokesOptions` governs the one stress
+operator that both velocity models share, so it applies to two-velocity flows
+as well.
 Both phases then receive the common increment
 
 ```math
