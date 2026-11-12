@@ -151,50 +151,219 @@ function _elliptic_boundary_data!(
     return diagonal
 end
 
-function _weighted_inverse_metric(
-        metric::DiagonalInverseFaceMetric{T},
-        coefficient::Vector{T}
-    ) where {T}
-    return spdiagm(0 => coefficient .* metric.diagonal)
-end
+"""Columns per fixed chunk of `_integrated_stiffness`."""
+const _ELLIPTIC_COLUMN_CHUNK = 256
 
-function _weighted_inverse_metric(
-        metric::SparseInverseFaceMetric{T},
-        coefficient::Vector{T}
-    ) where {T}
-    square_root = spdiagm(0 => sqrt.(coefficient))
-    return square_root * metric.matrix * square_root
-end
+"""
+    _integrated_stiffness(mesh, gradient_operator, coefficient)
 
+Symmetric integrated stiffness `(A + A') / 2` of `A = J' M J`, where `J` is
+the area-weighted face jump (`-|f|` at the minus cell, `|f|` at the plus cell)
+and `M` the coefficient-weighted inverse face metric: `κ K` for a diagonal
+metric `K`, `sqrt(κ) K sqrt(κ)` otherwise. The pattern holds every pair of
+cells that share a metric entry and the diagonal; an entry whose value
+cancels is stored as zero, because a coefficient refresh can make it nonzero.
+
+The values are bitwise those of SparseArrays' `transpose(J) * M * J` (left to
+right), `(A + transpose(A)) / 2` and `dropzeros!`: each product entry is the
+left-to-right sum in increasing inner index of its terms, the first term
+assigned. `P = J'M` is built by face columns and `A = PJ` by cell columns,
+each by a count pass, a prefix sum and a fill pass threaded over fixed chunks
+of `_ELLIPTIC_COLUMN_CHUNK` columns with chunk-owned merge scratch, so the
+result is the same for every thread count.
+"""
 function _integrated_stiffness(
         mesh::BlockTreeMesh,
         gradient_operator::GradientOperator{T},
         coefficient::Vector{T}
     ) where {T}
     nx, ny = mesh.block_size
-    number_of_faces = length(mesh.faces)
-    rows = Vector{Int}(undef, 2number_of_faces)
-    columns = Vector{Int}(undef, 2number_of_faces)
-    values = Vector{T}(undef, 2number_of_faces)
-    for (face_index, face) in pairs(mesh.faces)
-        entry = 2face_index - 1
-        rows[entry] = face_index
-        columns[entry] = _cell_index(face.minus, nx, ny)
-        values[entry] = -T(face.area)
-        rows[entry + 1] = face_index
-        columns[entry + 1] = _cell_index(face.plus, nx, ny)
-        values[entry + 1] = T(face.area)
+    faces = mesh.faces
+    number_of_faces = length(faces)
+    number_of_cells = ncells(mesh)
+    metric = gradient_operator.inverse_metric
+    # Weighted metric entries, in stored order.
+    weighted = Vector{T}(undef, _metric_entry_count(metric))
+    square_root = metric isa DiagonalInverseFaceMetric ? coefficient : sqrt.(coefficient)
+    _parallel_for(number_of_faces) do right_face
+        for entry in _metric_column_entries(metric, right_face)
+            left_face, value = _metric_entry(metric, entry)
+            weighted[entry] = metric isa DiagonalInverseFaceMetric ?
+                coefficient[right_face] * value :
+                (square_root[left_face] * value) * square_root[right_face]
+        end
     end
-    jump = sparse(rows, columns, values, number_of_faces, ncells(mesh))
-    face_metric = _weighted_inverse_metric(
-        gradient_operator.inverse_metric, coefficient
+    # P = J'M by face columns; scratch bound: two cells per metric entry.
+    width = 0
+    for right_face in 1:number_of_faces
+        width = max(width, 2length(_metric_column_entries(metric, right_face)))
+    end
+    face_chunks = cld(number_of_faces, _ELLIPTIC_COLUMN_CHUNK)
+    scratch_rows = Vector{Int}(undef, face_chunks * width)
+    scratch_values = Vector{T}(undef, face_chunks * width)
+    product_counts = Vector{Int}(undef, number_of_faces)
+    product_offsets = Int[]
+    product_rows = Int[]
+    product_values = T[]
+    for pass in 1:2
+        if pass == 2
+            product_offsets = _csr_offsets(product_counts)
+            resize!(product_rows, product_offsets[end] - 1)
+            resize!(product_values, length(product_rows))
+        end
+        _parallel_for(face_chunks; work = _ELLIPTIC_COLUMN_CHUNK) do chunk
+            offset = (chunk - 1) * width
+            for right_face in _chunk_columns(chunk, number_of_faces)
+                stored = 0
+                for entry in _metric_column_entries(metric, right_face)
+                    left_face, _ = _metric_entry(metric, entry)
+                    left = faces[left_face]
+                    value = weighted[entry]
+                    stored = _accumulate_column_term!(
+                        scratch_rows, scratch_values, offset, stored,
+                        _cell_index(left.minus, nx, ny), -T(left.area) * value,
+                    )
+                    stored = _accumulate_column_term!(
+                        scratch_rows, scratch_values, offset, stored,
+                        _cell_index(left.plus, nx, ny), T(left.area) * value,
+                    )
+                end
+                if pass == 1
+                    product_counts[right_face] = stored
+                else
+                    _store_sorted_column!(
+                        product_rows, product_values, product_offsets[right_face],
+                        scratch_rows, scratch_values, offset, stored,
+                    )
+                end
+            end
+        end
+    end
+    # A = PJ by cell columns; scratch bound: the product columns of the cell's
+    # faces and the diagonal.
+    incidence_offsets, incidence_faces, incidence_signs = _cell_face_incidence(mesh)
+    width = 0
+    for cell in 1:number_of_cells
+        cell_width = 1
+        for incidence in incidence_offsets[cell]:(incidence_offsets[cell + 1] - 1)
+            cell_width += product_counts[incidence_faces[incidence]]
+        end
+        width = max(width, cell_width)
+    end
+    cell_chunks = cld(number_of_cells, _ELLIPTIC_COLUMN_CHUNK)
+    resize!(scratch_rows, cell_chunks * width)
+    resize!(scratch_values, cell_chunks * width)
+    # A diagonal entry without a term is marked by `has_term = false`.
+    scratch_terms = Vector{Bool}(undef, cell_chunks * width)
+    column_counts = Vector{Int}(undef, number_of_cells)
+    column_pointers = Int[]
+    rows = Int[]
+    products = T[]
+    has_term = Bool[]
+    for pass in 1:2
+        if pass == 2
+            column_pointers = _csr_offsets(column_counts)
+            resize!(rows, column_pointers[end] - 1)
+            resize!(products, length(rows))
+            resize!(has_term, length(rows))
+        end
+        _parallel_for(cell_chunks; work = _ELLIPTIC_COLUMN_CHUNK) do chunk
+            offset = (chunk - 1) * width
+            for cell in _chunk_columns(chunk, number_of_cells)
+                stored = 0
+                for incidence in incidence_offsets[cell]:(incidence_offsets[cell + 1] - 1)
+                    face_index = incidence_faces[incidence]
+                    area = T(faces[face_index].area)
+                    jump = incidence_signs[incidence] < 0 ? -area : area
+                    for slot in product_offsets[face_index]:(product_offsets[face_index + 1] - 1)
+                        stored = _accumulate_column_term!(
+                            scratch_rows, scratch_values, offset, stored,
+                            product_rows[slot], product_values[slot] * jump,
+                        )
+                    end
+                end
+                for slot in (offset + 1):(offset + stored)
+                    scratch_terms[slot] = true
+                end
+                if !any(slot -> scratch_rows[slot] == cell, (offset + 1):(offset + stored))
+                    stored += 1
+                    scratch_rows[offset + stored] = cell
+                    scratch_values[offset + stored] = zero(T)
+                    scratch_terms[offset + stored] = false
+                end
+                if pass == 1
+                    column_counts[cell] = stored
+                else
+                    _store_sorted_column!(
+                        rows, products, column_pointers[cell],
+                        scratch_rows, scratch_values, offset, stored,
+                        has_term, scratch_terms,
+                    )
+                end
+            end
+        end
+    end
+    # Symmetrise: dropped (zero) sums become stored zeros of the pattern.
+    stiffness_values = Vector{T}(undef, length(rows))
+    _parallel_for(number_of_cells) do column
+        for slot in column_pointers[column]:(column_pointers[column + 1] - 1)
+            row = rows[slot]
+            mirror = _csc_stored_pointer_or_zero(rows, column_pointers, column, row)
+            value = has_term[slot] ? (products[slot] + products[mirror]) / 2 : zero(T)
+            stiffness_values[slot] = iszero(value) ? zero(T) : value
+        end
+    end
+    return SparseMatrixCSC(
+        number_of_cells, number_of_cells, column_pointers, rows, stiffness_values,
     )
-    stiffness = transpose(jump) * face_metric * jump
-    # Sparse products can accumulate the two triangles in a different order.
-    # Explicit symmetrisation makes the algebraic contract exact to roundoff.
-    stiffness = (stiffness + transpose(stiffness)) / 2
-    dropzeros!(stiffness)
-    return stiffness
+end
+
+@inline _chunk_columns(chunk, number_of_columns) =
+    ((chunk - 1) * _ELLIPTIC_COLUMN_CHUNK + 1):min(number_of_columns, chunk * _ELLIPTIC_COLUMN_CHUNK)
+
+"""Add `term` to row `row` of the column held in `rows`/`column_values` at
+`offset .+ (1:stored)` (assign it to a new row) and return the new count."""
+@inline function _accumulate_column_term!(rows, column_values, offset, stored, row, term)
+    for slot in (offset + 1):(offset + stored)
+        if rows[slot] == row
+            column_values[slot] += term
+            return stored
+        end
+    end
+    rows[offset + stored + 1] = row
+    column_values[offset + stored + 1] = term
+    return stored + 1
+end
+
+"""Store the scratch column `offset .+ (1:stored)` sorted by row from
+`start` on (insertion sort in place; columns are short), with an optional
+flag per entry."""
+function _store_sorted_column!(
+        rows, column_values, start, scratch_rows, scratch_values, offset, stored,
+        flags = nothing, scratch_flags = nothing,
+    )
+    for position in (offset + 2):(offset + stored)
+        row = scratch_rows[position]
+        value = scratch_values[position]
+        flag = flags === nothing ? false : scratch_flags[position]
+        target = position
+        while target > offset + 1 && scratch_rows[target - 1] > row
+            scratch_rows[target] = scratch_rows[target - 1]
+            scratch_values[target] = scratch_values[target - 1]
+            flags === nothing || (scratch_flags[target] = scratch_flags[target - 1])
+            target -= 1
+        end
+        scratch_rows[target] = row
+        scratch_values[target] = value
+        flags === nothing || (scratch_flags[target] = flag)
+    end
+    for local_index in 1:stored
+        rows[start + local_index - 1] = scratch_rows[offset + local_index]
+        column_values[start + local_index - 1] = scratch_values[offset + local_index]
+        flags === nothing ||
+            (flags[start + local_index - 1] = scratch_flags[offset + local_index])
+    end
+    return nothing
 end
 
 # CSC columns are sorted by row. Return the stored slot even when its current
@@ -229,75 +398,6 @@ function _elliptic_diagonal_pointers(matrix::SparseMatrixCSC)
         pointers[index] = _csc_stored_pointer(matrix, index, index)
     end
     return pointers
-end
-
-function _complete_elliptic_stiffness_pattern(
-        mesh::BlockTreeMesh,
-        gradient_operator::GradientOperator{T},
-        stiffness::SparseMatrixCSC{T, Int},
-    ) where {T}
-    nx, ny = mesh.block_size
-    rows = Int[]
-    columns = Int[]
-    metric = gradient_operator.inverse_metric
-    metric_entries = metric isa DiagonalInverseFaceMetric ?
-        length(metric.diagonal) : nnz(metric.matrix)
-    sizehint!(rows, ncells(mesh) + 4metric_entries)
-    sizehint!(columns, ncells(mesh) + 4metric_entries)
-    append!(rows, 1:ncells(mesh))
-    append!(columns, 1:ncells(mesh))
-    function add_face_pair(left_face, right_face)
-        left = mesh.faces[left_face]
-        right = mesh.faces[right_face]
-        left_cells = (
-            _cell_index(left.minus, nx, ny),
-            _cell_index(left.plus, nx, ny),
-        )
-        right_cells = (
-            _cell_index(right.minus, nx, ny),
-            _cell_index(right.plus, nx, ny),
-        )
-        for left_cell in left_cells, right_cell in right_cells
-            push!(rows, left_cell)
-            push!(columns, right_cell)
-        end
-        return nothing
-    end
-    if metric isa DiagonalInverseFaceMetric
-        for face in eachindex(metric.diagonal)
-            add_face_pair(face, face)
-        end
-    else
-        metric_rows = rowvals(metric.matrix)
-        for right_face in axes(metric.matrix, 2),
-                pointer in nzrange(metric.matrix, right_face)
-            add_face_pair(metric_rows[pointer], right_face)
-        end
-    end
-    completed = sparse(
-        rows, columns, ones(T, length(rows)), ncells(mesh), ncells(mesh),
-    )
-    fill!(nonzeros(completed), zero(T))
-    completed_rows = rowvals(completed)
-    completed_values = nonzeros(completed)
-    stiffness_rows = rowvals(stiffness)
-    stiffness_values = nonzeros(stiffness)
-    # Both row lists are sorted, so copy the sparse product with a column
-    # merge rather than building a row/column hash table.
-    for column in axes(stiffness, 2)
-        target = completed.colptr[column]
-        stop = completed.colptr[column + 1] - 1
-        for pointer in nzrange(stiffness, column)
-            row = @inbounds stiffness_rows[pointer]
-            while target <= stop && (@inbounds completed_rows[target]) < row
-                target += 1
-            end
-            target <= stop && (@inbounds completed_rows[target]) == row ||
-                error("elliptic stiffness pattern is incomplete")
-            @inbounds completed_values[target] = stiffness_values[pointer]
-        end
-    end
-    return completed
 end
 
 struct StiffnessRefresh{T}
@@ -417,92 +517,116 @@ function _impose_inactive_constraints!(
     return matrix
 end
 
+# Stored entries of an inverse face metric, by face column: the left faces and
+# values of column `right_face`, in stored order.
+@inline _metric_column_entries(metric::DiagonalInverseFaceMetric, right_face) =
+    right_face:right_face
+@inline _metric_column_entries(metric::SparseInverseFaceMetric, right_face) =
+    nzrange(metric.matrix, right_face)
+@inline _metric_entry(metric::DiagonalInverseFaceMetric, entry) =
+    (entry, @inbounds metric.diagonal[entry])
+@inline _metric_entry(metric::SparseInverseFaceMetric, entry) =
+    (@inbounds(rowvals(metric.matrix)[entry]), @inbounds(nonzeros(metric.matrix)[entry]))
+@inline _metric_entry_count(metric::DiagonalInverseFaceMetric) = length(metric.diagonal)
+@inline _metric_entry_count(metric::SparseInverseFaceMetric) = nnz(metric.matrix)
+
+# The stored slot of `(row, column)`, or zero when the pattern lacks it.
+@inline function _csc_stored_pointer_or_zero(rows, column_pointers, row::Int, column::Int)
+    lo = @inbounds column_pointers[column]
+    hi = (@inbounds column_pointers[column + 1]) - 1
+    while lo <= hi
+        middle = (lo + hi) >>> 1
+        candidate = @inbounds rows[middle]
+        if candidate < row
+            lo = middle + 1
+        elseif candidate > row
+            hi = middle - 1
+        else
+            return middle
+        end
+    end
+    return 0
+end
+
+@inline function _metric_entry_cells(faces, nx, ny, face_index)
+    face = @inbounds faces[face_index]
+    return _cell_index(face.minus, nx, ny), _cell_index(face.plus, nx, ny)
+end
+
+"""
+Refresh map of the elliptic stiffness: for stored entry `p`, the contributions
+`left_sign * area(left) * K[left, right] * right_sign * area(right)` of every
+metric entry `K[left, right]` whose cells meet in `p`, in metric-entry order
+(face columns, then stored order; per entry the minus/plus cells of the left
+face, then of the right face). The four stiffness slots of each metric entry
+are located in a threaded pass over face columns; a stable counting sort by
+slot then places every contribution once.
+"""
 function _elliptic_coefficient_refresh_map(
         mesh::BlockTreeMesh,
         gradient_operator::GradientOperator{T},
         stiffness::SparseMatrixCSC{T, Int},
     ) where {T}
     stiffness_rows = rowvals(stiffness)
-    pointers = Int[]
-    left_faces = Int[]
-    right_faces = Int[]
-    factors = T[]
+    column_pointers = stiffness.colptr
     metric = gradient_operator.inverse_metric
-    metric_entries = metric isa DiagonalInverseFaceMetric ?
-        length(metric.diagonal) : nnz(metric.matrix)
-    for values in (pointers, left_faces, right_faces, factors)
-        sizehint!(values, 4metric_entries)
-    end
+    faces = mesh.faces
     nx, ny = mesh.block_size
-    function add_metric_entry(left_face, right_face, metric_value)
-        left = mesh.faces[left_face]
-        right = mesh.faces[right_face]
-        left_cells = (
-            (_cell_index(left.minus, nx, ny), -one(T)),
-            (_cell_index(left.plus, nx, ny), one(T)),
-        )
-        right_cells = (
-            (_cell_index(right.minus, nx, ny), -one(T)),
-            (_cell_index(right.plus, nx, ny), one(T)),
-        )
-        for (left_cell, left_sign) in left_cells
-            for (right_cell, right_sign) in right_cells
-                push!(pointers, _csc_stored_pointer(stiffness, left_cell, right_cell))
-                push!(left_faces, left_face)
-                push!(right_faces, right_face)
-                push!(
-                    factors,
-                    left_sign * T(left.area) * metric_value *
-                        right_sign * T(right.area),
+    number_of_contributions = 4 * _metric_entry_count(metric)
+    contribution_pointers = Vector{Int}(undef, number_of_contributions)
+    # A missing slot is stored as zero; the caller throws after the launch.
+    _parallel_for(length(faces)) do right_face
+        right_minus, right_plus = _metric_entry_cells(faces, nx, ny, right_face)
+        for entry in _metric_column_entries(metric, right_face)
+            left_face, _ = _metric_entry(metric, entry)
+            left_minus, left_plus = _metric_entry_cells(faces, nx, ny, left_face)
+            contribution = 4entry - 3
+            for left_cell in (left_minus, left_plus), right_cell in (right_minus, right_plus)
+                contribution_pointers[contribution] = _csc_stored_pointer_or_zero(
+                    stiffness_rows, column_pointers, left_cell, right_cell,
                 )
+                contribution += 1
             end
-        end
-        return nothing
-    end
-    if metric isa DiagonalInverseFaceMetric
-        for face in eachindex(metric.diagonal)
-            add_metric_entry(face, face, metric.diagonal[face])
-        end
-    else
-        metric_rows = rowvals(metric.matrix)
-        metric_values = nonzeros(metric.matrix)
-        for right_face in axes(metric.matrix, 2),
-                pointer in nzrange(metric.matrix, right_face)
-            add_metric_entry(
-                metric_rows[pointer], right_face, metric_values[pointer],
-            )
         end
     end
     transpose_pointers = Vector{Int}(undef, nnz(stiffness))
-    for column in axes(stiffness, 2), pointer in nzrange(stiffness, column)
-        @inbounds transpose_pointers[pointer] =
-            _csc_stored_pointer(stiffness, column, stiffness_rows[pointer])
+    @_parallel for column in 1:size(stiffness, 2)
+        for slot in column_pointers[column]:(column_pointers[column + 1] - 1)
+            @inbounds transpose_pointers[slot] = _csc_stored_pointer_or_zero(
+                stiffness_rows, column_pointers, column, stiffness_rows[slot],
+            )
+        end
     end
+    (any(iszero, contribution_pointers) || any(iszero, transpose_pointers)) &&
+        error("sparse topology is missing a required entry")
     # Stable counting by target preserves the original per-entry summation
     # order without sorting the potentially much larger contribution list.
-    offsets = zeros(Int, nnz(stiffness) + 1)
-    for pointer in pointers
-        @inbounds offsets[pointer + 1] += 1
-    end
-    for pointer in 1:nnz(stiffness)
-        @inbounds offsets[pointer + 1] += offsets[pointer]
-    end
-    offsets .+= 1
-    next = copy(offsets)
-    ordered_pointers = similar(pointers)
-    ordered_left = similar(left_faces)
-    ordered_right = similar(right_faces)
-    ordered_factors = similar(factors)
-    for contribution in eachindex(pointers)
-        pointer = @inbounds pointers[contribution]
-        target = @inbounds next[pointer]
-        @inbounds begin
-            ordered_pointers[target] = pointer
-            ordered_left[target] = left_faces[contribution]
-            ordered_right[target] = right_faces[contribution]
-            ordered_factors[target] = factors[contribution]
-            next[pointer] += 1
+    offsets, order = _grouped_output_schedule(contribution_pointers, nnz(stiffness))
+    ordered_pointers = contribution_pointers[order]
+    ordered_left = Vector{Int}(undef, number_of_contributions)
+    ordered_right = Vector{Int}(undef, number_of_contributions)
+    ordered_factors = Vector{T}(undef, number_of_contributions)
+    # Every contribution of entry `k` lies in `4k - 3:4k`; recover its faces,
+    # metric value and signs from that index.
+    entry_faces = Vector{Int}(undef, _metric_entry_count(metric))
+    _parallel_for(length(faces)) do right_face
+        for entry in _metric_column_entries(metric, right_face)
+            entry_faces[entry] = right_face
         end
+    end
+    @_parallel for target in 1:number_of_contributions
+        contribution = @inbounds order[target]
+        entry, combination = divrem(contribution - 1, 4)
+        entry += 1
+        right_face = @inbounds entry_faces[entry]
+        left_face, metric_value = _metric_entry(metric, entry)
+        left_sign = combination < 2 ? -one(T) : one(T)
+        right_sign = iseven(combination) ? -one(T) : one(T)
+        @inbounds ordered_left[target] = left_face
+        @inbounds ordered_right[target] = right_face
+        @inbounds ordered_factors[target] =
+            left_sign * T(faces[left_face].area) * metric_value *
+            right_sign * T(faces[right_face].area)
     end
     return StiffnessRefresh(
         ordered_pointers, ordered_left, ordered_right, ordered_factors,
@@ -585,10 +709,7 @@ function EllipticOperator(
         boundary_material, apertures, constraints,
     )
     if assemble_matrix
-        stiffness = _complete_elliptic_stiffness_pattern(
-            mesh, gradient_operator,
-            _integrated_stiffness(mesh, gradient_operator, coefficients),
-        )
+        stiffness = _integrated_stiffness(mesh, gradient_operator, coefficients)
         diagonal_pointers = _elliptic_diagonal_pointers(stiffness)
         stiffness_values = nonzeros(stiffness)
         for cell in eachindex(boundary_diagonal)

@@ -3,18 +3,23 @@ struct HeightDonor{T}
     bounds::NTuple{4, T}
     weight::T
 end
-struct HeightGhost{T}
+"""A height-function halo value: cell `(i, j)` of the padded value matrix of
+`block`, the weighted sum of `donors[first_donor .+ (0:(donor_count - 1))]`."""
+struct HeightGhost
     block::Int
     i::Int
     j::Int
-    donors::Vector{HeightDonor{T}}
+    first_donor::Int
+    donor_count::Int
 end
 mutable struct HeightFunctionCache{T}
     keys::Vector{BlockKey}
     values::Vector{Matrix{T}}
-    ghosts::Vector{HeightGhost{T}}
+    ghosts::Vector{HeightGhost}
+    donors::Vector{HeightDonor{T}}
 end
-HeightFunctionCache(::Type{T}) where {T} = HeightFunctionCache(BlockKey[], Matrix{T}[], HeightGhost{T}[])
+HeightFunctionCache(::Type{T}) where {T} =
+    HeightFunctionCache(BlockKey[], Matrix{T}[], HeightGhost[], HeightDonor{T}[])
 
 @inline function _line_liquid_fraction(
         field, ref, direction, transverse_coordinate,
@@ -156,83 +161,157 @@ function _interface_height(field, direction, position)
     return low_phase ? normal_low + liquid_height : normal_high - liquid_height
 end
 
+"""Lattice cell `(xlo, ylo)` of halo cell `(i, j)` of `block`, wrapped across
+periodic seams, or `nothing` beyond a physical boundary (no valid height
+column there)."""
+@inline function _height_ghost_cell(mesh, block, i, j, lattice)
+    nx, ny = mesh.block_size
+    scale = _block_scale(mesh, block.key.level)
+    xlo = (block.key.i * nx + i - 1) * scale
+    ylo = (block.key.j * ny + j - 1) * scale
+    if (!mesh.periodic[1] && !(0 <= xlo && xlo + scale <= lattice[1])) ||
+            (!mesh.periodic[2] && !(0 <= ylo && ylo + scale <= lattice[2]))
+        return nothing
+    end
+    mesh.periodic[1] && (xlo = mod(xlo, lattice[1]))
+    mesh.periodic[2] && (ylo = mod(ylo, lattice[2]))
+    return xlo, ylo, scale
+end
+
+"""Count (`donors === nothing`) or store from `first_donor` on the donor
+cells of the halo lattice cell `(xlo, ylo)` of size `scale`: the leaf cells it
+overlaps, by block index, then cell row and column. Return their number."""
+function _height_ghost_donors!(
+        donors, first_donor, mesh, indices_by_key, candidate_nodes,
+        candidate_blocks, xlo, ylo, scale, ::Type{T},
+    ) where {T}
+    nx, ny = mesh.block_size
+    xhi, yhi = xlo + scale, ylo + scale
+    # A dyadic target cannot straddle a periodic seam after wrapping.
+    empty!(candidate_nodes)
+    _collect_leaf_nodes_in_window!(
+        candidate_nodes, mesh.root, (xlo, ylo), (xhi, yhi),
+        mesh.max_level, mesh.block_size,
+    )
+    empty!(candidate_blocks)
+    for node in candidate_nodes
+        push!(candidate_blocks, indices_by_key[node.data.key])
+    end
+    sort!(candidate_blocks)
+    donor_count = 0
+    for db in candidate_blocks
+        other = mesh.blocks[db]
+        other_scale = _block_scale(mesh, other.key.level)
+        other_x = other.key.i * nx * other_scale
+        other_y = other.key.j * ny * other_scale
+        xl = max(xlo, other_x)
+        xh = min(xhi, other_x + nx * other_scale)
+        yl = max(ylo, other_y)
+        yh = min(yhi, other_y + ny * other_scale)
+        xh > xl && yh > yl || continue
+        ilo = max(1, fld(xl - other_x, other_scale) + 1)
+        ihi = min(nx, cld(xh - other_x, other_scale))
+        jlo = max(1, fld(yl - other_y, other_scale) + 1)
+        jhi = min(ny, cld(yh - other_y, other_scale))
+        for dj in jlo:jhi, di in ilo:ihi
+            cell_x = other_x + (di - 1) * other_scale
+            cell_y = other_y + (dj - 1) * other_scale
+            left = max(xl, cell_x)
+            right = min(xh, cell_x + other_scale)
+            low = max(yl, cell_y)
+            high = min(yh, cell_y + other_scale)
+            right > left && high > low || continue
+            if donors !== nothing
+                bounds = (
+                    T((left - cell_x) / other_scale - 0.5),
+                    T((right - cell_x) / other_scale - 0.5),
+                    T((low - cell_y) / other_scale - 0.5),
+                    T((high - cell_y) / other_scale - 0.5),
+                )
+                weight = T((right - left) * (high - low) / (scale * scale))
+                donors[first_donor + donor_count] =
+                    HeightDonor{T}(CellRef(db, di, dj), bounds, weight)
+            end
+            donor_count += 1
+        end
+    end
+    return donor_count
+end
+
+"""
+Rebuild the height-function halo cache after a topology change: the halo
+cells of every block (block, then row and column order) and their donor
+cells. Halo cells are counted per block, donors are counted and stored per
+halo cell by two read-only tree searches (count, prefix sum, fill), threaded
+over blocks; the value matrices are reused.
+"""
 function _height_cache!(field)
     mesh, cache = field.mesh, field.height_cache
     T = eltype(field)
     length(cache.keys) == nblocks(mesh) &&
         all(cache.keys[b] == mesh.blocks[b].key for b in eachindex(cache.keys)) && return cache
-    empty!(cache.keys); empty!(cache.values); empty!(cache.ghosts)
     nx, ny = mesh.block_size
+    number_of_blocks = nblocks(mesh)
+    resize!(cache.keys, number_of_blocks)
+    previous_blocks = length(cache.values)
+    resize!(cache.values, number_of_blocks)
+    for b in 1:number_of_blocks
+        cache.keys[b] = mesh.blocks[b].key
+        if b > previous_blocks || size(cache.values[b]) != (nx + 8, ny + 8)
+            cache.values[b] = Matrix{T}(undef, nx + 8, ny + 8)
+        end
+        fill!(cache.values[b], T(NaN))
+    end
     indices_by_key = Dict(
         block.key => index for (index, block) in pairs(mesh.blocks)
     )
-    candidate_blocks = Int[]
-    candidate_nodes = _tree_node_type(mesh.root)[]
     lattice = _finest_lattice_size(mesh)
-    for (b, block) in pairs(mesh.blocks)
-        push!(cache.keys, block.key)
-        push!(cache.values, fill(eltype(field)(NaN), nx + 8, ny + 8))
-        scale = _block_scale(mesh, block.key.level)
+    ghost_counts = Vector{Int}(undef, number_of_blocks)
+    _parallel_for(number_of_blocks; work = _block_work()) do b
+        ghosts = 0
         for j in -3:(ny + 4), i in -3:(nx + 4)
             1 <= i <= nx && 1 <= j <= ny && continue
-            xlo = (block.key.i * nx + i - 1) * scale
-            ylo = (block.key.j * ny + j - 1) * scale
-            if (!mesh.periodic[1] && !(0 <= xlo && xlo + scale <= lattice[1])) ||
-                    (!mesh.periodic[2] && !(0 <= ylo && ylo + scale <= lattice[2]))
-                continue # physical boundaries do not provide valid height columns
-            end
-            mesh.periodic[1] && (xlo = mod(xlo, lattice[1]))
-            mesh.periodic[2] && (ylo = mod(ylo, lattice[2]))
-            xhi, yhi = xlo + scale, ylo + scale
-            donors = HeightDonor{T}[]
-            # A dyadic target cannot straddle a periodic seam after wrapping.
-            empty!(candidate_nodes)
-            _collect_leaf_nodes_in_window!(
-                candidate_nodes, mesh.root, (xlo, ylo), (xhi, yhi),
-                mesh.max_level, mesh.block_size,
-            )
-            empty!(candidate_blocks)
-            for node in candidate_nodes
-                push!(candidate_blocks, indices_by_key[node.data.key])
-            end
-            sort!(candidate_blocks)
-            for db in candidate_blocks
-                other = mesh.blocks[db]
-                other_scale = _block_scale(mesh, other.key.level)
-                other_x = other.key.i * nx * other_scale
-                other_y = other.key.j * ny * other_scale
-                xl = max(xlo, other_x)
-                xh = min(xhi, other_x + nx * other_scale)
-                yl = max(ylo, other_y)
-                yh = min(yhi, other_y + ny * other_scale)
-                xh > xl && yh > yl || continue
-                ilo = max(1, fld(xl - other_x, other_scale) + 1)
-                ihi = min(nx, cld(xh - other_x, other_scale))
-                jlo = max(1, fld(yl - other_y, other_scale) + 1)
-                jhi = min(ny, cld(yh - other_y, other_scale))
-                for dj in jlo:jhi, di in ilo:ihi
-                    cell_x = other_x + (di - 1) * other_scale
-                    cell_y = other_y + (dj - 1) * other_scale
-                    left = max(xl, cell_x)
-                    right = min(xh, cell_x + other_scale)
-                    low = max(yl, cell_y)
-                    high = min(yh, cell_y + other_scale)
-                    right > left && high > low || continue
-                    bounds = (
-                        T((left - cell_x) / other_scale - 0.5),
-                        T((right - cell_x) / other_scale - 0.5),
-                        T((low - cell_y) / other_scale - 0.5),
-                        T((high - cell_y) / other_scale - 0.5),
+            isnothing(_height_ghost_cell(mesh, mesh.blocks[b], i, j, lattice)) ||
+                (ghosts += 1)
+        end
+        ghost_counts[b] = ghosts
+    end
+    ghost_offsets = _csr_offsets(ghost_counts)
+    donor_counts = Vector{Int}(undef, ghost_offsets[end] - 1)
+    node_type = _tree_node_type(mesh.root)
+    # Pass 1 counts the donors of each halo cell; pass 2 stores them.
+    for pass in 1:2
+        donor_offsets = pass == 1 ? nothing : _csr_offsets(donor_counts)
+        if pass == 2
+            resize!(cache.ghosts, length(donor_counts))
+            resize!(cache.donors, donor_offsets[end] - 1)
+        end
+        _parallel_for(number_of_blocks; work = _block_work()) do b
+            block = mesh.blocks[b]
+            candidate_nodes = node_type[]
+            candidate_blocks = Int[]
+            ghost = ghost_offsets[b]
+            for j in -3:(ny + 4), i in -3:(nx + 4)
+                1 <= i <= nx && 1 <= j <= ny && continue
+                ghost_cell = _height_ghost_cell(mesh, block, i, j, lattice)
+                isnothing(ghost_cell) && continue
+                xlo, ylo, scale = ghost_cell
+                if pass == 1
+                    donor_counts[ghost] = _height_ghost_donors!(
+                        nothing, 0, mesh, indices_by_key, candidate_nodes,
+                        candidate_blocks, xlo, ylo, scale, T,
                     )
-                    weight = T((right - left) * (high - low) / (scale * scale))
-                    push!(
-                        donors, HeightDonor{T}(
-                            CellRef(db, di, dj), bounds, weight
-                        )
+                else
+                    _height_ghost_donors!(
+                        cache.donors, donor_offsets[ghost], mesh, indices_by_key,
+                        candidate_nodes, candidate_blocks, xlo, ylo, scale, T,
+                    )
+                    cache.ghosts[ghost] = HeightGhost(
+                        b, i + 4, j + 4, donor_offsets[ghost], donor_counts[ghost],
                     )
                 end
+                ghost += 1
             end
-            push!(cache.ghosts, HeightGhost(b, i + 4, j + 4, donors))
         end
     end
     return cache
@@ -259,11 +338,13 @@ function _fill_height_values!(field)
             end
         end
     end
+    donors = cache.donors
     @_parallel for ghost_index in 1:length(cache.ghosts)
         ghost = cache.ghosts[ghost_index]
         value = zero(eltype(field))
         valid = true
-        for donor in ghost.donors
+        for donor_index in ghost.first_donor:(ghost.first_donor + ghost.donor_count - 1)
+            donor = donors[donor_index]
             ref = donor.cell
             if !isnothing(field.geometry) &&
                     _get(field.geometry.open_fraction, ref) <

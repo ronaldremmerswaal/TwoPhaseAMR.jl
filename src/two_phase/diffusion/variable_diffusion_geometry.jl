@@ -439,9 +439,8 @@ end
     return low - margin <= coordinate <= high + margin
 end
 
-function _patch_near_changed_block(
-        vertex::NTuple{2, Int}, key::BlockKey, mesh::BlockTreeMesh,
-    )
+"""Lattice box and margin of the patches a changed block `key` invalidates."""
+function _changed_block_window(key::BlockKey, mesh::BlockTreeMesh)
     lattice = _finest_lattice_size(mesh)
     block_scale = _block_scale(mesh, key.level)
     low = (
@@ -465,6 +464,14 @@ function _patch_near_changed_block(
         ceil(Int, physical_margin / finest_spacing[1]),
         ceil(Int, physical_margin / finest_spacing[2]),
     )
+    return low, high, margin
+end
+
+@inline function _patch_near_changed_block(
+        vertex::NTuple{2, Int}, window, mesh::BlockTreeMesh,
+    )
+    low, high, margin = window
+    lattice = _finest_lattice_size(mesh)
     return _coordinate_near_interval(
         vertex[1], low[1], high[1], margin[1],
         mesh.periodic[1], lattice[1],
@@ -504,14 +511,18 @@ function _prepare_shear_patch_layer!(
     end
 
     if !isempty(layer.changed_blocks) && !isempty(layer.patches)
+        windows = [_changed_block_window(key, mesh) for key in layer.changed_blocks]
+        patch_keys = collect(keys(layer.patches))
+        stale = Vector{Bool}(undef, length(patch_keys))
+        _parallel_for(length(patch_keys); work = length(windows)) do index
+            vertex = patch_keys[index].vertex
+            stale[index] = any(
+                window -> _patch_near_changed_block(vertex, window, mesh), windows,
+            )
+        end
         empty!(layer.invalidated_patches)
-        for patch_key in keys(layer.patches)
-            any(
-                key -> _patch_near_changed_block(
-                    patch_key.vertex, key, mesh,
-                ),
-                layer.changed_blocks,
-            ) && push!(layer.invalidated_patches, patch_key)
+        for index in eachindex(patch_keys)
+            stale[index] && push!(layer.invalidated_patches, patch_keys[index])
         end
         for patch_key in layer.invalidated_patches
             delete!(layer.patches, patch_key)
