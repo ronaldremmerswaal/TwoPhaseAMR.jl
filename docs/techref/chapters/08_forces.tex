@@ -621,9 +621,15 @@ the transported fractions. Without a solid $\twocoef=\facecoef$ and
 $\forcemaptv=\forcemap$, and the step uses the one-velocity operator,
 refreshed only when $\surftens>0$ or $\gravacc\neq\mathbf{0}$. With a solid
 the two maps are congruent, $\forcemap=\apermat^{1/2}\forcemaptv\apermat^{1/2}$
-with $\apermat=\diag{\aperture{}}$: $(\forcemap\fjump{})_f=\aperture{f}(\forcemaptv\fjump{})_f$
-at a conforming face, but not at a face that $\rieszmat$ couples at a level
-transition. The projection assembles its own system with the coefficient
+with $\apermat=\diag{\aperture{}}$, so that
+$\forcemap\fjump{}=\apermat^{1/2}\forcemaptv(\apermat^{1/2}\jump{})$: at a
+face whose row of $\rieszmat$ is diagonal both maps are diagonal there,
+$(\forcemaptv\fjump{})_f=\fjump{}_f/(\stagdens{f}\,\opendualvol{f})$, so that
+$(\forcemap\fjump{})_f=\aperture{f}\,\fjump{}_f/(\stagdens{f}\,\opendualvol{f})$,
+the face acceleration of~\cref{eq:forces:conforming}; while at a level transition a row that
+$\rieszmat$ couples mixes faces whose apertures differ, so that
+$(\forcemap\fjump{})_f\neq\aperture{f}(\forcemaptv\fjump{})_f$ there.
+The projection assembles its own system with the coefficient
 $\twocoef$ and the gradient-jump unknowns $\gradjump$ with phase
 coefficients $\gfmthing^{\phase}$; the forces enter it through the predictor
 only, and its common pressure gradient $\forcemaptv\jumpmat\pres$ uses the
@@ -646,14 +652,33 @@ its CSF force added to both phases and projected by CMDGFM, keeps at most
 $\chkTensionTwoCmdgfm$ of the increment without solid and
 $\chkTensionTwoCmdgfmCut$ on the cut mesh ($\chkTensionTwoOne$ with one
 velocity). Until \issue{76} (PR~\#81) the increments used the one-velocity
-map $\forcemap$. On the composite mesh with a solid a cut face with
-$\aperture{f}=0.8$ at the level transition carries a gravity jump, or is
-coupled by $\rieszmat$ to faces that carry a CSF jump, and there
-$\forcemap\fjump{}$ is not in the range of $\forcemaptv\jumpmat$: CMDGFM left
-$0.029$ (solid in the gas) and $0.030$ (in the liquid) of $\dt\abs{\gravacc}$
-and $0.013$ of the drop's increment, now $1.1\times10^{-10}$,
-$4.3\times10^{-11}$ and $2.2\times10^{-12}$ (projection only; derivation
-(derivation audit).
+map $\forcemap$ of the cut-cell operator, i.e.\ the same jumps through
+$\apermat^{1/2}\forcemaptv\apermat^{1/2}$, whereas the projection removes
+gradients of $\forcemaptv$ alone: it balances that increment if and only if
+$\apermat^{1/2}\forcemaptv(\apermat^{1/2}\jump{})$ lies in the range of
+$\forcemaptv\jumpmat$, which at a face whose row of $\rieszmat$ is diagonal
+reduces to $\aperture{f}\jump{}_f$ being the jump of a cell function.
+Without a solid $\forcemaptv=\forcemap$ bitwise; on a conforming mesh with
+a solid every row is diagonal, and the one-velocity increment is balanced
+exactly when the aperture-weighted jumps are those of a cell function, which
+holds for the planar state of \cref{sec:forces:gravity} because its
+$\aperture{f}=1$ on every face that carries a jump. At a level transition
+the row of $\rieszmat$ mixes those faces with the cut face at
+$\aperture{f}=0.8$, so
+$\apermat^{1/2}\forcemaptv(\apermat^{1/2}\jump{})$ leaves the range even
+though $\jump{}$ is the jump of a cell function, and the one-velocity
+increment of the gravity or CSF jumps leaves $\chkStepCmdgfmFormer$ of
+$\dt\abs{\gravacc}$ (projection only, the largest of the composite cases
+with a solid; the full step left $0.029$ with the solid in the gas and
+$0.030$ with it in the liquid). The cut-mesh drop behaves alike: the solid
+does not touch it, but one cut face with $\aperture{f}=0.8$ at the level
+transition is coupled through $\rieszmat$ to the drop's CSF jumps, and the
+one-velocity increment leaves $0.013$ of it, while CGFM, whose jump never
+reaches that row, is balanced ($\chkTensionTwoCgfmCut$). With the increment evaluated through $\forcemaptv$ the
+two maps agree, the balance reduces to the hydrostatic
+condition~\cref{eq:forces:hydrostatic}, and the same projections leave
+$1.1\times10^{-10}$, $4.3\times10^{-11}$ and $2.2\times10^{-12}$
+(derivation audit, \code{proof_review/eq-forces-two-velocity/}).
 
 \begin{deviation}{Two-velocity forces}\label{dev:forces:two-velocity}
 The thesis puts surface tension into the jump conditions of the
@@ -679,10 +704,16 @@ the refresh of the one-velocity operator without a solid in
 Tests: \testsym{test/two_phase/forces.jl}{CMDGFM cut composite constant-curvature drop force map (#76)}
 (the force stage applies the projection's map, and CMDGFM removes the
 constant-curvature CSF and CGFM force on the cut composite mesh to
-$10^{-8}$), \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM hydrostatic rest with embedded solids (issue #76)}
+$10^{-9}$ of the increment, while the one-velocity increment of the same
+jumps is not removed), \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM hydrostatic rest with embedded solids (issue #76)}
 (one step of the composite planar fixture with a solid in either phase stays
-at rest to $10^{-8}\dt\abs{\gravacc}$). Checks: \code{hydrostatic_step} and
-\code{two_velocity_tension}; the former map in the derivation audit
+at rest to $10^{-9}\dt\abs{\gravacc}$),
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM balance needs the projection's force map (#76)}
+(the coefficients of the two operators, $\facecoef=\aperture{f}\,\twocoef$,
+and the two increments through the projection). Checks:
+\code{hydrostatic_step}, \code{two_velocity_tension} and
+\code{hydrostatic_former_step} (the one-velocity counterfactual); residual of
+the former map in the derivation audit
 \code{proof_review/eq-forces-two-velocity/}.
 \end{implnote}
 
