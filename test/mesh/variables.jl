@@ -94,3 +94,55 @@ end
     @test eltype(CellField(mesh32)) == Float32
     @test eltype(FaceVelocity(mesh32, (x, y, t, axis) -> 0.0f0).interior) == Float32
 end
+
+@testset "conditional fraction halos restrict numerator and denominator" begin
+    # A level-jump mesh with a plane wall: coarse halo slots beside the finer
+    # leaves have four donors, some of them covered, so their conditional
+    # fraction must be the ratio of the restricted liquid and open fractions.
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (8, 8), max_level = 2,
+        periodic = (false, false),
+        refine = (key, origin, extent) -> key.level == 0 || (
+            key.level == 1 && abs(origin[1] - 0.25) < 1.0e-12 &&
+                abs(origin[2] - 0.25) < 1.0e-12
+        ),
+    )
+    solid = InterfaceField(mesh; contact_angle = nothing)
+    initialize!(solid, (-0.23, 1.0), 0.17)
+    geometry = GeometryField(solid)
+    field = InterfaceField(mesh; geometry, contact_angle = nothing, init = 0)
+    initialize!(field, (0.2, 1.0), 0.5)
+    floor = field.fraction_floor
+    restricted = 0
+    covered_donors = 0
+    ratio_of_means_error = 0.0
+    for entry in mesh.halo_entries
+        entry.physical_boundary && continue
+        entry.donor_count > 1 || continue
+        restricted += 1
+        liquid_mass = 0.0
+        open_mass = 0.0
+        mean_of_ratios = 0.0
+        for index in entry.first_donor:(entry.first_donor + entry.donor_count - 1)
+            weight = mesh.halo_weights[index]
+            donor = mesh.halo_donors[index]
+            liquid = TwoPhaseAMR._get(field.fraction, donor)
+            open = TwoPhaseAMR._get(geometry.open_fraction, donor)
+            liquid_mass += weight * liquid
+            open_mass += weight * open
+            mean_of_ratios += weight * TwoPhaseAMR._conditional_fraction(field, donor)
+            iszero(open) && (covered_donors += 1)
+        end
+        expected = open_mass > 0 ? clamp(liquid_mass, 0.0, open_mass) / open_mass : 0.0
+        expected <= floor && (expected = 0.0)
+        expected >= 1 - floor && (expected = 1.0)
+        @test TwoPhaseAMR._get(field.conditional_fraction, entry.destination) ≈
+            expected atol = 1.0e-12
+        ratio_of_means_error = max(ratio_of_means_error, abs(mean_of_ratios - expected))
+    end
+    @test restricted > 0
+    @test covered_donors > 0
+    # Three covered children and one liquid child restrict to one, while the
+    # mean of the per-cell ratios is 0.25.
+    @test ratio_of_means_error > 0.25
+end

@@ -58,6 +58,32 @@ cell and does not trigger refinement merely because its curvature is
 undefined. Unresolved curvature or a filament in a genuinely mixed cell
 still requests refinement up to the configured maximum level.
 
+A block that holds a mixed cell in its own cells or in its one-cell halo
+borders the interface, and every liquid-filled cut cell of that block is then
+the place where the interface meets the solid: its conditional fraction is one
+and its curvature undefined while the contact line is unresolved (#148).
+Counting those cells keeps the contact line refined without refining the
+wetted solid boundary away from the interface (#118). The test is per block
+because the refinement decision is: a cell-level test would read a finer
+neighbour's restriction average at a level step, which is mixed even where the
+fine interface is resolved, so the coarse block would refine while its own
+children coarsened again.
+
+The curvature criterion protects the coarsening siblings of a family that
+holds such a wetted cut cell when the family plus a two-cell ring spans both
+phases, the same conservative parent test the fixed-band criteria use: the
+merged parent would restrict to a block that is again near the interface and
+would immediately refine, so the family is kept. Covered cells are excluded
+from that test, because their conditional fraction is zero by construction,
+not gas; without the exclusion every window crossing the solid would span both
+phases and the family would never coarsen (#118). The halo of a coarse block
+whose neighbours are finer is the restriction of the liquid and open fractions
+(their weighted ratio, see the interface chapter of the technical reference):
+it is the value transport, reconstruction and the forces use, and averaging
+per-cell ratios instead would count a covered neighbour as gas and make the
+block appear to border the interface. Together these rules let the contact
+line refine without the refine/coarsen cycle that made it unresolved (#148).
+
 The interface-band criterion has different semantics: covered solid cells
 have conditional liquid fraction zero, so liquid touching a solid can make a
 block appear near an interface even far from a liquid–gas contact line.
