@@ -88,6 +88,8 @@ function TwoPhaseFlowWorkspace(
         diffusion_preconditioner = :tree_geometric,
         diffusion_preconditioner_options = (;),
         multigrid::MultigridOptions = MultigridOptions(),
+        viscosity_averaging::AbstractViscosityAveraging =
+            HarmonicViscosityAveraging(),
         diffusion_cache = VariableDiffusionConstructionCache(T),
         reuse_diffusion = nothing,
         reuse_diffusion_preconditioner = nothing,
@@ -100,7 +102,7 @@ function TwoPhaseFlowWorkspace(
         _staggered_diffusion_operator(
             field; viscosity = model.dynamic_viscosity, boundary,
             construction_cache = diffusion_cache,
-            reuse = reuse_diffusion,
+            reuse = reuse_diffusion, averaging = viscosity_averaging,
         )
     density = if reuse_density isa Vector{T}
         resize!(reuse_density, length(field.mesh.faces))

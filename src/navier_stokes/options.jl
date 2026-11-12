@@ -38,23 +38,32 @@ end
     NavierStokesOptions(; advection=AdvectionOptions(),
                         pressure=LinearSolverOptions(),
                         diffusion=LinearSolverOptions(),
-                        multigrid=MultigridOptions())
+                        multigrid=MultigridOptions(),
+                        viscosity_averaging=HarmonicViscosityAveraging())
 
 Numerical configuration for the incompressible Navier--Stokes equation
 system. Physics, velocity-model choices, runtime AMR fields, and evolving
 simulation state are deliberately configured elsewhere.
+
+`viscosity_averaging` selects how the one-velocity `div(2 mu D(u))` operator
+mixes the two phase viscosities, in the cells and at the stress vertices: a
+[`HarmonicViscosityAveraging`](@ref) or a
+[`GeometricViscosityAveraging`](@ref) rule.
 """
 struct NavierStokesOptions{
         A <: AdvectionOptions,
         P <: LinearSolverOptions, D <: LinearSolverOptions,
-        M <: MultigridOptions,
+        M <: MultigridOptions, V <: AbstractViscosityAveraging,
     }
     advection::A
     pressure::P
     diffusion::D
     multigrid::M
+    viscosity_averaging::V
 
-    function NavierStokesOptions(advection, pressure, diffusion, multigrid)
+    function NavierStokesOptions(
+            advection, pressure, diffusion, multigrid, viscosity_averaging,
+        )
         advection isa AdvectionOptions || throw(
             ArgumentError("advection must be AdvectionOptions"),
         )
@@ -67,9 +76,15 @@ struct NavierStokesOptions{
         multigrid isa MultigridOptions || throw(
             ArgumentError("multigrid must be MultigridOptions"),
         )
+        viscosity_averaging isa AbstractViscosityAveraging || throw(
+            ArgumentError(
+                "viscosity_averaging must be HarmonicViscosityAveraging() or GeometricViscosityAveraging()",
+            ),
+        )
         return new{
-            typeof(advection), typeof(pressure), typeof(diffusion), typeof(multigrid),
-        }(advection, pressure, diffusion, multigrid)
+            typeof(advection), typeof(pressure), typeof(diffusion),
+            typeof(multigrid), typeof(viscosity_averaging),
+        }(advection, pressure, diffusion, multigrid, viscosity_averaging)
     end
 end
 
@@ -78,6 +93,9 @@ function NavierStokesOptions(;
         pressure = LinearSolverOptions(),
         diffusion = LinearSolverOptions(),
         multigrid = MultigridOptions(),
+        viscosity_averaging = HarmonicViscosityAveraging(),
     )
-    return NavierStokesOptions(advection, pressure, diffusion, multigrid)
+    return NavierStokesOptions(
+        advection, pressure, diffusion, multigrid, viscosity_averaging,
+    )
 end

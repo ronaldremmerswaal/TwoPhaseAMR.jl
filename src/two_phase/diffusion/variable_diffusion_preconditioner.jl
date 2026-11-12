@@ -139,6 +139,7 @@ function _tree_variable_diffusion_preconditioner(
                 coarse_mesh; viscosity = coarse_viscosity,
                 boundary = operator.boundary, T, construction_cache,
                 cache_layer = length(operators),
+                averaging = operator.averaging,
             )
             coarse_density = zeros(T, length(coarse_mesh.faces))
             _restrict_face_coefficients!(
