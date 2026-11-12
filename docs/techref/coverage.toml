@@ -1601,13 +1601,16 @@ check = "amr_indicator_check"
 label = "eq:amr:curvature"
 sources = [
   { file = "src/mesh/adaptivity/phase_criteria.jl", symbol = "refinement_labels!" },
+  { file = "src/mesh/adaptivity/phase_criteria.jl", symbol = "_wetted_cut_cell" },
   { file = "src/interface/height_functions.jl", symbol = "_lhf_refinement_status" },
   { file = "src/interface/height_functions.jl", symbol = "_fill_height_values!" }
 ]
 tests = [
   { file = "test/indicator/phase/height_functions.jl", testset = "Curvature AMR detects invalid heights and filaments" },
   { file = "test/mesh/adaptivity.jl", testset = "AMR criterion time windows and level bounds" },
-  { file = "test/mesh/adaptivity.jl", testset = "Curvature ignores liquid-filled sloped solid cuts (#118)" }
+  { file = "test/mesh/adaptivity.jl", testset = "Curvature ignores liquid-filled sloped solid cuts (#118)" },
+  { file = "test/mesh/adaptivity.jl", testset = "Curvature refines contact-line cells of a wall-cut liquid wedge (#148)" },
+  { file = "test/mesh/adaptivity.jl", testset = "Curvature keeps contact-line families across the interface (#148)" }
 ]
 check = "amr_indicator_check"
 [[claims]]

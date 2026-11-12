@@ -494,6 +494,88 @@ end
     @test count(==(:refine), labels) == 1
 end
 
+@testset "Curvature refines contact-line cells of a wall-cut liquid wedge (#148)" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (8, 8), max_level = 2,
+        periodic = (false, false),
+        refine = (key, origin, extent) -> key.level == 0,
+    )
+    solid = InterfaceField(mesh; contact_angle = nothing)
+    initialize!(solid, (-0.23, 1.0), 0.17)
+    geometry = GeometryField(solid)
+    # A straight, exactly resolved free surface meets the sloping wall at
+    # (0.77, 0.35); liquid fills the wedge above the wall and below the plane.
+    wedge = InterfaceField(mesh; geometry, contact_angle = nothing, init = 0)
+    initialize!(wedge, (0.2, 1.0), 0.5)
+    conditional = wedge.conditional_fraction
+    near_interface = [any(c -> 0 < c < 1, block) for block in conditional.blocks]
+    cells = TwoPhaseAMR._cell_references(mesh)
+    wetted = [
+        ref for ref in cells
+            if TwoPhaseAMR._conditional_fraction(wedge, ref) == 1 &&
+            0 < TwoPhaseAMR._get(geometry.open_fraction, ref) < 1
+    ]
+    @test !isempty(wetted)
+    contact = filter(ref -> near_interface[ref.block], wetted)
+    interior = filter(ref -> !near_interface[ref.block], wetted)
+    @test !isempty(contact)
+    @test !isempty(interior)
+    # A contact-line cell holds liquid in all of its open volume, so the mixed
+    # test alone skips it and its curvature is undefined.
+    @test all(ref -> isnan(TwoPhaseAMR._get(wedge.curvature, ref)), contact)
+
+    labels = Vector{Symbol}(undef, nblocks(mesh))
+    refinement_labels!(labels, CurvatureRefinementIndicator(wedge))
+    @test all(ref -> labels[ref.block] === :refine, contact)
+    # Liquid-filled cut cells in blocks without a mixed cell stay excluded.
+    @test all(ref -> labels[ref.block] === :coarsen, interior)
+end
+
+@testset "Curvature keeps contact-line families across the interface (#148)" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (8, 8), max_level = 1,
+        periodic = (false, false),
+        refine = (key, origin, extent) -> key.level == 0,
+    )
+    solid = InterfaceField(mesh; contact_angle = nothing)
+    initialize!(solid, (-0.23, 1.0), 0.17)
+    geometry = GeometryField(solid)
+    # Liquid below y = 0.5 and gas above: the free surface lies exactly on the
+    # level-1 cell faces, so no cell is mixed and the contact-line test alone
+    # would coarsen every family.
+    field = InterfaceField(mesh; geometry, init = 0)
+    initialize!(field, (0.0, 1.0), 0.5)
+    cells = TwoPhaseAMR._cell_references(mesh)
+    wetted = Set(
+        ref.block for ref in cells
+            if TwoPhaseAMR._conditional_fraction(field, ref) == 1 &&
+            0 < TwoPhaseAMR._get(geometry.open_fraction, ref) < 1
+    )
+    @test !isempty(wetted)
+    labels = Vector{Symbol}(undef, nblocks(mesh))
+    refinement_labels!(labels, CurvatureRefinementIndicator(field))
+    families = 0
+    for block in mesh.blocks
+        key = block.key
+        key.level == 1 && iseven(key.i) && iseven(key.j) || continue
+        family = [
+            b for b in eachindex(mesh.blocks) if begin
+                    other = mesh.blocks[b].key
+                    other.level == 1 && other.i >> 1 == key.i >> 1 &&
+                    other.j >> 1 == key.j >> 1
+                end
+        ]
+        @test length(family) == 4
+        # Coarsening would merge each family into a parent that spans the
+        # interface, so families holding a wetted cut cell are kept; those
+        # away from it still coarsen.
+        expected = any(in(wetted), family) ? :keep : :coarsen
+        @test all(b -> labels[b] === expected, family)
+        families += 1
+    end
+    @test families == 4
+end
+
 @testset "in-place conservative adaptive field transfer" begin
     options = MeshAdaptationOptions(
         update_interval = 2, coarsen_delay = 3, minimum_level = 0

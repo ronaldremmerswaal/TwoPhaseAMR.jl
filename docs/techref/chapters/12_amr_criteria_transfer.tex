@@ -165,8 +165,11 @@ Tests: \testsym{test/indicator/geometry.jl}{Geometry-presence refinement indicat
 \subsection{Curvature}\label{sec:amr:curvature}
 \apitype{CurvatureRefinementIndicator} reconstructs the interface and
 evaluates, in every owned cell with $0<\condfrac{\liq}{c}<1$ (the
-open-fluid conditional fraction after snapping), with $\cellsperradius$ cells
-per radius and the coarsening ratio $\coarsenratio$ ($0<2\coarsenratio<1$),
+open-fluid conditional fraction after snapping), and in every cut cell
+($0<\openfrac{c}<1$) that is full of liquid in its open part within a block
+that holds a mixed cell in its cells or its one-cell halo, with
+$\cellsperradius$ cells per radius and the coarsening ratio $\coarsenratio$
+($0<2\coarsenratio<1$),
 \begin{equation}\label{eq:amr:curvature}
   \cellerror{c}=\begin{cases}
     \infty, & c\ \text{unresolved},\\
@@ -190,8 +193,20 @@ in the same phase and an inner value is not (all within $64\machineeps$).
 Covered cells and cells whose open part is filled by a single phase are not
 mixed by this criterion: in particular, a liquid-filled cut cell does not
 trigger unresolved-interface refinement merely because its full-cell fraction
-is between zero and one (\issue{118}). Level bounds, other indicators and
-balancing still apply.
+is between zero and one (\issue{118}). Such a cell counts only in a block that
+holds a mixed cell in its own cells or its one-cell halo, which is the
+contact-line case: the interface meets the solid inside the wetted part of the
+cut cell, so its conditional fraction is one and its curvature undefined while
+the interface it straddles is not resolved (\issue{148}). The test is per block
+because refinement is: a cell-level test would read a finer neighbour's
+restriction average at a level step, which is mixed even where the fine
+interface is resolved, so the coarse block would refine while its own children
+coarsened again. Coarsening siblings of a family that holds such a wetted cut
+cell are kept when the family plus a two-cell ring spans both phases, the same
+conservative parent test the fixed-band criteria use
+(\cref{sec:amr:band}); covered cells are excluded from that test because
+their conditional fraction is zero by construction, not gas
+(\issue{118}). Level bounds, other indicators and balancing still apply.
 
 \begin{deviation}{Curvature refinement}\label{dev:amr:curvature}
 The thesis' $\curv$-AMR (criterion~2) keeps
@@ -215,12 +230,15 @@ default $\tfrac13$ keeps a margin.
 \begin{implnote}
 \apitype{CurvatureRefinementIndicator}\code{(interface; cells_per_radius=8, coarsen_ratio=1/3)}
 with the common keywords; \srcsym{src/mesh/adaptivity/phase_criteria.jl}{refinement_labels!}~\cref{eq:amr:curvature},
+contact-line cells \srcsym{src/mesh/adaptivity/phase_criteria.jl}{_wetted_cut_cell},
 validity and filament test
 \srcsym{src/interface/height_functions.jl}{_lhf_refinement_status}, stencil
 values \srcsym{src/interface/height_functions.jl}{_fill_height_values!}. Tests:
 \testsym{test/indicator/phase/height_functions.jl}{Curvature AMR detects invalid heights and filaments},
-\testsym{test/mesh/adaptivity.jl}{AMR criterion time windows and level bounds}, and
-\testsym{test/mesh/adaptivity.jl}{Curvature ignores liquid-filled sloped solid cuts (#118)}.
+\testsym{test/mesh/adaptivity.jl}{AMR criterion time windows and level bounds},
+\testsym{test/mesh/adaptivity.jl}{Curvature ignores liquid-filled sloped solid cuts (#118)},
+\testsym{test/mesh/adaptivity.jl}{Curvature refines contact-line cells of a wall-cut liquid wedge (#148)}, and
+\testsym{test/mesh/adaptivity.jl}{Curvature keeps contact-line families across the interface (#148)}.
 \end{implnote}
 
 \subsection{Vorticity}\label{sec:amr:vorticity}
@@ -512,7 +530,11 @@ up to rounding, and the open fraction, apertures and open dual volumes are
 recomputed from it (\cref{sec:cutcells:time}). The child's open part
 in~\cref{eq:amr:vof} is cut by the same parent plane, so
 $\phasefrac{\liq}{c_r}\le\openfrac{c_r}$ up to rounding and the conditional
-fraction of every child stays in $[0,1]$.
+fraction of every child stays in $[0,1]$. Halo values follow the same two
+quantities: a coarse block whose donor is finer restricts the liquid and open
+fractions with the donor weights and takes their ratio, never the mean of the
+per-cell conditional fractions, so a covered donor cell does not read as gas
+and spuriously mark the block as bordering the interface (\issue{148}).
 
 \emph{Phase scalars.} The intrinsic values $\avar^{\phase}_c$ of a
 \apitype{PhaseScalar} are transferred with the weights

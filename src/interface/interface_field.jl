@@ -278,7 +278,41 @@ function _refresh_conditional_fraction!(field::InterfaceField{T}) where {T}
     _throw_conditional_fraction_failure(field, failures)
     fill_halo!(field.fraction)
     fill_halo!(field.conditional_fraction)
+    isnothing(geometry) || _restrict_conditional_halo!(field, geometry)
     return field.conditional_fraction
+end
+
+# A coarse block next to finer blocks receives its halo values by restriction.
+# The conditional fraction is a ratio of the liquid fraction to the open
+# fraction, so its halo must restrict numerator and denominator with the same
+# weights: averaging the per-cell ratios instead counts covered cells, whose
+# ratio is zero by construction, as gas and makes every nearly covered halo
+# cell look mixed (#148).
+function _restrict_conditional_halo!(field::InterfaceField{T}, geometry) where {T}
+    mesh = field.mesh
+    floor = field.fraction_floor
+    fraction = field.fraction
+    open_fraction = geometry.open_fraction
+    conditional = field.conditional_fraction
+    @_parallel for entry_index in 1:length(mesh.halo_entries)
+        entry = @inbounds mesh.halo_entries[entry_index]
+        entry.physical_boundary && continue
+        liquid = zero(T)
+        available = zero(T)
+        stop = entry.first_donor + entry.donor_count - 1
+        for index in entry.first_donor:stop
+            weight = @inbounds mesh.halo_weights[index]
+            donor = @inbounds mesh.halo_donors[index]
+            liquid += weight * _get(fraction, donor)
+            available += weight * _get(open_fraction, donor)
+        end
+        ratio = available > zero(T) ?
+            clamp(liquid, zero(T), available) / available : zero(T)
+        ratio <= floor && (ratio = zero(T))
+        ratio >= one(T) - floor && (ratio = one(T))
+        _set!(conditional, ratio, entry.destination)
+    end
+    return conditional
 end
 
 # Exact area fraction of a rectangle clipped by one plane. Reflect the axes

@@ -166,8 +166,17 @@ _refinement_labels_at_time!(
 Request refinement where `max(dx,dy)*abs(curvature) > 1/cells_per_radius`.
 Following the thesis, a cell mixed in the open fluid volume also requests
 refinement when no valid LHF exists or when its height columns reveal a thin
-filament. Use hysteresis for coarsening; combine with
-`InterfaceRefinementIndicator` for a protected band.
+filament. A block that holds a mixed cell in its own cells or in its one-cell
+halo borders the interface, and every wall-cut cell of that block which is
+completely liquid in its open volume then counts as an interface cell: the
+liquid–gas interface meets the solid there, so its undefined curvature is the
+unresolved contact line (#148). The test is per block because the refinement
+decision is: a cell-level test would read a finer neighbour's restriction
+average at a level step, which is mixed even where the fine interface is
+resolved, so the coarse block would refine and its own children would coarsen
+again. Liquid-filled cut cells in blocks without a mixed cell lie away from
+the interface and stay excluded (#118). Use hysteresis for coarsening; combine
+with `InterfaceRefinementIndicator` for a protected band.
 The criterion is active for `t_init <= time <= t_end` and enforces its level
 bounds independently of the curvature estimate.
 Only blocks intersecting the closed spatial region are eligible; outside it
@@ -348,6 +357,124 @@ _refinement_labels_at_time!(
     labels, indicator::VorticityRefinementIndicator, time
 ) = refinement_labels!(labels, indicator; time)
 _indicator_field(indicator::CurvatureRefinementIndicator) = indicator.field
+
+"""
+    _wetted_cut_cell(conditional, open, i, j, halo)
+
+Return whether interior cell `(i, j)` of one block is a wall-cut cell that is
+completely liquid inside its open volume. `conditional` and `open` are the
+block's haloed arrays.
+
+At a contact line the liquid–gas interface meets the solid inside a cell that
+the wall has cut down to its wetted part: that cell holds liquid in all of its
+open volume (`conditional == 1`), so its curvature is undefined (#148). On its
+own that does not make it an interface cell, because every wetted cell of the
+solid boundary looks the same (#118); the caller therefore counts these cells
+only in a block that also holds a mixed cell.
+"""
+@inline function _wetted_cut_cell(conditional, open, i, j, halo)
+    ii, jj = i + halo, j + halo
+    return @inbounds open[ii, jj] < 1 && conditional[ii, jj] == 1
+end
+
+# A family may only coarsen when its parent would not immediately be refined
+# again. The interface band protects its coarsening families the same way. A
+# contact-line cell is an interface cell in the coarse view even where the fine
+# interface is resolved, because the interface crossing a coarse cell makes
+# that block border the interface; merging the family would then refine it
+# straight back and cycle the mesh (#148). The window is the family plus a
+# `2r`-cell ring, so a contact line just outside the family still protects it,
+# while a wetted solid boundary with no interface in reach coarsens (#118).
+# Covered cells are excluded from the phase extrema: their conditional
+# fraction is zero by construction, not gas, so counting them would make every
+# window that crosses the solid span both phases.
+function _protect_contact_line_coarsening!(labels, field, wetted, r)
+    mesh = field.mesh
+    geometry = field.geometry
+    isnothing(geometry) && return labels
+    nx, ny = mesh.block_size
+    h = mesh.halo
+    floor = field.fraction_floor
+    indices = Dict(block.key => b for (b, block) in pairs(mesh.blocks))
+    lattice = mesh.base_mesh .<< mesh.max_level
+    candidates = Int[]
+    for block in mesh.blocks
+        key = block.key
+        key.level > 0 || continue
+        iseven(key.i) && iseven(key.j) || continue
+        parent = _parent_key(key)
+        children = ntuple(i -> get(indices, _child_keys(parent)[i], 0), 4)
+        all(!iszero, children) || continue
+        all(i -> labels[i] === :coarsen, children) || continue
+        any(i -> wetted[i], children) || continue
+
+        # `key` is the lower-left child, so its two-block span is the parent's
+        # and both bounds live on the common finest-level cell lattice.
+        scale = 1 << (mesh.max_level - key.level)
+        lower = ((key.i * nx - 2r) * scale, (key.j * ny - 2r) * scale)
+        upper = (
+            (key.i * nx + 2nx + 2r) * scale,
+            (key.j * ny + 2ny + 2r) * scale,
+        )
+        shifts = ntuple(2) do axis
+            mesh.periodic[axis] ?
+                (
+                    fld(-upper[axis], lattice[axis]):
+                    cld(lattice[axis] - lower[axis], lattice[axis])
+                ) : (0:0)
+        end
+        low, high = one(eltype(field)), zero(eltype(field))
+        for sy in shifts[2], sx in shifts[1]
+            low < 1 - floor && high > floor && break
+            lo = (
+                max(0, lower[1] + sx * lattice[1]),
+                max(0, lower[2] + sy * lattice[2]),
+            )
+            hi = (
+                min(lattice[1], upper[1] + sx * lattice[1]),
+                min(lattice[2], upper[2] + sy * lattice[2]),
+            )
+            lo[1] < hi[1] && lo[2] < hi[2] || continue
+            physical_lo = ntuple(
+                a -> prevfloat(mesh.origin[a] + mesh.extent[a] * lo[a] / lattice[a]), 2
+            )
+            physical_hi = ntuple(
+                a -> nextfloat(mesh.origin[a] + mesh.extent[a] * hi[a] / lattice[a]), 2
+            )
+            empty!(candidates)
+            _collect_leaf_blocks_in_window!(
+                candidates, mesh.root, indices, physical_lo, physical_hi
+            )
+            for index in candidates
+                other = mesh.blocks[index].key
+                cell_scale = 1 << (mesh.max_level - other.level)
+                x0, y0 = other.i * nx * cell_scale, other.j * ny * cell_scale
+                imin = max(1, fld(lo[1] - x0, cell_scale) + 1)
+                imax = min(nx, cld(hi[1] - x0, cell_scale))
+                jmin = max(1, fld(lo[2] - y0, cell_scale) + 1)
+                jmax = min(ny, cld(hi[2] - y0, cell_scale))
+                imin <= imax && jmin <= jmax || continue
+                conditional = @inbounds field.conditional_fraction.blocks[index]
+                open = @inbounds geometry.open_fraction.blocks[index]
+                @inbounds for j in (h + jmin):(h + jmax), i in (h + imin):(h + imax)
+                    # A covered cell holds no fluid: its conditional fraction
+                    # is zero by construction, not gas (#118).
+                    open[i, j] > 0 || continue
+                    value = conditional[i, j]
+                    low = min(low, value)
+                    high = max(high, value)
+                end
+                low < 1 - floor && high > floor && break
+            end
+        end
+        low < 1 - floor && high > floor || continue
+        for child in children
+            labels[child] = :keep
+        end
+    end
+    return labels
+end
+
 function refinement_labels!(
         labels::AbstractVector{Symbol},
         indicator::CurvatureRefinementIndicator;
@@ -362,16 +489,35 @@ function refinement_labels!(
     reconstruct!(field)
     height_values = _fill_height_values!(field)
     nx, ny = mesh.block_size
+    h = mesh.halo
+    geometry = field.geometry
+    wetted = fill(false, nblocks(mesh))
     _parallel_for(nblocks(mesh); work = _block_work()) do b
         block = mesh.blocks[b]
+        conditional = @inbounds field.conditional_fraction.blocks[b]
+        open = isnothing(geometry) ? nothing :
+            @inbounds geometry.open_fraction.blocks[b]
+        # Refinement is a block decision, so the contact-line test is one too:
+        # a block holding a mixed cell in its own cells or its one-cell halo
+        # borders the interface, and its wetted cut cells are where that
+        # interface meets the solid (#148). Testing cell adjacency instead
+        # would read a finer neighbour's restriction average at a level step:
+        # that average is mixed even where the fine interface is resolved, so
+        # the coarse block would refine while its own children, seeing the
+        # resolved values, coarsen again, and the mesh would cycle.
+        near_interface = any(c -> 0 < c < 1, conditional)
         error = 0.0
         for j in 1:ny, i in 1:nx
-            c = interior(field.conditional_fraction, b)[i, j]
-            0 < c < 1 || continue
+            c = @inbounds conditional[i + h, j + h]
+            wetted_cell = !isnothing(open) &&
+                _wetted_cut_cell(conditional, open, i, j, h)
+            wetted_cell && (wetted[b] = true)
+            interface_cell = 0 < c < 1 || (wetted_cell && near_interface)
+            interface_cell || continue
             valid_lhf, filament = _lhf_refinement_status(
                 height_values[b], i + 4, j + 4
             )
-            kappa = interior(field.curvature, b)[i, j]
+            kappa = @inbounds field.curvature.blocks[b][i + h, j + h]
             unresolved = !valid_lhf || filament || !isfinite(kappa)
             error = max(
                 error,
@@ -393,6 +539,7 @@ function refinement_labels!(
             :keep
         end
     end
+    _protect_contact_line_coarsening!(labels, field, wetted, h)
     return _apply_refinement_region!(labels, indicator)
 end
 
