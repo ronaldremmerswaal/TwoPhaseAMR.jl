@@ -49,7 +49,7 @@ jobs:
   unit:
     if: (github.event_name == 'pull_request' && github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 50
     permissions:
       contents: read
     strategy:
@@ -59,7 +59,7 @@ jobs:
         # on both the oldest supported Julia and the current stable one, so the
         # minimum version cannot rot outside PR checks.
         julia: ['1.11', '1.12']
-        shard: [A, B, C, D]
+        shard: [A, B, C, D, E]
     name: unit / ${{ matrix.shard }} (julia ${{ matrix.julia }})
     steps:
       - uses: actions/checkout@v7
