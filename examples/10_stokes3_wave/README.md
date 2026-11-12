@@ -16,6 +16,8 @@ The wave breaks within the first period. The snapshot comes from a separate leve
 | **Validated against** | At docs size, the final interface after two periods, at 200 evenly spaced `x` positions, differs from the analytical third-order *initial* profile by sample RMS `0.0449043` and maximum `0.103414`. This approximate Stokes profile is not an exact solution of the viscous, capillary, two-phase problem. |
 | **Cost** | `run_example` default: `max_level=5`, one period, runtime and final cells unmeasured. Gallery `:docs`: `max_level=4`, two periods (`T≈4.39705`), 2308 steps and 6208 final cells; setup and simulation took 157.4 s on one thread, including first-use compilation, and the separate level-5 first-period hero and impact-location runs took 288.3 s. The whole figure script took 501.2 s. Gallery `:default` uses `max_level=6`, two periods. |
 
+Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded.
+
 ## Setup
 
 The liquid occupies the region below the third-order profile returned by `stokes3_initial_condition().elevation`; its initial analytical velocity is projected before time integration. With `k=2π`, `h=0.5`, `ε=0.55` and `χ=coth(kh)`, the initialization uses
