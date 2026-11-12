@@ -145,10 +145,7 @@ form threaded loops capture)."""
 @inline function _face_local_tangent_interval(leaf_blocks, extent, periodic, ref, face)
     tangent = 3 - face.axis
     block = @inbounds leaf_blocks[ref.block]
-    center = (
-        block.origin[1] + (ref.i - 1 / 2) * block.spacing[1],
-        block.origin[2] + (ref.j - 1 / 2) * block.spacing[2],
-    )
+    center = _leaf_cell_center(block, ref.i, ref.j)
     spacing = block.spacing[tangent]
     lo = _wrapped_delta(
         face.center[tangent] - face.area / 2 - center[tangent],

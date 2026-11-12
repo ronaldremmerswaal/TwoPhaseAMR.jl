@@ -144,6 +144,16 @@ end
         )
         check_error("invalid boundary face 1")
     end
+    boundaries[1] = boundary
+
+    # Per-axis face fields index their faces as one contiguous range.
+    @test faces[1].axis == 1 && faces[end].axis == 2
+    faces[1], faces[end] = faces[end], faces[1]
+    check_error("every axis-1 face before every axis-2 face")
+    faces[1], faces[end] = faces[end], faces[1]
+    @test boundaries[1].axis == 1 && boundaries[end].axis == 2
+    boundaries[1], boundaries[end] = boundaries[end], boundaries[1]
+    check_error("every axis-1 face before every axis-2 face")
 end
 
 

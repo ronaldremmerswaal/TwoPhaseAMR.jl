@@ -1,7 +1,7 @@
 using LinearAlgebra: diag
 using SparseArrays: sparse
 using TwoPhaseAMR: @_parallel, _parallel_for, _parallel_block_columns, _PARALLEL_GRAIN
-using SparseArrays: nonzeros, nzrange, rowvals, sprand
+using SparseArrays: nnz, nonzeros, nzrange, rowvals, sprand
 
 # Run `f` with every loop above `grain` work units threaded.
 function with_parallel_grain(f, grain)
@@ -558,6 +558,48 @@ const BOTH_PATHS = (1, typemax(Int))
         TwoPhaseAMR._prolongate!(zeros(3000), level, coarse),
         scheduled_prolongation(prolongation, coarse),
     )
+
+    # A multigrid level's stored transpose: refreshed values on the recorded
+    # pattern, a pattern changed in place at constant nnz and a new matrix
+    # object all give `copy(transpose(A))` (pattern and value bits, signed
+    # zeros included), on the serial and the threaded gather.
+    for grain in BOTH_PATHS
+        matrix = sprand(1800, 700, 0.004)
+        nonzeros(matrix)[2:5:end] .= -0.0
+        matrix_transpose = copy(transpose(matrix))
+        transpose_map = TwoPhaseAMR.SparseTransposeMap()
+        refresh!(source) = with_parallel_grain(
+            () -> TwoPhaseAMR._refresh_matrix_transpose!(matrix_transpose, transpose_map, source),
+            grain,
+        )
+        function same_transpose(source)
+            expected = copy(transpose(source))
+            return matrix_transpose.colptr == expected.colptr &&
+                rowvals(matrix_transpose) == rowvals(expected) &&
+                isequal(nonzeros(matrix_transpose), nonzeros(expected))
+        end
+        refresh!(matrix)
+        @test same_transpose(matrix)
+        nonzeros(matrix) .= randn(nnz(matrix))
+        nonzeros(matrix)[3:7:end] .= -0.0
+        refresh!(matrix)
+        @test same_transpose(matrix)
+        # Move the last stored entry of a column to the last row (constant
+        # nnz, rows stay sorted).
+        last_row = size(matrix, 1)
+        moved = findfirst(
+            column -> !isempty(nzrange(matrix, column)) &&
+                rowvals(matrix)[last(nzrange(matrix, column))] < last_row,
+            axes(matrix, 2),
+        )
+        rowvals(matrix)[last(nzrange(matrix, moved))] = last_row
+        refresh!(matrix)
+        @test same_transpose(matrix)
+        other = sprand(1800, 700, 0.003)
+        refresh!(other)
+        @test same_transpose(other)
+        @test_throws DimensionMismatch refresh!(sprand(700, 1800, 0.003))
+    end
 
     # The gathered factorized roundoff floor equals the former face scatter,
     # with the diagonal (uniform) and the sparse (two-level) Riesz map.

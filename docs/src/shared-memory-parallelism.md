@@ -48,7 +48,12 @@ thread-count independent:
   use this pattern, so none of them costs a serial pass over the mesh per step.
 - A check on fixed topology runs once, when that topology is built. The
   elliptic matrix locates its diagonal slots at assembly and every coefficient
-  refresh indexes them, so no threaded body searches the sparse pattern.
+  refresh indexes them, so no threaded body searches the sparse pattern. A
+  multigrid level likewise keeps the source slot of every entry of its stored
+  row form (the transpose its smoother multiplies with); a refresh compares the
+  level matrix's pattern with the recorded one and copies the values through
+  the slots, both threaded (the comparison in fixed chunks with one mismatch
+  flag each), so only a changed pattern costs a serial counting sort.
 
 Only cheap input checks still run serially before a loop. A rejected input
 leaves the state unchanged where the old serial code did, except where the
