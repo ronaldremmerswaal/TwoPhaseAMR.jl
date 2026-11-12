@@ -258,11 +258,35 @@ end
         @test stats.normal_velocity_defect <= tolerance
         @test state.projection_workspace.pressure_cache.operator.face_coefficient ≈
             operator.face_coefficient rtol = 128eps()
-        # A gradient force is removed up to the iterative solver error,
-        # allowing for conditioning of this cut-cell variable-density system.
+        # The projection removes gradients of its own map, so the constant
+        # curvature is balanced to the iterative solver's error.
+        force_scale = dt * maximum(abs, expected.interior)
         for phase in flow.velocity
             active = filter(isfinite, phase.interior)
-            @test maximum(abs, active) <= 1.0e-8
+            @test maximum(abs, active) <= 1.0e-9 * force_scale
+        end
+        if formulation isa CSF
+            # Counterfactual of issue #76: the same jump through the
+            # one-velocity coefficient a^2/rho leaves a velocity at the cut
+            # face (aperture 0.8) that the composite metric couples to the
+            # drop's jumps, although the solid does not touch the drop.
+            phases = (FaceVelocity(mesh), FaceVelocity(mesh))
+            for phase in phases
+                phase.interior .= dt .* old_force.interior
+            end
+            TwoPhaseAMR._mark_inactive_phase_velocities!(phases, interface)
+            former = project!(
+                phases, CellField(mesh), state.projection_solver, dt,
+                CMDGFMProjectionWorkspace(state.projection_solver);
+                tolerance = 1.0e-12, max_iterations = 4000,
+            )
+            @test former.converged
+            worst = 0.0
+            for phase in phases, index in eachindex(phase.interior)
+                value = phase.interior[index]
+                isnan(value) || (worst = max(worst, abs(value)))
+            end
+            @test worst > 1.0e-3 * dt * maximum(abs, old_force.interior)
         end
     end
 end

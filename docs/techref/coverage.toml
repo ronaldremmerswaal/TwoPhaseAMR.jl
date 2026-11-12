@@ -1142,7 +1142,7 @@ sources = [
   { file = "src/two_phase/diffusion/variable_diffusion_operator.jl", symbol = "_update_dynamic_viscosity!" }
 ]
 tests = [
-  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Thesis geometric dynamic-viscosity mixture" }
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Phase-viscosity averaging rules (#113)" }
 ]
 check = "stress_rows_check"
 [[claims]]
@@ -1173,7 +1173,7 @@ sources = [
   { file = "src/two_phase/diffusion/variable_diffusion_operator.jl", symbol = "_update_log_dynamic_viscosity!" }
 ]
 tests = [
-  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Thesis geometric dynamic-viscosity mixture" }
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Phase-viscosity averaging rules (#113)" }
 ]
 check = "stress_rows_check"
 [[claims]]
@@ -2399,6 +2399,7 @@ check = "solv_cmdgfm_cases"
 "src/operators/gradient.jl" = { class = "equation", chapters = ["ch:discrete-setting"] }
 "src/operators/elliptic.jl" = { class = "equation", chapters = ["ch:discrete-setting", "ch:viscosity", "ch:projection", "ch:solvers"] }
 "src/operators/staggered_diffusion.jl" = { class = "equation", chapters = ["ch:viscosity", "ch:projection"] }
+"src/operators/viscosity_averaging.jl" = { class = "equation", chapters = ["ch:viscosity"] }
 "src/operators/advection/cell_advection.jl" = { class = "equation", chapters = ["ch:mesh-amr", "ch:discrete-setting", "ch:momentum-transport"] }
 "src/operators/advection/staggered_fluxes.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
 "src/operators/advection/staggered_schedules.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:momentum-transport"] }
@@ -2448,6 +2449,7 @@ check = "solv_cmdgfm_cases"
 "src/navier_stokes/independent_step.jl" = { class = "orchestration", chapters = ["ch:overview"] }
 "src/navier_stokes/options.jl" = { class = "orchestration", chapters = ["ch:overview"] }
 "src/navier_stokes/projection.jl" = { class = "equation", chapters = ["ch:projection"] }
+"src/navier_stokes/projection_stats.jl" = { class = "storage", chapters = ["ch:projection", "ch:solvers", "ch:verification"] }
 "src/navier_stokes/simulate.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:mesh-amr", "ch:vof-transport", "ch:forces", "ch:projection", "ch:amr-criteria-transfer", "ch:stability-accuracy"] }
 "src/navier_stokes/stages.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:forces"] }
 "src/navier_stokes/system.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:viscosity"] }

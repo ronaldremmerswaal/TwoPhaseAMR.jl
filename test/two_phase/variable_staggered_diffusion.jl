@@ -426,8 +426,19 @@ end
     @test length(periodic_solver.preconditioner.levels) == 1
 end
 
-@testset "Thesis geometric dynamic-viscosity mixture" begin
-    for kind in 1:2
+@testset "Phase-viscosity averaging rules (#113)" begin
+    for (rule, cell_value, row_value) in (
+                (
+                    HarmonicViscosityAveraging(),
+                    (c, liquid, gas) -> 1 / (c / liquid + (1 - c) / gas),
+                    inverse -> iszero(inverse) ? 1.0 : inv(inverse),
+                ),
+                (
+                    GeometricViscosityAveraging(),
+                    (c, liquid, gas) -> liquid^c * gas^(1 - c),
+                    _ -> nothing,
+                ),
+            ), kind in 1:2
         mesh = BlockTreeMesh(
             block_size = (8, 8), max_level = 2,
             refine = (key, origin, extent) -> kind == 2 &&
@@ -440,14 +451,16 @@ end
             mesh, (x, y) -> x + 0.3y - 0.57; lipschitz = hypot(1, 0.3)
         )
         phases = (1.0e-2, 1.0e-5)
-        viscosity = dynamic_viscosity(interface; viscosity = phases)
+        viscosity = dynamic_viscosity(
+            interface; viscosity = phases, averaging = rule,
+        )
         for ref in TwoPhaseAMR._cell_references(mesh)
             c = TwoPhaseAMR._get(interface.fraction, ref)
-            expected = phases[1]^c * phases[2]^(1 - c)
+            expected = cell_value(c, phases[1], phases[2])
             @test TwoPhaseAMR._get(viscosity, ref) ≈ expected rtol = 16eps()
         end
         from_interface = StaggeredDiffusionOperator(
-            interface; viscosity = phases
+            interface; viscosity = phases, averaging = rule,
         )
         stiffness_storage = from_interface.stiffness
         TwoPhaseAMR._update_dynamic_viscosity!(
@@ -467,19 +480,201 @@ end
         )
         @test solver.matrix.nzval === matrix_storage
         from_field = StaggeredDiffusionOperator(
-            mesh; viscosity
+            mesh; viscosity, averaging = rule,
         )
         @test from_interface.stiffness ≈ from_field.stiffness rtol = 16eps()
-        fractions = [
-            TwoPhaseAMR._get(interface.fraction, ref)
+        cells = [
+            TwoPhaseAMR._get(viscosity, ref)
                 for ref in TwoPhaseAMR._cell_references(mesh)
         ]
-        stress_fractions = from_interface.stress_interpolation * fractions
         observed = from_interface.stress_weights ./
             from_interface.stress_measures
-        expected = phases[1] .^ stress_fractions .* phases[2] .^
-            (1 .- stress_fractions)
+        if rule isa HarmonicViscosityAveraging
+            # The series conductance of the cell quarters the row spans.
+            row_inverse = from_interface.stress_interpolation *
+                (1 ./ cells)
+            expected = row_value.(row_inverse)
+        else
+            # The thesis' geometric mixture of the row's cell quarters.
+            logs = [
+                TwoPhaseAMR._get(interface.fraction, ref)
+                    for ref in TwoPhaseAMR._cell_references(mesh)
+            ]
+            row_fraction = from_interface.stress_interpolation * logs
+            expected = phases[1] .^ row_fraction .* phases[2] .^
+                (1 .- row_fraction)
+        end
         @test observed ≈ expected rtol = 32eps()
+
+        # A VOF update refreshes the cell mixture through the same rule; the
+        # refreshed operator equals one built from the new mixture field.
+        moved = InterfaceField(
+            mesh, (x, y) -> x + 0.3y - 0.51; lipschitz = hypot(1, 0.3),
+        )
+        TwoPhaseAMR._update_dynamic_viscosity!(from_interface, moved, phases)
+        refreshed = dynamic_viscosity(
+            moved; viscosity = phases, averaging = rule,
+        )
+        @test from_interface.cell_work ≈ [
+            log(TwoPhaseAMR._get(refreshed, ref))
+                for ref in TwoPhaseAMR._cell_references(mesh)
+        ] rtol = 64eps()
+        rebuilt = StaggeredDiffusionOperator(
+            mesh; viscosity = refreshed, averaging = rule,
+        )
+        @test from_interface.stiffness ≈ rebuilt.stiffness rtol = 64eps()
+    end
+end
+
+"""Shifted-solve error for the 1-D shear `mu(y) u'(y) = -cos(2 pi y)`.
+
+The tangential traction is continuous across the interface at `y = 1/2`, so
+the exact velocity is smooth in traction but has a derivative jump of the
+viscosity ratio there. A stress vertex that spans the jump must carry the
+series conductance of its two phases for the discrete flux to reproduce the
+traction; with any other average the local flux defect does not vanish under
+refinement.
+"""
+function _aligned_jump_shear_error(
+        n; liquid = 2.0, gas = 1.0,
+        averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
+    )
+    mesh = BlockTreeMesh(block_size = (4, n), periodic = (true, true))
+    viscosity = CellField(mesh, (x, y) -> y < 0.5 ? liquid : gas)
+    operator = StaggeredDiffusionOperator(mesh; viscosity, averaging)
+    volumes = operator.volumes
+    exact_value(y) = -sinpi(2y) / (2pi * (y < 0.5 ? liquid : gas))
+    # d/dy(mu u') = 2 pi sin(2 pi y)
+    divergence(y) = 2pi * sinpi(2y)
+    exact = FaceVelocity(
+        mesh, (x, y, time, axis) -> axis == 1 ? exact_value(y) : 0.0,
+    )
+    shift = 1.0
+    rhs = similar(volumes)
+    for (index, face) in pairs(mesh.faces)
+        rhs[index] = volumes[index] * (
+            exact.interior[index] -
+                (face.axis == 1 ? shift * divergence(face.center[2]) : 0.0)
+        )
+    end
+    matrix = spdiagm(0 => volumes) + shift * operator.stiffness
+    solution = matrix \ rhs
+    error = sqrt(
+        sum(volumes .* (solution .- exact.interior) .^ 2) / sum(volumes)
+    )
+    return error, operator
+end
+
+@testset "Aligned viscosity jump transmits the tangential traction (#113)" begin
+    # The series conductance 2 mu_liquid mu_gas / (mu_liquid + mu_gas) = 4/3 at
+    # the interface vertices, whose row viscosity the cell rows keep at their
+    # cell value, gives second-order shear across the jump.
+    harmonic_errors = Float64[]
+    for n in (16, 32, 64, 128)
+        error, operator = _aligned_jump_shear_error(n)
+        push!(harmonic_errors, error)
+        row_viscosity = sort(
+            unique(
+                round.(
+                    operator.stress_weights ./ operator.stress_measures,
+                    digits = 12,
+                ),
+            ),
+        )
+        @test row_viscosity ≈ [1.0, 4 / 3, 2.0]
+    end
+    harmonic_rates = log2.(
+        harmonic_errors[1:(end - 1)] ./ harmonic_errors[2:end],
+    )
+    @test all(harmonic_rates .>= 1.9)
+
+    # Equal viscosities are unaffected by the averaging rule: every row takes
+    # the common value and the same solve keeps its second order, with or
+    # without the geometric mixture.
+    for rule in (
+            HarmonicViscosityAveraging(), GeometricViscosityAveraging(),
+        )
+        equal_errors = Float64[]
+        for n in (16, 32, 64, 128)
+            error, operator = _aligned_jump_shear_error(
+                n; liquid = 1.0, gas = 1.0, averaging = rule,
+            )
+            push!(equal_errors, error)
+            @test all(
+                value == 1.0 for value in
+                    operator.stress_weights ./ operator.stress_measures
+            )
+        end
+        equal_rates = log2.(equal_errors[1:(end - 1)] ./ equal_errors[2:end])
+        @test all(equal_rates .>= 1.9)
+    end
+end
+
+@testset "Geometric mixture keeps the first-order aligned shear (#113)" begin
+    # The thesis' diffuse mixture is preserved as an option, including its
+    # measured behaviour: the geometric vertex coefficient sqrt(2) instead of
+    # 4/3 overestimates the traction flux by 6.07 %, and the aligned shear does
+    # not converge at second order.
+    errors = Float64[]
+    for n in (16, 32, 64, 128)
+        error, operator = _aligned_jump_shear_error(
+            n; averaging = GeometricViscosityAveraging(),
+        )
+        push!(errors, error)
+        row_viscosity = sort(
+            unique(
+                round.(
+                    operator.stress_weights ./ operator.stress_measures,
+                    digits = 12,
+                ),
+            ),
+        )
+        @test row_viscosity ≈ [1.0, sqrt(2.0), 2.0]
+    end
+    rates = log2.(errors[1:(end - 1)] ./ errors[2:end])
+    @test all(rates .< 1.2)
+end
+
+@testset "Harmonic vertex viscosity stays dissipative (#113)" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (4, 4), max_level = 1,
+        refine = (key, origin, extent) -> key.level == 0 && origin[1] < 0.5,
+    )
+    viscosity = CellField(mesh, (x, y) -> y < 0.5 ? 2.0 : 1.0)
+    for rule in (HarmonicViscosityAveraging(), GeometricViscosityAveraging())
+        operator = StaggeredDiffusionOperator(mesh; viscosity, averaging = rule)
+        volumes = operator.volumes
+        @test operator.stiffness ≈ transpose(operator.stiffness) atol =
+            1.0e-14 * norm(operator.stiffness)
+        constant = FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ? 1.0 : -2.0)
+        constant_force = FaceVelocity(mesh)
+        diffusion!(constant_force, constant, operator)
+        # A constant velocity has no strain, so it is in the kernel up to
+        # round-off relative to the matrix magnitude (the product is zero).
+        stiffness_scale = maximum(abs, operator.stiffness) *
+            maximum(abs, constant.interior)
+        @test maximum(abs, operator.stiffness * constant.interior) <=
+            1.0e-12 * stiffness_scale
+        @test maximum(abs, constant_force.interior) <=
+            1.0e-12 * stiffness_scale / minimum(volumes)
+        velocity = FaceVelocity(
+            mesh,
+            (x, y, time, axis) -> axis == 1 ? sinpi(2y) + 3 : sinpi(2x) - 1,
+        )
+        force = FaceVelocity(mesh)
+        diffusion!(force, velocity, operator)
+        @test dot(velocity.interior, volumes .* force.interior) < 0
+        # The stiffness stays positive semidefinite for every velocity; the
+        # midpoint step is energy contractive with it.
+        for seed in 1:4
+            probe = [sin(seed * 1.7index) + cos(index / seed) for index in eachindex(volumes)]
+            @test dot(probe, operator.stiffness * probe) >=
+                -1.0e-12 * norm(probe)^2 * norm(operator.stiffness)
+        end
+        old_energy = sum(volumes .* velocity.interior .^ 2)
+        result = FaceVelocity(mesh)
+        implicit_midpoint_diffusion!(result, velocity, operator, 0.01)
+        @test sum(volumes .* result.interior .^ 2) < old_energy
     end
 end
 
