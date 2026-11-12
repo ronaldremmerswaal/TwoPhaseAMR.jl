@@ -17,11 +17,12 @@
 # call and reports the per-step solver wall time (`StepInfo.wall_time`: the
 # step, mesh adaptation and diagnostics) and a SHA-256 of the final state
 # (bitwise comparison across thread counts). The Stokes-3 cases warm up until
-# one step has regridded and extend both windows until they hold a regrid step;
-# regular (`steady_mean_ms`) and regrid steps are reported separately. With
-# PROFILE_STEPS > 0 it profiles further steps one at a time, files each step's
-# samples under its class (regular or regrid) and splits the main thread's
-# samples into serial samples and samples inside a Polyester batch.
+# one step has regridded and extend both windows until they hold a regrid step
+# (an error if none comes within 40 extra steps); the median of the regular
+# steps (`steady_median_ms`) and the mean of the regrid steps are reported
+# separately. With PROFILE_STEPS > 0 it profiles further steps one at a time,
+# files each step's samples under its class (regular or regrid) and splits the
+# main thread's samples into serial samples and samples inside a Polyester batch.
 using LinearAlgebra
 BLAS.set_num_threads(1)
 using Printf
@@ -274,15 +275,17 @@ function measure(case, steps, profile_steps)
             run_steps!(flow, dt, 1; observer)
         end
     end
+    regridding && !any(observer.topology_changed) &&
+        error("$case did not regrid in $(length(observer.seconds)) timed steps")
     times = observer.seconds
     regrid = observer.topology_changed
     steady = times[.!regrid]
     @printf(
-        "case=%s threads=%d cells=%d->%d blocks=%d->%d dt=%.4e steps=%d regrid_steps=%d median_ms=%.3f mean_ms=%.3f min_ms=%.3f steady_mean_ms=%.3f regrid_mean_ms=%.3f bytes_per_step=%d checksum=%s\n",
+        "case=%s threads=%d cells=%d->%d blocks=%d->%d dt=%.4e steps=%d regrid_steps=%d median_ms=%.3f mean_ms=%.3f min_ms=%.3f steady_median_ms=%.3f regrid_mean_ms=%.3f bytes_per_step=%d checksum=%s\n",
         case, Threads.nthreads(:default), cells_before, ncells(flow), blocks_before,
         length(flow.pressure.blocks), dt, length(times), count(regrid),
         1.0e3median(times), 1.0e3mean(times), 1.0e3minimum(times),
-        isempty(steady) ? NaN : 1.0e3mean(steady),
+        isempty(steady) ? NaN : 1.0e3median(steady),
         any(regrid) ? 1.0e3mean(times[regrid]) : NaN,
         round(Int, stats.bytes / length(times)), state_checksum(flow),
     )
@@ -305,6 +308,8 @@ function measure(case, steps, profile_steps)
         bucket.steps += 1
         serial_profile!(bucket, Profile.fetch(include_meta = true), main_thread)
     end
+    regridding && regridded.steps == 0 &&
+        error("$case did not regrid in $(regular.steps) profiled steps")
     print_profile("regular steps", regular)
     print_profile("regrid steps", regridded)
     flush(stdout)
