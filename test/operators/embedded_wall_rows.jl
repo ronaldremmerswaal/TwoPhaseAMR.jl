@@ -412,14 +412,17 @@ end
     # non-periodic boundary in the component direction (whose only dual face
     # would otherwise lose the whole segment) and a segment that lies exactly
     # on the cell mid-plane (which a closed partition would count twice).
-    for n in (16, 32), refined in (false, true), kind in (:slope, :steep, :midplane)
+    for n in (16, 32), refined in (false, true),
+            kind in (:slope, :steep, :midplane, :midplane_fluid_negative)
         h = 8.0 / n
         levelset = if kind === :slope
             (x, y) -> y - 1 - 0.1x
         elseif kind === :steep
             (x, y) -> y - 1 - 0.5x
-        else
+        elseif kind === :midplane
             (x, y) -> x - 1 - h / 2
+        else
+            (x, y) -> 1 + h / 2 - x
         end
         mesh = BlockTreeMesh(;
             base_mesh = (n, n), block_size = (4, 4), extent = (8.0, 8.0),
@@ -468,6 +471,18 @@ end
                     total += connection.conductance * max(distance, minimum(spacing) / 64)
                 end
                 @test isapprox(total, length; rtol = 1.0e-10, atol = 0.0)
+                # A segment on the mid-plane belongs to the fluid-side node,
+                # whichever side that is.
+                if iszero(segment[1][axis]) && iszero(segment[2][axis])
+                    for connection in connections
+                        face = mesh.faces[
+                            local_to_global[connection.degree_of_freedom],
+                        ]
+                        @test TwoPhaseAMR._embedded_plic_distance(
+                            geometry, ref, face.center,
+                        ) > 0
+                    end
+                end
                 tested += 1
             end
             @test tested > 0

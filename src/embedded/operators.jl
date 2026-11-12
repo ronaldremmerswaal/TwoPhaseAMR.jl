@@ -612,13 +612,39 @@ function _push_embedded_cut_wall!(
     # (and its condition number) O(1/h^2) as h -> 0.
     floor = min(spacing...) / T(64)
     minus_present, plus_present = false, false
+    # A segment that lies exactly on the cell mid-plane satisfies the
+    # half-open test on one side only, which must be the side whose dual node
+    # is in the fluid; the positive side keeps it when the plane passes
+    # through both face centres.
+    midplane_owner = zero(Int8)
+    if iszero(segment[1][Axis]) && iszero(segment[2][Axis])
+        distances = ntuple(2) do position
+            side = position == 1 ? -1 : 1
+            incidence = findfirst(face -> face.side == side, cell_faces)
+            isnothing(incidence) && return zero(T)
+            face = mesh.faces[cell_faces[incidence].global_index]
+            return _embedded_plic_distance(geometry, ref, face.center)
+        end
+        minus_distance, plus_distance = distances
+        if minus_distance > zero(T) && plus_distance <= zero(T)
+            midplane_owner = Int8(-1)
+        elseif plus_distance > zero(T)
+            midplane_owner = Int8(1)
+        end
+    end
     for incidence in cell_faces
         face = mesh.faces[incidence.global_index]
-        lo, hi = _face_local_tangent_interval(mesh, ref, face)
-        measure = _embedded_cut_wall_measure(
-            geometry, Val(Axis), ref, lo, hi, incidence.side, segment,
-        )
         incidence.side < 0 ? (minus_present = true) : (plus_present = true)
+        if !iszero(midplane_owner) && incidence.side != midplane_owner
+            continue
+        end
+        lo, hi = _face_local_tangent_interval(mesh, ref, face)
+        # The owned piece is independent of the side for a segment on the
+        # mid-plane, so the closed positive half measures it there.
+        wall_side = iszero(midplane_owner) ? incidence.side : Int8(1)
+        measure = _embedded_cut_wall_measure(
+            geometry, Val(Axis), ref, lo, hi, wall_side, segment,
+        )
         measure > zero(T) || continue
         distance = abs(_embedded_plic_distance(geometry, ref, face.center))
         push!(
@@ -633,7 +659,10 @@ function _push_embedded_cut_wall!(
     # of the strip, so it carries the missing piece over the whole cell at its
     # own wall distance: the pieces still sum to the segment length and the
     # wall flux is not dropped.
+    # A segment on the mid-plane is already owned whole by the node found
+    # above, so no missing side may add it again.
     isempty(cell_faces) && return connections
+    iszero(midplane_owner) || return connections
     owner = first(cell_faces)
     owner_face = mesh.faces[owner.global_index]
     for (is_present, side) in ((minus_present, -1), (plus_present, 1))
