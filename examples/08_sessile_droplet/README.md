@@ -14,6 +14,8 @@ A circular liquid cap relaxes under gravity and surface tension while maintainin
 | **Validated against** | `:phase_volume` should remain constant. At docs size the initial discrete liquid area is `0.0628318530718`, matching the continuum semicircle area `π(0.2)^2/2`; the final change and maximum sampled absolute change are `-3.49632e-10` and `3.49632e-10`, respectively. |
 | **Cost** | Default and docs: level 3 (square cells, `dx = dy = 1/8` on level 0 and `1/64` at level 3, 12.8 cells per radius), `T≈0.716`, 1299 steps and 1024 final cells; setup and simulation took 34.55 s and the whole figure script 91.6 s on one thread, including first-use compilation and rendering. |
 
+Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded.
+
 ## Setup
 
 For radius `R=0.2`, the initial liquid lies inside the circle centred at `(0.5,-R cos θ)`. With `ρ=(1,0.001)` and `σ=1`, the script derives

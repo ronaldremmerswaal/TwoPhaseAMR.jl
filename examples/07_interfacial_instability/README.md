@@ -14,6 +14,8 @@ A tangential velocity jump and gravity perturb a heavy-over-light interface, com
 | **Validated against** | The `:amplitude` history is compared with `:analytical_amplitude` from small-amplitude linear theory. At `t=2 acosh(2)≈2.634`, the two-velocity amplitude is `0.0196288` versus `0.02`, a maximum sampled absolute error of `3.71158e-4`; the one-velocity closure ends at `0.00260283`. |
 | **Cost** | Default and `:docs`: level 4, `T≈2.634`, 859 steps and 6144 final cells for two velocities. On one thread, setup and simulation took 70.98 s for two velocities and 18.67 s for one; the whole figure script, including the level-5 README animation run and rendering, took 514.8 s. |
 
+Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded.
+
 ## Setup
 
 For `k=2π`, the example computes

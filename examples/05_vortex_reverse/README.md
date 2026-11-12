@@ -14,6 +14,8 @@ A prescribed reversing vortex stretches a circular liquid patch and then returns
 | **Validated against** | The exact reversing flow returns to its initial shape and conserves liquid volume. At docs size `abs(V(T)-V(0)) = 4.75607e-11`; a geometric shape-error norm was not measured. |
 | **Cost** | The default level-5 run is unmeasured. Docs: level 3, `T=8`, 1661 steps, 64 regrids and 1792 final cells; setup and simulation took 85.39 s and the whole figure script 113.9 s on one thread, including first-use compilation and rendering. |
 
+Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded.
+
 ## Setup
 
 The streamfunction and time-dependent carrier velocity are

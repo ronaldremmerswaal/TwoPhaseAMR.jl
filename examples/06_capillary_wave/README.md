@@ -14,6 +14,8 @@ A small standing wave damps under viscosity and surface tension, and its amplitu
 | **Validated against** | `:amplitude` measures the interface height at `x=0` minus `0.25`; `:analytical_amplitude` is [Prosperetti's equal-kinematic-viscosity solution](https://doi.org/10.1063/1.863522). At docs size and `t=0.399142`, one velocity gives `0.00625680` versus `0.00614806` reference; the maximum sampled absolute error is `1.32120e-4`. |
 | **Cost** | Default and `:docs`: level 4, one period (`T≈0.399`), 2048 steps and 6528 final cells. Setup and simulation took 78.24 s for one velocity and 124.86 s for two; the whole figure script took 261.7 s on one thread, including first-use compilation and rendering. |
 
+Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded.
+
 ## Setup
 
 With `k=2π` and `ρ=(1, 0.001)`, the initial interface and linear inviscid capillary frequency are

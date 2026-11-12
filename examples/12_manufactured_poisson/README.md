@@ -14,6 +14,8 @@ A periodic two-phase manufactured solution measures pressure and phase-gradient 
 | **Validated against** | Gauge-aligned pressure and physical phase gradients are compared with the manufactured fields. At `resolution=32`, pressure RMS/max errors are `1.04378/8.98783`. |
 | **Cost** | `:docs` and `:default` both solve at `resolution=32` (1024 cells); image dimensions differ. In a shared single-thread gallery process, setup and solve took 5.92 s; incremental generator compilation, including rendering, was 37.21 s. |
 
+Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded.
+
 ## Setup
 
 Let `r²=(x−0.5)²+(y−0.5)²`. The pressure is continuous at the interface but has a phase-dependent gradient:

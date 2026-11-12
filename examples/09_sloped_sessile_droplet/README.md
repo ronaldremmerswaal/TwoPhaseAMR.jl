@@ -14,6 +14,8 @@ A liquid drop relaxes against an inclined embedded wall under capillarity and wa
 | **Validated against** | Liquid volume should remain constant: `:phase_volume` changes by `-3.16005e-11` at docs size. The final volume-weighted `:divergence_norm` is `6.16318e-7` against zero; 100 curvature faces were unresolved cumulatively. No analytical drop-shape or contact-angle error is claimed. |
 | **Cost** | Both gallery sizes use `max_level=3` (square cells, `dx = dy = 1/64` at level 3, 10 cells per radius) and `T=4t_c≈0.2561`; image dimensions differ. The docs run had 932 steps and 1792 final cells and took 119.50 s for setup and simulation on one thread, including incremental compilation; the whole figure script took 161.7 s. `run_example` keeps `max_level=2`. |
 
+Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded.
+
 ## Setup
 
 The solid is the negative side of `n⋅(x−x₀)=0`, where `n=(-sin θ, cos θ)` and `x₀=(0.5,0.22)`. The liquid initially occupies the radius-`R` circle centred at `x₀−R cos(α)n`, clipped by that solid. Gravity is **normal to the wall**, not fixed vertically:
