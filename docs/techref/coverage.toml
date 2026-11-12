@@ -279,10 +279,12 @@ tests = [
 label = "eq:interface:fractions"
 sources = [
   { file = "src/interface/interface_field.jl", symbol = "_refresh_conditional_fraction!" },
+  { file = "src/interface/interface_field.jl", symbol = "_restrict_conditional_halo!" },
   { file = "src/two_phase/two_velocity/transport_geometry.jl", symbol = "_phase_cell_fractions" }
 ]
 tests = [
-  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Two-phase cell, staggered and face geometry partitions" }
+  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Two-phase cell, staggered and face geometry partitions" },
+  { file = "test/mesh/variables.jl", testset = "conditional fraction halos restrict numerator and denominator" }
 ]
 [[claims]]
 label = "eq:interface:floor"
@@ -1601,13 +1603,17 @@ check = "amr_indicator_check"
 label = "eq:amr:curvature"
 sources = [
   { file = "src/mesh/adaptivity/phase_criteria.jl", symbol = "refinement_labels!" },
+  { file = "src/mesh/adaptivity/phase_criteria.jl", symbol = "_wetted_cut_cell" },
   { file = "src/interface/height_functions.jl", symbol = "_lhf_refinement_status" },
   { file = "src/interface/height_functions.jl", symbol = "_fill_height_values!" }
 ]
 tests = [
   { file = "test/indicator/phase/height_functions.jl", testset = "Curvature AMR detects invalid heights and filaments" },
   { file = "test/mesh/adaptivity.jl", testset = "AMR criterion time windows and level bounds" },
-  { file = "test/mesh/adaptivity.jl", testset = "Curvature ignores liquid-filled sloped solid cuts (#118)" }
+  { file = "test/mesh/adaptivity.jl", testset = "Curvature ignores liquid-filled sloped solid cuts (#118)" },
+  { file = "test/mesh/adaptivity.jl", testset = "Curvature refines contact-line cells of a wall-cut liquid wedge (#148)" },
+  { file = "test/mesh/adaptivity.jl", testset = "Curvature keeps contact-line families across the interface (#148)" },
+  { file = "test/mesh/adaptivity.jl", testset = "Contact-line refinement reaches a fixed point at a level step (#148)" }
 ]
 check = "amr_indicator_check"
 [[claims]]

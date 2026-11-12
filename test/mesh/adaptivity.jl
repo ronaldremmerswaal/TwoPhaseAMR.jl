@@ -494,6 +494,148 @@ end
     @test count(==(:refine), labels) == 1
 end
 
+@testset "Curvature refines contact-line cells of a wall-cut liquid wedge (#148)" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (8, 8), max_level = 2,
+        periodic = (false, false),
+        refine = (key, origin, extent) -> key.level == 0,
+    )
+    solid = InterfaceField(mesh; contact_angle = nothing)
+    initialize!(solid, (-0.23, 1.0), 0.17)
+    geometry = GeometryField(solid)
+    # A straight, exactly resolved free surface meets the sloping wall at
+    # (0.77, 0.35); liquid fills the wedge above the wall and below the plane.
+    wedge = InterfaceField(mesh; geometry, contact_angle = nothing, init = 0)
+    initialize!(wedge, (0.2, 1.0), 0.5)
+    # A block borders the interface when one of its cells, halo included, holds
+    # both phases in its open part. Read the stored area fractions here rather
+    # than the derived conditional fraction, so the expectation does not
+    # restate the implementation's mixed-cell test.
+    near_interface = [
+        any(
+            index -> 0 < wedge.fraction.blocks[b][index] <
+                geometry.open_fraction.blocks[b][index],
+            eachindex(wedge.fraction.blocks[b]),
+        ) for b in eachindex(mesh.blocks)
+    ]
+    cells = TwoPhaseAMR._cell_references(mesh)
+    wetted = [
+        ref for ref in cells
+            if TwoPhaseAMR._conditional_fraction(wedge, ref) == 1 &&
+            0 < TwoPhaseAMR._get(geometry.open_fraction, ref) < 1
+    ]
+    @test !isempty(wetted)
+    contact = filter(ref -> near_interface[ref.block], wetted)
+    interior = filter(ref -> !near_interface[ref.block], wetted)
+    @test !isempty(contact)
+    @test !isempty(interior)
+    # A contact-line cell holds liquid in all of its open volume, so the mixed
+    # test alone skips it and its curvature is undefined.
+    @test all(ref -> isnan(TwoPhaseAMR._get(wedge.curvature, ref)), contact)
+
+    labels = Vector{Symbol}(undef, nblocks(mesh))
+    refinement_labels!(labels, CurvatureRefinementIndicator(wedge))
+    @test all(ref -> labels[ref.block] === :refine, contact)
+    # Liquid-filled cut cells in blocks without a mixed cell stay excluded.
+    @test all(ref -> labels[ref.block] === :coarsen, interior)
+end
+
+@testset "Curvature keeps contact-line families across the interface (#148)" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (8, 8), max_level = 1,
+        periodic = (false, false),
+        refine = (key, origin, extent) -> key.level == 0,
+    )
+    solid = InterfaceField(mesh; contact_angle = nothing)
+    initialize!(solid, (-0.23, 1.0), 0.17)
+    geometry = GeometryField(solid)
+    # Liquid below y = 0.5 and gas above: the free surface lies exactly on the
+    # level-1 cell faces, so no cell is mixed and the contact-line test alone
+    # would coarsen every family.
+    field = InterfaceField(mesh; geometry, init = 0)
+    initialize!(field, (0.0, 1.0), 0.5)
+    cells = TwoPhaseAMR._cell_references(mesh)
+    wetted = Set(
+        ref.block for ref in cells
+            if TwoPhaseAMR._conditional_fraction(field, ref) == 1 &&
+            0 < TwoPhaseAMR._get(geometry.open_fraction, ref) < 1
+    )
+    @test !isempty(wetted)
+    labels = Vector{Symbol}(undef, nblocks(mesh))
+    refinement_labels!(labels, CurvatureRefinementIndicator(field))
+    families = 0
+    for block in mesh.blocks
+        key = block.key
+        key.level == 1 && iseven(key.i) && iseven(key.j) || continue
+        family = [
+            b for b in eachindex(mesh.blocks) if begin
+                    other = mesh.blocks[b].key
+                    other.level == 1 && other.i >> 1 == key.i >> 1 &&
+                    other.j >> 1 == key.j >> 1
+                end
+        ]
+        @test length(family) == 4
+        # Coarsening would merge each family into a parent that spans the
+        # interface, so families holding a wetted cut cell are kept; those
+        # away from it still coarsen.
+        expected = any(in(wetted), family) ? :keep : :coarsen
+        @test all(b -> labels[b] === expected, family)
+        families += 1
+    end
+    @test families == 4
+end
+
+@testset "Contact-line refinement reaches a fixed point at a level step (#148)" begin
+    # A wall whose fine cells are not cut (it lies on fine cell faces) and a
+    # sloped wall that cuts them: both meet a static free surface inside the
+    # level-jump block, and neither may keep changing the mesh.
+    cases = (
+        # wall normal, wall offset, level-jump block origin, surface normal,
+        # surface offset
+        ((-0.23, 1.0), 0.17, (0.75, 0.25), (0.2, 1.0), 0.5),
+        ((0.0, 1.0), 33 / 64, (0.25, 0.5), (0.2, 1.0), 0.575),
+    )
+    for (wall_normal, wall_offset, jump, surface_normal, surface_offset) in cases
+        @testset "wall $wall_normal offset $wall_offset" begin
+            mesh = BlockTreeMesh(
+                base_mesh = (16, 16), block_size = (8, 8), max_level = 2,
+                periodic = (false, false),
+                adaptation = MeshAdaptationOptions(coarsen_delay = 1),
+                refine = (key, origin, extent) -> key.level == 0 || (
+                    key.level == 1 && isapprox(origin[1], jump[1]; atol = 1.0e-12) &&
+                        isapprox(origin[2], jump[2]; atol = 1.0e-12)
+                ),
+            )
+            solid = InterfaceField(mesh; contact_angle = nothing)
+            initialize!(solid, wall_normal, wall_offset)
+            geometry = GeometryField(solid)
+            interface = InterfaceField(
+                mesh; geometry, contact_angle = nothing, init = 0
+            )
+            initialize!(interface, surface_normal, surface_offset)
+            workspace = AMRWorkspace(mesh, geometry, interface)
+            indicator = CurvatureRefinementIndicator(
+                interface; cells_per_radius = 8
+            )
+            changes = Bool[]
+            for step in 1:26
+                stats = adapt!(workspace, indicator; step, force = true)
+                @test stats.attempted
+                push!(changes, stats.changed)
+                if stats.changed
+                    # Re-sample the stationary fields after the transfer.
+                    initialize!(interface, surface_normal, surface_offset)
+                    refresh_geometry!(geometry)
+                end
+            end
+            # Six attempts settle the level step; further passes must keep the
+            # mesh unchanged, in particular no refine/coarsen cycle.
+            @test !any(changes[7:26])
+            @test isbalanced(mesh)
+        end
+    end
+end
+
 @testset "in-place conservative adaptive field transfer" begin
     options = MeshAdaptationOptions(
         update_interval = 2, coarsen_delay = 3, minimum_level = 0
