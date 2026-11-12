@@ -229,10 +229,13 @@ cell, not the distance to the segment midpoint, and the conductance is
   \quad(\text{omitted for \apitype{FreeSlip}\code{()}}),
 \end{equation}
 with $\meas{\interface^{\solid}_{c,f}}$ the length of the piece. The floor is
-one sixty-fourth of the smallest cell width: no resolved cut brings a node
-closer than $h/20$ to its own plane, so it only limits the degenerate case,
-and it bounds the largest conductance at $64\meas{\interface^{\solid}_{c,f}}/h$,
-which keeps the assembled stiffness scaling as $1/h^2$. The factor
+one sixty-fourth of the smallest cell width and it is active: a cut plane
+passes through or next to the centre of many wall-piece nodes, so a fifth to a
+third of the pieces on the manufactured fixtures sit closer than $h/64$ (the
+closest is a node exactly on the reconstructed plane). It bounds the largest
+wall conductance at $64\meas{\interface^{\solid}_{c,f}}/\min_t\cellwidth{c}{t}$,
+which keeps the assembled stiffness scaling as $1/h^2$; the pinned errors and
+orders are measured with this floor in place. The factor
 $\tfrac12\sidefrac{c}{f}$ of the previous closure is gone because the pieces
 already partition the segment. A fluid-side unknown satisfies
 $0=\velo_w=\velo_f-d_f\partial_n\velo$ for the wall-normal derivative
@@ -276,7 +279,7 @@ $0.74$ on the composite grid, rather than two (\issue{110};
 \code{test/operators/embedded_wall_rows.jl}). The remaining first-order error
 sits in the cut cells' interior contact measures, which are rebuilt from
 bisected one-dimensional traces: the normal component's wall rows keep an
-$h/(2\abs{\nabla d})$ residual, $0.09$ rms at $32$ cells on the two slopes; a node whose centre lies inside the solid
+$h/(2\abs{\nabla d})$ residual, $0.091$ rms at $32$ cells on the two slopes; a node whose centre lies inside the solid
 also carries its wall piece with the flux sign of a fluid-side node, which a
 symmetric non-negative stiffness cannot avoid.
 The constructor builds when a solid cuts cells at a level transition

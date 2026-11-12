@@ -605,11 +605,12 @@ function _push_embedded_cut_wall!(
     spacing = mesh.blocks[ref.block].spacing
     # A dual node on the reconstructed plane has the exact no-slip value and
     # its conductance would diverge. The floor is one sixty-fourth of the
-    # smallest cell width: no resolved cut in the manufactured tests brings a
-    # node closer than h/20 to its own plane, so the floor only limits the
-    # degenerate case, and it bounds the largest conductance at 64*measure/h,
-    # two orders above the interior ones, which keeps the assembled stiffness
-    # (and its condition number) O(1/h^2) as h -> 0.
+    # smallest cell width, and it is active: a cut plane passes through or
+    # next to the centre of many wall-piece nodes, so a fifth to a third of
+    # the pieces in the manufactured fixtures sit closer than h/64. It bounds
+    # the largest wall conductance at 64*measure/min(h), which keeps the
+    # assembled stiffness scaling as 1/h^2; the pinned errors and orders of
+    # the convergence tests are measured with this floor.
     floor = min(spacing...) / T(64)
     minus_present, plus_present = false, false
     # A segment that lies exactly on the cell mid-plane satisfies the
@@ -663,21 +664,26 @@ function _push_embedded_cut_wall!(
     # above, so no missing side may add it again.
     isempty(cell_faces) && return connections
     iszero(midplane_owner) || return connections
-    owner = first(cell_faces)
-    owner_face = mesh.faces[owner.global_index]
     for (is_present, side) in ((minus_present, -1), (plus_present, 1))
         is_present && continue
-        measure = _embedded_cut_wall_measure(
-            geometry, Val(Axis), ref, -T(0.5), T(0.5), side, segment,
-        )
-        measure > zero(T) || continue
-        distance = abs(_embedded_plic_distance(geometry, ref, owner_face.center))
-        push!(
-            connections, WallDiffusionConnection(
-                global_to_local[owner.global_index],
-                measure / max(distance, floor), midpoint, true,
-            ),
-        )
+        # Each present face takes the missing side's piece over its own
+        # tangential strip, at its own wall distance, so a split side keeps
+        # its strip ownership.
+        for incidence in cell_faces
+            face = mesh.faces[incidence.global_index]
+            lo, hi = _face_local_tangent_interval(mesh, ref, face)
+            measure = _embedded_cut_wall_measure(
+                geometry, Val(Axis), ref, lo, hi, side, segment,
+            )
+            measure > zero(T) || continue
+            distance = abs(_embedded_plic_distance(geometry, ref, face.center))
+            push!(
+                connections, WallDiffusionConnection(
+                    global_to_local[incidence.global_index],
+                    measure / max(distance, floor), midpoint, true,
+                ),
+            )
+        end
     end
     return connections
 end
@@ -1161,13 +1167,13 @@ function _cut_cell_normal_measures!(
                     zero(T), one(T),
                 )
                 measure = (hi - lo) * (one(T) - solid_fraction) * tangent_spacing
-                # A mid-plane that is entirely solid leaves the two faces with
-                # no diffusive path; keep the schedule measure so a cut
-                # control volume never loses its only normal contact. The
-                # threshold is relative, so round-off from a boundary that
-                # grazes the mid-plane cannot replace a real contact.
-                measure > T(256) * eps(T) * (hi - lo) * tangent_spacing ||
-                    continue
+                # A mid-plane that is (almost) entirely solid leaves the two
+                # faces with no diffusive path. Keep the schedule measure then,
+                # so a cut control volume never loses its only normal contact
+                # and no row keeps a round-off-sized diagonal: a boundary that
+                # grazes the mid-plane produces relative measures of a few
+                # hundred eps, well below this 1e-10 margin.
+                measure > T(1.0e-10) * (hi - lo) * tangent_spacing || continue
                 minus, plus = minmax(first.local_index, second.local_index)
                 position = get(positions, (minus, plus), 0)
                 if position > 0
