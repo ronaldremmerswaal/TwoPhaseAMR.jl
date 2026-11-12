@@ -691,11 +691,19 @@ bound holds on every $2{:}1$-balanced mesh without solid, periodic or with
 walls: a hanging fine control volume is smaller, but the volumes through the
 faces of its small cell are capped by its own volume (checked as exact linear
 programs over every local configuration of random meshes, not proved here).
-With a solid it can fail, because the open volumes are small: $\mathcfl_g$
-reached $3.3\,\wycflval$ in random cut meshes (\code{proof_review/sec-momentum-cfl/}).
-The regular dual faces next to a solid use the selected scheme
-(\cref{sec:momentum:flux-rules}), so a Lax--Wendroff or limited state may
-there see a Courant number above one; no bound is claimed for it (\issue{72}).
+With a solid the open volumes are small, and the argument above fails. The
+cut-donor bound of \cref{sec:vof:cfl} restores it: it limits every outgoing
+flux by its donor's open strip, the same strip whose half the staggered
+volume of the receiving unknown interpolates, and the phase schedules weigh
+the fluxes by those strips (\cref{eq:momentum:open-fractions}). Over random
+cut meshes with a level transition $\mathcfl_g/\wycflval$ stayed at one to
+round-off, at $\wycflval=\half$ and $\wycflval=0.3$, and
+\testsym{test/two_phase/transport.jl}{Dual Courant number next to a solid}
+holds the bound on the cut fixture; the supremum over the states the older
+per-cell bound admits reached $3.3$ before that bound was in place
+(\code{proof_review/sec-momentum-cfl/}, \issue{72}). So the selected scheme's
+Lax--Wendroff or limited state stays a convex combination of its two
+neighbours next to a solid as well.
 
 \begin{implnote}
 \apifun{stable_timestep}\code{(velocity, workspace; cfl=0.9)} for a

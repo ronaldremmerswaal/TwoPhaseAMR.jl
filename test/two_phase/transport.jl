@@ -902,6 +902,48 @@ end
     @test cut_momentum_identity_defect(interface, geometric, Val(1), 1) > 1.0e-4
 end
 
+@testset "Dual Courant number next to a solid" begin
+    # eq:momentum:cfl: with a solid the cut-donor strip bound limits every
+    # outgoing flux by its donor's open strip, and the phase schedules weigh
+    # the fluxes by those same strips, so the dual Courant number stays at most
+    # nu^dagger also where the open dual volumes are small (#72).
+    interface, carrier = cut_momentum_fixture()
+    momentum = MomentumAdvectionWorkspace(interface)
+    scalars = ntuple(axis -> PhaseFaceScalar{axis}(interface), 2)
+    for cfl in (0.5, 0.2)
+        field = copy(interface)
+        work = WYAdvectionWorkspace(field)
+        dt = stable_timestep(carrier, work; cfl)
+        reconstruct!(field)
+        for axis in (1, 2)
+            TP._compute_directional_wy_fluxes!(field, carrier, dt, work, axis)
+        end
+        for axis in (1, 2), flux in (
+                    work.open_flux, work.liquid_flux, work.gas_flux,
+                )
+            schedules = (
+                (axis == 1 ? momentum.x : momentum.y).advection.schedule,
+                scalars[axis].workspace.schedule,
+            )
+            for schedule in schedules
+                worst = 0.0
+                for face in schedule.faces
+                    face.axis == axis || continue
+                    rate = TP._phase_dual_flux(face, schedule, flux, field.mesh)
+                    worst = max(
+                        worst,
+                        abs(rate) / min(
+                            schedule.volumes[face.minus],
+                            schedule.volumes[face.plus],
+                        ),
+                    )
+                end
+                @test worst <= cfl * (1 + 1.0e-12)
+            end
+        end
+    end
+end
+
 function wy_cut_hanging_counterexample(parameters)
     mesh = BlockTreeMesh(
         base_mesh = (4, 4), block_size = (2, 2), extent = (4.0, 4.0),
