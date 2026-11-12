@@ -34,8 +34,11 @@ patch, let the rows of `Y` contain
 Y_f = |f|(x_+ - x_-),
 ```
 
-using the shortest periodic displacement, and let `N` contain half of the
-coordinate-normal vector for each face. The local metric is
+where the normal component of the centre difference is positive — the plus cell
+lies on the coordinate-normal side of the shared face — and its magnitude is the
+shortest periodic image, which also resolves a periodic direction with only two
+cells; the tangential component takes its shortest periodic image. `N` contains
+half of the coordinate-normal vector for each face. The local metric is
 
 ```math
 K_v = N (Y^T N)^{-1} N^T + \gamma
