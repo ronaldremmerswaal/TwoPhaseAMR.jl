@@ -28,23 +28,35 @@ function study(c::KHCase)
     p, ω0, X0 = initial_mode(c)
     frozen = integrate(p, base_flow(c; diffusing = false), X0, [T]; dt = DT)[end, 1]
     sheet = vortex_sheet_frequency(c)
-    report(@sprintf("== %s: ρ = %s, ν = %s, δ0 = %s, U∞ = %s, σ = %.6g, T = %g, |η̂(0)| = %g",
-        c.name, c.density, kinematic_viscosities(c), initial_thicknesses(c), far_velocities(c),
-        surface_tension(c), T, c.amplitude))
+    report(
+        @sprintf(
+            "== %s: ρ = %s, ν = %s, δ0 = %s, U∞ = %s, σ = %.6g, T = %g, |η̂(0)| = %g",
+            c.name, c.density, kinematic_viscosities(c), initial_thicknesses(c), far_velocities(c),
+            surface_tension(c), T, c.amplitude
+        )
+    )
     report(@sprintf("   vortex sheet (Lamb):     ω = %+.6f %+.6fi", real(sheet), imag(sheet)))
     report(@sprintf("   OS eigenvalue at t = 0:  ω = %+.6f %+.6fi", real(ref.ω0), imag(ref.ω0)))
     for t in range(0, T; length = 5)
         ω, _ = leading_mode(ref.problem, base_flow(c); t)
-        report(@sprintf("   quasi-steady OS at t = %.3f (δ_g = %.5f): ω = %+.6f %+.6fi", t,
-            thickness(base_flow(c), 2, t), real(ω), imag(ω)))
+        report(
+            @sprintf(
+                "   quasi-steady OS at t = %.3f (δ_g = %.5f): ω = %+.6f %+.6fi", t,
+                thickness(base_flow(c), 2, t), real(ω), imag(ω)
+            )
+        )
     end
     rel(chk) = maximum(abs.(ref.eta .- chk.eta) ./ abs.(chk.eta))
     report(@sprintf("   IVP: |η̂(T)|/|η̂(0)| = %.5f, phase(T) = %+.5f rad", abs(ref.eta[end]) / c.amplitude, angle(ref.eta[end] / ref.eta[1])))
     for (label, chk, setting) in (("time step", chk_dt, CHECK_DT), ("collocation", chk_n, CHECK_N))
         report(@sprintf("   IVP %s check (N,β,dt) = %s vs %s: max_t |Δη̂|/|η̂| = %.2e", label, values(PRIMARY), values(setting), rel(chk)))
     end
-    report(@sprintf("   Radau IIA frozen-base check: |η̂(T)/(η̂(0)e^{-iω0 T}) − 1| = %.2e",
-        abs(frozen / (X0[end] * exp(-im * ω0 * T)) - 1)))
+    report(
+        @sprintf(
+            "   Radau IIA frozen-base check: |η̂(T)/(η̂(0)e^{-iω0 T}) − 1| = %.2e",
+            abs(frozen / (X0[end] * exp(-im * ω0 * T)) - 1)
+        )
+    )
     open(joinpath(RESULTS, "reference_$(c.name).csv"), "w") do io
         println(io, "t,eta_re,eta_im")
         for (t, η) in zip(times, ref.eta)

@@ -62,8 +62,10 @@ function streamfunction(m::ModeProfile, phase, y)
 end
 
 "∫_a^b U∞ erf(y/δ) dy."
-erf_integral(U∞, δ, a, b) = U∞ * ((b * erf(b / δ) + δ / sqrt(pi) * exp(-(b / δ)^2)) -
-    (a * erf(a / δ) + δ / sqrt(pi) * exp(-(a / δ)^2)))
+erf_integral(U∞, δ, a, b) = U∞ * (
+    (b * erf(b / δ) + δ / sqrt(pi) * exp(-(b / δ)^2)) -
+        (a * erf(a / δ) + δ / sqrt(pi) * exp(-(a / δ)^2))
+)
 
 const GAUSS4 = (
     (-0.8611363115940526, 0.34785484513745385), (-0.33998104358485626, 0.6521451548625461),
@@ -154,13 +156,36 @@ mutable struct ModeObserver <: AbstractObserver
     times::Vector{Float64}
     eta::Vector{ComplexF64}
     last_print::Float64
+    urange::Vector{Float64}       # extrema over the run of the finite x-velocities
+    frange::Vector{Float64}       # extrema over the run of the volume fractions
+    infinite::Int                 # number of ±Inf velocity entries seen
 end
-ModeObserver(h) = ModeObserver(h, Float64[], ComplexF64[], time())
+ModeObserver(h) = ModeObserver(h, Float64[], ComplexF64[], time(), [Inf, -Inf], [Inf, -Inf], 0)
+
+function track_bounds!(o::ModeObserver, state)
+    fields = state.velocity isa Tuple ? state.velocity : (state.velocity,)
+    mesh = state.interface.mesh
+    for f in fields, (i, face) in pairs(mesh.faces)
+        face.axis == 1 || continue
+        u = f.interior[i]
+        isinf(u) && (o.infinite += 1)
+        isfinite(u) || continue
+        o.urange[1] = min(o.urange[1], u)
+        o.urange[2] = max(o.urange[2], u)
+    end
+    for b in eachindex(mesh.blocks)
+        fmin, fmax = extrema(interior(state.interface.fraction, b))
+        o.frange[1] = min(o.frange[1], fmin)
+        o.frange[2] = max(o.frange[2], fmax)
+    end
+    return nothing
+end
 
 function TwoPhaseAMR.observe!(o::ModeObserver, event::Symbol, state, info)
     (event === :initial || event === :step) || return nothing
     push!(o.times, state.time)
     push!(o.eta, interface_mode(state.interface, o.h))
+    track_bounds!(o, state)
     if time() - o.last_print > 60
         o.last_print = time()
         @printf("    t = %.4f  |η̂| = %.4e\n", state.time, abs(o.eta[end]))
@@ -188,13 +213,13 @@ function row_profiles(flow, fields)
     return ys, [[rows[y][q][2] > 0 ? rows[y][q][1] / rows[y][q][2] : NaN for y in ys] for q in eachindex(fields)]
 end
 
-"x-face velocities near the interface: (x, y, u per field)."
+"x-face velocities near the interface: (x, y, face length = local h, u per field)."
 function band_field(flow, fields; halfwidth = 0.1)
     mesh = flow.system.mesh
     out = Vector{Vector{Float64}}()
     for (i, face) in pairs(mesh.faces)
         face.axis == 1 && abs(face.center[2]) <= halfwidth || continue
-        push!(out, [face.center[1], face.center[2], (f.interior[i] for f in fields)...])
+        push!(out, [face.center[1], face.center[2], face.area, (f.interior[i] for f in fields)...])
     end
     return out
 end
@@ -202,15 +227,44 @@ end
 model_label(model) = model isa OneVelocityModel ? "one" : "two"
 
 """
-    run_case(c, model, n; save_field=false, tag="") -> NamedTuple
+    set_ctu_threshold!(flow, θ)
+
+Replace the WY advection workspace of a two-phase flow by one with `ctu_threshold = θ`
+(the threshold is not reachable from the public `FlowSimulation` options; the
+workspace is rebuilt from the public `WYAdvectionWorkspace` constructor and stored in
+the mutable flow workspaces).
+"""
+function set_ctu_threshold!(flow, θ)
+    two_phase = flow.workspace.two_phase
+    advection = WYAdvectionWorkspace(flow.interface; ctu_threshold = θ)
+    two_phase.advection = advection
+    state = two_phase.two_velocity[]
+    isnothing(state) || (state.advection = advection)
+    return flow
+end
+
+"""
+    run_case(c, model, n; save_field=false, tag="", scheme=LaxWendroff(),
+             ctu_threshold=0.5, runs=RUNS, skip_existing=false) -> NamedTuple
 
 Simulate case `c` on the mesh with interface resolution λ/h = n and write
-results/runs/<case>_<model>_n<n><tag>.csv (time series) and _profile.csv
+<runs>/<case>_<model>_n<n><tag>.csv (time series) and _profile.csv
 (x-averaged tangential velocity at the final time); with `save_field` also the
-x-face velocities near the interface to results/fields/.
+x-face velocities near the interface to results/fields/. `scheme` is the bulk
+staggered momentum flux, `ctu_threshold` the phase fraction below which the CTU
+(upwind) flux is used.
 """
-function run_case(c::KHCase, model, n; save_field = false, tag = "")
-    mkpath(RUNS)
+function run_case(
+        c::KHCase, model, n; save_field = false, tag = "", scheme = LaxWendroff(),
+        ctu_threshold = 0.5, runs = RUNS, skip_existing = false
+    )
+    label = "$(c.name)_$(model_label(model))_n$(n)$(tag)"
+    if skip_existing && isfile(joinpath(runs, label * ".csv")) &&
+            (!save_field || isfile(joinpath(FIELDS, label * "_field.csv")))
+        println("  skip $label (exists)")
+        return nothing
+    end
+    mkpath(runs)
     h = WAVELENGTH / n
     p, ω0, X = initial_mode(c)
     mode = ModeProfile(p, X)
@@ -224,23 +278,36 @@ function run_case(c::KHCase, model, n; save_field = false, tag = "")
     flow = FlowSimulation(
         mesh, physics; velocity_model = model,
         velocity = initial_velocity(c, mode, model, h), boundary = FreeSlip(),
+        numerics = NavierStokesOptions(; advection = AdvectionOptions(; scheme)),
     )
+    ctu_threshold == 0.5 || set_ctu_threshold!(flow, ctu_threshold)
     observer = ModeObserver(h)
     cells = ncells(mesh)
-    label = "$(c.name)_$(model_label(model))_n$(n)$(tag)"
     @printf("  run %s: %d cells, h = 1/%d\n", label, cells, n)
     flush(stdout)
-    wall = @elapsed result = simulate!(flow, c.final_time; observer)
+    failure = ""
+    wall = @elapsed result = try
+        simulate!(flow, c.final_time; observer)
+    catch err
+        failure = sprint(showerror, err)[1:min(end, 200)]
+        @printf("  FAILED %s: %s\n", label, failure)
+        (; steps = length(observer.times) - 1)
+    end
     fields = model isa OneVelocityModel ? (flow.velocity,) : flow.velocity
     ys, profiles = row_profiles(flow, fields)
-    open(joinpath(RUNS, label * ".csv"), "w") do io
-        @printf(io, "# case=%s model=%s n=%d cells=%d steps=%d wall=%.3f\n", c.name, model_label(model), n, cells, result.steps, wall)
+    open(joinpath(runs, label * ".csv"), "w") do io
+        @printf(
+            io, "# case=%s model=%s n=%d cells=%d steps=%d wall=%.3f umin=%.6g umax=%.6g fmin=%.6g fmax=%.6g infinite=%d failed=%s\n",
+            c.name, model_label(model), n, cells, result.steps, wall, observer.urange..., observer.frange...,
+            observer.infinite, isempty(failure) ? "no" : "yes"
+        )
+        isempty(failure) || println(io, "# failure: ", replace(failure, '\n' => ' '))
         println(io, "t,eta_re,eta_im")
         for (t, e) in zip(observer.times, observer.eta)
             @printf(io, "%.8f,%.12e,%.12e\n", t, real(e), imag(e))
         end
     end
-    open(joinpath(RUNS, label * "_profile.csv"), "w") do io
+    open(joinpath(runs, label * "_profile.csv"), "w") do io
         println(io, model isa OneVelocityModel ? "y,u" : "y,u_liquid,u_gas")
         for (r, y) in enumerate(ys)
             println(io, join((y, (pr[r] for pr in profiles)...), ","))
@@ -249,7 +316,7 @@ function run_case(c::KHCase, model, n; save_field = false, tag = "")
     if save_field
         mkpath(FIELDS)
         open(joinpath(FIELDS, label * "_field.csv"), "w") do io
-            println(io, model isa OneVelocityModel ? "x,y,u" : "x,y,u_liquid,u_gas")
+            println(io, model isa OneVelocityModel ? "x,y,h,u" : "x,y,h,u_liquid,u_gas")
             for row in band_field(flow, fields)
                 println(io, join(row, ","))
             end
@@ -264,9 +331,10 @@ end
 modify(c::KHCase; kw...) = KHCase(; (f => get(kw, f, getfield(c, f)) for f in fieldnames(KHCase))...)
 
 # Command line:
-#   julia --project=. kh_run.jl <case[,case…]> <one|two|both> <n[,n…]> [field] [uniform] [amp=<A0>]
+#   julia --project=. kh_run.jl <case[,case…]> <one|two|both> <n[,n…]> [field] [uniform] [amp=<A0>] [skip]
 # `uniform`: finest level everywhere (checks the graded mesh); `amp=`: initial amplitude
-# (checks linearity); both add a tag to the output names.
+# (checks linearity); both add a tag to the output names. `skip`: do not redo runs
+# whose output exists.
 if abspath(PROGRAM_FILE) == @__FILE__
     names = split(ARGS[1], ',')
     models = ARGS[2] == "both" ? (OneVelocityModel(), TwoVelocityModel()) :
@@ -274,6 +342,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
     resolutions = parse.(Int, split(ARGS[3], ','))
     flags = ARGS[4:end]
     save_field = "field" in flags
+    skip_existing = "skip" in flags
     for name in names, n in resolutions, model in models
         c = CASES[name]
         tag = ""
@@ -286,6 +355,6 @@ if abspath(PROGRAM_FILE) == @__FILE__
             c = modify(c; amplitude = parse(Float64, f[5:end]))
             tag *= "_" * f
         end
-        run_case(c, model, n; save_field, tag)
+        run_case(c, model, n; save_field, tag, skip_existing)
     end
 end

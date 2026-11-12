@@ -81,8 +81,10 @@ function Layer(side, N, H; stretch = 0.0, density, viscosity)
         a, c = 2s / (β * H), s / H
         z = r .* c
         w = 1 .+ z .^ 2
-        (a ./ sqrt.(w), -a * c .* z ./ w .^ 1.5, a * c^2 .* (2z .^ 2 .- 1) ./ w .^ 2.5,
-            a * c^3 .* (9z .- 6z .^ 3) ./ w .^ 3.5)
+        (
+            a ./ sqrt.(w), -a * c .* z ./ w .^ 1.5, a * c^2 .* (2z .^ 2 .- 1) ./ w .^ 2.5,
+            a * c^3 .* (9z .- 6z .^ 3) ./ w .^ 3.5,
+        )
     end
     q1, q2, q3, q4 = q
     Dξ2 = Dξ * Dξ

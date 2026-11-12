@@ -14,7 +14,8 @@ function read_series(path)
     for line in eachline(path)
         if startswith(line, "#")
             for kv in split(line[2:end])
-                k, v = split(kv, '=')
+                occursin('=', kv) || continue
+                k, v = split(kv, '='; limit = 2)
                 meta[k] = v
             end
         elseif !startswith(line, "t,")
@@ -108,17 +109,19 @@ function collect_errors()
             ηT_ref = interpolate_reference(ref, run.t[end])
             prof = read_table(joinpath(RUNS, replace(file, ".csv" => "_profile.csv")))
             δT = thickness(base_flow(c), 1, c.final_time)   # liquid (thinner) layer at T
-            push!(rows, (;
-                case = name, model = m.captures[1], n,
-                delta0_over_h = minimum(initial_thicknesses(c)) * n,
-                deltaT_over_h = δT * n,
-                cells = parse(Int, run.meta["cells"]), steps = parse(Int, run.meta["steps"]),
-                wall = parse(Float64, run.meta["wall"]),
-                growth = s, growth_ref = s_ref, growth_err = abs(s - s_ref) / s_ref,
-                speed = cr, speed_ref = c_ref, speed_err = abs(cr - c_ref),
-                amp_err = abs(ηT - ηT_ref) / abs(ηT_ref),
-                profile_err = profile_error(c, prof), jump = interface_jump(prof),
-            ))
+            push!(
+                rows, (;
+                    case = name, model = m.captures[1], n,
+                    delta0_over_h = minimum(initial_thicknesses(c)) * n,
+                    deltaT_over_h = δT * n,
+                    cells = parse(Int, run.meta["cells"]), steps = parse(Int, run.meta["steps"]),
+                    wall = parse(Float64, run.meta["wall"]),
+                    growth = s, growth_ref = s_ref, growth_err = abs(s - s_ref) / s_ref,
+                    speed = cr, speed_ref = c_ref, speed_err = abs(cr - c_ref),
+                    amp_err = abs(ηT - ηT_ref) / abs(ηT_ref),
+                    profile_err = profile_error(c, prof), jump = interface_jump(prof),
+                )
+            )
         end
     end
     return rows
@@ -138,18 +141,22 @@ function write_tables(rows)
             c = CASES[name]
             sub = filter(r -> r.case == name, rows)
             r0 = sub[1]
-            @printf(io, "\n### %s — ρ_l/ρ_g = %g, Re = %g, δ0_g = 1/%d, T = %g; reference: growth %.5f, phase speed %+.5f (fit over [T/3, T])\n\n",
-                name, c.density[1] / c.density[2], c.reynolds, round(Int, 1 / c.thickness), c.final_time, r0.growth_ref, r0.speed_ref)
+            @printf(
+                io, "\n### %s — ρ_l/ρ_g = %g, Re = %g, δ0_g = 1/%d, T = %g; reference: growth %.5f, phase speed %+.5f (fit over [T/3, T])\n\n",
+                name, c.density[1] / c.density[2], c.reynolds, round(Int, 1 / c.thickness), c.final_time, r0.growth_ref, r0.speed_ref
+            )
             println(io, "| model | λ/h | δ0_l/h | cells | steps | wall [s] | growth err | order | phase-speed err | order | η̂(T) err | order | ū(y,T) RMS err | order | jump |")
             println(io, "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
             for model in ("one", "two")
                 ms = sort(filter(r -> r.model == model, sub); by = r -> r.n)
                 for (j, r) in enumerate(ms)
                     o(f) = j == 1 ? "" : @sprintf("%.2f", order(getfield(ms[j - 1], f), getfield(r, f)))
-                    @printf(io, "| %s | %d | %.3g | %d | %d | %.1f | %.2e | %s | %.2e | %s | %.2e | %s | %.2e | %s | %s |\n",
+                    @printf(
+                        io, "| %s | %d | %.3g | %d | %d | %.1f | %.2e | %s | %.2e | %s | %.2e | %s | %.2e | %s | %s |\n",
                         model, r.n, r.delta0_over_h, r.cells, r.steps, r.wall, r.growth_err, o(:growth_err),
                         r.speed_err, o(:speed_err), r.amp_err, o(:amp_err), r.profile_err, o(:profile_err),
-                        isnan(r.jump) ? "–" : @sprintf("%.3f", r.jump))
+                        isnan(r.jump) ? "–" : @sprintf("%.3f", r.jump)
+                    )
                 end
             end
         end

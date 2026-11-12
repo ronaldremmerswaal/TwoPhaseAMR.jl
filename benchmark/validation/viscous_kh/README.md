@@ -132,10 +132,13 @@ averages of the exact field (essential when $\delta\ll h$): the one-velocity mod
 gets the mass-weighted mixture average, the two-velocity model the phase averages over
 the part of the control volume occupied by each phase.
 
-**Meshes.** Static graded quadtree: interface resolution $h=\lambda/n$,
-$n\in\{16,\dots,512\}$, uniform within $|y|\le\lambda/8$, one level coarser per
-doubling of the distance to the interface (base $16\times16$). The ladder spans
-$\delta_{\ell,0}/h$ from $1/16$ (clearly unresolved) to $8$–$16$ (clearly resolved).
+**Meshes.** Static graded quadtree (`kh_run.jl: build_mesh`): interface resolution
+$h=\lambda/n$, $n\in\{16,32,\dots,512\}$, uniform within $|y|\le w$ ($w=\lambda/32$
+thin cases, $\lambda/8$ thick cases), one level coarser per doubling of the distance to
+the interface (base $16\times16$, 2:1 balanced; no hanging faces near the interface).
+The ladder spans $\delta_{\ell,0}/h$ from $1/16$ (clearly unresolved) to 4–8 (clearly
+resolved). Check runs: uniform mesh at $n=128$ (`_uniform`), half amplitude at
+$n=256$ (`_amp=1e-4`).
 
 **Measures** (`analyze.jl`).
 * $\hat\eta(t)$ = first Fourier coefficient of the interface height computed from the
@@ -144,25 +147,60 @@ $\delta_{\ell,0}/h$ from $1/16$ (clearly unresolved) to $8$–$16$ (clearly reso
 * growth rate and phase speed: least-squares slopes of $\log|\hat\eta|$ and of the
   unwrapped phase over $t\in[T/3,T]$, the same fit applied to the reference;
   errors relative (growth) and absolute in units of $\Delta U$ (phase speed);
-* interface state: $|\hat\eta(T)-\hat\eta_{\rm ref}(T)|/|\hat\eta_{\rm ref}(T)|$;
-* shear-layer state: RMS deviation over $|y|\le0.1$ of the $x$-averaged tangential
-  velocity at $T$ from the exact base profile $U(y,T)$ (each phase's own velocity on
-  its own side for the two-velocity model) and the phase velocity jump at the interface.
-* cost: cells, time steps, wall-clock time (single thread).
+* interface state: $|\hat\eta(T)-\hat\eta_{\rm ref}(T)|/|\hat\eta_{\rm ref}(T)|$
+  (amplitude and phase);
+* shear-layer state: RMS deviation over $|y|\le w$ of the $x$-averaged tangential
+  velocity at $T$ from the exact profile $U(y,T)$ (each phase's own velocity on its own
+  side for the two-velocity model), and the largest phase-velocity jump
+  $\bar u_g-\bar u_\ell$ on the rows carrying both phases;
+* cost: cells, time steps, wall-clock time (single thread); per-step bounds of the
+  velocity and volume fraction are recorded in the run headers.
 
-## 4. Rerunning
+## 4. Figures
 
-```sh
-cd benchmark/validation/viscous_kh
-julia --project=. -e 'using Pkg; Pkg.instantiate()'
-julia --project=. verify_reference.jl                     # solver verification
-julia --project=. make_reference.jl                       # results/reference_*.csv
-julia --project=. kh_run.jl r1_thin,r10_thin both 16,32,64,128,256,512
-julia --project=. kh_run.jl r1_thick,r10_thick both 16,32,64,128,256
-julia --project=. kh_run.jl r1_thin both 32,512 field     # fields for the 2×2 figure
-julia --project=. analyze.jl                              # results/tables.md, errors.csv
-julia --project=. plots.jl r1_thin 32 512                 # figures/*.png
-```
+Style: colour = interface resolution $\lambda/h$ (same map everywhere), solid =
+one-velocity, dashed = two-velocity, black solid = viscous reference (Orr–Sommerfeld
+linear IVP, or the exact profile), black dashed = inviscid vortex sheet (Lamb).
 
-Use `OPENBLAS_NUM_THREADS=1 julia -t 1` on a shared machine; the $n=512$ runs take
-the longest (see the wall-clock column of the tables).
+* `figures/amplitude.png` — $|\hat\eta|(t)$ of every run vs the references, per case.
+* `figures/refinement.png` — growth-rate, phase-speed, $\hat\eta(T)$ and profile errors
+  vs $\delta_{\ell,0}/h$ (log–log, reference slopes $h^1$, $h^2$).
+* `figures/efficiency.png` — $\hat\eta(T)$ error vs wall-clock time.
+* `figures/profile_<case>.png` — tangential velocity vs distance to the interface at
+  $T$ for every resolution of both models and the exact profile; for the two-velocity
+  model each phase on its own side, so the gap at $y=0$ is the interface jump.
+* `figures/fields_r1_thin.png` — $u-\bar u(y)$ near the interface at $T$,
+  one-/two-velocity × unresolved ($\lambda/h=32$) / resolved ($\lambda/h=512$).
+* `prelim/` — the preliminary single-case comparison; `ctu_threshold/` — the
+  CTU-threshold study (see REPORT.md).
+
+![amplitude](figures/amplitude.png)
+![refinement](figures/refinement.png)
+![profile](figures/profile_r1_thin.png)
+![fields](figures/fields_r1_thin.png)
+
+## 5. Rerunning
+
+`./run_all.sh` (≈ 4 h on one core) runs everything in order: verification, reference,
+all simulations (`kh_run.jl <cases> <one|two|both> <n,…> [field] [uniform] [amp=A]
+[skip]`), the jump reproducer, the CTU study, `analyze.jl` (→ `results/tables.md`,
+`results/errors.csv`) and `plots.jl` (→ `figures/`). Use
+`OPENBLAS_NUM_THREADS=1 julia -t 1` on a shared machine.
+
+## References
+
+* P. A. M. Boomkamp, B. J. Boersma, R. H. M. Miesen, G. V. Beijnon, A Chebyshev
+  collocation method for solving two-phase flow stability problems, J. Comput. Phys.
+  132 (1997) 191–200, doi:10.1006/jcph.1996.5571.
+* A. Bagué, D. Fuster, S. Popinet, R. Scardovelli, S. Zaleski, Instability growth rate
+  of two-phase mixing layers from a linear eigenvalue problem and an initial-value
+  problem, Phys. Fluids 22 (2010) 092104, doi:10.1063/1.3483206.
+* P. Yecko, S. Zaleski, J.-M. Fullana, Viscous modes in two-phase mixing layers, Phys.
+  Fluids 14 (2002) 4115, doi:10.1063/1.1513987.
+* T. Boeck, S. Zaleski, Viscous versus inviscid instability of two-phase mixing layers
+  with continuous velocity profile, Phys. Fluids 17 (2005) 032106, doi:10.1063/1.1862234.
+* S. A. Orszag, Accurate solution of the Orr–Sommerfeld stability equation, J. Fluid
+  Mech. 50 (1971) 689–703, doi:10.1017/S0022112071002842.
+* H. Lamb, Hydrodynamics, 6th ed., Cambridge University Press (1932), §§267–268.
+* L. N. Trefethen, Spectral Methods in MATLAB, SIAM (2000) (Chebyshev matrices).
+* R. Remmerswaal, PhD thesis (two-velocity model, CMDGFM), ch. 7–8.

@@ -90,8 +90,12 @@ for (label, kw) in (
     )
     for δ in (1 / 32, 1 / 64, 1 / 128, 1 / 256), (N, β) in ((100, 2.0), (120, 3.0))
         exact, found = thin_layer(; kw..., δ, ν = δ / 2000, N, β)
-        report(@sprintf("  %s kδ = %.4f N = %d β = %g: OS ω = %+.5f %+.5fi   (Lamb %+.5f %+.5fi)",
-            label, 2pi * δ, N, β, real(found), imag(found), real(exact), imag(exact)))
+        report(
+            @sprintf(
+                "  %s kδ = %.4f N = %d β = %g: OS ω = %+.5f %+.5fi   (Lamb %+.5f %+.5fi)",
+                label, 2pi * δ, N, β, real(found), imag(found), real(exact), imag(exact)
+            )
+        )
     end
 end
 
