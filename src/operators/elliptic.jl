@@ -193,116 +193,47 @@ function _integrated_stiffness(
                 (square_root[left_face] * value) * square_root[right_face]
         end
     end
-    # P = J'M by face columns; scratch bound: two cells per metric entry.
-    width = 0
-    for right_face in 1:number_of_faces
-        width = max(width, 2length(_metric_column_entries(metric, right_face)))
-    end
+    # P = J'M by face columns; scratch bound: two cells per metric entry. Each
+    # pass runs behind a function barrier: its closures capture arguments
+    # only, never a binding this function reassigns (that would be boxed).
+    face_width = _elliptic_face_width(metric, number_of_faces)
     face_chunks = cld(number_of_faces, _ELLIPTIC_COLUMN_CHUNK)
-    scratch_rows = Vector{Int}(undef, face_chunks * width)
-    scratch_values = Vector{T}(undef, face_chunks * width)
+    scratch_rows = Vector{Int}(undef, face_chunks * face_width)
+    scratch_values = Vector{T}(undef, face_chunks * face_width)
     product_counts = Vector{Int}(undef, number_of_faces)
-    product_offsets = Int[]
-    product_rows = Int[]
-    product_values = T[]
-    for pass in 1:2
-        if pass == 2
-            product_offsets = _csr_offsets(product_counts)
-            resize!(product_rows, product_offsets[end] - 1)
-            resize!(product_values, length(product_rows))
-        end
-        _parallel_for(face_chunks; work = _ELLIPTIC_COLUMN_CHUNK) do chunk
-            offset = (chunk - 1) * width
-            for right_face in _chunk_columns(chunk, number_of_faces)
-                stored = 0
-                for entry in _metric_column_entries(metric, right_face)
-                    left_face, _ = _metric_entry(metric, entry)
-                    left = faces[left_face]
-                    value = weighted[entry]
-                    stored = _accumulate_column_term!(
-                        scratch_rows, scratch_values, offset, stored,
-                        _cell_index(left.minus, nx, ny), -T(left.area) * value,
-                    )
-                    stored = _accumulate_column_term!(
-                        scratch_rows, scratch_values, offset, stored,
-                        _cell_index(left.plus, nx, ny), T(left.area) * value,
-                    )
-                end
-                if pass == 1
-                    product_counts[right_face] = stored
-                else
-                    _store_sorted_column!(
-                        product_rows, product_values, product_offsets[right_face],
-                        scratch_rows, scratch_values, offset, stored,
-                    )
-                end
-            end
-        end
-    end
+    _elliptic_product_pass!(
+        nothing, product_counts, metric, weighted, faces, nx, ny,
+        scratch_rows, scratch_values, face_width,
+    )
+    product_offsets = _csr_offsets(product_counts)
+    product_rows = Vector{Int}(undef, product_offsets[end] - 1)
+    product_values = Vector{T}(undef, length(product_rows))
+    _elliptic_product_pass!(
+        (product_offsets, product_rows, product_values), product_counts, metric,
+        weighted, faces, nx, ny, scratch_rows, scratch_values, face_width,
+    )
     # A = PJ by cell columns; scratch bound: the product columns of the cell's
     # faces and the diagonal.
     incidence_offsets, incidence_faces, incidence_signs = _cell_face_incidence(mesh)
-    width = 0
-    for cell in 1:number_of_cells
-        cell_width = 1
-        for incidence in incidence_offsets[cell]:(incidence_offsets[cell + 1] - 1)
-            cell_width += product_counts[incidence_faces[incidence]]
-        end
-        width = max(width, cell_width)
-    end
+    cell_width = _elliptic_cell_width(incidence_offsets, incidence_faces, product_counts)
     cell_chunks = cld(number_of_cells, _ELLIPTIC_COLUMN_CHUNK)
-    resize!(scratch_rows, cell_chunks * width)
-    resize!(scratch_values, cell_chunks * width)
+    resize!(scratch_rows, cell_chunks * cell_width)
+    resize!(scratch_values, cell_chunks * cell_width)
     # A diagonal entry without a term is marked by `has_term = false`.
-    scratch_terms = Vector{Bool}(undef, cell_chunks * width)
+    scratch_terms = Vector{Bool}(undef, cell_chunks * cell_width)
     column_counts = Vector{Int}(undef, number_of_cells)
-    column_pointers = Int[]
-    rows = Int[]
-    products = T[]
-    has_term = Bool[]
-    for pass in 1:2
-        if pass == 2
-            column_pointers = _csr_offsets(column_counts)
-            resize!(rows, column_pointers[end] - 1)
-            resize!(products, length(rows))
-            resize!(has_term, length(rows))
-        end
-        _parallel_for(cell_chunks; work = _ELLIPTIC_COLUMN_CHUNK) do chunk
-            offset = (chunk - 1) * width
-            for cell in _chunk_columns(chunk, number_of_cells)
-                stored = 0
-                for incidence in incidence_offsets[cell]:(incidence_offsets[cell + 1] - 1)
-                    face_index = incidence_faces[incidence]
-                    area = T(faces[face_index].area)
-                    jump = incidence_signs[incidence] < 0 ? -area : area
-                    for slot in product_offsets[face_index]:(product_offsets[face_index + 1] - 1)
-                        stored = _accumulate_column_term!(
-                            scratch_rows, scratch_values, offset, stored,
-                            product_rows[slot], product_values[slot] * jump,
-                        )
-                    end
-                end
-                for slot in (offset + 1):(offset + stored)
-                    scratch_terms[slot] = true
-                end
-                if !any(slot -> scratch_rows[slot] == cell, (offset + 1):(offset + stored))
-                    stored += 1
-                    scratch_rows[offset + stored] = cell
-                    scratch_values[offset + stored] = zero(T)
-                    scratch_terms[offset + stored] = false
-                end
-                if pass == 1
-                    column_counts[cell] = stored
-                else
-                    _store_sorted_column!(
-                        rows, products, column_pointers[cell],
-                        scratch_rows, scratch_values, offset, stored,
-                        has_term, scratch_terms,
-                    )
-                end
-            end
-        end
-    end
+    product = (product_offsets, product_rows, product_values)
+    incidence = (incidence_offsets, incidence_faces, incidence_signs)
+    scratch = (scratch_rows, scratch_values, scratch_terms)
+    _elliptic_cell_pass!(nothing, column_counts, product, incidence, faces, scratch, cell_width)
+    column_pointers = _csr_offsets(column_counts)
+    rows = Vector{Int}(undef, column_pointers[end] - 1)
+    products = Vector{T}(undef, length(rows))
+    has_term = Vector{Bool}(undef, length(rows))
+    _elliptic_cell_pass!(
+        (column_pointers, rows, products, has_term), column_counts, product,
+        incidence, faces, scratch, cell_width,
+    )
     # Symmetrise: dropped (zero) sums become stored zeros of the pattern.
     stiffness_values = Vector{T}(undef, length(rows))
     _parallel_for(number_of_cells) do column
@@ -316,6 +247,114 @@ function _integrated_stiffness(
     return SparseMatrixCSC(
         number_of_cells, number_of_cells, column_pointers, rows, stiffness_values,
     )
+end
+
+_elliptic_face_width(metric, number_of_faces) = maximum(
+    right_face -> 2length(_metric_column_entries(metric, right_face)),
+    1:number_of_faces; init = 0,
+)
+
+function _elliptic_cell_width(incidence_offsets, incidence_faces, product_counts)
+    width = 0
+    for cell in 1:(length(incidence_offsets) - 1)
+        cell_width = 1
+        for incidence in incidence_offsets[cell]:(incidence_offsets[cell + 1] - 1)
+            cell_width += product_counts[incidence_faces[incidence]]
+        end
+        width = max(width, cell_width)
+    end
+    return width
+end
+
+"""Count (`outputs === nothing`) or fill the columns of `P = J'M` of
+`_integrated_stiffness`, threaded over fixed chunks of face columns."""
+function _elliptic_product_pass!(
+        outputs, product_counts, metric, weighted::Vector{T}, faces, nx, ny,
+        scratch_rows, scratch_values, width,
+    ) where {T}
+    number_of_faces = length(faces)
+    chunks = cld(number_of_faces, _ELLIPTIC_COLUMN_CHUNK)
+    _parallel_for(chunks; work = _ELLIPTIC_COLUMN_CHUNK) do chunk
+        offset = (chunk - 1) * width
+        for right_face in _chunk_columns(chunk, number_of_faces)
+            stored = 0
+            for entry in _metric_column_entries(metric, right_face)
+                left_face, _ = _metric_entry(metric, entry)
+                left = faces[left_face]
+                value = weighted[entry]
+                stored = _accumulate_column_term!(
+                    scratch_rows, scratch_values, offset, stored,
+                    _cell_index(left.minus, nx, ny), -T(left.area) * value,
+                )
+                stored = _accumulate_column_term!(
+                    scratch_rows, scratch_values, offset, stored,
+                    _cell_index(left.plus, nx, ny), T(left.area) * value,
+                )
+            end
+            if outputs === nothing
+                product_counts[right_face] = stored
+            else
+                product_offsets, product_rows, product_values = outputs
+                _store_sorted_column!(
+                    product_rows, product_values, product_offsets[right_face],
+                    scratch_rows, scratch_values, offset, stored,
+                )
+            end
+        end
+    end
+    return nothing
+end
+
+"""Count (`outputs === nothing`) or fill the columns of `A = PJ` of
+`_integrated_stiffness`, threaded over fixed chunks of cell columns."""
+function _elliptic_cell_pass!(
+        outputs, column_counts, product::Tuple{Vector{Int}, Vector{Int}, Vector{T}},
+        incidence, faces, scratch, width,
+    ) where {T}
+    product_offsets, product_rows, product_values = product
+    incidence_offsets, incidence_faces, incidence_signs = incidence
+    scratch_rows, scratch_values, scratch_terms = scratch
+    number_of_cells = length(column_counts)
+    chunks = cld(number_of_cells, _ELLIPTIC_COLUMN_CHUNK)
+    _parallel_for(chunks; work = _ELLIPTIC_COLUMN_CHUNK) do chunk
+        offset = (chunk - 1) * width
+        for cell in _chunk_columns(chunk, number_of_cells)
+            stored = 0
+            for incidence_index in incidence_offsets[cell]:(incidence_offsets[cell + 1] - 1)
+                face_index = incidence_faces[incidence_index]
+                area = T(faces[face_index].area)
+                jump = incidence_signs[incidence_index] < 0 ? -area : area
+                for slot in product_offsets[face_index]:(product_offsets[face_index + 1] - 1)
+                    stored = _accumulate_column_term!(
+                        scratch_rows, scratch_values, offset, stored,
+                        product_rows[slot], product_values[slot] * jump,
+                    )
+                end
+            end
+            diagonal_present = false
+            for slot in (offset + 1):(offset + stored)
+                scratch_terms[slot] = true
+                diagonal_present |= scratch_rows[slot] == cell
+            end
+            if !diagonal_present
+                stored += 1
+                scratch_rows[offset + stored] = cell
+                scratch_values[offset + stored] = zero(T)
+                scratch_terms[offset + stored] = false
+            end
+            if outputs === nothing
+                column_counts[cell] = stored
+            else
+                column_pointers, rows, products, has_term = outputs
+                _store_sorted_column!(
+                    rows, products, column_pointers[cell],
+                    scratch_rows, scratch_values, offset, stored,
+                    has_term, scratch_terms,
+                )
+            end
+        end
+    end
+    return nothing
 end
 
 @inline _chunk_columns(chunk, number_of_columns) =

@@ -79,12 +79,15 @@ mutable struct LocalShearPatchCache{T}
     invalidated_patches::Vector{ShearPatchKey}
     face_indices::Dict{DiffusionFaceKey, Int}
     face_keys::Vector{DiffusionFaceKey}
+    # Invalidation scratch, reused across topology changes.
+    patch_keys::Vector{ShearPatchKey}
+    stale_patches::Vector{Bool}
 end
 
 LocalShearPatchCache(::Type{T}) where {T} = LocalShearPatchCache{T}(
     nothing, Set{BlockKey}(), Set{BlockKey}(), BlockKey[],
     Dict{ShearPatchKey, CachedShearPatch{T}}(), ShearPatchKey[],
-    Dict{DiffusionFaceKey, Int}(), DiffusionFaceKey[],
+    Dict{DiffusionFaceKey, Int}(), DiffusionFaceKey[], ShearPatchKey[], Bool[],
 )
 
 """Grow-only scratch and local topology storage for stress construction."""
@@ -512,8 +515,8 @@ function _prepare_shear_patch_layer!(
 
     if !isempty(layer.changed_blocks) && !isempty(layer.patches)
         windows = [_changed_block_window(key, mesh) for key in layer.changed_blocks]
-        patch_keys = collect(keys(layer.patches))
-        stale = Vector{Bool}(undef, length(patch_keys))
+        patch_keys = append!(empty!(layer.patch_keys), keys(layer.patches))
+        stale = resize!(layer.stale_patches, length(patch_keys))
         _parallel_for(length(patch_keys); work = length(windows)) do index
             vertex = patch_keys[index].vertex
             stale[index] = any(
