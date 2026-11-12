@@ -116,6 +116,50 @@ parallel geometric multigrid on quadtree/octree meshes:
 - [p4est weighted partition API](https://p4est.github.io/api/p4est-latest/p4est_8h.html)
 - [Afivo shared-memory AMR and geometric multigrid](https://doi.org/10.1016/j.cpc.2018.06.018)
 
+## Determinism across thread counts
+
+Results are bitwise identical for every thread count: a thread count is a
+performance choice, not a numerical one. Two rules give this. Every index owns
+its outputs, so a loop body computes the same value whichever task runs it.
+Every reduction has a schedule that depends only on the number of items: sums
+run over fixed chunks of 1,024 items that are folded in chunk order, and maxima
+fold canonicalised `NaN` terms in chunk order. A thread count therefore never
+changes a sign, a rounding, or an iteration count, and a flow can be restarted
+or compared across machines that differ only in `-t`.
+
+The regression oracle records one state, valid for every thread count. The
+`threading_equivalence` test group checks the claim directly. It runs five short
+cases in fresh Julia processes with one, two and four threads, with the grain
+`_PARALLEL_GRAIN[]` at one so that small meshes take the threaded branch of
+every loop:
+
+| Case | Workload |
+| --- | --- |
+| `capillary` | two-phase CMDGFM capillary wave with interface AMR |
+| `droplet` | two-phase CMDGFM on an embedded sloped wall (example 09), AMR |
+| `stokes3_two` | the two-velocity Stokes-3 wave (example 10); must regrid |
+| `cylinder` | the one-phase cylinder (example 04) with geometry and vorticity AMR |
+| `taylor_green` | one-phase Taylor--Green vortices, 16² root block refined to level 3 |
+
+Each process prints a SHA-256 over every state field (velocity components per
+phase, pressure, liquid fraction) and over every recorded diagnostic history
+(its name, the time and step of each sample and the sample values, which are
+vectors for the momentum and volume diagnostics), the step and mesh-update
+counts and the leaf block count, and the group requires all of them to be equal
+across thread counts. The Stokes-3 case must adapt its mesh during the run, so the transfer,
+rebuild and re-solve paths are compared as well. A warm step of the Taylor--Green and the capillary
+case must also stay within a recorded allocation budget at one and at two
+threads, so a threaded launch cannot start allocating per cell or per launch.
+Run it locally with
+
+```sh
+julia --project=. -e 'using Pkg; Pkg.test(test_args=["threading_equivalence"])'
+```
+
+and set `THREADING_EQUIVALENCE_THREADS=1,2,4,8` to add a thread count that CI
+does not run. The `threading-equivalence` CI job runs the group on Julia 1.12 on
+every pull request.
+
 ## Reproducible kernel scaling
 
 Instantiate the dedicated benchmark environment once, then run the same suite
@@ -135,3 +179,22 @@ and keeps fixture construction outside timed steady-state samples. Use
 `TWOPHASE_BENCHMARK_OUTPUT` to control sampling and save machine-local raw
 results. The suite covers both uniform and mixed meshes; compare matching
 groups rather than combining setup, adaptation, and stepping into one timing.
+
+The thread-scaling probe times one fixture per process and prints the per-step
+wall times, a state checksum, and with a third argument a profile split of the
+main thread into serial samples and samples inside a Polyester batch:
+
+```sh
+julia --project=. --threads=4 benchmark/threading/scaling.jl taylor_green 20 0
+```
+
+The manual `scaling` tier of the CI workflow runs the ten target cases
+(Taylor--Green, the cylinder, the capillary wave and the one- and two-velocity
+Stokes-3 wave, each at its default resolution and one level finer) at one, two
+and four threads, and uploads the logs as an artifact:
+
+```sh
+gh workflow run CI.yml --ref <branch> -f tier=scaling
+```
+
+That tier is a measurement, not a gate: it is not part of `ci-ok`.

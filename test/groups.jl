@@ -2,6 +2,9 @@
 const TEST_GROUPS = [
     "mesh" => ["mesh/topology.jl", "mesh/variables.jl", "mesh/adaptivity.jl", "mesh/amr_connectivity.jl"],
     "threading" => ["threading.jl"],
+    # Not in the default suite: starts fresh 1-, 2- and 4-thread processes, so
+    # it has its own CI job (threading-equivalence).
+    "threading_equivalence" => ["threading_equivalence.jl"],
     "indicators" => ["indicator/phase/anisotropic_cells.jl", "indicator/phase/levelset_initialization.jl", "indicator/phase/height_functions.jl", "indicator/geometry.jl"],
     "operators" => ["operators/advection/cell_advection.jl", "operators/gradient.jl", "operators/advection/staggered_advection.jl", "operators/staggered_diffusion.jl", "operators/embedded_wall_rows.jl", "operators/embedded_wall_force.jl", "operators/embedded_variable_wall_mms.jl", "operators/poisson.jl"],
     "two_phase" => ["two_phase/transport.jl", "two_phase/phase_face_lifecycle.jl", "two_phase/two_velocity/inactive_velocity.jl", "two_phase/two_velocity/transport/two_velocity.jl", "two_phase/two_velocity/projection/cmdgfm_projection.jl", "two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl", "two_phase/two_velocity/transport/two_velocity_wy_reference.jl", "two_phase/variable_staggered_diffusion.jl", "two_phase/forces.jl", "two_phase/two_velocity/diffusion.jl"],
@@ -33,14 +36,15 @@ const UNIT_SHARDS = [
     "A" => ["two_phase"],
     "B" => ["registry", "mesh", "threading", "indicators", "operators", "solvers", "aqua"],
     "C" => ["navier_stokes", "diagnostics"],
-    "D" => ["examples", "recording"],
+    "D" => ["examples"],
+    "E" => ["recording"],
 ]
 
 const TEST_HELPERS = [
     "test_utils.jl", "two_phase/two_velocity/helpers.jl",
     "two_phase/two_velocity/projection/cmdgfm_reference_helpers.jl",
     "embedded_operator_reference_helpers.jl",
-    "integration/circle_geometry.jl",
+    "integration/circle_geometry.jl", "threading_equivalence_cases.jl",
 ]
 # Entrypoints and the separately provisioned Makie suite are not included as tests.
 const TEST_EXCLUSIONS = [

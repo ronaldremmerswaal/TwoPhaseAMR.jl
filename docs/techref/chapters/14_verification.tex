@@ -131,13 +131,25 @@ among the helpers, or among the exclusions (the entry points, the separately
 provisioned Makie suite and the MimeticFV comparison). The group
 \code{registry} fails when a file is unregistered or a registered file is
 missing, and when a default group is not in exactly one unit shard. The
-default suite (\code{Pkg.test()}) is \code{registry} and the
-eleven groups that are neither integration groups nor \code{performance}.
-Arguments select groups by name, \code{integration} selects the thirteen
+default suite (\code{Pkg.test()}) is \code{registry} and the eleven groups
+that are neither integration groups nor one of the separate groups
+\code{performance} and \code{threading_equivalence}, which have their own
+jobs. Arguments select groups by name, \code{integration} selects the thirteen
 integration groups and \code{shard:A}, \code{shard:B}, \code{shard:C} the unit
 shards. The unit groups check contracts, exact identities and short
 manufactured-solution studies; the integration groups run refinement studies
-and benchmark flows; \code{performance} holds allocation contracts.
+and benchmark flows; \code{performance} holds allocation contracts;
+\code{threading_equivalence} repeats five short flows (Taylor--Green vortices on
+an adaptively refined mesh, two-phase CMDGFM on an embedded sloped wall, a
+capillary wave with interface refinement, the two-velocity Stokes-3 wave, which
+must regrid during the run, and the cylinder) in fresh processes with one, two
+and four Julia threads and the threading grain at one, so that every loop
+takes its threaded branch. It requires bitwise equal SHA-256 hashes of every
+state field (velocity components per phase, pressure, liquid fraction) and of
+every recorded diagnostic history, equal step, mesh-update and leaf-block
+counts, and warm steps of the Taylor--Green and capillary cases within a
+recorded allocation budget, so the oracle of \cref{sec:verif:oracle} holds for
+every thread count.
 \Cref{tab:verif:tiers} lists when continuous integration runs what.
 
 \begin{table}[tbp]
@@ -145,17 +157,19 @@ and benchmark flows; \code{performance} holds allocation contracts.
   \caption{Tiers of continuous integration (workflow \code{CI}, and the
   technical-reference job of workflow \code{Documentation}). Julia ``1'' is
   the current release; the \code{unit} shards run on Julia 1.11 (the lower
-  compat bound) and 1.12, and the unit and integration jobs run on two
-  threads. The \code{ci-ok} check of a pull request requires every job of the
-  first row.}\label{tab:verif:tiers}
+  compat bound) and 1.12, the unit and integration jobs run on two threads and
+  \code{threading-equivalence} on four. The \code{ci-ok} check of a pull
+  request requires every job of the first row; the \code{scaling} tier is a
+  measurement and is not part of it.}\label{tab:verif:tiers}
   \begin{tabular}{@{}>{\raggedright}p{2.0cm}>{\raggedright}p{3.2cm}>{\raggedright\arraybackslash}p{6.9cm}@{}}
     \toprule
     Tier & Trigger & Jobs and contents\\
     \midrule
-    Pull request & every pull request and push to \code{main} & \code{format} (Runic 1.10.0); \code{unit} shards A (\code{two_phase}), B (\code{registry}, \code{mesh}, \code{threading}, \code{indicators}, \code{operators}, \code{solvers}, \code{aqua}), C (\code{navier_stokes}, \code{diagnostics}) and D (\code{examples}, \code{recording}) on Julia 1.11 (the lower compat bound) and 1.12, with coverage from the 1.12 shards; \code{makie} (visualisation extension); \code{studio} (Studio server, Julia 1.11 and 1.12); \code{frontend} (browser client tests and bundle check)\\
+    Pull request & every pull request and push to \code{main} & \code{format} (Runic 1.10.0); \code{unit} shards A (\code{two_phase}), B (\code{registry}, \code{mesh}, \code{threading}, \code{indicators}, \code{operators}, \code{solvers}, \code{aqua}), C (\code{navier_stokes}, \code{diagnostics}), D (\code{examples}) and E (\code{recording}) on Julia 1.11 (the lower compat bound) and 1.12, with coverage from the 1.12 shards; \code{threading-equivalence} (group \code{threading_equivalence}: complete flows in fresh 1-, 2- and 4-thread processes, Julia 1.12); \code{makie} (visualisation extension); \code{studio} (Studio server, Julia 1.11 and 1.12); \code{frontend} (browser client tests and bundle check)\\
     Main & push to \code{main} & \code{contracts} (group \code{performance}, one thread); \code{benchmark} (one-sample smoke run of the benchmarks and the latency probe)\\
     Integration & weekly (Monday 03:00 UTC), dispatch, or a pull request labelled \code{run-integration} & eleven integration groups in three shards: A \code{two_velocity_vortex}, \code{two_velocity_transport}, \code{staggered_wave_equation}; B \code{two_phase_waves}, \code{two_phase_droplet}, \code{wave_equation}, \code{amr_manufactured_flow}; C \code{two_phase_vortex}, \code{two_velocity_rotation}, \code{anisotropic_cells}, \code{two_phase_sessile_droplet}\\
     Heavy & monthly (1st, 04:00 UTC) or dispatch & \code{two_velocity_instabilities} and \code{single_phase_cylinder}; a failure does not fail the run (\code{continue-on-error})\\
+    Scaling & dispatch, tier \code{scaling} & \code{thread-scaling}: the ten target cases of \code{benchmark/threading/scaling.jl} (Taylor--Green, cylinder, capillary wave and the one- and two-velocity Stokes-3 wave, each at its default resolution and one level finer) at one, two and four threads, one job per thread count, with the logs uploaded as an artifact\\
     Browser & weekly and monthly schedule, dispatch & \code{studio-browser}: Studio smoke, live AMR and examples tests in Chromium\\
     Reference & every pull request and push to \code{main} & \code{check_links.py --skip-api} (blocking), PDF build, rejection of undefined references (\cref{sec:verif:audits})\\
     \bottomrule
@@ -181,8 +195,11 @@ Registry \srcsym{test/groups.jl}{TEST_GROUPS},
 \srcsym{test/groups.jl}{UNIT_SHARDS}, \srcsym{test/groups.jl}{TEST_HELPERS},
 \srcsym{test/groups.jl}{TEST_EXCLUSIONS}; selection and registry check
 \srcsym{test/runtests.jl}{selected_groups},
+\srcsym{test/runtests.jl}{SEPARATE_GROUPS},
 \srcsym{test/runtests.jl}{default_groups},
-\srcsym{test/runtests.jl}{check_registry}. Workflows
+\srcsym{test/runtests.jl}{check_registry}; the equivalence cases
+\nolinkurl{test/threading_equivalence_cases.jl} and their comparison
+\nolinkurl{test/threading_equivalence.jl}. Workflows
 \code{.github/workflows/CI.yml} and \code{.github/workflows/Documentation.yml};
 the entry points and their use are documented in \code{docs/src/testing.md}.
 \end{implnote}

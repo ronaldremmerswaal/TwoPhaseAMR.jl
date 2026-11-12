@@ -11,11 +11,11 @@ on:
   workflow_dispatch:
     inputs:
       tier:
-        description: Test tier to run (T1 also runs on dispatch)
+        description: Test tier to run (T1 also runs on dispatch; 'scaling' only measures thread scaling)
         type: choice
         required: true
         default: unit
-        options: [unit, integration, heavy, all]
+        options: [unit, integration, heavy, all, scaling]
 
 # Label events run in their own group and only start the integration tier, so
 # they never cancel (or are cancelled by) the code run that reports ci-ok.
@@ -49,7 +49,7 @@ jobs:
   unit:
     if: (github.event_name == 'pull_request' && github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 50
     permissions:
       contents: read
     strategy:
@@ -59,7 +59,7 @@ jobs:
         # on both the oldest supported Julia and the current stable one, so the
         # minimum version cannot rot outside PR checks.
         julia: ['1.11', '1.12']
-        shard: [A, B, C, D]
+        shard: [A, B, C, D, E]
     name: unit / ${{ matrix.shard }} (julia ${{ matrix.julia }})
     steps:
       - uses: actions/checkout@v7
@@ -96,6 +96,65 @@ jobs:
           version: '1.12'
       - uses: julia-actions/cache@v3
       - run: julia --project=. -e 'using Pkg; Pkg.test(test_args=["performance"])'
+
+  threading-equivalence:
+    # Complete flows in fresh 1-, 2- and 4-thread processes with every loop
+    # threaded: identical SHA-256 state hashes, step counts and warm-step
+    # allocations. The group is not in the default suite because it starts its
+    # own Julia processes.
+    if: (github.event_name == 'pull_request' && github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    env:
+      JULIA_NUM_THREADS: '4'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1.12'
+      - uses: julia-actions/cache@v3
+      - uses: julia-actions/julia-buildpkg@v1
+      - run: julia --project=. -e 'using Pkg; Pkg.test(test_args=["threading_equivalence"])'
+
+  thread-scaling:
+    # Manual measurement tier: the ten target cases at 1, 2 and 4 threads.
+    #   gh workflow run CI.yml --ref <branch> -f tier=scaling
+    if: github.event_name == 'workflow_dispatch' && inputs.tier == 'scaling'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        threads: [1, 2, 4]
+    name: Thread scaling / ${{ matrix.threads }} thread(s)
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1.12'
+      - uses: julia-actions/cache@v3
+      - uses: julia-actions/julia-buildpkg@v1
+      - name: Measure the target cases
+        env:
+          THREADS: ${{ matrix.threads }}
+          STEPS: '20'
+        run: |
+          mkdir -p scaling
+          for case in taylor_green taylor_green_fine cylinder cylinder_fine \
+              capillary capillary_fine stokes3_one stokes3_one_fine \
+              stokes3_two stokes3_two_fine; do
+            echo "=== $case on $THREADS thread(s)"
+            julia --project=. --threads="$THREADS" \
+              benchmark/threading/scaling.jl "$case" "$STEPS" 0 | tee "scaling/$case.log"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: thread-scaling-${{ matrix.threads }}-threads
+          path: scaling
 
   makie:
     if: (github.event_name == 'pull_request' && github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
@@ -264,7 +323,7 @@ jobs:
     # A run cancelled by a newer run on the same branch must not report a
     # failing ci-ok for its commit; the newer run reports the result.
     if: ${{ !cancelled() && ((github.event_name == 'pull_request' && github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))) }}
-    needs: [format, unit, makie, studio, frontend]
+    needs: [format, unit, threading-equivalence, makie, studio, frontend]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
@@ -273,7 +332,8 @@ jobs:
         env:
           FORMAT_RESULT: ${{ needs.format.result }}
           UNIT_RESULT: ${{ needs.unit.result }}
+          EQUIVALENCE_RESULT: ${{ needs.threading-equivalence.result }}
           MAKIE_RESULT: ${{ needs.makie.result }}
           STUDIO_RESULT: ${{ needs.studio.result }}
           FRONTEND_RESULT: ${{ needs.frontend.result }}
-        run: test "$FORMAT_RESULT" = success && test "$UNIT_RESULT" = success && test "$MAKIE_RESULT" = success && test "$STUDIO_RESULT" = success && test "$FRONTEND_RESULT" = success
+        run: test "$FORMAT_RESULT" = success && test "$UNIT_RESULT" = success && test "$EQUIVALENCE_RESULT" = success && test "$MAKIE_RESULT" = success && test "$STUDIO_RESULT" = success && test "$FRONTEND_RESULT" = success

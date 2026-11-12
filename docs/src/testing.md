@@ -1,13 +1,15 @@
 # Testing and validation
 
-The test tree has three suites: unit tests, integration tests, and performance
-contracts. Machine-dependent benchmarks remain outside the test tree.
+The test tree has four suites: unit tests, integration tests, performance
+contracts, and the thread-count equivalence group. Machine-dependent benchmarks
+remain outside the test tree.
 
 | Area | Location | Purpose |
 | --- | --- | --- |
 | unit | `test/runtests.jl` and its component folders | isolated contracts, numerical invariants, and short example smoke tests |
 | integration | `test/integration/runtests.jl` | refinement, manufactured-solution, and literature-comparison studies |
 | performance contracts | `test/performance` | allocation and hot-kernel regression checks |
+| thread equivalence | `test/threading_equivalence.jl` | bitwise 1/2/4-thread comparison of complete flows and their warm-step allocations |
 | benchmarks | `benchmark` | machine-local timing and allocation measurements |
 
 Run the standard suite with:
@@ -31,6 +33,18 @@ Run performance contracts separately with:
 ```sh
 julia --project=. test/performance/runtests.jl
 ```
+
+The thread equivalence group is not part of the default suite either, because
+it starts fresh Julia processes with one, two and four threads and compares
+their states bitwise. Run it with
+
+```sh
+julia --project=. -e 'using Pkg; Pkg.test(test_args=["threading_equivalence"])'
+```
+
+and set `THREADING_EQUIVALENCE_THREADS=1,2,4,8` to add thread counts; the
+[shared-memory parallelism](shared-memory-parallelism.md) page describes the
+cases and the thread-scaling measurement tier.
 
 All three runners enable Julia's verbose test timing, so their summaries show
 the elapsed time of each component testset without a separate profiling mode.
