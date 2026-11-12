@@ -11,8 +11,10 @@
 #             balanced, however aggressive the refinement function. (For other floating-point
 #             extents the balancing can miss contacts: code_04 / code_05.)
 #         (c) _wrapped_delta returns the covering-space displacement iff |d| < L/2; at |d| = L/2
-#             (a periodic direction with two level-0 cells) the sign of a seam displacement is lost.
-#         (d) the behaviour of GradientOperator on periodic directions with two level-0 cells.
+#             (a periodic direction with two level-0 cells) its sign is a tie, which
+#             _face_displacement settles from the face orientation instead (#36).
+#         (d) GradientOperator on periodic directions with two level-0 cells: the seam face
+#             keeps the covering-space displacement +h and the metric is the diagonal MAC metric.
 # Run:    julia --heap-size-hint=3G -t 1 --project=. proof_review/eq-setting-patch-metric/scripts/code_03_assumptions.jl
 
 import TwoPhaseAMR   # not `using`: the package also exports Cell and Face (names used by model.jl)
@@ -76,17 +78,32 @@ include(joinpath(@__DIR__, "code_helpers.jl"))
     end
 
     @testset "(d) a periodic direction with exactly two level-0 cells" begin
-        # seam faces get displacement -h instead of +h (round-half-even in _wrapped_delta),
-        # T11 <= 0 and the constructor throws; with >= 4 cells everything is fine
+        # the face orientation fixes the normal sign, so the seam face carries the
+        # covering-space displacement +h (round-half-even never decides it, #36)
         mesh = AMR.BlockTreeMesh(; base_mesh = (2, 4), block_size = (2, 2), extent = (2.0, 4.0), periodic = (true, false))
         seam = [f for f in mesh.faces if f.axis == 1 && abs(f.center[1] - mesh.origin[1]) < 1.0e-12]
         inner = [f for f in mesh.faces if f.axis == 1 && abs(f.center[1] - 1.0) < 1.0e-12]
         @test !isempty(seam) && !isempty(inner)
-        @test all(f -> AMR._face_displacement(mesh, f)[1] == -1.0, seam)     # true covering-space displacement: +1
+        @test all(f -> AMR._face_displacement(mesh, f)[1] == +1.0, seam)     # covering-space displacement
         @test all(f -> AMR._face_displacement(mesh, f)[1] == +1.0, inner)
         for (base, periodic) in (((2, 2), (true, true)), ((2, 4), (true, false)), ((4, 2), (false, true)), ((2, 6), (true, false)))
             m = AMR.BlockTreeMesh(; base_mesh = base, block_size = (2, 2), extent = (Float64(base[1]), Float64(base[2])), periodic = periodic)
-            @test_throws ArgumentError AMR.GradientOperator(m)
+            operator = AMR.GradientOperator(m)
+            @test operator.inverse_metric isa AMR.DiagonalInverseFaceMetric
+            @test all(>(0), operator.inverse_metric.diagonal)
+            # the diagonal MAC metric reproduces an affine pressure's normal gradient
+            jump = similar(operator.pressure_jump)
+            result = similar(jump)
+            for coordinate_axis in 1:2
+                for (index, face) in pairs(m.faces)
+                    jump[index] = face.area * AMR._face_displacement(m, face)[coordinate_axis]
+                end
+                AMR._mul_inverse_metric!(result, operator.inverse_metric, jump)
+                @test all(
+                    index -> isapprox(result[index], m.faces[index].axis == coordinate_axis ? 1.0 : 0.0; atol = 1.0e-13, rtol = 1.0e-13),
+                    eachindex(result),
+                )
+            end
         end
         for (base, periodic) in (((4, 4), (true, true)), ((4, 4), (true, false)), ((6, 6), (true, true)), ((2, 6), (false, false)))
             m = AMR.BlockTreeMesh(; base_mesh = base, block_size = (2, 2), extent = (Float64(base[1]), Float64(base[2])), periodic = periodic)

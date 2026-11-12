@@ -760,22 +760,32 @@ tolerance $\inittol\meas{c}$ ($\inittol=10^{-10}$, depths at most
   bisection; the integral is split where $\lset$ changes sign on the two
   transverse sides and evaluated by adaptive 8-point Gauss--Legendre quadrature
   with interval halving;
+\item otherwise, if a Lipschitz bound $\lipschitz$ is given and the area that
+  $\qbox$ could misattribute to its declared phase is at most
+  $\inittol\meas{c}$, $\qbox$ is accepted with the sign of its centre. A sample
+  $s$ with that sign rules the other phase out of the ball of radius
+  $\abs{\lset(s)}/\lipschitz$ about $s$, because $\lipschitz$ bounds how fast
+  $\lset$ crosses zero; the other phase therefore lies outside the union of the
+  nine balls, hence outside the largest one alone, and the misattributed area is
+  at most $\meas{\qbox}$ minus that ball's overlap with $\qbox$, which is
+  evaluated in closed form. Accepting $\qbox$ adds at most $\inittol$ to the
+  cell's fraction, and $\inittol\meas{c}$ does not shrink with $\qbox$;
 \item otherwise $\qbox$ is split into four quarters, each with a quarter of
-  its tolerance; at depth \code{maxdepth} initialisation fails.
+  its quadrature tolerance; at depth \code{maxdepth} initialisation fails.
 \end{enumerate}
 Fractions within $64\machineeps$ of zero or one are set to zero or
 one. Failures leave the field unchanged. Without $\lipschitz$, features that
 fall between the samples of item~2 are not detected; \code{min_depth} forces a
-finer search. The code also contains the rule ``accept $\qbox$ if
-$\meas{\qbox}$ does not exceed its tolerance'' before item~4, but since both are
-quartered at every level it is never reached. Consequently, with $\lipschitz$
-given, a level set that touches a side of $\qbox$ tangentially at a point that
-is never sampled is neither certified pure nor split into monotone pieces, and
-initialisation fails for any \code{maxdepth}: a circle of radius $0.27$ centred
-at $(0.52,0.47)$ in the unit square with $16\times16$ cells and
-\code{lipschitz=1} touches the grid line $\coordk{1}=0.25$ and throws, while
-the same circle without \code{lipschitz} initialises with a volume error of
-$10^{-16}$.
+finer search. Item~4 is what resolves a tangential contact: with $\lipschitz$
+given, a level set that touches a side of $\qbox$ at a point that is never
+sampled is not certified pure by item~1 at any depth, item~3 does not apply, and
+the largest ball of item~4 covers all of $\qbox$ except a small remainder
+near the contact. A circle of radius $0.27$ centred at $(0.52,0.47)$ in the unit square
+with $16\times16$ cells and \code{lipschitz=1} touches the grid line
+$\coordk{1}=0.25$ and initialises with a volume error of $6\times10^{-17}$, the
+value the same circle gets without $\lipschitz$; \code{maxdepth=14} and
+$\inittol=10^{-13}$ still throw for it, so it is the tolerance and not the depth
+limit that accepts the contact.
 
 \emph{With a solid}, the level set is first initialised and reconstructed on a
 field without solid (same \code{reconstruction_method}); then
@@ -785,7 +795,8 @@ rather than of the exact regions.
 
 \begin{implnote}
 \apifun{initialize!} and \apitype{InterfaceField}\code{(mesh, levelset; atol=1e-10, maxdepth=16, min_depth=0, lipschitz=nothing)}
-with the recursion \srcsym{src/interface/levelset_initialization.jl}{_levelset_area};
+with the recursion \srcsym{src/interface/levelset_initialization.jl}{_levelset_area}
+and the area bound \srcsym{src/interface/levelset_initialization.jl}{_levelset_disk_area};
 polygons \apitype{PolygonIndicator}; half-plane
 \apifun{initialize!}\code{(field, normal, intercept)}. Tests:
 \testsym{test/indicator/phase/levelset_initialization.jl}{Level-set cell fractions on uniform, mixed and AMR meshes}
@@ -793,6 +804,8 @@ polygons \apitype{PolygonIndicator}; half-plane
 \testsym{test/indicator/phase/levelset_initialization.jl}{Polygon indicators use exact geometric clipping}
 (polygons to round-off),
 \testsym{test/indicator/phase/levelset_initialization.jl}{Level-set pure cells are exactly pure},
+\testsym{test/indicator/phase/levelset_initialization.jl}{Level set tangent to a grid line at a Lipschitz bound}
+(tangential contact, and the disk-area bound against independent values),
 \testsym{test/indicator/phase/levelset_initialization.jl}{Interior components and initialization failures}
 (enclosed components, failures leave the field unchanged),
 \testsym{test/indicator/geometry.jl}{Geometry-aware level-set initialization converges in open volume}

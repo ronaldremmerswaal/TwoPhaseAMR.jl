@@ -382,8 +382,9 @@ its parent (pruning \code{:all}; with \code{:deepest} it caps the deepest
 level instead), and the tree constructor restores the 2:1 balance. Once all
 blocks are roots, $\mgmesh{\mgindex+1}$ merges $2\times2$ root blocks, which
 halves the base mesh, while both root counts are even and every periodic axis
-keeps at least four cells (with two cells per period the face displacement is
-ambiguous, \issue{36}). Coarsening stops when the mesh has at most
+keeps at least four cells (the gradient resolves a two-cell direction, whose
+half-period tie the face orientation settles, \issue{36}; the coarsest level
+keeps this resolution floor). Coarsening stops when the mesh has at most
 \code{coarse_size} cells (default $64$), when $J+1$ reaches \code{max_levels}
 (default $32$), when no coarser mesh exists, or, with pruning \code{:all},
 when a pruned mesh is not smaller. If coarsening stops early the last mesh is

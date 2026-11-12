@@ -62,9 +62,11 @@ end
 function _coarsened_base_mesh(mesh::BlockTreeMesh)
     all(iseven, mesh.root.layout) || return nothing
     coarse_base = mesh.base_mesh .÷ 2
-    # With only two cells on a periodic axis, opposite cell centres are
-    # exactly half a period apart. The current gradient metric's wrapped
-    # displacement cannot disambiguate the face orientation (issue #36).
+    # The coarsest level keeps at least four cells per periodic axis. The
+    # gradient resolves a two-cell direction since issue #36 was fixed (the
+    # face orientation settles the half-period tie in `_face_displacement`),
+    # so this floor is the multigrid's coarse-level resolution choice and not
+    # a gradient restriction; lifting it is a separate numerics change.
     for axis in 1:2
         mesh.periodic[axis] && coarse_base[axis] < 4 && return nothing
     end

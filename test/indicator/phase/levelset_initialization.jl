@@ -71,6 +71,37 @@ end
     end
 end
 
+@testset "Level set tangent to a grid line at a Lipschitz bound" begin
+    # A circle that touches a grid line at a point none of the nine samples hits
+    # is not certified pure by the Lipschitz test at any depth and is not split
+    # into monotone pieces. The acceptance that spends the remaining tolerance
+    # used to compare the box area with a tolerance quartered together with it,
+    # so it never fired and the cell recursed to `maxdepth` and threw.
+    mesh = BlockTreeMesh(block_size = (16, 16))
+    circle = (x, y) -> hypot(x - 0.52, y - 0.47) - 0.27  # touches x = 0.25
+    reference = InterfaceField(mesh, circle)
+    tangent = InterfaceField(mesh, circle; lipschitz = 1)
+    @test integrate(tangent) ≈ pi * 0.27^2 atol = 2.0e-12
+    @test ls_values(tangent) ≈ ls_values(reference) atol = 2.0e-12
+    @test all(0 .<= ls_values(tangent) .<= 1)
+    # The contact is accepted by the tolerance, not by the depth limit.
+    @test_throws ErrorException InterfaceField(mesh, circle; lipschitz = 1, maxdepth = 14)
+    @test_throws ErrorException InterfaceField(mesh, circle; lipschitz = 1, atol = 1.0e-13)
+
+    # The bound the acceptance is based on is the exact disk area inside a box.
+    disk_area(lo, hi, sx, sy, r) = TwoPhaseAMR._levelset_disk_area(
+        lo[1], hi[1], lo[2], hi[2], sx, sy, r,
+    )
+    @test disk_area((0.0, 0.0), (1.0, 1.0), 0.0, 0.0, 1.0) ≈ pi / 4 atol = 1.0e-15
+    @test disk_area((0.0, 0.0), (1.0, 1.0), 0.0, 0.0, 0.5) ≈ pi / 16 atol = 1.0e-15
+    @test disk_area((0.0, 0.0), (2.0, 2.0), 1.0, 0.0, 1.0) ≈ pi / 2 atol = 1.0e-15
+    @test disk_area((0.0, 0.0), (2.0, 2.0), 1.0, 1.0, 0.5) ≈ pi / 4 atol = 1.0e-15
+    @test disk_area((0.0, 0.0), (2.0, 2.0), 1.0, 1.0, 1.0e3) ≈ 4.0 atol = 1.0e-15
+    # Independent high-precision evaluation of the arc cutting two box sides.
+    @test disk_area((0.0, 0.0), (1.0, 1.0), 0.25, 0.6, 0.7) ≈
+        0.8743536742329306 atol = 1.0e-13
+end
+
 @testset "Polygon indicators use exact geometric clipping" begin
     vertices = [
         (0.1, 0.1), (0.8, 0.1), (0.8, 0.3),
