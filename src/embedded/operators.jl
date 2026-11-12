@@ -557,8 +557,16 @@ function _embedded_cut_wall_measure(
     parameter_lo, parameter_hi = zero(T), one(T)
     for dimension in 1:2
         if iszero(delta[dimension])
-            lower[dimension] <= first[dimension] <= upper[dimension] ||
-                return zero(T)
+            # The component-direction partition is half open: a segment that
+            # lies exactly on the cell mid-plane belongs to the positive side
+            # only, so the pieces of one cell always sum to its segment.
+            closed = dimension != Axis || side > 0
+            inside = if closed
+                lower[dimension] <= first[dimension] <= upper[dimension]
+            else
+                lower[dimension] <= first[dimension] < upper[dimension]
+            end
+            inside || return zero(T)
         else
             lo = (lower[dimension] - first[dimension]) / delta[dimension]
             hi = (upper[dimension] - first[dimension]) / delta[dimension]
@@ -579,50 +587,68 @@ function _embedded_cut_wall_measure(
 end
 
 # No-slip closure of a cut-cell PLIC segment. The segment is split among the
-# dual nodes by the tangential strips of the two component faces and by the
-# mid-plane of the component direction, so every piece is owned once. A
-# fluid-side node $f$ satisfies $u_w = u_f - d_f\,\partial_n u$ with $u_w = 0$,
-# so the flux through its piece $A_f$ is $(A_f/d_f)u_f$: a Dirichlet
-# conductance that is exact for linear data. A node whose centre lies inside
-# the solid carries its piece with the same magnitude and the opposite sign,
-# which limits the rows of those nodes to first order; they are kept as
-# diffusion unknowns because the cut-cell projection updates the same faces.
+# dual nodes by the tangential strip of each component face and by the
+# half-open half-strip on that face's side of the cell mid-plane, so every
+# piece is owned once, also by an unpaired face at a non-periodic boundary.
+# A fluid-side node $f$ satisfies $u_w = u_f - d_f\,\partial_n u$ with
+# $u_w = 0$, so its wall flux is $(A_f/d_f)u_f$: that flux is exact for linear
+# data. The conductance is positive for every node, so a node whose centre
+# lies inside the solid gets the same magnitude with the sign of $\abs{d_f}$,
+# i.e. the opposite row contribution to the one its open dual volume needs;
+# its rows are therefore first order. They stay diffusion unknowns because
+# the cut-cell projection updates the same faces.
 function _push_embedded_cut_wall!(
         connections, geometry::GeometryField{T}, ::Val{Axis}, ref, cell_faces,
         segment, midpoint, global_to_local,
     ) where {T, Axis}
     mesh = geometry.mesh
     spacing = mesh.blocks[ref.block].spacing
-    floor = T(1.0e-6) * min(spacing...)
-    for first in cell_faces
-        first.side < 0 || continue
-        first_face = mesh.faces[first.global_index]
-        first_lo, first_hi = _face_local_tangent_interval(mesh, ref, first_face)
-        for second in cell_faces
-            second.side > 0 || continue
-            second_face = mesh.faces[second.global_index]
-            second_lo, second_hi = _face_local_tangent_interval(
-                mesh, ref, second_face,
-            )
-            lo = max(T(first_lo), T(second_lo))
-            hi = min(T(first_hi), T(second_hi))
-            hi > lo || continue
-            for (incidence, side, face) in (
-                    (first, -1, first_face), (second, 1, second_face),
-                )
-                measure = _embedded_cut_wall_measure(
-                    geometry, Val(Axis), ref, lo, hi, side, segment,
-                )
-                measure > zero(T) || continue
-                distance = abs(_embedded_plic_distance(geometry, ref, face.center))
-                push!(
-                    connections, WallDiffusionConnection(
-                        global_to_local[incidence.global_index],
-                        measure / max(distance, floor), midpoint, true,
-                    ),
-                )
-            end
-        end
+    # A dual node on the reconstructed plane has the exact no-slip value and
+    # its conductance would diverge. The floor is one sixty-fourth of the
+    # smallest cell width: no resolved cut in the manufactured tests brings a
+    # node closer than h/20 to its own plane, so the floor only limits the
+    # degenerate case, and it bounds the largest conductance at 64*measure/h,
+    # two orders above the interior ones, which keeps the assembled stiffness
+    # (and its condition number) O(1/h^2) as h -> 0.
+    floor = min(spacing...) / T(64)
+    minus_present, plus_present = false, false
+    for incidence in cell_faces
+        face = mesh.faces[incidence.global_index]
+        lo, hi = _face_local_tangent_interval(mesh, ref, face)
+        measure = _embedded_cut_wall_measure(
+            geometry, Val(Axis), ref, lo, hi, incidence.side, segment,
+        )
+        incidence.side < 0 ? (minus_present = true) : (plus_present = true)
+        measure > zero(T) || continue
+        distance = abs(_embedded_plic_distance(geometry, ref, face.center))
+        push!(
+            connections, WallDiffusionConnection(
+                global_to_local[incidence.global_index],
+                measure / max(distance, floor), midpoint, true,
+            ),
+        )
+    end
+    # A cell that touches a non-periodic boundary in the component direction
+    # has no dual face on that side. Its existing node is then the only owner
+    # of the strip, so it carries the missing piece over the whole cell at its
+    # own wall distance: the pieces still sum to the segment length and the
+    # wall flux is not dropped.
+    isempty(cell_faces) && return connections
+    owner = first(cell_faces)
+    owner_face = mesh.faces[owner.global_index]
+    for (is_present, side) in ((minus_present, -1), (plus_present, 1))
+        is_present && continue
+        measure = _embedded_cut_wall_measure(
+            geometry, Val(Axis), ref, -T(0.5), T(0.5), side, segment,
+        )
+        measure > zero(T) || continue
+        distance = abs(_embedded_plic_distance(geometry, ref, owner_face.center))
+        push!(
+            connections, WallDiffusionConnection(
+                global_to_local[owner.global_index],
+                measure / max(distance, floor), midpoint, true,
+            ),
+        )
     end
     return connections
 end
@@ -1108,8 +1134,11 @@ function _cut_cell_normal_measures!(
                 measure = (hi - lo) * (one(T) - solid_fraction) * tangent_spacing
                 # A mid-plane that is entirely solid leaves the two faces with
                 # no diffusive path; keep the schedule measure so a cut
-                # control volume never loses its only normal contact.
-                measure > zero(T) || continue
+                # control volume never loses its only normal contact. The
+                # threshold is relative, so round-off from a boundary that
+                # grazes the mid-plane cannot replace a real contact.
+                measure > T(256) * eps(T) * (hi - lo) * tangent_spacing ||
+                    continue
                 minus, plus = minmax(first.local_index, second.local_index)
                 position = get(positions, (minus, plus), 0)
                 if position > 0
