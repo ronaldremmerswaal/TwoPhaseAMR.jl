@@ -16,3 +16,5 @@ $J jump_reproducer.jl | tee results/jump_reproducer.txt
 $J analyze.jl                                            # results/tables.md, errors.csv
 $J plots.jl r1_thin 32 512                               # figures/*.png
 $J prelim.jl r1_thin 32 512                              # prelim/*
+$J mc_compare.jl run                                       # MC vs LaxWendroff
+$J mc_compare.jl report
