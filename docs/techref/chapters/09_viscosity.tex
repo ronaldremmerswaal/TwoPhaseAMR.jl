@@ -482,7 +482,7 @@ in \srcsym{src/two_phase/diffusion/variable_diffusion_operator.jl}{_variable_sta
 shear stencils \srcsym{src/two_phase/diffusion/variable_diffusion_geometry.jl}{_vertex_derivative}
 (cached by \srcsym{src/two_phase/diffusion/variable_diffusion_geometry.jl}{_cached_vertex_derivative!})~\cref{eq:viscosity:shear};
 embedded wall rows \srcsym{src/embedded/operators.jl}{_embedded_variable_wall_stresses};
-stiffness \srcsym{src/two_phase/diffusion/variable_diffusion_geometry.jl}{_complete_symmetric_stiffness};
+stiffness \srcsym{src/two_phase/diffusion/variable_diffusion_geometry.jl}{_symmetric_stiffness!};
 refresh \srcsym{src/two_phase/diffusion/variable_diffusion_operator.jl}{_update_dynamic_viscosity!};
 action \srcsym{src/two_phase/diffusion/variable_diffusion_operator.jl}{_factorized_variable_stiffness_mul!}.
 Tests: \testsym{test/two_phase/variable_staggered_diffusion.jl}{Factorized variable-stress action matches assembled operator},

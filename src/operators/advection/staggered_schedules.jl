@@ -367,8 +367,10 @@ function _three_point_stencils(
         )
     end
 
+    # Each connection owns its stencil pair; the searches only read.
     result = Vector{NTuple{2, ThreePointStencil{T}}}(undef, length(connections))
-    for (index, connection) in pairs(connections)
+    _parallel_for(length(connections)) do index
+        connection = connections[index]
         displacement = _dual_displacement(
             mesh, centres[connection.minus], centres[connection.plus]
         )
@@ -454,19 +456,225 @@ function _uniform_dual_schedule(
     return UniformDualAdvectionSchedule(dual_faces, T(dx * dy))
 end
 
-@inline function _add_amr_flux_weight!(
-        coefficients, first::Int, second::Int,
-        flux::Int, coefficient
-    )
-    first == second && throw(ArgumentError("degenerate AMR dual connection"))
-    if first < second
-        key = (first, second, flux)
-        coefficients[key] = get(coefficients, key, zero(coefficient)) + coefficient
+"""
+    _AMRFluxWeights{T}
+
+Algebraic flux weights of an AMR dual schedule, grouped by the lower dual
+unknown `minus` of each key `(minus, plus, flux)` (`minus < plus`): group
+`minus` holds `counts[minus]` distinct keys at `offsets[minus]` onwards in
+`plus`, `flux` and `weights`, sorted by `(plus, axis of flux, flux)`. A weight
+is the sum of its contributions in generation order, starting from zero; a
+contribution oriented from the higher to the lower unknown enters with a
+minus sign. Zero sums are kept.
+"""
+struct _AMRFluxWeights{T}
+    offsets::Vector{Int}
+    counts::Vector{Int}
+    plus::Vector{Int}
+    flux::Vector{Int}
+    weights::Vector{T}
+end
+
+"""Number of flux-weight contributions of interior primal face `flux_index`
+to the dual schedule of component `Axis` (see `_flux_weight_contributions!`)."""
+@inline function _flux_weight_count(
+        faces, incidences, nx, ny, ::Val{Axis}, flux_index,
+    ) where {Axis}
+    flux_face = @inbounds faces[flux_index]
+    contributions = 0
+    if flux_face.axis == Axis
+        for cell in (flux_face.minus, flux_face.plus)
+            for component_face in @inbounds incidences[_cell_index(cell, nx, ny)]
+                component_face.global_index == flux_index || (contributions += 1)
+            end
+        end
     else
-        key = (second, first, flux)
-        coefficients[key] = get(coefficients, key, zero(coefficient)) - coefficient
+        minus_faces = @inbounds incidences[_cell_index(flux_face.minus, nx, ny)]
+        plus_faces = @inbounds incidences[_cell_index(flux_face.plus, nx, ny)]
+        for side in (-1, 1), minus_face in minus_faces, plus_face in plus_faces
+            minus_face.side == side == plus_face.side && (contributions += 1)
+        end
     end
-    return coefficients
+    return contributions
+end
+
+@inline function _store_flux_weight!(
+        minus, plus, coefficients, position, first::Int, second::Int, coefficient,
+    )
+    # A degenerate connection stores `minus == 0`; the caller throws.
+    if first < second
+        @inbounds minus[position], plus[position] = first, second
+        @inbounds coefficients[position] = coefficient
+    else
+        @inbounds minus[position] = first == second ? 0 : second
+        @inbounds plus[position] = first
+        # `x - c` and `x + (-c)` are the same IEEE operation.
+        @inbounds coefficients[position] = -coefficient
+    end
+    return position + 1
+end
+
+"""Store the flux-weight contributions of interior primal face `flux_index`
+from `position` on. A normal primal flux is routed through the two cells
+adjacent to it: stars centred on the transported face reproduce the regular
+two-point average and remain valid when either cell side splits. Across a
+transverse primal face the same normal side of both cells is coupled: the
+product weights are a conservative transport plan between possibly split side
+partitions, whose marginals are exactly one half of the incidence fractions."""
+@inline function _flux_weight_contributions!(
+        minus, plus, coefficients, position, faces, incidences, global_to_local,
+        nx, ny, ::Val{Axis}, flux_index,
+    ) where {Axis}
+    flux_face = @inbounds faces[flux_index]
+    T = eltype(coefficients)
+    if flux_face.axis == Axis
+        centre = @inbounds global_to_local[flux_index]
+        for (cell, sign) in ((flux_face.minus, one(T)), (flux_face.plus, -one(T)))
+            for component_face in @inbounds incidences[_cell_index(cell, nx, ny)]
+                component_face.global_index == flux_index && continue
+                position = _store_flux_weight!(
+                    minus, plus, coefficients, position, component_face.local_index,
+                    centre, sign * component_face.fraction / 2,
+                )
+            end
+        end
+    else
+        minus_faces = @inbounds incidences[_cell_index(flux_face.minus, nx, ny)]
+        plus_faces = @inbounds incidences[_cell_index(flux_face.plus, nx, ny)]
+        for side in (-1, 1), minus_face in minus_faces, plus_face in plus_faces
+            minus_face.side == side == plus_face.side || continue
+            position = _store_flux_weight!(
+                minus, plus, coefficients, position, minus_face.local_index,
+                plus_face.local_index, minus_face.fraction * plus_face.fraction / 2,
+            )
+        end
+    end
+    return position
+end
+
+"""Fixed number of dual unknowns per chunk when sorting flux-weight groups."""
+const _FLUX_WEIGHT_GROUP_CHUNK = 256
+
+"""
+    _amr_flux_weights(mesh, Val(Axis), T, incidences, global_to_local, number_of_unknowns)
+
+Flux weights of the AMR dual schedule of component `Axis` from the cell
+`incidences` of its `number_of_unknowns` dual unknowns. The contributions of
+each interior primal face are counted, placed by a prefix sum and stored in
+face order, threaded over faces; a stable counting sort groups them by their
+lower unknown, and each group is sorted stably and summed per key, threaded
+over fixed chunks of groups. The summation order is the face order of the
+contributions, so the weights are the same for every thread count.
+"""
+function _amr_flux_weights(
+        mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}, incidences, global_to_local,
+        number_of_unknowns::Int,
+    ) where {Axis, T}
+    nx, ny = mesh.block_size
+    faces = mesh.faces
+    number_of_faces = length(faces)
+    face_counts = Vector{Int}(undef, number_of_faces)
+    @_parallel for flux_index in 1:number_of_faces
+        @inbounds face_counts[flux_index] = _flux_weight_count(
+            faces, incidences, nx, ny, Val(Axis), flux_index,
+        )
+    end
+    face_offsets = _csr_offsets(face_counts)
+    number_of_contributions = face_offsets[end] - 1
+    contribution_minus = Vector{Int}(undef, number_of_contributions)
+    contribution_plus = Vector{Int}(undef, number_of_contributions)
+    contribution_weights = Vector{T}(undef, number_of_contributions)
+    @_parallel for flux_index in 1:number_of_faces
+        _flux_weight_contributions!(
+            contribution_minus, contribution_plus, contribution_weights,
+            face_offsets[flux_index], faces, incidences, global_to_local,
+            nx, ny, Val(Axis), flux_index,
+        )
+    end
+    any(iszero, contribution_minus) &&
+        throw(ArgumentError("degenerate AMR dual connection"))
+    # Stable counting sort by the lower unknown (`face_counts` is reused for
+    # the contribution order).
+    group_counts = zeros(Int, number_of_unknowns)
+    for minus in contribution_minus
+        @inbounds group_counts[minus] += 1
+    end
+    offsets = _csr_offsets(group_counts)
+    copyto!(group_counts, 1, offsets, 1, number_of_unknowns)
+    plus = Vector{Int}(undef, number_of_contributions)
+    flux = Vector{Int}(undef, number_of_contributions)
+    weights = Vector{T}(undef, number_of_contributions)
+    for flux_index in 1:number_of_faces, contribution in
+            face_offsets[flux_index]:(face_offsets[flux_index + 1] - 1)
+        minus = @inbounds contribution_minus[contribution]
+        position = @inbounds group_counts[minus]
+        @inbounds group_counts[minus] = position + 1
+        @inbounds plus[position] = contribution_plus[contribution]
+        @inbounds flux[position] = flux_index
+        @inbounds weights[position] = contribution_weights[contribution]
+    end
+    chunks = cld(number_of_unknowns, _FLUX_WEIGHT_GROUP_CHUNK)
+    @_parallel work = _FLUX_WEIGHT_GROUP_CHUNK for chunk in 1:chunks
+        last_group = min(number_of_unknowns, chunk * _FLUX_WEIGHT_GROUP_CHUNK)
+        for group in ((chunk - 1) * _FLUX_WEIGHT_GROUP_CHUNK + 1):last_group
+            @inbounds group_counts[group] = _combine_flux_weight_group!(
+                plus, flux, weights, faces, offsets[group], offsets[group + 1] - 1,
+            )
+        end
+    end
+    return _AMRFluxWeights(offsets, group_counts, plus, flux, weights)
+end
+
+@inline _flux_weight_key(plus, flux, faces, position) =
+    (@inbounds(plus[position]), @inbounds(faces[flux[position]].axis), @inbounds(flux[position]))
+
+"""Sort one group of contributions stably by `(plus, axis, flux)` (insertion
+sort; groups are short) and sum each key's contributions in order into the
+group's leading entries. Return the number of distinct keys."""
+@inline function _combine_flux_weight_group!(plus, flux, weights, faces, start, stop)
+    for position in (start + 1):stop
+        key = _flux_weight_key(plus, flux, faces, position)
+        moving_plus = @inbounds plus[position]
+        moving_flux = @inbounds flux[position]
+        moving_weight = @inbounds weights[position]
+        target = position
+        while target > start && _flux_weight_key(plus, flux, faces, target - 1) > key
+            @inbounds plus[target] = plus[target - 1]
+            @inbounds flux[target] = flux[target - 1]
+            @inbounds weights[target] = weights[target - 1]
+            target -= 1
+        end
+        @inbounds plus[target] = moving_plus
+        @inbounds flux[target] = moving_flux
+        @inbounds weights[target] = moving_weight
+    end
+    distinct = 0
+    position = start
+    while position <= stop
+        key_plus = @inbounds plus[position]
+        key_flux = @inbounds flux[position]
+        weight = zero(eltype(weights))
+        while position <= stop && (@inbounds plus[position]) == key_plus &&
+                (@inbounds flux[position]) == key_flux
+            weight += @inbounds weights[position]
+            position += 1
+        end
+        @inbounds plus[start + distinct] = key_plus
+        @inbounds flux[start + distinct] = key_flux
+        @inbounds weights[start + distinct] = weight
+        distinct += 1
+    end
+    return distinct
+end
+
+"""Combined weight of the key `(minus, plus, flux)` of `weights`."""
+function _amr_flux_weight(weights::_AMRFluxWeights, minus, plus, flux)
+    start = weights.offsets[minus]
+    for position in start:(start + weights.counts[minus] - 1)
+        weights.plus[position] == plus && weights.flux[position] == flux &&
+            return weights.weights[position]
+    end
+    throw(KeyError((minus, plus, flux)))
 end
 
 function _component_incidences(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}) where {Axis, T}
@@ -519,61 +727,84 @@ function _amr_dual_schedule(
         mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T};
         build_three_point_stencils::Bool = true
     ) where {Axis, T}
-    nx, ny = mesh.block_size
     incidences, global_to_local, volumes =
         _component_incidences(mesh, Val(Axis), T)
-    coefficients = Dict{NTuple{3, Int}, T}()
-
-    for (flux_index, flux_face) in pairs(mesh.faces)
-        if flux_face.axis == Axis
-            # A normal primal flux is routed through the two cells adjacent to
-            # it. Stars centred on the transported face reproduce the regular
-            # two-point average and remain valid when either cell side splits.
-            centre = global_to_local[flux_index]
-            for (cell, sign) in (
-                    (flux_face.minus, one(T)),
-                    (flux_face.plus, -one(T)),
-                )
-                cell_index = _cell_index(cell, nx, ny)
-                for component_face in incidences[cell_index]
-                    component_face.global_index == flux_index && continue
-                    coefficient = sign * component_face.fraction / 2
-                    _add_amr_flux_weight!(
-                        coefficients, component_face.local_index, centre,
-                        flux_index, coefficient
-                    )
-                end
-            end
-        else
-            # Across a transverse primal face, couple the same normal side of
-            # both cells. The product weights are a conservative transport
-            # plan between possibly split side partitions; their marginals are
-            # exactly one half of the incidence fractions.
-            minus_index = _cell_index(flux_face.minus, nx, ny)
-            plus_index = _cell_index(flux_face.plus, nx, ny)
-            for side in (-1, 1)
-                for minus_face in incidences[minus_index]
-                    minus_face.side == side || continue
-                    for plus_face in incidences[plus_index]
-                        plus_face.side == side || continue
-                        coefficient = minus_face.fraction * plus_face.fraction / 2
-                        _add_amr_flux_weight!(
-                            coefficients, minus_face.local_index,
-                            plus_face.local_index,
-                            flux_index, coefficient
-                        )
-                    end
-                end
-            end
-        end
-    end
+    weights = _amr_flux_weights(
+        mesh, Val(Axis), T, incidences, global_to_local, length(volumes),
+    )
     return _assemble_amr_dual_schedule(
-        mesh, Val(Axis), T, coefficients, volumes; build_three_point_stencils,
+        mesh, Val(Axis), T, weights, volumes; build_three_point_stencils,
     )
 end
 
+"""Count (`outputs === nothing`) or fill the dual connections of the
+nonzero flux weights of group `group` (see `_assemble_amr_dual_schedule`).
+Return the numbers of flux weights and connections of the group."""
+@inline function _dual_group_connections!(
+        outputs, group, weights::_AMRFluxWeights{T}, faces, dual_sizes, interior_count,
+    ) where {T}
+    group_plus, group_flux, group_weights = weights.plus, weights.flux, weights.weights
+    start = @inbounds weights.offsets[group]
+    stop = start + (@inbounds weights.counts[group]) - 1
+    if outputs !== nothing
+        flux_indices, flux_weights, dual_connections, entry_offsets,
+            connection_offsets = outputs
+        first_entry = @inbounds entry_offsets[group]
+        first_connection = @inbounds connection_offsets[group]
+    end
+    entries = 0
+    connections = 0
+    position = start
+    while position <= stop
+        if iszero(@inbounds group_weights[position])
+            position += 1
+            continue
+        end
+        # Consecutive nonzero keys with the same upper unknown and flux axis
+        # form one dual connection; zero keys are skipped.
+        plus = @inbounds group_plus[position]
+        axis = @inbounds faces[group_flux[position]].axis
+        connection_entries = entries
+        refinement_interface = group > interior_count || plus > interior_count
+        while position <= stop && (@inbounds group_plus[position]) == plus &&
+                (@inbounds faces[group_flux[position]].axis) == axis
+            weight = @inbounds group_weights[position]
+            if !iszero(weight)
+                if outputs !== nothing
+                    @inbounds flux_indices[first_entry + entries] = group_flux[position]
+                    @inbounds flux_weights[first_entry + entries] = weight
+                end
+                refinement_interface |= abs(weight) != T(0.5)
+                entries += 1
+            end
+            position += 1
+        end
+        weight_count = entries - connection_entries
+        refinement_interface |= weight_count != 2
+        if group <= interior_count && plus <= interior_count
+            refinement_interface |=
+                (@inbounds dual_sizes[group]) != (@inbounds dual_sizes[plus])
+        end
+        if outputs !== nothing
+            @inbounds dual_connections[first_connection + connections] = RawAMRDualFace(
+                group, plus, first_entry + connection_entries, weight_count, axis,
+                refinement_interface,
+            )
+        end
+        connections += 1
+    end
+    return entries, connections
+end
+
+"""
+Assemble the AMR dual schedule of component `Axis` from its flux weights:
+one dual connection per run of nonzero keys `(minus, plus, flux)` with equal
+`minus`, `plus` and flux axis, in key order. The connections of each lower
+unknown are counted, placed by a prefix sum and filled, threaded over fixed
+chunks of unknowns, so the schedule is the same for every thread count.
+"""
 function _assemble_amr_dual_schedule(
-        mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}, coefficients, volumes;
+        mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}, weights::_AMRFluxWeights{T}, volumes;
         build_three_point_stencils::Bool = true,
         interior_count::Int = length(volumes),
     ) where {Axis, T}
@@ -582,53 +813,47 @@ function _assemble_amr_dual_schedule(
     # Comparing these integers identifies refinement interfaces independently
     # of physical extent and roundoff in the metric volumes.
     lattice = _finest_lattice_size(mesh)
-    dual_sizes = Int[]
-    sizehint!(dual_sizes, interior_count)
-    for face in mesh.faces
-        face.axis == Axis || continue
+    faces = mesh.faces
+    face_offset = _axis_face_offset(faces, Axis, interior_count)
+    dual_sizes = Vector{Int}(undef, interior_count)
+    _parallel_for(interior_count) do local_index
+        face = faces[face_offset + local_index]
         _, lo, hi = _face_lattice_geometry(mesh, face, lattice)
         _, minus_scale = _cell_lattice_bounds(mesh, mesh.blocks, face.minus, lattice)
         _, plus_scale = _cell_lattice_bounds(mesh, mesh.blocks, face.plus, lattice)
-        push!(dual_sizes, (hi - lo) * (minus_scale[Axis] + plus_scale[Axis]))
+        dual_sizes[local_index] = (hi - lo) * (minus_scale[Axis] + plus_scale[Axis])
     end
 
-    keys_in_order = sort!(
-        [
-            key for key in keys(coefficients) if !iszero(coefficients[key])
-        ]; by = key -> (key[1], key[2], mesh.faces[key[3]].axis, key[3])
-    )
-    dual_connections = RawAMRDualFace[]
-    flux_indices = Int[]
-    flux_weights = T[]
-    cursor = 1
-    while cursor <= length(keys_in_order)
-        minus, plus, first_flux = keys_in_order[cursor]
-        axis = mesh.faces[first_flux].axis
-        first_weight = length(flux_indices) + 1
-        while cursor <= length(keys_in_order) &&
-                keys_in_order[cursor][1] == minus &&
-                keys_in_order[cursor][2] == plus &&
-                mesh.faces[keys_in_order[cursor][3]].axis == axis
-            key = keys_in_order[cursor]
-            push!(flux_indices, key[3])
-            push!(flux_weights, coefficients[key])
-            cursor += 1
-        end
-        weight_count = length(flux_indices) - first_weight + 1
-        refinement_interface = weight_count != 2 ||
-            minus > interior_count || plus > interior_count
-        for index in first_weight:length(flux_indices)
-            refinement_interface |= abs(flux_weights[index]) != T(0.5)
-        end
-        if minus <= interior_count && plus <= interior_count
-            refinement_interface |= dual_sizes[minus] != dual_sizes[plus]
-        end
-        push!(
-            dual_connections, RawAMRDualFace(
-                minus, plus, first_weight, weight_count, axis,
-                refinement_interface
+    number_of_groups = length(weights.counts)
+    group_entries = Vector{Int}(undef, number_of_groups)
+    group_connections = Vector{Int}(undef, number_of_groups)
+    chunks = cld(number_of_groups, _FLUX_WEIGHT_GROUP_CHUNK)
+    @_parallel work = _FLUX_WEIGHT_GROUP_CHUNK for chunk in 1:chunks
+        last_group = min(number_of_groups, chunk * _FLUX_WEIGHT_GROUP_CHUNK)
+        for group in ((chunk - 1) * _FLUX_WEIGHT_GROUP_CHUNK + 1):last_group
+            entries, connections = _dual_group_connections!(
+                nothing, group, weights, faces, dual_sizes, interior_count,
             )
+            @inbounds group_entries[group] = entries
+            @inbounds group_connections[group] = connections
+        end
+    end
+    entry_offsets = _csr_offsets(group_entries)
+    connection_offsets = _csr_offsets(group_connections)
+    flux_indices = Vector{Int}(undef, entry_offsets[end] - 1)
+    flux_weights = Vector{T}(undef, length(flux_indices))
+    dual_connections = Vector{RawAMRDualFace}(undef, connection_offsets[end] - 1)
+    @_parallel work = _FLUX_WEIGHT_GROUP_CHUNK for chunk in 1:chunks
+        last_group = min(number_of_groups, chunk * _FLUX_WEIGHT_GROUP_CHUNK)
+        outputs = (
+            flux_indices, flux_weights, dual_connections, entry_offsets,
+            connection_offsets,
         )
+        for group in ((chunk - 1) * _FLUX_WEIGHT_GROUP_CHUNK + 1):last_group
+            _dual_group_connections!(
+                outputs, group, weights, faces, dual_sizes, interior_count,
+            )
+        end
     end
 
     stencils = if build_three_point_stencils

@@ -74,35 +74,14 @@ function _momentum_advection_workspace(
     if changed
         # Match `_bounded_phase_schedule`'s normal stars and transverse
         # product plan, changing only the cell-to-face partition fractions.
-        coefficients = Dict{NTuple{3, Int}, T}()
-        for (index, face) in pairs(mesh.faces)
-            if face.axis == Axis
-                centre = global_to_local[index]
-                for (cell, sign) in ((face.minus, one(T)), (face.plus, -one(T)))
-                    for other in incidences[_cell_index(cell, nx, ny)]
-                        other.global_index == index && continue
-                        _add_amr_flux_weight!(
-                            coefficients, other.local_index, centre, index,
-                            sign * other.fraction / 2,
-                        )
-                    end
-                end
-            else
-                minus = incidences[_cell_index(face.minus, nx, ny)]
-                plus = incidences[_cell_index(face.plus, nx, ny)]
-                for side in (-1, 1), a in minus, b in plus
-                    a.side == side == b.side || continue
-                    _add_amr_flux_weight!(
-                        coefficients, a.local_index, b.local_index, index,
-                        a.fraction * b.fraction / 2,
-                    )
-                end
-            end
-        end
+        weights = _amr_flux_weights(
+            mesh, Val(Axis), T, incidences, global_to_local, local_index,
+        )
         for face in schedule.faces
             for pointer in face.first_weight:(face.first_weight + face.weight_count - 1)
-                key = (face.minus, face.plus, schedule.flux_indices[pointer])
-                schedule.flux_weights[pointer] = coefficients[key]
+                schedule.flux_weights[pointer] = _amr_flux_weight(
+                    weights, face.minus, face.plus, schedule.flux_indices[pointer],
+                )
             end
         end
     end

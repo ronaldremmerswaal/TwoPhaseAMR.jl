@@ -612,29 +612,6 @@ function _restrict_transfer_to_active_domain!(
     return prolongation
 end
 
-# Stable grouping keeps each transfer's accumulation order identical to
-# sortperm while avoiding a comparison sort over every fine-grid coupling.
-function _transfer_output_schedule(targets::Vector{Int}, outputs::Int)
-    offsets = zeros(Int, outputs + 1)
-    for target in targets
-        @inbounds offsets[target + 1] += 1
-    end
-    for target in 1:outputs
-        @inbounds offsets[target + 1] += offsets[target]
-    end
-    offsets .+= 1
-    next = copy(offsets)
-    indices = Vector{Int}(undef, length(targets))
-    for index in eachindex(targets)
-        target = @inbounds targets[index]
-        pointer = @inbounds next[target]
-        @inbounds begin
-            indices[pointer] = index
-            next[target] += 1
-        end
-    end
-    return offsets, indices
-end
 function _pressure_transfer_owners(tentative::SparseMatrixCSC)
     owners = zeros(Int, size(tentative, 1))
     tentative_rows = rowvals(tentative)
@@ -685,7 +662,7 @@ function _smoothed_transfer_refresh(
         @inbounds stiffness_to_transfer[pointer] =
             _csc_stored_pointer(prolongation, stiffness_rows[pointer], owners[column])
     end
-    transfer_offsets, stiffness_indices = _transfer_output_schedule(
+    transfer_offsets, stiffness_indices = _grouped_output_schedule(
         stiffness_to_transfer, nnz(prolongation),
     )
     tentative_entries = falses(nnz(prolongation))
@@ -770,7 +747,7 @@ function _factorized_smoothed_transfer_refresh(
             owners[stencil.entry_columns[entry]],
         ) for entry in eachindex(stencil.entry_rows)
     ]
-    transfer_offsets, entry_indices = _transfer_output_schedule(
+    transfer_offsets, entry_indices = _grouped_output_schedule(
         entry_to_transfer, nnz(prolongation),
     )
     tentative_entries = falses(nnz(prolongation))

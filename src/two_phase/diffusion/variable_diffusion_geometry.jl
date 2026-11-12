@@ -125,7 +125,10 @@ mutable struct VariableDiffusionConstructionCache{T}
     patch_misses::Int
     patch_invalidations::Int
     patch_remap_failures::Int
-    stiffness_entries::Vector{Vector{Tuple{Int, T}}}
+    stiffness_heads::Vector{Int}
+    stiffness_column_counts::Vector{Int}
+    stiffness_contribution_counts::Vector{Int}
+    stiffness_contribution_starts::Vector{Int}
 end
 
 function VariableDiffusionConstructionCache(::Type{T}) where {T}
@@ -139,7 +142,7 @@ function VariableDiffusionConstructionCache(::Type{T}) where {T}
         Tuple{Int, T, T}[], Int[], Int[], T[],
         Dict{ShearTemplateKey{T}, Vector{T}}(), 0, 0,
         LocalShearPatchCache{T}[], 0, 0, 0, 0,
-        Vector{Tuple{Int, T}}[],
+        Int[], Int[], Int[], Int[],
     )
 end
 
@@ -153,88 +156,165 @@ function _cached_cell_references!(references, mesh)
     return references
 end
 
-function _stiffness_refresh_map!(
-        pointers, stresses, factors, offsets, entries, strain, stiffness
+"""Columns per fixed chunk of `_symmetric_stiffness!`."""
+const _STIFFNESS_COLUMN_CHUNK = 256
+
+"""
+    _symmetric_stiffness!(pointers, stresses, factors, offsets, cache, strain, strain_transpose, weights)
+
+Return the symmetric stiffness `E'WE` for the strain `E = strain` and the
+stress weights `W = Diagonal(weights)`, and fill its coefficient-refresh map.
+
+Column `c` of the stiffness holds every face `r` that shares a stress row with
+face `c`, also where the outer products cancel for the current weights:
+changing the phase viscosity can make them nonzero. Its value is the mean of
+the two algebraically equal halves `(A[r, c] + A[c, r]) / 2`, so it is exactly
+symmetric. Each half is the left-to-right sum over the shared stresses `s` in
+increasing order of `(E[s, r] W[s]) E[s, c]`, bitwise SparseArrays'
+`transpose(E) * spdiagm(0 => W) * E`.
+
+The refresh map lists, for stored entry `p`, the shared stresses `s` in the
+same order in `stresses[offsets[p]:(offsets[p + 1] - 1)]` with the factors
+`E[s, r] E[s, c]`; `pointers` repeats `p` once per contribution. A refresh
+sums `W[s] * factor` in that order.
+
+The columns are built by a merge of the rows of `strain_transpose` at the
+stresses of each column: a count pass, a prefix sum and a fill pass, threaded
+over fixed chunks of `_STIFFNESS_COLUMN_CHUNK` columns. Every column owns its
+outputs, so the result is the same for every thread count.
+"""
+function _symmetric_stiffness!(
+        pointers, stresses, factors, offsets, cache, strain, strain_transpose, weights,
     )
-    T = eltype(stiffness)
-    empty!(pointers)
-    empty!(stresses)
-    empty!(factors)
-    old_length = length(entries)
-    number_of_stresses = size(strain, 1)
-    number_of_stresses > old_length && resize!(entries, number_of_stresses)
-    for index in 1:number_of_stresses
-        if index > old_length
-            entries[index] = Tuple{Int, T}[]
-        else
-            empty!(entries[index])
-        end
-    end
-    strain_rows = rowvals(strain)
+    T = eltype(strain)
+    number_of_faces = size(strain, 2)
+    strain_pointers = strain.colptr
+    stress_rows = rowvals(strain)
     strain_values = nonzeros(strain)
-    for column in axes(strain, 2), pointer in nzrange(strain, column)
-        row = strain_rows[pointer]
-        push!(entries[row], (column, strain_values[pointer]))
+    face_pointers = strain_transpose.colptr
+    face_rows = rowvals(strain_transpose)
+    transpose_values = nonzeros(strain_transpose)
+    width = 0
+    for column in 1:number_of_faces
+        width = max(width, strain_pointers[column + 1] - strain_pointers[column])
     end
-    stiffness_rows = rowvals(stiffness)
-    for stress in 1:number_of_stresses
-        row_entries = entries[stress]
-        for (column, right_value) in row_entries
-            for (row, left_value) in row_entries
-                pointer = 0
-                for candidate in nzrange(stiffness, column)
-                    if stiffness_rows[candidate] == row
-                        pointer = candidate
-                        break
-                    end
-                end
-                iszero(pointer) && error(
-                    "stress refresh changed diffusion sparsity",
-                )
-                push!(pointers, pointer)
-                push!(stresses, stress)
-                push!(factors, left_value * right_value)
-            end
+    chunks = cld(number_of_faces, _STIFFNESS_COLUMN_CHUNK)
+    merge_heads = resize!(cache.stiffness_heads, chunks * width)
+    column_counts = resize!(cache.stiffness_column_counts, number_of_faces)
+    contribution_counts = resize!(cache.stiffness_contribution_counts, number_of_faces)
+    @_parallel work = _STIFFNESS_COLUMN_CHUNK for chunk in 1:chunks
+        head_offset = (chunk - 1) * width
+        last_column = min(number_of_faces, chunk * _STIFFNESS_COLUMN_CHUNK)
+        for column in ((chunk - 1) * _STIFFNESS_COLUMN_CHUNK + 1):last_column
+            entries, contributions = _stiffness_column!(
+                nothing, column, head_offset, merge_heads, strain_pointers, stress_rows,
+                strain_values, face_pointers, face_rows, transpose_values, weights,
+            )
+            @inbounds column_counts[column] = entries
+            @inbounds contribution_counts[column] = contributions
         end
     end
-    permutation = sortperm(pointers)
-    pointers[:] = pointers[permutation]
-    stresses[:] = stresses[permutation]
-    factors[:] = factors[permutation]
-    resize!(offsets, nnz(stiffness) + 1)
-    contribution = 1
-    for pointer in 1:nnz(stiffness)
-        offsets[pointer] = contribution
-        while contribution <= length(pointers) &&
-                pointers[contribution] == pointer
-            contribution += 1
-        end
-    end
-    offsets[end] = contribution
-    contribution == length(pointers) + 1 || error(
-        "diffusion coefficient refresh contains an invalid sparse pointer",
+    column_pointers = _csr_offsets(column_counts)
+    contribution_starts = _csr_offsets(
+        contribution_counts, cache.stiffness_contribution_starts,
     )
-    return pointers, stresses, factors, offsets
+    number_of_entries = column_pointers[end] - 1
+    number_of_contributions = contribution_starts[end] - 1
+    rows = Vector{Int}(undef, number_of_entries)
+    stiffness_values = Vector{T}(undef, number_of_entries)
+    resize!(pointers, number_of_contributions)
+    resize!(stresses, number_of_contributions)
+    resize!(factors, number_of_contributions)
+    resize!(offsets, number_of_entries + 1)
+    @_parallel work = _STIFFNESS_COLUMN_CHUNK for chunk in 1:chunks
+        head_offset = (chunk - 1) * width
+        last_column = min(number_of_faces, chunk * _STIFFNESS_COLUMN_CHUNK)
+        outputs = (
+            column_pointers, contribution_starts, rows, stiffness_values,
+            pointers, stresses, factors, offsets,
+        )
+        for column in ((chunk - 1) * _STIFFNESS_COLUMN_CHUNK + 1):last_column
+            _stiffness_column!(
+                outputs, column, head_offset, merge_heads, strain_pointers, stress_rows,
+                strain_values, face_pointers, face_rows, transpose_values, weights,
+            )
+        end
+    end
+    offsets[end] = number_of_contributions + 1
+    return SparseMatrixCSC(
+        number_of_faces, number_of_faces, column_pointers, rows, stiffness_values,
+    )
 end
 
-function _complete_symmetric_stiffness(strain, weights)
-    assembled = transpose(strain) * spdiagm(0 => weights) * strain
-    # A stress row can contain coefficients whose outer products cancel for
-    # the initial viscosity. Those locations must remain structurally present:
-    # changing the phase viscosity can make them nonzero. Build the symbolic
-    # pattern with positive unit entries, then sample the two algebraically
-    # equivalent halves to store one exactly symmetric value.
-    unit_strain = copy(strain)
-    fill!(nonzeros(unit_strain), one(eltype(strain)))
-    pattern = transpose(unit_strain) * unit_strain
-    pattern_rows = rowvals(pattern)
-    pattern_values = nonzeros(pattern)
-    for column in axes(pattern, 2), pointer in nzrange(pattern, column)
-        row = pattern_rows[pointer]
-        @inbounds pattern_values[pointer] =
-            (assembled[row, column] + assembled[column, row]) / 2
+"""Count (`outputs === nothing`) or fill stiffness column `column` of
+`_symmetric_stiffness!`: merge the sorted face lists of the stresses of
+`column`, in increasing stress order, with one head per stress in
+`merge_heads[head_offset .+ (1:width)]`. Return the numbers of stored entries and
+refresh contributions of the column."""
+@inline function _stiffness_column!(
+        outputs, column, head_offset, merge_heads, strain_pointers, stress_rows,
+        strain_values, face_pointers, face_rows, transpose_values, weights,
+    )
+    first_stress = @inbounds strain_pointers[column]
+    stress_count = (@inbounds strain_pointers[column + 1]) - first_stress
+    contributions = 0
+    for local_stress in 1:stress_count
+        stress = @inbounds stress_rows[first_stress + local_stress - 1]
+        @inbounds merge_heads[head_offset + local_stress] = face_pointers[stress]
+        contributions += (@inbounds face_pointers[stress + 1]) - face_pointers[stress]
     end
-    return pattern
+    if outputs !== nothing
+        column_pointers, contribution_starts, rows, stiffness_values,
+            pointers, stresses, factors, offsets = outputs
+        entry = @inbounds column_pointers[column]
+        contribution = @inbounds contribution_starts[column]
+    end
+    entries = 0
+    while true
+        # The next face of the column: the smallest head over all stresses.
+        row = typemax(Int)
+        for local_stress in 1:stress_count
+            stress = @inbounds stress_rows[first_stress + local_stress - 1]
+            head = @inbounds merge_heads[head_offset + local_stress]
+            head < (@inbounds face_pointers[stress + 1]) &&
+                (row = min(row, @inbounds face_rows[head]))
+        end
+        row == typemax(Int) && break
+        entries += 1
+        if outputs !== nothing
+            @inbounds offsets[entry] = contribution
+            lower = zero(eltype(stiffness_values))
+            upper = zero(eltype(stiffness_values))
+        end
+        shared = 0
+        for local_stress in 1:stress_count
+            stress = @inbounds stress_rows[first_stress + local_stress - 1]
+            head = @inbounds merge_heads[head_offset + local_stress]
+            head < (@inbounds face_pointers[stress + 1]) &&
+                (@inbounds face_rows[head]) == row || continue
+            @inbounds merge_heads[head_offset + local_stress] = head + 1
+            outputs === nothing && continue
+            shared += 1
+            row_value = @inbounds transpose_values[head]
+            column_value = @inbounds strain_values[first_stress + local_stress - 1]
+            weight = @inbounds weights[stress]
+            # SparseArrays assigns the first product and adds the others.
+            lower_term = (row_value * weight) * column_value
+            upper_term = (column_value * weight) * row_value
+            lower = shared == 1 ? lower_term : lower + lower_term
+            upper = shared == 1 ? upper_term : upper + upper_term
+            @inbounds pointers[contribution] = entry
+            @inbounds stresses[contribution] = stress
+            @inbounds factors[contribution] = row_value * column_value
+            contribution += 1
+        end
+        if outputs !== nothing
+            @inbounds rows[entry] = row
+            @inbounds stiffness_values[entry] = (lower + upper) / 2
+            entry += 1
+        end
+    end
+    return entries, contributions
 end
 
 @inline function _phase_dynamic_viscosity(c, viscosity::NTuple{2})

@@ -176,6 +176,22 @@ end
     end
 end
 
+"""`sortperm` reference of `_grouped_output_schedule`."""
+function sorted_output_schedule(targets, outputs)
+    sorted = sort(targets)
+    return searchsortedfirst.(Ref(sorted), 1:(outputs + 1)), sortperm(targets)
+end
+
+@testset "Grouped output schedules are a stable sortperm" begin
+    for outputs in (1, 3, 40), number_of_targets in (0, 1, 7, 500)
+        targets = rand(1:outputs, number_of_targets)
+        @test TwoPhaseAMR._grouped_output_schedule(targets, outputs) ==
+            sorted_output_schedule(targets, outputs)
+    end
+    @test_throws ArgumentError TwoPhaseAMR._grouped_output_schedule([1, 4], 3)
+    @test_throws ArgumentError TwoPhaseAMR._grouped_output_schedule([0, 1], 3)
+end
+
 @testset "CSC transfer schedules preserve stored entries and order" begin
     # An explicit zero is a stored coupling and must remain in the map.
     stiffness = sparse(
@@ -183,7 +199,7 @@ end
     )
     tentative = sparse([1, 2, 3], [1, 1, 2], ones(3), 3, 2)
     transfer = TwoPhaseAMR._smoothed_transfer_refresh(stiffness, tentative)
-    expected_offsets, expected_indices = TwoPhaseAMR._grouped_output_schedule(
+    expected_offsets, expected_indices = sorted_output_schedule(
         transfer.stiffness_to_transfer, nnz(transfer.prolongation),
     )
     @test transfer.transfer_offsets == expected_offsets
@@ -211,7 +227,7 @@ end
         a = TreeGeometricMultigridPreconditioner(assembled; coarse_size = 16)
         b = TreeGeometricMultigridPreconditioner(matrix_free; coarse_size = 16)
         factorized = first(b.transfer_refreshes)
-        offsets, indices = TwoPhaseAMR._grouped_output_schedule(
+        offsets, indices = sorted_output_schedule(
             factorized.entry_to_transfer, nnz(factorized.prolongation),
         )
         @test factorized.transfer_offsets == offsets
