@@ -459,7 +459,7 @@ end
         )
         default_frames = video_frames(default, gif_size(default))
         configured_frames = video_frames(configured, gif_size(configured))
-        @test length(default_frames) == length(configured_frames) == length(FRAMES)
+        @test length(default_frames) == length(configured_frames) == 41
         @test first(default_frames) != first(configured_frames)
     end
 end
@@ -486,7 +486,7 @@ end
     range = Tuple(image.colorrange[])
     largest = maximum(frame.stats[:velocity_vorticity].absmax for frame in animation.frames)
     @test range[2] ≈ largest && range[1] ≈ -largest
-    @test length(animation.frames) == length(FRAMES)
+    @test length(animation.frames) == 41
     @test length(animation.diagnostic_axes) == 2
     settle!(animation.figure)
     field_limits = limits_rect(axis)
@@ -509,7 +509,7 @@ end
         @test [diagnostic.finallimits[] for diagnostic in animation.diagnostic_axes] ==
             diagnostic_limits
     end
-    @test allunique(titles)
+    @test length(unique(titles)) == length(FRAMES) # sparse sampling repeats frames
     # A requested colour range wins; the registered one wins over the data.
     @test Tuple(
         field_image(
@@ -593,12 +593,12 @@ end
     mktempdir() do dir
         path = joinpath(dir, "vorticity.gif")
         @test export_animation(
-            path, RUN.recorder; field = :speed, framerate = 4,
+            path, RUN.recorder; field = :speed, fps = 8, duration = 1.0,
             decorations = :none, title = nothing, size = (300, 200),
             colormap = :viridis
         ) == path
         frames = video_frames(path, gif_size(path))
-        @test length(frames) == length(FRAMES)
+        @test length(frames) == 9 # round(8 × 1) + 1, both ends included
         # The field fills the same square region of every frame: the first
         # run of coloured pixel columns, left of the colour bar.
         regions = map(frames) do pixels
@@ -613,24 +613,30 @@ end
         (top, bottom), (left, right) = first(regions)
         @test abs((bottom - top) - (right - left)) <= 2
         @test bottom - top > 0.6 * gif_size(path)[2]
-        # Every keyframe is its own decoded frame, titled with its time.
+        # The default 20 fps over 2 s gives 41 output frames; the four
+        # keyframes repeat instead of mapping one-to-one.
         titled = joinpath(dir, "titled.gif")
         export_animation(titled, RUN.store; field = :speed, size = (300, 200))
         decoded = video_frames(titled, gif_size(titled))
-        @test length(decoded) == length(FRAMES) && allunique(decoded)
-        # A time window restricts the stored keyframes.
+        @test length(decoded) == 41
+        @test length(unique(decoded)) <= length(FRAMES)
+        @test !allunique(decoded)
+        # A time window keeps only candidates inside it and spans it linearly.
         window = (FRAMES[2].time, last(FRAMES).time)
-        @test length(MakieExt._animation_scene(RUN.store, :speed; window).frames) ==
-            length(FRAMES) - 1
+        scene = MakieExt._animation_scene(RUN.store, :speed; window)
+        @test length(scene.frames) == 41
+        @test all(index -> 1 <= index <= length(FRAMES) - 1, scene.schedule.indices)
+        @test first(scene.schedule.indices) == 1 && last(scene.schedule.indices) == length(FRAMES) - 1
+        @test first(scene.frames).id == FRAMES[2].id && last(scene.frames).id == last(FRAMES).id
         video = joinpath(dir, "speed.mp4")
         video_progress = Tuple{Int, Int}[]
         @test export_animation(
-            video, RUN.store; field = :speed, window,
-            diagnostics = :all, framerate = 4,
+            video, RUN.store; field = :speed, window, fps = 4, duration = 1.0,
+            diagnostics = :all,
             progress = (index, total) -> push!(video_progress, (index, total)),
         ) == video
         @test filesize(video) > 0
-        @test video_progress == [(i, length(FRAMES) - 1) for i in 1:(length(FRAMES) - 1)]
+        @test video_progress == [(i, 5) for i in 1:5]
     end
     @test_throws ArgumentError export_animation("unused.gif", RUN.store; field = :missing)
     @test_throws ArgumentError export_animation(
@@ -642,8 +648,13 @@ end
         source = :both
     )
     @test_throws ArgumentError export_animation(
-        "unused.gif", RUN.store; field = :speed,
-        every = 2
+        "unused.gif", RUN.store; field = :speed, duration = 2.0, nframes = 5,
+    )
+    @test_throws ArgumentError export_animation(
+        "unused.gif", RUN.store; field = :speed, sim_per_second = 1.0,
+    )
+    @test_throws ArgumentError export_animation(
+        "unused.gif", RUN.store; field = :speed, frames = :everything,
     )
     @test_throws ArgumentError export_animation(
         "unused.gif", RUN.store; field = :speed, arrangement = :diagonal,
@@ -660,7 +671,7 @@ end
         path = joinpath(dir, "progress.gif")
         events = Tuple{Int, Int}[]
         @test export_animation(
-            path, RUN.store; field = :speed, size = (300, 200), framerate = 4,
+            path, RUN.store; field = :speed, size = (300, 200), fps = 4, nframes = length(FRAMES),
             progress = (index, total) -> push!(events, (index, total)),
             cancel = () -> false,
         ) == path
@@ -674,7 +685,7 @@ end
         requested = Ref(false)
         @test isnothing(
             export_animation(
-                path, RUN.store; field = :speed, size = (300, 200), framerate = 4,
+                path, RUN.store; field = :speed, size = (300, 200), fps = 4, nframes = length(FRAMES),
                 progress = (index, total) -> begin
                     push!(events, (index, total))
                     requested[] = true
@@ -689,7 +700,7 @@ end
         requested[] = false
         @test isnothing(
             export_animation(
-                new_path, RUN.store; field = :speed, size = (300, 200), framerate = 4,
+                new_path, RUN.store; field = :speed, size = (300, 200), fps = 4, nframes = length(FRAMES),
                 progress = (index, total) -> (requested[] = true),
                 cancel = () -> requested[],
             )
@@ -701,7 +712,7 @@ end
         checks = Ref(0)
         @test isnothing(
             export_animation(
-                path, RUN.store; field = :speed, size = (300, 200), framerate = 4,
+                path, RUN.store; field = :speed, size = (300, 200), fps = 4, nframes = length(FRAMES),
                 cancel = () -> (checks[] += 1; checks[] > length(FRAMES) + 2),
             )
         )
@@ -754,7 +765,7 @@ committed(store) = let usage = store_usage(store)
     usage.frames + usage.thinned_previews
 end
 
-@testset "Live recordings encode the frame stream without slowing the run" begin
+@testset "Live recordings sample the frame stream linearly in simulation time" begin
     plain = thinned_run()
     elapsed_plain = @elapsed plain_result = simulate!(plain.flow, 0.1; observer = plain.recorder)
     mktempdir() do dir
@@ -766,7 +777,7 @@ end
             diagnostic_options = [
                 (; names = [:signed_pair], scale = :log, hidden = [(; name = :signed_pair, component = 2)]),
             ],
-            size = (400, 300), capacity = 1000
+            size = (400, 300), capacity = 1000, fps = 20, sim_per_second = 0.1,
         )
         @test isopen(recording) && !isfile(path)
         # Reading the store from another task, as a viewer scrubbing its
@@ -793,13 +804,17 @@ end
         @test last(diagnostic_history(live.flow, :kinetic_energy).values) ==
             last(diagnostic_history(plain.flow, :kinetic_energy).values)
         @test elapsed_live < 4 * elapsed_plain + 5
-        # Every committed frame was encoded, including the previews that the
-        # store thinned; one video frame per encoded frame.
+        # The stream kept frames that the store thinned, and output times are
+        # a uniform simulation-time grid with Δt = 0.1 / 20 = 0.005.
         @test store_usage(live.store).thinned_previews > 0
-        @test recording.dropped == 0 && recording.skipped == 0
-        @test recording.encoded == committed(live.store)
+        @test recording.dropped == 0
+        @test recording.encoded == length(recording.ids) == length(recording.times)
+        @test issorted(recording.ids)
+        @test issorted(recording.times)
+        @test first(recording.times) ≈ 0.0 && last(recording.times) ≈ 0.1
+        @test abs(recording.encoded - 21) <= 1
         configured_frames = video_frames(path, gif_size(path))
-        @test length(configured_frames) == recording.encoded
+        @test !isempty(configured_frames)
         @test reads[] > 0
 
         baseline = thinned_run()
@@ -811,21 +826,49 @@ end
         simulate!(baseline.flow, 0.1; observer = baseline.recorder)
         close(baseline_recording)
         baseline_frames = video_frames(baseline_path, gif_size(baseline_path))
-        @test length(baseline_frames) == baseline_recording.encoded > 0
+        @test baseline_recording.encoded > 0 && !isempty(baseline_frames)
         @test last(baseline_frames) != last(configured_frames)
 
-        # A small queue drops frames instead of waiting, and `every` thins
-        # the stream; all frames are accounted for.
+        # A dense stream skips stored frames instead of encoding each one.
+        dense = thinned_run()
+        dense_path = joinpath(dir, "live-dense.gif")
+        dense_recording = export_animation(
+            dense_path, dense.recorder; field = :speed, source = :live,
+            capacity = 1000, fps = 10, sim_per_second = 0.2, # Δt = 0.02
+        )
+        simulate!(dense.flow, 0.1; observer = dense.recorder)
+        close(dense_recording)
+        @test dense_recording.encoded < committed(dense.store)
+        @test issorted(dense_recording.ids)
+        @test !isempty(video_frames(dense_path, gif_size(dense_path)))
+
+        # A sparse stream repeats the last frame for output times in between.
+        sparse = thinned_run(preview = EveryNSteps(5))
+        sparse_path = joinpath(dir, "live-sparse.gif")
+        sparse_recording = export_animation(
+            sparse_path, sparse.recorder; field = :speed, source = :live,
+            capacity = 1000, fps = 20, sim_per_second = 0.02, # Δt = 0.001
+        )
+        simulate!(sparse.flow, 0.1; observer = sparse.recorder)
+        close(sparse_recording)
+        @test sparse_recording.encoded > length(unique(sparse_recording.ids))
+        @test issorted(sparse_recording.ids) && issorted(sparse_recording.times)
+
+        # A small queue drops frames instead of waiting.
         dropping = thinned_run()
-        recording = export_animation(
+        dropping_recording = export_animation(
             joinpath(dir, "drop.mp4"), dropping.recorder;
-            field = :speed, source = :live, capacity = 1, every = 2
+            field = :speed, source = :live, capacity = 1,
         )
         simulate!(dropping.flow, 0.1; observer = dropping.recorder)
-        close(recording)
-        @test recording.encoded + recording.dropped + recording.skipped ==
-            committed(dropping.store)
-        @test recording.encoded >= 1 && recording.skipped >= recording.encoded - 1
+        close(dropping_recording)
+        @test dropping_recording.encoded >= 1
+        # Every output frame is accounted for once, and the accounting agrees
+        # with the video that was written.
+        @test dropping_recording.encoded ==
+            length(dropping_recording.ids) == length(dropping_recording.times)
+        @test issorted(dropping_recording.times)
+        @test last(dropping_recording.times) <= last(step_log(dropping.store).time) + 1.0e-12
     end
     @test_throws ArgumentError export_animation(
         "unused.gif", RUN.store; field = :speed,
@@ -836,12 +879,20 @@ end
         source = :live, window = (0, 1)
     )
     @test_throws ArgumentError export_animation(
-        "unused.png", RUN.recorder; field = :speed,
-        source = :live
+        "unused.gif", RUN.recorder; field = :speed, source = :live, duration = 2.0,
     )
     @test_throws ArgumentError export_animation(
-        "unused.gif", RUN.recorder; field = :speed,
-        source = :live, every = 0
+        "unused.gif", RUN.recorder; field = :speed, source = :live, nframes = 5,
+    )
+    @test_throws ArgumentError export_animation(
+        "unused.gif", RUN.recorder; field = :speed, source = :live, frames = :all,
+    )
+    @test_throws ArgumentError export_animation(
+        "unused.gif", RUN.recorder; field = :speed, source = :live, progress = (i, n) -> nothing,
+    )
+    @test_throws ArgumentError export_animation(
+        "unused.png", RUN.recorder; field = :speed,
+        source = :live
     )
     fresh = thinned_run()
     @test_throws ArgumentError export_animation(
@@ -851,6 +902,60 @@ end
         ],
     )
     @test isempty(fresh.store.subscriptions)
+end
+
+@testset "Live recording stops at its stop time" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), max_level = 1)
+    flow = FlowSimulation(
+        mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.01);
+        velocity = (x, y, t, axis) -> axis == 1 ? sinpi(2x) * cospi(2y) : -cospi(2x) * sinpi(2y),
+        dt = 0.002,
+    )
+    fields = VisualizationFieldRegistry()
+    register_field!(fields, :speed, flow.velocity, CentredMagnitude())
+    recorder = Recorder(
+        fields; preview = EveryStep(), max_capture_overhead = 1.0,
+        retention = Retention(preview = :all),
+    )
+    store = snapshot_store(recorder)
+    # Keep every step slow enough that the run is still advancing when the
+    # recording stops.
+    step_lock = ReentrantLock()
+    last_midpoint = Ref(-Inf)
+    function slow_force(x, y, midpoint, axis)
+        Base.@lock step_lock begin
+            if midpoint > last_midpoint[]
+                last_midpoint[] = midpoint
+                sleep(0.02)
+            end
+        end
+        return axis == 1 ? 0.1 * cospi(2y) : 0.0
+    end
+    mktempdir() do dir
+        path = joinpath(dir, "stop-time.gif")
+        simulation = Threads.@spawn simulate!(flow, 0.2; observer = recorder, force = slow_force)
+        recording = export_animation(
+            path, recorder; field = :speed, source = :live,
+            capacity = 1000, fps = 20, sim_per_second = 0.2,
+        )
+        timedwait(() -> length(frames(store)) >= 2, 120.0) === :ok ||
+            error("the run produced too few frames before the stop")
+        @test recording.stop_time === nothing
+        # Stop the recording while the run keeps stepping: the frozen stop time
+        # must bound the output, even though the encoder finalizes later.
+        close(recording)
+        stopped_at = recording.stop_time
+        @test stopped_at !== nothing
+        @test fetch(simulation).steps > 0
+        continued = last(step_log(store).time)
+        @test continued > stopped_at
+        @test recording.encoded == length(recording.ids) == length(recording.times)
+        @test issorted(recording.times)
+        @test maximum(recording.times) <= stopped_at + 1.0e-12
+        @test isfile(path) && filesize(path) > 0
+        @test !isempty(video_frames(path, gif_size(path)))
+    end
+    @test isempty(store.subscriptions)
 end
 
 png_size(path) = open(path) do io

@@ -17,7 +17,8 @@
     "test:live-amr": "node smoke/live-amr.mjs && npm run test:header-stability",
     "test:header-stability": "node smoke/header-stability.mjs",
     "test:continue": "node smoke/continue.mjs",
-    "bench:renderer": "node smoke/performance.mjs"
+    "bench:renderer": "node smoke/performance.mjs",
+    "test:time-linear": "node smoke/time-linear.mjs"
   },
   "dependencies": {
     "dockview": "8.8.3",

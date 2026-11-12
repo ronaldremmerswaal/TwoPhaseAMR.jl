@@ -39,6 +39,7 @@ export interface RecordingState {
   error?: string | null;
   progress?: number | null;
   url?: string | null;
+  times?: number[] | null;
 }
 
 export const idleRecording = (): RecordingState => ({
@@ -57,6 +58,19 @@ export type DataResponse = {
   [key: string]: unknown;
 };
 
+export interface RecordingSchedule {
+  frames: number;
+  distinct: number;
+  repeats: number;
+  sparse: boolean;
+  window: [number, number];
+  fps: number;
+  duration: number;
+  spacing: number;
+  sim_per_second: number;
+  first_frame: FrameId;
+}
+
 export type ServerMessage =
   | { type: 'hello'; protocol: number; runs: RunSummary[]; frames: FrameSummary[]; recording: RecordingState; theme?: 'light' | 'dark' | 'system' }
   | { type: 'state'; run_state: string; time: number | null; step: number | null; dt: number | null; store_bytes: number; recording: RecordingState;
@@ -66,6 +80,7 @@ export type ServerMessage =
   | { type: 'frames'; frames: FrameSummary[] }
   | DataResponse
   | { type: 'recording_preview'; request: number; url: string }
+  | ({ type: 'recording_schedule'; request: number } & RecordingSchedule)
   | { type: 'error'; message: string; request?: number | null };
 
 export type ControlAction = 'pause' | 'resume' | 'stop' | 'keyframe';
@@ -76,19 +91,61 @@ export interface DiagnosticExportOptions {
   scale: 'linear' | 'log';
   hidden: { name: string; component: number }[];
 }
+export interface StoredExportOptions {
+  source: 'stored';
+  field: string;
+  diagnostics: string[];
+  frames: 'keyframes' | 'all';
+  window?: [number, number];
+  camera: 'fit' | [number, number, number, number];
+  colorrange: 'global' | [number, number];
+  colormap?: string;
+  phase_rendering: 'cell' | 'plic';
+  size: [number, number];
+  fps: number;
+  duration: number;
+  theme: 'light' | 'dark';
+  arrangement: 'right' | 'below';
+  interface: boolean;
+  geometry: boolean;
+  blocks: boolean;
+  diagnostic_options?: DiagnosticExportOptions[];
+}
+
+export interface LiveExportOptions {
+  source: 'live';
+  field: string;
+  diagnostics: string[];
+  camera: 'fit' | [number, number, number, number];
+  colorrange?: [number, number];
+  colormap?: string;
+  phase_rendering: 'cell' | 'plic';
+  size: [number, number];
+  fps: number;
+  sim_per_second: number;
+  arrangement: 'right' | 'below';
+  interface: boolean;
+  geometry: boolean;
+  blocks: boolean;
+  diagnostic_options?: DiagnosticExportOptions[];
+}
+
+export type ScheduleCommand = {
+  type: 'recording';
+  action: 'schedule';
+  source: 'stored';
+  field: string;
+  diagnostics: string[];
+  frames: 'keyframes' | 'all';
+  window?: [number, number];
+  fps: number;
+  duration: number;
+};
+
 export type RecordingCommand =
-  | { type: 'recording'; action: 'start'; source: 'live' | 'stored'; path: string; field: string; diagnostics: string[];
-      camera?: 'fit' | [number, number, number, number]; colorrange?: [number, number]; colormap?: string;
-      phase_rendering?: 'cell' | 'plic'; size?: [number, number]; framerate?: number; every?: number; arrangement?: 'right' | 'below';
-      interface?: boolean; geometry?: boolean; blocks?: boolean; diagnostic_options?: DiagnosticExportOptions[] }
-  | { type: 'recording'; action: 'export'; source: 'stored'; path: string; field: string; diagnostics: string[];
-      frames: 'keyframes' | 'all'; window?: [number, number]; camera: 'fit' | [number, number, number, number];
-      colorrange: 'global' | [number, number]; colormap?: string; phase_rendering: 'cell' | 'plic';
-      size: [number, number]; framerate: number; every: number; theme: 'light' | 'dark'; arrangement: 'right' | 'below';
-      interface: boolean; geometry: boolean; blocks: boolean; diagnostic_options?: DiagnosticExportOptions[] }
+  | ({ type: 'recording'; action: 'export'; path: string } & StoredExportOptions)
+  | ({ type: 'recording'; action: 'start'; path: string } & LiveExportOptions)
+  | ScheduleCommand
   | { type: 'recording'; action: 'stop' | 'cancel' };
 
-export type PreviewCommand = Omit<Extract<RecordingCommand, { action: 'export' }>, 'action' | 'path'> & {
-  action: 'preview';
-  frame: FrameId;
-};
+export type PreviewCommand = ({ type: 'recording'; action: 'preview'; frame: FrameId } & StoredExportOptions);
