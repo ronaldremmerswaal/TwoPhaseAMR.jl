@@ -10,6 +10,21 @@ mutable struct SimulationStepSelection{T, M <: BlockTreeMesh}
     velocity::Union{Nothing, FaceVelocity{T, M}, NTuple{2, FaceVelocity{T, M}}}
     pressure::Union{Nothing, CellField{T, M}}
     solver::Union{Nothing, NavierStokesSystem{T, M}}
+
+    # `M` only occurs inside unions of field types, so the constructor Julia
+    # would generate implicitly leaves it unbound in the method signature (an
+    # "Unbound type parameters" error for Aqua on Julia 1.11). Declaring the
+    # inner constructor explicitly takes both parameters from the constructed
+    # type; `new` converts the arguments to the field types.
+    function SimulationStepSelection{T, M}(
+            time, step, last_dt, defect_dt, topology_generation,
+            velocity, pressure, solver
+        ) where {T, M <: BlockTreeMesh}
+        return new{T, M}(
+            time, step, last_dt, defect_dt, topology_generation,
+            velocity, pressure, solver
+        )
+    end
 end
 
 SimulationStepSelection(::Type{T}, ::Type{M}) where {T, M <: BlockTreeMesh} =

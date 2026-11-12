@@ -746,9 +746,23 @@ end
         end
     end
     @test isfinite(bounds[1]) && bounds[1] === bounds[2]
-    with_parallel_grain(1) do
-        TwoPhaseAMR._frozen_face_maximum(threaded, work, nothing)
-        @test (@allocated TwoPhaseAMR._frozen_face_maximum(threaded, work, nothing)) == 0
+    # A warm launch allocates nothing per face on either path. The threaded
+    # path additionally pays whatever the parallel runtime packs for the
+    # launch: Polyester boxes the closure argument on Julia 1.11 (16-32 B
+    # measured per launch) and not from 1.12 on, while a per-face allocation
+    # would cost tens of kilobytes here.
+    for grain in (SERIAL_GRAIN, 1)
+        with_parallel_grain(grain) do
+            TwoPhaseAMR._frozen_face_maximum(threaded, work, nothing)
+            allocated = @allocated TwoPhaseAMR._frozen_face_maximum(
+                threaded, work, nothing,
+            )
+            if grain == SERIAL_GRAIN || VERSION >= v"1.12"
+                @test allocated == 0
+            else
+                @test allocated <= 64
+            end
+        end
     end
     gas_failure = map(copy, threaded)
     gas_failure[2].interior[active[1]] = NaN
