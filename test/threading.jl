@@ -1,7 +1,7 @@
-using LinearAlgebra: diag
+using LinearAlgebra: diag, mul!
 using SparseArrays: sparse
 using TwoPhaseAMR: @_parallel, _parallel_for, _parallel_block_columns, _PARALLEL_GRAIN
-using SparseArrays: nnz, nonzeros, nzrange, rowvals, sprand
+using SparseArrays: SparseMatrixCSC, nnz, nonzeros, nzrange, rowvals, sprand, sprandn, spzeros
 
 # Run `f` with every loop above `grain` work units threaded.
 function with_parallel_grain(f, grain)
@@ -668,6 +668,93 @@ const BOTH_PATHS = (1, typemax(Int))
         end
         @test isa(failure, Tuple{ArgumentError, String})
         @test occursin("reduction scratch has 0 entries", message_of(failure))
+    end
+end
+
+# The two fields of `CMDGFMProjectionWorkspace` that `_cmdgfm_row_form!` uses.
+mutable struct RowFormWorkspace
+    matrix_transpose::SparseMatrixCSC{Float64, Int}
+    transpose_map::TwoPhaseAMR.SparseTransposeMap
+end
+
+@testset "CMDGFM row-form products are bitwise SparseArrays" begin
+    # Rectangular, empty and CMDGFM-shaped matrices (a five-point pressure
+    # block with entries over six decades, coupled to a jump block with
+    # large and small couplings): the threaded row product equals
+    # SparseArrays' serial `mul!` bit for bit, signed zeros included, on the
+    # serial and the threaded path of every supported Julia version.
+    function cmdgfm_shaped(np)
+        rows, columns, entries = Int[], Int[], Float64[]
+        for row in 1:np, (column, value) in (
+                    (row, 4.0 + rand()), (row - 1, -1.0), (row + 1, -1.0 + 1.0e-3randn()),
+                    (row - 37, -1.0), (row + 37, -0.999),
+                )
+            1 <= column <= np || continue
+            push!(rows, row), push!(columns, column), push!(entries, value * exp10(rand(-3:3)))
+        end
+        for jump in 1:(np ÷ 10)
+            row = np + jump
+            push!(rows, row), push!(columns, row), push!(entries, 3.0 + randn())
+            for cell in rand(1:np, 4)
+                push!(rows, row), push!(columns, cell), push!(entries, 1.0e5randn())
+                push!(rows, cell), push!(columns, row), push!(entries, 1.0e-5randn())
+            end
+        end
+        return sparse(rows, columns, entries, np + np ÷ 10, np + np ÷ 10)
+    end
+    rectangular = sprandn(3000, 1700, 0.002)
+    nonzeros(rectangular)[2:9:end] .= -0.0
+    matrices = [
+        spzeros(0, 0), spzeros(0, 4), spzeros(4, 0), sprandn(1, 1, 1.0), sprandn(7, 3, 0.4),
+        rectangular, sprandn(2500, 2500, 0.0), cmdgfm_shaped(4000),
+    ]
+    for matrix in matrices, grain in BOTH_PATHS
+        source = randn(size(matrix, 2)) .* exp10.(rand(-8:8, size(matrix, 2)))
+        source[1:7:end] .= -0.0
+        expected = mul!(fill(NaN, size(matrix, 1)), matrix, source)
+        row_form = TwoPhaseAMR._RowForm(copy(transpose(matrix)))
+        @test size(row_form) == size(matrix)
+        product = with_parallel_grain(() -> mul!(fill(NaN, size(matrix, 1)), row_form, source), grain)
+        @test isequal(product, expected)
+    end
+
+    # The workspace's row form follows a size change, a pattern change at
+    # the same size and new values on the recorded pattern; the asymmetry is
+    # the serial lookup maximum; the chunked increment update matches the
+    # serial update and its change flag.
+    for grain in BOTH_PATHS
+        workspace = RowFormWorkspace(spzeros(0, 0), TwoPhaseAMR.SparseTransposeMap())
+        same_pattern = cmdgfm_shaped(2000)
+        renewed = copy(same_pattern)
+        nonzeros(renewed) .= randn(nnz(renewed))
+        nonzeros(renewed)[1:11:end] .= -0.0
+        for matrix in (cmdgfm_shaped(3000), cmdgfm_shaped(2000), same_pattern, renewed)
+            form = with_parallel_grain(() -> TwoPhaseAMR._cmdgfm_row_form!(workspace, matrix), grain)
+            @test form.matrix_transpose === workspace.matrix_transpose
+            @test form.matrix_transpose == copy(transpose(matrix))
+            @test isequal(nonzeros(form.matrix_transpose), nonzeros(copy(transpose(matrix))))
+            reference = 0.0
+            for column in axes(matrix, 2), pointer in nzrange(matrix, column)
+                row = rowvals(matrix)[pointer]
+                reference = max(reference, abs(nonzeros(matrix)[pointer] - matrix[column, row]))
+            end
+            asymmetry = with_parallel_grain(grain) do
+                TwoPhaseAMR._cmdgfm_matrix_asymmetry(matrix, form.matrix_transpose, Float64[])
+            end
+            @test asymmetry === reference
+        end
+    end
+    for grain in BOTH_PATHS, unchanged in (false, true)
+        solution, columns, increment = randn(5000), rand(5000), randn(5000)
+        unchanged && fill!(increment, 0.0)
+        expected = solution .+ columns .* (0.25 .* increment)
+        flags = Bool[]
+        changed = with_parallel_grain(grain) do
+            TwoPhaseAMR._cmdgfm_apply_increment!(solution, columns, 0.25, increment, flags)
+        end
+        @test changed == !unchanged
+        @test isequal(solution, expected)
+        @test length(flags) == cld(5000, 1024)
     end
 end
 

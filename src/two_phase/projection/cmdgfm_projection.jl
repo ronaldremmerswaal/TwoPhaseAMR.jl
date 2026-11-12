@@ -110,6 +110,8 @@ end
 
 # If x = D_c*x̂ and A*x = b, Krylov sees (D_r*A*D_c)*x̂ = D_r*b.
 # The physical residual and solution remain available in their original units.
+# `matrix` is the system's `_RowForm`, so the product threads over its rows;
+# the diagonal scalings thread per entry. Both are bitwise the serial result.
 struct _ScaledProjectionOperator{T, A}
     matrix::A
     scaling::_ProjectionKrylovScaling{T}
@@ -121,9 +123,16 @@ Base.eltype(::_ScaledProjectionOperator{T}) where {T} = T
 
 function mul!(destination, op::_ScaledProjectionOperator, source)
     scaling = op.scaling
-    @. scaling.scratch = scaling.columns * source
-    mul!(destination, op.matrix, scaling.scratch)
-    @. destination = scaling.rows * destination
+    scratch, columns, rows = scaling.scratch, scaling.columns, scaling.rows
+    length(scratch) == length(source) == length(destination) ||
+        throw(DimensionMismatch("scaled projection vector sizes differ"))
+    @_parallel for index in 1:length(scratch)
+        @inbounds scratch[index] = columns[index] * source[index]
+    end
+    mul!(destination, op.matrix, scratch)
+    @_parallel for index in 1:length(destination)
+        @inbounds destination[index] = rows[index] * destination[index]
+    end
     return destination
 end
 
@@ -137,9 +146,16 @@ Base.eltype(::_ScaledProjectionPreconditioner{T}) where {T} = T
 
 function ldiv!(destination, pc::_ScaledProjectionPreconditioner, source)
     scaling = pc.scaling
-    @. scaling.scratch = source / scaling.rows
-    ldiv!(destination, pc.preconditioner, scaling.scratch)
-    @. destination = destination / scaling.columns
+    scratch, columns, rows = scaling.scratch, scaling.columns, scaling.rows
+    length(scratch) == length(source) == length(destination) ||
+        throw(DimensionMismatch("scaled projection vector sizes differ"))
+    @_parallel for index in 1:length(scratch)
+        @inbounds scratch[index] = source[index] / rows[index]
+    end
+    ldiv!(destination, pc.preconditioner, scratch)
+    @_parallel for index in 1:length(destination)
+        @inbounds destination[index] = destination[index] / columns[index]
+    end
     return destination
 end
 
@@ -224,6 +240,13 @@ mutable struct CMDGFMProjectionWorkspace{T, M <: BlockTreeMesh}
     initial_guess_used::Bool
     # Per-chunk flags of `_mark_inactive_phase_velocities!` (resized on use).
     inactive_failures::Vector{Int}
+    # Stored transpose of the assembled system (`_cmdgfm_row_form!`) with its
+    # pattern-checked value map, and the chunk maxima and chunk change flags
+    # of the threaded asymmetry and solution update.
+    matrix_transpose::SparseMatrixCSC{T, Int}
+    transpose_map::SparseTransposeMap
+    reduction_partials::Vector{T}
+    chunk_flags::Vector{Bool}
 end
 
 function CMDGFMProjectionWorkspace(
@@ -238,7 +261,7 @@ function CMDGFMProjectionWorkspace(
         FaceField{2}(mesh, T), spzeros(T, 0, 0), spzeros(T, 0, 0),
         T[], T[], Int[], Int[], CMDGFMJumpStencil{T}[], nothing,
         nothing, T[], _ProjectionKrylovScaling(T), CMDGFMPressureCache(T, typeof(mesh)), false,
-        Int[],
+        Int[], spzeros(T, 0, 0), SparseTransposeMap(), T[], Bool[],
     )
 end
 
@@ -1235,10 +1258,72 @@ function _cmdgfm_scaled_residual_norm(residual, assembled, dt)
     return value
 end
 
-function _cmdgfm_initial_solution!(work, assembled, previous_increment, dt, preconditioner)
+"""
+    _cmdgfm_row_form!(workspace, matrix)
+
+`_RowForm` of the assembled system `matrix` for the threaded products:
+refreshes the workspace's stored transpose (a threaded pattern check and value
+gather on the recorded pattern; a serial counting sort when the pattern or the
+size changed, which the moving jump set makes the common case).
+"""
+function _cmdgfm_row_form!(workspace, matrix::SparseMatrixCSC)
+    matrix_transpose = workspace.matrix_transpose
+    if size(matrix_transpose) != reverse(size(matrix))
+        # A size change is a pattern change: the map rebuilds the pattern.
+        column_pointers = fill!(resize!(matrix_transpose.colptr, size(matrix, 1) + 1), 1)
+        matrix_transpose = SparseMatrixCSC(
+            size(matrix, 2), size(matrix, 1), column_pointers,
+            resize!(rowvals(matrix_transpose), 0), resize!(nonzeros(matrix_transpose), 0),
+        )
+        workspace.matrix_transpose = matrix_transpose
+    end
+    _refresh_matrix_transpose!(matrix_transpose, workspace.transpose_map, matrix)
+    return _RowForm(matrix_transpose)
+end
+
+"""`residual = rhs - A * solution` with the threaded row-form product of `A`."""
+function _cmdgfm_residual!(residual, right_hand_side, row_form, solution)
+    mul!(residual, row_form, solution)
+    length(right_hand_side) == length(residual) ||
+        throw(DimensionMismatch("residual sizes differ"))
+    @_parallel for index in 1:length(residual)
+        @inbounds residual[index] = right_hand_side[index] - residual[index]
+    end
+    return residual
+end
+
+"""Add the rescaled Krylov `increment` to `solution` and return whether any
+entry changed: the serial update, threaded in fixed chunks with one change
+flag each (`flags`, grown to the chunk count)."""
+function _cmdgfm_apply_increment!(solution, columns, rhs_scale, increment, flags)
+    number_of_unknowns = length(solution)
+    length(columns) == length(increment) == number_of_unknowns ||
+        throw(DimensionMismatch("increment sizes differ"))
+    chunks = _reduction_chunks(number_of_unknowns)
+    length(flags) < chunks && resize!(flags, chunks)
+    @_parallel work = _REDUCTION_CHUNK for chunk in 1:chunks
+        changed = false
+        for index in _reduction_range(chunk, number_of_unknowns)
+            previous = @inbounds solution[index]
+            updated = previous + @inbounds(columns[index]) * (rhs_scale * @inbounds(increment[index]))
+            @inbounds solution[index] = updated
+            changed |= updated != previous
+        end
+        @inbounds flags[chunk] = changed
+    end
+    for chunk in 1:chunks
+        @inbounds flags[chunk] && return true
+    end
+    return false
+end
+
+function _cmdgfm_initial_solution!(
+        work, assembled, previous_increment, dt, preconditioner,
+        row_form = _cmdgfm_row_form!(work, assembled.matrix),
+    )
     # Guesses are increments, not the input physical pressure. The zero
     # solution is always available as the robust fallback.
-    rhs, matrix = assembled.right_hand_side, assembled.matrix
+    rhs = assembled.right_hand_side
     solution, residual = work.solution, work.correction_rhs
     candidate = work.pressure_cache.initial_guess
     resize!(candidate, length(rhs))
@@ -1283,8 +1368,7 @@ function _cmdgfm_initial_solution!(work, assembled, previous_increment, dt, prec
             )
         end
         all(isfinite, candidate) || continue
-        mul!(residual, matrix, candidate)
-        residual .= rhs .- residual
+        _cmdgfm_residual!(residual, rhs, row_form, candidate)
         defect = maximum(_cmdgfm_residual_defects(residual, assembled, dt))
         l2 = _cmdgfm_scaled_residual_norm(residual, assembled, dt)
         # Require improvement in both the dimensionless L2 residual and the
@@ -1296,8 +1380,7 @@ function _cmdgfm_initial_solution!(work, assembled, previous_increment, dt, prec
             used = true
         end
     end
-    mul!(residual, matrix, solution)
-    residual .= rhs .- residual
+    _cmdgfm_residual!(residual, rhs, row_form, solution)
     work.initial_guess_used = used
     return used
 end
@@ -1471,7 +1554,10 @@ function _project_cmdgfm_assembled!(
     right_hand_side = assembled.right_hand_side
     previous_increment = _cmdgfm_same_topology(workspace.increment_keys, interface.mesh) ?
         workspace.pressure_increment : nothing
-    asymmetry = _cmdgfm_matrix_asymmetry(matrix)
+    row_form = _cmdgfm_row_form!(workspace, matrix)
+    asymmetry = _cmdgfm_matrix_asymmetry(
+        matrix, row_form.matrix_transpose, workspace.reduction_partials,
+    )
     initial_residual = norm(right_hand_side)
     solution = workspace.solution
     resize!(solution, length(right_hand_side))
@@ -1490,9 +1576,9 @@ function _project_cmdgfm_assembled!(
         resize!(correction_rhs, length(right_hand_side))
         copyto!(correction_rhs, right_hand_side)
         warm_start && _cmdgfm_initial_solution!(
-            workspace, assembled, previous_increment, dt, preconditioner
+            workspace, assembled, previous_increment, dt, preconditioner, row_form,
         )
-        scaled_matrix = _ScaledProjectionOperator(matrix, scaling)
+        scaled_matrix = _ScaledProjectionOperator(row_form, scaling)
         scaled_preconditioner = if isnothing(preconditioner)
             nothing
         elseif solver.preconditioner === :block
@@ -1512,7 +1598,10 @@ function _project_cmdgfm_assembled!(
                 _cmdgfm_anchor_residual_defect(workspace, assembled, dt),
             )
             (!isfinite(defect) || defect <= T(tolerance)) && break
-            @. scaling.rhs = scaling.rows * correction_rhs
+            scaled_rhs, scaling_rows = scaling.rhs, scaling.rows
+            @_parallel for index in 1:length(scaled_rhs)
+                @inbounds scaled_rhs[index] = scaling_rows[index] * correction_rhs[index]
+            end
             rhs_norm = norm(scaling.rhs)
             (!isfinite(rhs_norm) || iszero(rhs_norm)) && break
             requested = min(T(tolerance), T(tolerance) / max(defect, eps(T)))
@@ -1557,15 +1646,10 @@ function _project_cmdgfm_assembled!(
                 iterations += attempt_iterations
             end
             (!all(isfinite, increment) || iszero(attempt_iterations)) && break
-            changed = false
-            for index in eachindex(solution)
-                previous = solution[index]
-                solution[index] = previous + scaling.columns[index] * (rhs_scale * increment[index])
-                changed |= solution[index] != previous
-            end
-            changed || break
-            mul!(correction_rhs, matrix, solution)
-            correction_rhs .= right_hand_side .- correction_rhs
+            _cmdgfm_apply_increment!(
+                solution, scaling.columns, rhs_scale, increment, workspace.chunk_flags,
+            ) || break
+            _cmdgfm_residual!(correction_rhs, right_hand_side, row_form, solution)
         end
     end
     # `correction_rhs` is the true residual rhs - A*x after the last Krylov
