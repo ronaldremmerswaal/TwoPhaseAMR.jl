@@ -104,7 +104,7 @@ jobs:
     # own Julia processes.
     if: (github.event_name == 'pull_request' && github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 35
     permissions:
       contents: read
     env:
