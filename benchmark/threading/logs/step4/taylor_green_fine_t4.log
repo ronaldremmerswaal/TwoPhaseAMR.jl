@@ -1,0 +1,96 @@
+ 02:51:46 up 19:44,  1 user,  load average: 3.30, 3.17, 3.01
+4605051d Thread the per-solve and per-iteration solver loops deterministically (4E.4 step 4)
+case=taylor_green_fine threads=4 cells=65536->65536 blocks=256->256 dt=5.5227e-03 steps=20 regrid_steps=0 median_ms=37.588 mean_ms=42.823 min_ms=34.784 steady_mean_ms=42.823 regrid_mean_ms=NaN bytes_per_step=118194 checksum=0cfa563e831b0dd9
+step_ms=37.54,48.09,135.67,40.21,38.61,36.19,36.27,40.75,40.1,35.8,39.09,37.77,35.41,36.54,34.78,35.12,36.68,35.47,38.73,37.64
+regular steps: main-thread samples=2347 steps=40 serial=35.4% batch=64.6%
+regular steps serial self by function (innermost package frame), % of main-thread samples:
+    6.6%  _run_krylov! (elliptic_solver.jl)
+    4.4%  copyto! (cell_advection.jl)
+    4.1%  _true_residual! (elliptic_solver.jl)
+    2.9%  _apply_staggered_diffusion! (staggered_diffusion.jl)
+    2.4%  _roundoff_residual_floor! (cycles.jl)
+    2.3%  _add! (variables.jl)
+    1.7%  _run_krylov_reliably! (elliptic_solver.jl)
+    1.4%  _apply_vcycle_preconditioner! (cycles.jl)
+    1.2%  _refresh_elliptic_components! (elliptic_solver.jl)
+    1.1%  _integrated_residual_norms (cycles.jl)
+    1.0%  weighted_gradient! (elliptic.jl)
+    1.0%  divergence! (cell_advection.jl)
+    0.6%  ldiv! (implicit_diffusion.jl)
+    0.6%  #305 (implicit_diffusion.jl)
+    0.4%  _chunked_slot_sums! (threading.jl)
+    0.3%  #advect!#165 (staggered_update.jl)
+    0.3%  _copy_to_field! (elliptic.jl)
+    0.3%  _coarse_solve! (cycles.jl)
+    0.3%  _convection! (staggered_fluxes.jl)
+    0.2%  #_refresh_multigrid_level!#252 (geometric_preconditioner.jl)
+    0.2%  _set! (variables.jl)
+    0.2%  _copy_velocity! (stages.jl)
+    0.2%  _copy_from_field! (elliptic.jl)
+    0.2%  #implicit_midpoint_diffusion!#310 (implicit_diffusion.jl)
+    0.2%  _vcycle! (cycles.jl)
+    0.1%  _staggered_has_shift_pattern (implicit_diffusion.jl)
+    0.1%  macro expansion (hierarchy.jl)
+    0.1%  #_project_prepared!#292 (projection.jl)
+    0.1%  #307 (implicit_diffusion.jl)
+    0.1%  #283 (elliptic_solver.jl)
+    0.1%  #stable_timestep#171 (staggered_update.jl)
+    0.1%  #_refresh_staggered_component!#294 (implicit_diffusion.jl)
+    0.1%  #step!#816 (stepping.jl)
+    0.1%  _refresh_component_slots! (elliptic_solver.jl)
+    0.1%  _refactorize_coarse! (implicit_diffusion.jl)
+    0.0%  #_diffusion_substep!#813 (stepping.jl)
+    0.0%  _restrict! (hierarchy.jl)
+    0.0%  #_jacobi_weight!#215 (hierarchy.jl)
+    0.0%  _check_transport_timestep (stepping.jl)
+    0.0%  #_timestep_bound#814 (stepping.jl)
+    0.0%  stable_timestep (staggered_update.jl)
+    0.0%  mul! (elliptic.jl)
+    0.0%  _strong_maximum (stats.jl)
+    0.0%  _prolongate! (hierarchy.jl)
+regular steps serial inclusive (package functions), % of main-thread samples:
+   35.4%  _simulate!
+   35.4%  #step!#816
+   35.4%  simulate!
+   35.4%  #simulate!#845
+   35.4%  #_simulate!#850
+   35.4%  step!
+   35.4%  #step!#844
+   21.7%  solve!
+   21.7%  _solve_krylov_with_stats!
+   21.7%  #_solve_krylov_with_stats!#279
+   20.0%  #_diffusion_substep!#813
+   20.0%  _diffusion_substep!
+   19.9%  #implicit_midpoint_diffusion!#310
+   19.9%  implicit_midpoint_diffusion!
+   16.3%  _solve_staggered_component!
+   16.3%  #solve!#309
+   16.3%  #_solve_staggered_component!#302
+   11.4%  _run_krylov_reliably!
+    9.7%  _run_krylov!
+    8.5%  #_project_prepared!#292
+    8.5%  _project_prepared!
+    5.5%  #solve!#280
+    5.4%  _transport_substep!
+    5.0%  advect!
+    5.0%  #advect!#165
+    4.4%  copyto!
+    4.1%  _true_residual!
+    3.3%  divergence!
+    3.0%  _apply_vcycle_preconditioner!
+    3.0%  ldiv!
+    2.9%  _apply_staggered_diffusion!
+    2.9%  diffusion!
+    2.9%  #diffusion!#189
+    2.4%  _roundoff_residual_floor!
+    2.3%  _add!
+    1.6%  _vcycle!
+    1.6%  #283
+    1.3%  _refresh_elliptic_components!
+    1.1%  _integrated_residual_norms
+    1.0%  weighted_gradient!
+    0.9%  _coarse_solve!
+    0.6%  _update_staggered_elliptic!
+    0.6%  #305
+    0.5%  _copy_to_field!
+    0.5%  _pressure_predictor!

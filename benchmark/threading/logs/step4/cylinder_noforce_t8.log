@@ -1,0 +1,105 @@
+ 03:00:43 up 19:53,  1 user,  load average: 2.93, 3.09, 3.06
+4605051d Thread the per-solve and per-iteration solver loops deterministically (4E.4 step 4)
+case=cylinder_noforce threads=8 cells=2944->2944 blocks=184->184 dt=6.4804e-04 steps=100 regrid_steps=0 median_ms=1.757 mean_ms=1.836 min_ms=1.657 steady_mean_ms=1.836 regrid_mean_ms=NaN bytes_per_step=120348 checksum=9165022ca795d438
+step_ms=2.3,2.07,3.29,1.75,1.71,1.82,1.79,2.0,3.03,1.85,1.84,1.86,2.04,1.86,1.85,1.84,1.87,2.06,1.89,1.9,3.03,1.72,2.03,1.72,1.8,1.7,1.77,1.89,1.81,1.69,1.8,1.67,1.99,1.73,1.81,1.66,1.8,1.89,1.81,1.67,1.77,1.7,1.97,1.73,1.81,1.66,1.79,1.92,1.79,1.66,1.67,1.66,1.97,1.69,1.74,1.75,1.8,1.88,1.71,1.69,1.68,1.71,1.87,1.66,1.7,1.69,1.69,1.87,1.68,1.69,1.68,1.68,1.9,1.67,1.68,1.69,1.66,1.87,1.67,1.66,1.68,1.68,1.85,1.69,1.67,1.67,1.66,1.85,1.67,1.69,1.67,1.7,3.23,1.77,1.77,1.76,1.74,1.96,1.75,1.75
+regular steps: main-thread samples=863 steps=400 serial=65.4% batch=34.6%
+regular steps serial self by function (innermost package frame), % of main-thread samples:
+   15.4%  _parallel_csr_row_mul! (threading.jl)
+    8.6%  macro expansion (hierarchy.jl)
+    6.4%  _coarse_solve! (cycles.jl)
+    5.6%  _run_krylov! (elliptic_solver.jl)
+    3.2%  _true_residual! (elliptic_solver.jl)
+    2.3%  _cell_centered_velocity! (sampling.jl)
+    2.3%  _roundoff_residual_floor! (cycles.jl)
+    2.0%  _apply_vcycle_preconditioner! (cycles.jl)
+    1.9%  _protect_fixed_band_coarsening! (phase_criteria.jl)
+    1.5%  _collect_leaf_blocks_in_window! (mesh.jl)
+    1.5%  _vorticity_from_centered! (sampling.jl)
+    1.4%  _add! (variables.jl)
+    1.4%  _run_krylov_reliably! (elliptic_solver.jl)
+    1.3%  macro expansion (cycles.jl)
+    1.2%  _integrated_residual_norms (cycles.jl)
+    0.8%  _vcycle! (cycles.jl)
+    0.7%  #307 (implicit_diffusion.jl)
+    0.7%  diagnostic_value (interface.jl)
+    0.6%  macro expansion (threading.jl)
+    0.5%  _collect_leaf_nodes_in_window! (mesh.jl)
+    0.5%  #_record_diagnostics!#694 (history.jl)
+    0.5%  _get (variables.jl)
+    0.3%  #_find_field_buffer##0 (workspace.jl)
+    0.2%  _lattice_box_intersects (mesh.jl)
+    0.2%  divergence! (operators.jl)
+    0.2%  _copy_to_field! (elliptic.jl)
+    0.2%  _collect_active_nodes! (workspace.jl)
+    0.2%  _compute_threads (threading.jl)
+    0.2%  _refresh_conditional_fraction! (interface_field.jl)
+    0.2%  #_protect_fixed_band_coarsening!##2 (phase_criteria.jl)
+    0.2%  [GC]
+    0.2%  #_project_prepared!#403 (operators.jl)
+    0.2%  #305 (implicit_diffusion.jl)
+    0.2%  _apply_refinement_actions! (workspace.jl)
+    0.2%  _fold_chunk_maxima (threading.jl)
+    0.2%  _tree_box_intersects (mesh.jl)
+    0.2%  _refactorize_coarse! (geometric_preconditioner.jl)
+    0.1%  _mesh_topology_changed (adapt.jl)
+    0.1%  _parallel_batch (threading.jl)
+    0.1%  #step!#816 (stepping.jl)
+    0.1%  _collect_leaves! (mesh.jl)
+    0.1%  mul! (elliptic.jl)
+    0.1%  nblocks (mesh.jl)
+    0.1%  #_protect_fixed_band_coarsening!##4 (phase_criteria.jl)
+    0.1%  _multigrid_mul! (cycles.jl)
+    0.1%  _cell_index (mesh.jl)
+    0.1%  #advect!#165 (staggered_update.jl)
+    0.1%  _parallel_block_columns (threading.jl)
+    0.1%  #_adapt_with_labels!#102 (adapt.jl)
+    0.1%  [outside] timer_delete
+    0.1%  #step!#844 (flow_simulation.jl)
+    0.1%  _wrapped_delta (gradient.jl)
+regular steps serial inclusive (package functions), % of main-thread samples:
+   65.2%  _simulate!
+   65.2%  simulate!
+   65.2%  #simulate!#845
+   65.2%  #_simulate!#850
+   65.0%  step!
+   65.0%  #step!#844
+   52.0%  #step!#816
+   50.6%  solve!
+   50.6%  _solve_krylov_with_stats!
+   50.6%  #_solve_krylov_with_stats!#279
+   42.6%  _run_krylov_reliably!
+   41.1%  _run_krylov!
+   35.5%  _apply_vcycle_preconditioner!
+   35.5%  ldiv!
+   33.7%  #_diffusion_substep!#813
+   33.7%  #implicit_midpoint_diffusion!#310
+   33.7%  implicit_midpoint_diffusion!
+   33.7%  _diffusion_substep!
+   33.5%  _solve_staggered_component!
+   33.5%  #solve!#309
+   33.5%  #_solve_staggered_component!#302
+   33.5%  _vcycle!
+   18.1%  _project_prepared!
+   18.1%  #_project_prepared!#403
+   17.1%  #solve!#280
+   15.5%  _multigrid_mul!
+   15.4%  _parallel_csr_row_mul!
+   13.7%  _smooth!
+   10.8%  macro expansion
+   10.4%  #adapt!#103
+   10.4%  adapt!
+    8.3%  #refinement_labels!#83
+    8.3%  refinement_labels!
+    8.2%  _adaptive_refinement_labels!
+    6.4%  _coarse_solve!
+    6.0%  _restrict!
+    4.2%  #refinement_labels!#437
+    4.2%  _refinement_labels_at_time!
+    4.1%  _vorticity_values!
+    4.1%  _vorticity_refinement_labels!
+    4.1%  #refinement_labels!#430
+    3.9%  _protect_fixed_band_coarsening!
+    3.4%  _true_residual!
+    3.1%  _prolongate!
+    2.7%  #_record_diagnostics!#694
+[ Info: Recorder: a native-precision frame needs 234.000 KiB; the memory budget of 2.000 GiB holds about 8962 frames.

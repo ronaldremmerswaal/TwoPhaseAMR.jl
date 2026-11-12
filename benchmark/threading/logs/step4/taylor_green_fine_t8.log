@@ -1,0 +1,96 @@
+ 02:52:02 up 19:44,  1 user,  load average: 3.24, 3.16, 3.01
+4605051d Thread the per-solve and per-iteration solver loops deterministically (4E.4 step 4)
+case=taylor_green_fine threads=8 cells=65536->65536 blocks=256->256 dt=5.5227e-03 steps=20 regrid_steps=0 median_ms=36.326 mean_ms=42.736 min_ms=33.340 steady_mean_ms=42.736 regrid_mean_ms=NaN bytes_per_step=118214 checksum=0cfa563e831b0dd9
+step_ms=34.3,42.15,135.4,37.01,37.53,34.18,33.65,35.2,47.78,48.64,42.72,41.64,35.26,33.34,35.18,34.42,37.55,34.9,38.22,35.64
+regular steps: main-thread samples=1411 steps=40 serial=46.0% batch=54.0%
+regular steps serial self by function (innermost package frame), % of main-thread samples:
+    9.3%  _run_krylov! (elliptic_solver.jl)
+    4.9%  _true_residual! (elliptic_solver.jl)
+    4.3%  copyto! (cell_advection.jl)
+    3.6%  _apply_staggered_diffusion! (staggered_diffusion.jl)
+    3.1%  _roundoff_residual_floor! (cycles.jl)
+    3.0%  _add! (variables.jl)
+    2.6%  _apply_vcycle_preconditioner! (cycles.jl)
+    2.5%  _run_krylov_reliably! (elliptic_solver.jl)
+    2.0%  weighted_gradient! (elliptic.jl)
+    0.9%  _integrated_residual_norms (cycles.jl)
+    0.9%  _copy_from_field! (elliptic.jl)
+    0.8%  divergence! (cell_advection.jl)
+    0.8%  _refresh_elliptic_components! (elliptic_solver.jl)
+    0.6%  #305 (implicit_diffusion.jl)
+    0.6%  _coarse_solve! (cycles.jl)
+    0.5%  _chunked_slot_sums! (threading.jl)
+    0.5%  ldiv! (implicit_diffusion.jl)
+    0.4%  _vcycle! (cycles.jl)
+    0.4%  _copy_to_field! (elliptic.jl)
+    0.4%  #307 (implicit_diffusion.jl)
+    0.4%  _convection! (staggered_fluxes.jl)
+    0.4%  _copy_velocity! (stages.jl)
+    0.4%  #_project_prepared!#292 (projection.jl)
+    0.3%  #_refresh_multigrid_level!#252 (geometric_preconditioner.jl)
+    0.3%  #advect!#165 (staggered_update.jl)
+    0.3%  _set! (variables.jl)
+    0.2%  #_solve_krylov_with_stats!#279 (elliptic_solver.jl)
+    0.2%  #283 (elliptic_solver.jl)
+    0.1%  #_refresh_staggered_component!#294 (implicit_diffusion.jl)
+    0.1%  macro expansion (hierarchy.jl)
+    0.1%  _strong_maximum (stats.jl)
+    0.1%  _get (variables.jl)
+    0.1%  _refresh_component_slots! (elliptic_solver.jl)
+    0.1%  _staggered_has_shift_pattern (implicit_diffusion.jl)
+    0.1%  #implicit_midpoint_diffusion!#310 (implicit_diffusion.jl)
+    0.1%  #_timestep_bound#814 (stepping.jl)
+    0.1%  stable_timestep (staggered_update.jl)
+    0.1%  #solve!#309 (implicit_diffusion.jl)
+    0.1%  _convection_schedule! (staggered_fluxes.jl)
+    0.1%  _compute_threads (threading.jl)
+    0.1%  #stable_timestep#171 (staggered_update.jl)
+    0.1%  _pressure_predictor! (stepping.jl)
+    0.1%  _observe_safely! (observer.jl)
+    0.1%  [outside] dgemm_kernel_ZEN
+regular steps serial inclusive (package functions), % of main-thread samples:
+   45.9%  _simulate!
+   45.9%  simulate!
+   45.9%  #simulate!#845
+   45.9%  #_simulate!#850
+   45.9%  step!
+   45.9%  #step!#844
+   45.9%  #step!#816
+   29.9%  solve!
+   29.8%  _solve_krylov_with_stats!
+   29.8%  #_solve_krylov_with_stats!#279
+   24.8%  #_diffusion_substep!#813
+   24.8%  #implicit_midpoint_diffusion!#310
+   24.8%  implicit_midpoint_diffusion!
+   24.8%  _diffusion_substep!
+   20.6%  #solve!#309
+   20.6%  _solve_staggered_component!
+   20.6%  #_solve_staggered_component!#302
+   16.6%  _run_krylov_reliably!
+   14.1%  _run_krylov!
+   12.6%  #_project_prepared!#292
+   12.6%  _project_prepared!
+    9.3%  #solve!#280
+    5.6%  _transport_substep!
+    5.0%  advect!
+    5.0%  #advect!#165
+    4.9%  _true_residual!
+    4.8%  _apply_vcycle_preconditioner!
+    4.8%  ldiv!
+    4.3%  copyto!
+    3.8%  divergence!
+    3.6%  _apply_staggered_diffusion!
+    3.6%  diffusion!
+    3.6%  #diffusion!#189
+    3.1%  _roundoff_residual_floor!
+    3.0%  _add!
+    2.2%  _vcycle!
+    2.1%  #283
+    2.0%  weighted_gradient!
+    1.6%  _pressure_predictor!
+    1.5%  _projection_weighted_gradient!
+    1.1%  _coarse_solve!
+    1.0%  _copy_from_field!
+    0.9%  _integrated_residual_norms
+    0.9%  _refresh_elliptic_components!
+    0.7%  _copy_to_field!

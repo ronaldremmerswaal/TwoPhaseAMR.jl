@@ -1,0 +1,112 @@
+ 02:55:04 up 19:47,  1 user,  load average: 3.29, 3.23, 3.06
+4605051d Thread the per-solve and per-iteration solver loops deterministically (4E.4 step 4)
+case=capillary_fine threads=2 cells=13056->13056 blocks=204->204 dt=3.4453e-05 steps=20 regrid_steps=0 median_ms=69.352 mean_ms=68.042 min_ms=58.215 steady_mean_ms=68.042 regrid_mean_ms=NaN bytes_per_step=3123404 checksum=625ef26512d9ebf9
+step_ms=74.37,71.92,71.98,70.84,60.95,74.63,67.77,68.58,59.52,68.91,69.8,71.37,58.76,68.81,70.07,58.22,69.93,68.61,62.28,73.53
+regular steps: main-thread samples=3818 steps=30 serial=43.0% batch=57.0%
+regular steps serial self by function (innermost package frame), % of main-thread samples:
+    7.5%  _mark_inactive_phase_velocities! (velocity_fields.jl)
+    5.6%  #_frozen_interface_stable_timestep#509 (transport_geometry.jl)
+    5.0%  #_refresh_multigrid_level!#252 (geometric_preconditioner.jl)
+    2.3%  _staggered_liquid_fraction (forces.jl)
+    1.9%  _projection_correct_phase_velocities! (common.jl)
+    1.6%  _phase_face_average! (phase_face_fields.jl)
+    1.3%  #_extend_phase_face_values!#494 (velocity_fields.jl)
+    1.0%  mul! (cmdgfm_projection.jl)
+    0.9%  _cmdgfm_scaled_residual_norm (cmdgfm_projection.jl)
+    0.9%  #_project_cmdgfm_assembled!#567 (cmdgfm_projection.jl)
+    0.8%  [GC]
+    0.8%  _refresh_tree_variable_diffusion_preconditioner! (variable_diffusion_preconditioner.jl)
+    0.7%  _get (variables.jl)
+    0.7%  _refactorize_coarse! (geometric_preconditioner.jl)
+    0.7%  copyto! (cell_advection.jl)
+    0.6%  _run_krylov! (elliptic_solver.jl)
+    0.6%  _refresh_elliptic_components! (elliptic_solver.jl)
+    0.5%  _cmdgfm_matrix_asymmetry (cmdgfm_cache.jl)
+    0.5%  _coarse_solve! (cycles.jl)
+    0.5%  ldiv! (cmdgfm_projection.jl)
+    0.4%  _roundoff_residual_floor! (variable_diffusion_operator.jl)
+    0.3%  #_jacobi_weight!#215 (hierarchy.jl)
+    0.3%  _impose_inactive_constraints! (elliptic.jl)
+    0.3%  _cmdgfm_anchor_residual_defect (cmdgfm_projection.jl)
+    0.3%  _cmdgfm_block_matrix! (cmdgfm_cache.jl)
+    0.3%  _pack_phase_faces! (phase_face_fields.jl)
+    0.3%  _apply_vcycle_preconditioner! (cycles.jl)
+    0.3%  _reconstruction_is_current (interface_field.jl)
+    0.3%  _refresh_coarse_cut_cell_activity! (geometric_preconditioner.jl)
+    0.2%  _cmdgfm_initial_solution! (cmdgfm_projection.jl)
+    0.2%  #_projection_face_data#521 (common.jl)
+    0.2%  _parallel_csr_row_mul! (threading.jl)
+    0.2%  _cmdgfm_cell_flux! (cmdgfm_cache.jl)
+    0.2%  _chunked_slot_sums! (threading.jl)
+    0.2%  _vcycle! (cycles.jl)
+    0.2%  weighted_gradient! (elliptic.jl)
+    0.2%  #incomplete_lu_preconditioner#266 (cycles.jl)
+    0.2%  _cmdgfm_vertex_candidates (cmdgfm_projection.jl)
+    0.2%  #_cmdgfm_pressure_cache!#528 (cmdgfm_cache.jl)
+    0.2%  ldiv! (cycles.jl)
+    0.2%  _projection_global_face_fractions! (common.jl)
+    0.2%  _wrapped_delta (gradient.jl)
+    0.1%  macro expansion (hierarchy.jl)
+    0.1%  _face_local_tangent_interval (geometry.jl)
+    0.1%  _refresh_multigrid_components! (hierarchy.jl)
+    0.1%  #_cmdgfm_jump_blocks#555 (cmdgfm_projection.jl)
+    0.1%  _augmented_multigrid_coarse_matrix (geometric_preconditioner.jl)
+    0.1%  _set! (variables.jl)
+    0.1%  _integrated_residual_norms (cycles.jl)
+    0.1%  _copy_from_field! (elliptic.jl)
+    0.1%  _cmdgfm_append_gradient_row! (cmdgfm_cache.jl)
+    0.1%  cellcenter (mesh.jl)
+    0.1%  _cmdgfm_check_shared_operator (cmdgfm_cache.jl)
+    0.1%  #_cmdgfm_jump_stencils#534 (cmdgfm_projection.jl)
+    0.1%  _freeze_phase_apertures! (interface_transport.jl)
+    0.1%  _frozen_subface_interval (interface_transport.jl)
+    0.1%  #_diffusion_substep!#827 (stepping.jl)
+    0.1%  _unpack_phase_faces! (phase_face_fields.jl)
+    0.1%  _check_phase_wy_velocity (workspace.jl)
+    0.1%  _add! (variables.jl)
+regular steps serial inclusive (package functions), % of main-thread samples:
+   43.0%  simulate!
+   43.0%  #simulate!#845
+   43.0%  _simulate!
+   43.0%  #_simulate!#850
+   43.0%  #step!#844
+   43.0%  step!
+   42.8%  #step!#829
+   12.7%  #project!#566
+   12.7%  _project_two_velocity!
+   12.7%  #_project_two_velocity!#683
+   12.7%  project!
+   12.3%  _transport_substep!
+   12.3%  #_transport_substep!#821
+   10.0%  _mark_inactive_phase_velocities!
+    9.2%  #_project_cmdgfm_assembled!#567
+    9.2%  _project_cmdgfm_assembled!
+    9.1%  #_diffusion_substep!#827
+    9.1%  _diffusion_substep!
+    7.6%  #implicit_midpoint_diffusion!#677
+    7.6%  implicit_midpoint_diffusion!
+    6.6%  #_timestep_bound#818
+    6.6%  _check_transport_timestep
+    6.6%  _two_phase_timestep_bound
+    6.6%  _timestep_bound
+    6.6%  #stable_timestep#505
+    6.6%  stable_timestep
+    6.4%  #_frozen_interface_stable_timestep#509
+    6.4%  _frozen_interface_stable_timestep
+    5.7%  _advect_transport_substep!
+    5.7%  #_advect_transport_substep!#507
+    5.7%  _advect_wy!
+    5.7%  #_advect_wy!#451
+    5.6%  _refresh_tree_variable_diffusion_preconditioner!
+    5.6%  _update_variable_diffusion_solver!
+    5.3%  _refresh_multigrid_level!
+    5.3%  #_refresh_multigrid_level!#252
+    4.0%  _enforce_phase_velocity_boundary!
+    3.6%  _two_velocity_pressure_operator!
+    3.6%  _refresh_pressure_substep!
+    2.6%  _refresh_geometric_multigrid!
+    2.6%  _staggered_liquid_fraction
+    2.1%  ldiv!
+    2.0%  _solve_variable_diffusion!
+    2.0%  #_solve_krylov_with_stats!#279
+    2.0%  _solve_krylov_with_stats!
