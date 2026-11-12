@@ -1,0 +1,42 @@
+δ/h = 1.6, dt = 2.500e-02
+  (a) after initialisation                       max|u_g−u_l| = 0.00e+00  at (x, y) = (NaN, +NaN), (y−η)/h = +NaN, u_l = +NaN
+  (b) old velocity after boundary enforcement    max|u_g−u_l| = 0.00e+00  at (x, y) = (NaN, +NaN), (y−η)/h = +NaN, u_l = +NaN
+  (c) after transport (state.convected)          max|u_g−u_l| = 4.28e-14  at (x, y) = (0.219, -0.0156), (y−η)/h = -0.56, u_l = -0.1514
+  (d) after boundary enforcement                 max|u_g−u_l| = 4.28e-14  at (x, y) = (0.219, -0.0156), (y−η)/h = -0.56, u_l = -0.1514
+  (e) after viscous step                         max|u_g−u_l| = 4.28e-14  at (x, y) = (0.219, -0.0156), (y−η)/h = -0.56, u_l = -0.1492
+  (f) after old pressure gradient                max|u_g−u_l| = 4.28e-14  at (x, y) = (0.219, -0.0156), (y−η)/h = -0.56, u_l = -0.1492
+  (g) after CMDGFM projection (end of step 1)    max|u_g−u_l| = 5.28e-01  at (x, y) = (0.250, +0.0156), (y−η)/h = +0.50, u_l = -0.3638
+δ/h = 3.2, dt = 1.250e-02
+  (a) after initialisation                       max|u_g−u_l| = 0.00e+00  at (x, y) = (NaN, +NaN), (y−η)/h = +NaN, u_l = +NaN
+  (b) old velocity after boundary enforcement    max|u_g−u_l| = 0.00e+00  at (x, y) = (NaN, +NaN), (y−η)/h = +NaN, u_l = +NaN
+  (c) after transport (state.convected)          max|u_g−u_l| = 1.29e-14  at (x, y) = (0.234, -0.0078), (y−η)/h = -0.56, u_l = -0.0775
+  (d) after boundary enforcement                 max|u_g−u_l| = 1.29e-14  at (x, y) = (0.234, -0.0078), (y−η)/h = -0.56, u_l = -0.0775
+  (e) after viscous step                         max|u_g−u_l| = 1.29e-14  at (x, y) = (0.234, -0.0078), (y−η)/h = -0.56, u_l = -0.0768
+  (f) after old pressure gradient                max|u_g−u_l| = 1.29e-14  at (x, y) = (0.234, -0.0078), (y−η)/h = -0.56, u_l = -0.0768
+  (g) after CMDGFM projection (end of step 1)    max|u_g−u_l| = 3.02e-01  at (x, y) = (0.250, +0.0078), (y−η)/h = +0.50, u_l = -0.2171
+δ/h = 6.4, dt = 6.250e-03
+  (a) after initialisation                       max|u_g−u_l| = 0.00e+00  at (x, y) = (NaN, +NaN), (y−η)/h = +NaN, u_l = +NaN
+  (b) old velocity after boundary enforcement    max|u_g−u_l| = 0.00e+00  at (x, y) = (NaN, +NaN), (y−η)/h = +NaN, u_l = +NaN
+  (c) after transport (state.convected)          max|u_g−u_l| = 3.04e-14  at (x, y) = (0.242, -0.0039), (y−η)/h = -0.56, u_l = -0.0390
+  (d) after boundary enforcement                 max|u_g−u_l| = 3.04e-14  at (x, y) = (0.242, -0.0039), (y−η)/h = -0.56, u_l = -0.0390
+  (e) after viscous step                         max|u_g−u_l| = 3.04e-14  at (x, y) = (0.242, -0.0039), (y−η)/h = -0.56, u_l = -0.0388
+  (f) after old pressure gradient                max|u_g−u_l| = 3.04e-14  at (x, y) = (0.242, -0.0039), (y−η)/h = -0.56, u_l = -0.0388
+  (g) after CMDGFM projection (end of step 1)    max|u_g−u_l| = 1.58e-01  at (x, y) = (0.250, +0.0039), (y−η)/h = +0.50, u_l = -0.1147
+
+Dependence on the time step (δ/h = 3.2):
+δ/h = 3.2, dt = 3.125e-03
+  (a) after initialisation                       max|u_g−u_l| = 0.00e+00  at (x, y) = (NaN, +NaN), (y−η)/h = +NaN, u_l = +NaN
+  (b) old velocity after boundary enforcement    max|u_g−u_l| = 0.00e+00  at (x, y) = (NaN, +NaN), (y−η)/h = +NaN, u_l = +NaN
+  (c) after transport (state.convected)          max|u_g−u_l| = 1.10e-12  at (x, y) = (0.234, -0.0078), (y−η)/h = -0.56, u_l = -0.0775
+  (d) after boundary enforcement                 max|u_g−u_l| = 1.10e-12  at (x, y) = (0.234, -0.0078), (y−η)/h = -0.56, u_l = -0.0775
+  (e) after viscous step                         max|u_g−u_l| = 1.10e-12  at (x, y) = (0.234, -0.0078), (y−η)/h = -0.56, u_l = -0.0773
+  (f) after old pressure gradient                max|u_g−u_l| = 1.10e-12  at (x, y) = (0.234, -0.0078), (y−η)/h = -0.56, u_l = -0.0773
+  (g) after CMDGFM projection (end of step 1)    max|u_g−u_l| = 3.03e-01  at (x, y) = (0.250, +0.0078), (y−η)/h = +0.50, u_l = -0.2185
+δ/h = 3.2, dt = 7.813e-04
+  (a) after initialisation                       max|u_g−u_l| = 0.00e+00  at (x, y) = (NaN, +NaN), (y−η)/h = +NaN, u_l = +NaN
+  (b) old velocity after boundary enforcement    max|u_g−u_l| = 0.00e+00  at (x, y) = (NaN, +NaN), (y−η)/h = +NaN, u_l = +NaN
+  (c) after transport (state.convected)          max|u_g−u_l| = 5.02e-12  at (x, y) = (0.234, -0.0078), (y−η)/h = -0.56, u_l = -0.0775
+  (d) after boundary enforcement                 max|u_g−u_l| = 5.02e-12  at (x, y) = (0.234, -0.0078), (y−η)/h = -0.56, u_l = -0.0775
+  (e) after viscous step                         max|u_g−u_l| = 5.02e-12  at (x, y) = (0.234, -0.0078), (y−η)/h = -0.56, u_l = -0.0775
+  (f) after old pressure gradient                max|u_g−u_l| = 5.02e-12  at (x, y) = (0.234, -0.0078), (y−η)/h = -0.56, u_l = -0.0775
+  (g) after CMDGFM projection (end of step 1)    max|u_g−u_l| = 3.04e-01  at (x, y) = (0.250, +0.0078), (y−η)/h = +0.50, u_l = -0.2188

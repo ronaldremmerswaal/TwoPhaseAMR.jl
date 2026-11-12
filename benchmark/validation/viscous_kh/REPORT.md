@@ -114,16 +114,34 @@ in 195 s for the two-velocity model at λ/h = 256).
 | 3.2 | 0.302 | 0.285 | 0.272 | 0.235 |
 | 6.4 | 0.158 | 0.152 | 0.140 | 0.123 |
 
-max|u_g − u_l| appears in one step and is O(h|U′|) (first order). Mechanism (code
-reading): a newly cut face is seeded by `_extend_phase_face_values!`
-(`src/two_phase/two_velocity/velocity_fields.jl:76-105`) from same-phase neighbours,
-i.e. from the row across the interface; the CTU partial-flux update for minority
-fractions (`src/two_phase/phase_face_transport.jl:193, 356-360`) divides by the small
-predicted phase fraction and keeps the minority velocity at the neighbour-row value;
-the viscous step adds one common increment to both phases (`two_velocity/stepping.jl:
-119-153`) and CMDGFM only removes normal jumps, so nothing relaxes u_g − u_l. In a
-resolved layer the model therefore does not reduce to the one-velocity model faster
-than O(h), which explains its poorer resolved-regime accuracy.
+max|u_g − u_l| appears in one step and is O(h|U′|) (first order).
+
+**Which sub-step creates it** (`jump_trace.jl` → `results/jump_trace.txt`; re-executes
+the body of the two-velocity `step!`, `src/two_phase/two_velocity/stepping.jl:285-363`,
+measuring after every sub-step). FlowSimulation performs *no* initial projection
+(`src/navier_stokes/flow_simulation.jl:230-238` only masks absent phases), so the
+"initial projection" hypothesis does not apply; the jump stays at round-off
+(≤ 5·10⁻¹²) through transport, boundary enforcement, the viscous step and the
+old-pressure-gradient update, and is created entirely by the **CMDGFM projection at the
+end of step 1** (`_project_two_velocity!`): 0.528 / 0.302 / 0.158 at δ/h = 1.6 / 3.2 /
+6.4, independent of the time step (δ/h = 3.2: 0.302, 0.303, 0.304 for dt, dt/4, dt/16)
+and identical for every bulk scheme and CTU threshold (§6). The maximum sits on the
+x-face at x = λ/4 — where the interface crosses y = 0 with its largest slope — half a
+cell above the interface (liquid minority), where the liquid velocity is moved by
+≈ −2|U′|h (e.g. +0.077 → −0.217). [INFERENCE from the code structure, not traced
+line by line:] the normal-velocity-jump rows of CMDGFM on cut x-faces of a tilted
+interface (`src/two_phase/projection/cmdgfm_projection.jl:692-710`, stencils 520-690)
+approximate the normal jump with phase velocities taken at different positions, so a
+continuous sheared field shows a discrete "normal jump" O(h|U′|)/dt·dt; the correction
+dt·ξ is shared between the phases with weights ∝ the *other* phase's mass
+(`src/two_phase/projection/common.jl:281-320`, ζ_l = −m_g, ζ_g = m_l), so it lands
+almost entirely on the minority phase and appears as a tangential jump. Afterwards the
+viscous step (common increment, `two_velocity/stepping.jl:119-153`) cannot relax it.
+In a resolved layer the model therefore does not reduce to the one-velocity model
+faster than O(h), which explains its poorer resolved-regime accuracy. (Newly cut faces
+are additionally seeded from the row across the interface by
+`_extend_phase_face_values!`, `velocity_fields.jl:76-105`, but this is not what creates
+the first-step jump.)
 
 ## 6. CTU threshold (exploratory)
 
@@ -131,8 +149,16 @@ than O(h), which explains its poorer resolved-regime accuracy.
 used whenever a dual face has a predicted phase fraction below `ctu_threshold`
 (default 0.5): thresholds {0.5, 0.1, 0.01, 10⁻¹²} × bulk schemes {Upwind,
 LaxWendroff, MC} on the reproducer (jump after 1 and 160 steps, observed order, bound
-and failure checks), and the r1_thin two-velocity KH runs at λ/h = 64, 128, 256 with MC
-at θ = 0.5 and 10⁻¹². The threshold is not reachable from the public options; the
+and failure checks). **Result:** the jump after step 1 is identical to four digits
+(0.5277 / 0.3019 / 0.1575 at δ/h = 1.6 / 3.2 / 6.4) for every scheme and threshold,
+including 10⁻¹² — transport order and the CTU path do not create it (consistent with
+§5: it comes from the projection); they only change its later evolution (jump after
+160 steps 0.26–0.29 / 0.18–0.24 / 0.12 for δ/h = 1.6 / 3.2 / 6.4). Velocities exceed
+the initial range |u| ≤ ½ by up to ≈ 22 % at δ/h = 1.6 (all schemes, also at the default
+threshold; pressure-driven, not necessarily a transport bound violation); volume
+fractions stayed in [0, 1]. The KH part runs the r1_thin two-velocity case at
+λ/h = 64, 128, 256 with MC at θ = 0.5 and 10⁻¹². The threshold is not reachable from
+the public options; the
 scripts rebuild the WY workspace with the public constructor
 `WYAdvectionWorkspace(interface; ctu_threshold)` and store it in the mutable flow
 workspace (`set_ctu_threshold!` in `kh_run.jl`). The study meshes have no hanging
