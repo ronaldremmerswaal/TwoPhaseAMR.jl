@@ -13,14 +13,13 @@ using Printf
 include(joinpath(@__DIR__, "kh_cases.jl"))
 
 const BASE_CELLS = 16
-const BAND = 1 / 8
 const RUNS = joinpath(@__DIR__, "results", "runs")
 const FIELDS = joinpath(@__DIR__, "results", "fields")
 
 function build_mesh(c::KHCase, n)
     L = round(Int, log2(n / BASE_CELLS))
     2^L * BASE_CELLS == n || throw(ArgumentError("n must be 16·2^L"))
-    target(d) = d <= BAND ? L : max(0, L - ceil(Int, log2(d / BAND)))
+    target(d) = d <= c.band ? L : max(0, L - ceil(Int, log2(d / c.band)))
     refine = (key, origin, extent) -> begin
         y0, y1 = origin[2], origin[2] + extent[2]
         d = y0 <= 0 <= y1 ? 0.0 : min(abs(y0), abs(y1))
@@ -203,11 +202,12 @@ end
 model_label(model) = model isa OneVelocityModel ? "one" : "two"
 
 """
-    run_case(c, model, n; save_field=false, amplitude=c.amplitude) -> NamedTuple
+    run_case(c, model, n; save_field=false, tag="") -> NamedTuple
 
 Simulate case `c` on the mesh with interface resolution λ/h = n and write
-results/runs/<case>_<model>_n<n>.csv (time series) and _profile.csv (x-averaged
-tangential velocity at the final time).
+results/runs/<case>_<model>_n<n><tag>.csv (time series) and _profile.csv
+(x-averaged tangential velocity at the final time); with `save_field` also the
+x-face velocities near the interface to results/fields/.
 """
 function run_case(c::KHCase, model, n; save_field = false, tag = "")
     mkpath(RUNS)
@@ -260,14 +260,32 @@ function run_case(c::KHCase, model, n; save_field = false, tag = "")
     return (; label, cells, steps = result.steps, wall)
 end
 
-# Command line: julia --project=. kh_run.jl <case[,case…]> <one|two|both> <n[,n…]> [field]
+"Copy of case `c` with some fields replaced."
+modify(c::KHCase; kw...) = KHCase(; (f => get(kw, f, getfield(c, f)) for f in fieldnames(KHCase))...)
+
+# Command line:
+#   julia --project=. kh_run.jl <case[,case…]> <one|two|both> <n[,n…]> [field] [uniform] [amp=<A0>]
+# `uniform`: finest level everywhere (checks the graded mesh); `amp=`: initial amplitude
+# (checks linearity); both add a tag to the output names.
 if abspath(PROGRAM_FILE) == @__FILE__
     names = split(ARGS[1], ',')
     models = ARGS[2] == "both" ? (OneVelocityModel(), TwoVelocityModel()) :
         ARGS[2] == "one" ? (OneVelocityModel(),) : (TwoVelocityModel(),)
     resolutions = parse.(Int, split(ARGS[3], ','))
-    save_field = length(ARGS) >= 4 && ARGS[4] == "field"
+    flags = ARGS[4:end]
+    save_field = "field" in flags
     for name in names, n in resolutions, model in models
-        run_case(CASES[name], model, n; save_field)
+        c = CASES[name]
+        tag = ""
+        if "uniform" in flags
+            c = modify(c; band = Inf)
+            tag *= "_uniform"
+        end
+        for f in flags
+            startswith(f, "amp=") || continue
+            c = modify(c; amplitude = parse(Float64, f[5:end]))
+            tag *= "_" * f
+        end
+        run_case(c, model, n; save_field, tag)
     end
 end

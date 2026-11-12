@@ -119,40 +119,45 @@ function profile_figure(name; ylim = 0.06)
     return fig
 end
 
-"2×2 panels of the perturbation tangential velocity u − ū(y) near the interface."
-function field_figure(name, n_unresolved, n_resolved; halfwidth = 0.08)
+"""
+2×2 panels (one/two-velocity × unresolved/resolved mesh) of the perturbation
+tangential velocity u − ū(y) in the uniform band |y| ≤ band around the interface; for
+the two-velocity model the velocity of the phase at the face centre is shown.
+"""
+function field_figure(name, n_unresolved, n_resolved; out = FIGURES)
     c = CASES[name]
-    fig = Figure(; size = (1100, 640), fontsize = 13)
+    fig = Figure(; size = (1150, 620), fontsize = 13)
     for (i, n) in enumerate((n_unresolved, n_resolved)), (j, model) in enumerate(("one", "two"))
         path = joinpath(FIELDS, "$(name)_$(model)_n$(n)_field.csv")
         isfile(path) || continue
-        f = read_table(path)
-        x, y = f["x"], f["y"]
-        u = haskey(f, "u") ? f["u"] : [isfinite(gl) && (yy > 0 || !isfinite(ll)) ? gl : ll for (yy, ll, gl) in zip(y, f["u_liquid"], f["u_gas"])]
-        ys = sort(unique(y))
-        mean = Dict(v => sum(u[y .== v]) / count(==(v), y) for v in ys)
-        up = [u[q] - mean[y[q]] for q in eachindex(u)]
-        sel = findall(v -> abs(v) <= halfwidth, y)
-        xs = sort(unique(x[sel]))
-        yv = sort(unique(y[sel]))
-        Z = fill(NaN, length(xs), length(yv))
-        ix = Dict(v => q for (q, v) in enumerate(xs))
-        iy = Dict(v => q for (q, v) in enumerate(yv))
-        for q in sel
-            Z[ix[x[q]], iy[y[q]]] = up[q]
-        end
-        lim = maximum(abs, filter(isfinite, Z))
         series = read_series(joinpath(RUNS, "$(name)_$(model)_n$(n).csv"))
         ηT = series.η[end]
-        ax = Axis(fig[i, 2j - 1]; xlabel = "x/λ", ylabel = "y/λ", aspect = DataAspect(),
-            title = @sprintf("%s, λ/h = %d (δ_l/h = %.2g)", LABELS[model], n, thickness(base_flow(c), 1, c.final_time) * n))
-        hm = heatmap!(ax, xs, yv, Z; colormap = :balance, colorrange = (-lim, lim))
+        interface(x) = real(ηT * cis(WAVENUMBER * x))
+        f = read_table(path)
+        sel = findall(v -> abs(v) <= c.band, f["y"])
+        x, y = f["x"][sel], f["y"][sel]
+        u = haskey(f, "u") ? f["u"][sel] :
+            [yy > interface(xx) ? (isfinite(g) ? g : l) : (isfinite(l) ? l : g)
+             for (xx, yy, l, g) in zip(x, y, f["u_liquid"][sel], f["u_gas"][sel])]
+        xs, ys = sort(unique(x)), sort(unique(y))
+        ix = Dict(v => q for (q, v) in enumerate(xs))
+        iy = Dict(v => q for (q, v) in enumerate(ys))
+        Z = fill(NaN, length(xs), length(ys))
+        for q in eachindex(u)
+            Z[ix[x[q]], iy[y[q]]] = u[q]
+        end
+        Z .-= sum(Z; dims = 1) ./ size(Z, 1)
+        lim = maximum(abs, Z)
+        ax = Axis(fig[i, 2j - 1]; xlabel = "x/λ", ylabel = "y/λ",
+            title = @sprintf("%s, λ/h = %d (δ_l(T)/h = %.2g)", LABELS[model], n, thickness(base_flow(c), 1, c.final_time) * n))
+        hm = heatmap!(ax, xs, ys, Z; colormap = :balance, colorrange = (-lim, lim))
         xx = range(0, 1; length = 200)
-        lines!(ax, xx, [real(ηT * cis(WAVENUMBER * v)) for v in xx]; color = :black, linewidth = 1.5)
+        lines!(ax, xx, interface.(xx); color = :black, linewidth = 1.5)
+        ylims!(ax, -c.band, c.band)
         Colorbar(fig[i, 2j], hm; label = "u − ū(y)")
     end
-    Label(fig[0, :], "$(CASE_TITLES[name]): perturbation tangential velocity at t = $(c.final_time), interface (black, true scale)")
-    save(joinpath(FIGURES, "fields_$(name).png"), fig; px_per_unit = 1)
+    Label(fig[0, :], "$(CASE_TITLES[name]): perturbation tangential velocity at t = $(c.final_time); black: interface (true scale, y axis stretched)")
+    save(joinpath(out, "fields_$(name).png"), fig; px_per_unit = 1)
     return fig
 end
 

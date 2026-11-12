@@ -68,13 +68,13 @@ end
 
 window(c::KHCase) = (c.final_time / 3, c.final_time)
 
-"Mean tangential velocity profile error (RMS over the rows with |y| ≤ 0.1) at T."
+"Mean tangential velocity profile error (RMS over the rows with |y| ≤ band) at T."
 function profile_error(c::KHCase, prof)
     base = base_flow(c)
     T = c.final_time
     y = prof["y"]
     u = haskey(prof, "u") ? prof["u"] : [yy < 0 ? ul : ug for (yy, ul, ug) in zip(y, prof["u_liquid"], prof["u_gas"])]
-    idx = findall(yy -> abs(yy) <= 0.1, y)
+    idx = findall(yy -> abs(yy) <= c.band, y)
     exact = [base_profile(base, yy < 0 ? -1 : 1, yy, T)[1] for yy in y[idx]]
     return sqrt(sum(abs2, u[idx] .- exact) / length(idx))
 end

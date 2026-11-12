@@ -20,6 +20,7 @@ Base.@kwdef struct KHCase
     amplitude::Float64 = 2.0e-4          # initial interface amplitude |η̂(0)|
     final_time::Float64
     height::Float64 = 0.5                # walls at y = ±H
+    band::Float64 = 1 / 32               # finest mesh level within |y| ≤ band (kh_run.jl)
     collocation::Tuple{Int, Float64} = (100, 2.0)   # reference (N per layer, stretch β)
 end
 
@@ -90,7 +91,7 @@ end
 # Collocation settings from convergence checks (results/reference_summary.txt).
 const CASES = Dict(
     "r1_thin" => KHCase(; name = "r1_thin", density = (1.0, 1.0), thickness = 1 / 128, reynolds = 1000.0, final_time = 1.5, collocation = (100, 2.0)),
-    "r1_thick" => KHCase(; name = "r1_thick", density = (1.0, 1.0), thickness = 1 / 32, reynolds = 100.0, final_time = 3.0, collocation = (80, 0.0)),
+    "r1_thick" => KHCase(; name = "r1_thick", density = (1.0, 1.0), thickness = 1 / 32, reynolds = 100.0, final_time = 3.0, band = 1 / 8, collocation = (80, 0.0)),
     "r10_thin" => KHCase(; name = "r10_thin", density = (1.0, 0.1), viscosity_ratio = 4.0, thickness = 1 / 128, reynolds = 1000.0, final_time = 2.5, collocation = (120, 3.0)),
-    "r10_thick" => KHCase(; name = "r10_thick", density = (1.0, 0.1), viscosity_ratio = 4.0, thickness = 1 / 32, reynolds = 100.0, final_time = 4.0, collocation = (80, 0.0)),
+    "r10_thick" => KHCase(; name = "r10_thick", density = (1.0, 0.1), viscosity_ratio = 4.0, thickness = 1 / 32, reynolds = 100.0, final_time = 4.0, band = 1 / 8, collocation = (80, 0.0)),
 )
