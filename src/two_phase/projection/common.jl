@@ -308,11 +308,14 @@ function _projection_gradient_core!(
 end
 
 function _projection_correct_phase_velocities!(velocity, gradients, dt, ::Type{T}) where {T}
+    scaled_dt = T(dt)
     for phase in 1:2
-        for index in eachindex(velocity[phase].interior)
-            isnan(velocity[phase].interior[index]) && continue
-            @inbounds velocity[phase].interior[index] -=
-                T(dt) * gradients[phase].interior[index]
+        phase_values = velocity[phase].interior
+        gradient = gradients[phase].interior
+        @_parallel for index in 1:length(phase_values)
+            value = @inbounds phase_values[index]
+            isnan(value) && continue
+            @inbounds phase_values[index] = value - scaled_dt * gradient[index]
         end
     end
     return velocity

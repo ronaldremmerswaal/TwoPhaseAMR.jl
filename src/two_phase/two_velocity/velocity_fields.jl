@@ -26,26 +26,32 @@ end
 Absence means exactly zero phase volume, not a density-dependent tolerance.
 Values on arbitrarily small but positive phase volumes remain physical. A
 missing value on such an active face is an error, not a request to use zero.
+The interior faces are marked in fixed chunks, which record their first
+offending face in `failures` (caller-owned scratch, one entry per chunk; the
+per-step callers pass their workspace's, the default allocates); the error
+names the first such face, as a serial pass would, after every interior face
+has been marked. Without a solid the chunks run threaded over the phase face
+arrays and the conditional-fraction block vectors, which are not plain data and
+are therefore boxed per launch; the cut-cell fraction reads the solid
+reconstruction and runs serially.
 """
 function _mark_inactive_phase_velocities!(
         velocity::TwoPhaseVelocity, interface::InterfaceField{T},
+        failures::Vector{Int} = Int[],
     ) where {T}
     geometry = interface.geometry
-    for (index, face) in pairs(interface.mesh.faces)
-        fraction = _staggered_liquid_fraction(interface, geometry, face)
-        open = isnothing(geometry) || geometry.face_dual_volumes[index] > zero(T)
-        for phase in 1:2
-            active = open && (phase == 1 ? fraction > zero(T) : fraction < one(T))
-            if active
-                isfinite(velocity[phase].interior[index]) || throw(
-                    ArgumentError(
-                        "non-finite active phase-$phase velocity on face $index"
-                    )
-                )
-            else
-                velocity[phase].interior[index] = T(NaN)
-            end
-        end
+    chunks = _reduction_chunks(length(interface.mesh.faces))
+    _reduction_partials!(failures, length(interface.mesh.faces))
+    _mark_inactive_interior!(failures, velocity[1].interior, velocity[2].interior, interface, geometry)
+    for chunk in 1:chunks
+        failure = @inbounds failures[chunk]
+        iszero(failure) && continue
+        phase = isodd(failure) ? 1 : 2
+        throw(
+            ArgumentError(
+                "non-finite active phase-$phase velocity on face $(cld(failure, 2))"
+            )
+        )
     end
     for (index, face) in pairs(interface.mesh.boundary_faces)
         fraction = _conditional_fraction(interface, face.cell)
@@ -66,6 +72,64 @@ function _mark_inactive_phase_velocities!(
     return velocity
 end
 
+# Full Cartesian faces: a threaded launch over the phase face arrays and the
+# conditional-fraction block vectors (boxed per launch, see `_parallel_for`).
+function _mark_inactive_interior!(failures, liquid, gas, interface, ::Nothing)
+    T = eltype(liquid)
+    faces = interface.mesh.faces
+    leaf_blocks = interface.mesh.blocks
+    fraction_blocks = interface.conditional_fraction.blocks
+    halo = interface.mesh.halo
+    number_of_faces = length(faces)
+    @_parallel work = _REDUCTION_CHUNK for chunk in 1:_reduction_chunks(number_of_faces)
+        failure = 0
+        for index in _reduction_range(chunk, number_of_faces)
+            fraction = _staggered_liquid_fraction(
+                leaf_blocks, fraction_blocks, halo, @inbounds(faces[index]), T,
+            )
+            failure = _mark_inactive_face!(liquid, gas, index, fraction, true, failure)
+        end
+        @inbounds failures[chunk] = failure
+    end
+    return failures
+end
+
+# Cut cells: the open-volume weighted fraction reads the solid's
+# reconstruction through its fields; a threaded launch would box them on every
+# call, so these chunks run serially.
+function _mark_inactive_interior!(failures, liquid, gas, interface, geometry::GeometryField)
+    faces = interface.mesh.faces
+    number_of_faces = length(faces)
+    for chunk in 1:_reduction_chunks(number_of_faces)
+        failure = 0
+        for index in _reduction_range(chunk, number_of_faces)
+            fraction = _staggered_liquid_fraction(interface, geometry, faces[index])
+            face_open = geometry.face_dual_volumes[index] > zero(eltype(liquid))
+            failure = _mark_inactive_face!(liquid, gas, index, fraction, face_open, failure)
+        end
+        failures[chunk] = failure
+    end
+    return failures
+end
+
+"""Mark the absent phases of interior face `index` with `NaN`; return
+`failure`, or `2index - 1` (liquid) / `2index` (gas) for the first active
+non-finite velocity when `failure` is still zero."""
+@inline function _mark_inactive_face!(liquid, gas, index, fraction, face_open, failure)
+    T = eltype(liquid)
+    if face_open && fraction > zero(T)
+        iszero(failure) && !isfinite(@inbounds liquid[index]) && (failure = 2index - 1)
+    else
+        @inbounds liquid[index] = T(NaN)
+    end
+    if face_open && fraction < one(T)
+        iszero(failure) && !isfinite(@inbounds gas[index]) && (failure = 2index)
+    else
+        @inbounds gas[index] = T(NaN)
+    end
+    return failure
+end
+
 """Two-layer, same-component extension in *working storage* only.
 
 The owned phase velocity remains NaN where absent. This finite extension
@@ -73,35 +137,41 @@ supplies missing interpolation/transport stencil entries, exclusively from
 valid neighbours. Beyond the stencil band zero is an algebraic placeholder,
 never an intrinsic velocity or a donor on a zero-volume phase.
 """
-function _extend_phase_face_values!(values, next, work; layers = 2, zero_missing = true)
-    any(isnan, values) || return values
-    T = eltype(values)
+function _extend_phase_face_values!(face_values, next, work; layers = 2, zero_missing = true)
+    any(isnan, face_values) || return face_values
+    T = eltype(face_values)
+    offsets = work.dual_offsets
+    dual_faces = work.dual_faces
+    schedule_faces = work.schedule.faces
     for _ in 1:layers
-        for output in eachindex(values)
-            if isfinite(values[output])
-                next[output] = values[output]
+        # Each output averages its finite neighbours of the previous layer in
+        # incidence order: owned outputs, the same sums at every thread count.
+        @_parallel for output in 1:length(face_values)
+            value = @inbounds face_values[output]
+            if isfinite(value)
+                @inbounds next[output] = value
                 continue
             end
             total = zero(T)
-            count = 0
-            for pointer in work.dual_offsets[output]:(work.dual_offsets[output + 1] - 1)
-                face = work.schedule.faces[work.dual_faces[pointer]]
+            neighbours = 0
+            for slot in @inbounds(offsets[output]):(@inbounds(offsets[output + 1]) - 1)
+                face = @inbounds schedule_faces[dual_faces[slot]]
                 neighbour = face.minus == output ? face.plus : face.minus
-                value = values[neighbour]
-                isfinite(value) || continue
-                total += value
-                count += 1
+                neighbour_value = @inbounds face_values[neighbour]
+                isfinite(neighbour_value) || continue
+                total += neighbour_value
+                neighbours += 1
             end
-            next[output] = iszero(count) ? T(NaN) : total / count
+            @inbounds next[output] = iszero(neighbours) ? T(NaN) : total / neighbours
         end
-        copyto!(values, next)
+        copyto!(face_values, next)
     end
     if zero_missing
-        for index in eachindex(values)
-            isnan(values[index]) && (values[index] = zero(T))
+        @_parallel for index in 1:length(face_values)
+            isnan(@inbounds face_values[index]) && (@inbounds face_values[index] = zero(T))
         end
     end
-    return values
+    return face_values
 end
 
 function _extend_phase_velocity_for_transfer!(

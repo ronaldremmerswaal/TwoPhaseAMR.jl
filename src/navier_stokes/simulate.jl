@@ -146,7 +146,10 @@ function _simulate!(
                         velocity, solver, current_time; preserve_open = true,
                     )
                 else
-                    _enforce_current_velocity_boundary!(velocity, solver, current_time)
+                    _enforce_current_velocity_boundary!(
+                        velocity, solver, current_time,
+                        workspace.two_phase.inactive_failures,
+                    )
                 end
                 bound = stable_timestep(velocity, solver, workspace; cfl)
                 selected_step = min(selected_step, bound)

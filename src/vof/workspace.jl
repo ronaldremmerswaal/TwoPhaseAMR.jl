@@ -42,6 +42,13 @@ mutable struct WYAdvectionWorkspace{T, M <: BlockTreeMesh, F}
     # entry is the column index of a cell whose conditional fraction left
     # `[0, open]` in the sweep being validated.
     const conditional_failure::Vector{Int32}
+    # Owned scratch of the threaded frozen-interface timestep bound, sized on
+    # use: per fixed face chunk, the velocity-validation bits (1 liquid,
+    # 2 gas) and the largest face rate; per block column, the largest cell
+    # rate.
+    const velocity_failure::Vector{Int}
+    const rate_partials::Vector{T}
+    const column_rates::Vector{T}
     const ctu_threshold::T
     const diagnostics::PhaseFluxDiagnostics{T}
 end
@@ -71,7 +78,8 @@ function WYAdvectionWorkspace(
         fill(false, isnothing(field.geometry) ? 0 : number_of_faces),
         offsets, faces, Int8.(-signs),
         [block.key for block in mesh.blocks],
-        zeros(Int32, nblocks(mesh) * mesh.block_size[2]), threshold,
+        zeros(Int32, nblocks(mesh) * mesh.block_size[2]), Int[], T[], T[],
+        threshold,
         PhaseFluxDiagnostics(T),
     )
 end
@@ -187,20 +195,6 @@ function _check_wy_workspace(velocity, work)
         throw(ArgumentError("velocity must be finite"))
     all(iszero, velocity.boundary) ||
         throw(ArgumentError("WY currently requires impermeable or periodic boundaries"))
-    return nothing
-end
-
-function _check_phase_wy_velocity(velocity, work, geometry::G, phase) where {G}
-    for (index, face) in pairs(work.mesh.faces)
-        _phase_face_is_active(work.interface, geometry, index, face, phase) || continue
-        isfinite(velocity.interior[index]) ||
-            throw(ArgumentError("active $phase velocity must be finite"))
-    end
-    for (index, face) in pairs(work.mesh.boundary_faces)
-        _phase_cell_is_active(work.interface, geometry, face.cell, phase) || continue
-        isfinite(velocity.boundary[index]) && iszero(velocity.boundary[index]) ||
-            throw(ArgumentError("WY requires zero active phase boundary velocity"))
-    end
     return nothing
 end
 
