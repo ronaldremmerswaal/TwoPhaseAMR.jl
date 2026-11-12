@@ -340,26 +340,29 @@ function ldiv!(
         preconditioner::CMDGFMReducedPressurePreconditioner{T},
         right_hand_side::AbstractVector{T},
     ) where {T}
-    fill!(preconditioner.full_right_hand_side, zero(T))
-    for local_index in eachindex(preconditioner.pressure_indices)
-        cell = @inbounds preconditioner.pressure_indices[local_index]
-        anchor = @inbounds preconditioner.pressure_anchors[local_index]
-        value = @inbounds right_hand_side[local_index]
-        @inbounds begin
-            preconditioner.full_right_hand_side[cell] += value
-            preconditioner.full_right_hand_side[anchor] -= value
-        end
+    full_right_hand_side = preconditioner.full_right_hand_side
+    full_solution = preconditioner.full_solution
+    pressure_indices = preconditioner.pressure_indices
+    pressure_anchors = preconditioner.pressure_anchors
+    length(right_hand_side) == length(destination) == length(pressure_indices) ||
+        throw(DimensionMismatch("reduced pressure vector sizes differ"))
+    fill!(full_right_hand_side, zero(T))
+    # Retained cells are distinct and never an anchor
+    # (`_projection_gauge_partition!`), so each owns its entry: the zero start
+    # plus its value, threaded. A component's anchor collects all its cells'
+    # values, subtracted serially in index order as before.
+    @_parallel for local_index in 1:length(pressure_indices)
+        @inbounds full_right_hand_side[pressure_indices[local_index]] =
+            zero(T) + right_hand_side[local_index]
     end
-    ldiv!(
-        preconditioner.full_solution, preconditioner.multigrid,
-        preconditioner.full_right_hand_side,
-    )
-    for local_index in eachindex(preconditioner.pressure_indices)
-        cell = @inbounds preconditioner.pressure_indices[local_index]
-        anchor = @inbounds preconditioner.pressure_anchors[local_index]
+    for local_index in eachindex(pressure_anchors)
+        @inbounds full_right_hand_side[pressure_anchors[local_index]] -= right_hand_side[local_index]
+    end
+    ldiv!(full_solution, preconditioner.multigrid, full_right_hand_side)
+    @_parallel for local_index in 1:length(pressure_indices)
         @inbounds destination[local_index] =
-            preconditioner.full_solution[cell] -
-            preconditioner.full_solution[anchor]
+            full_solution[pressure_indices[local_index]] -
+            full_solution[pressure_anchors[local_index]]
     end
     return destination
 end
