@@ -1013,7 +1013,9 @@ end
     function check_regrid_projection(flow, reference, step_size, tolerance; max_cycles)
         solver, workspace = reference.flow.system, reference.flow.workspace
         TV._rebuild_topology_dependent_state!(solver, workspace; dt = step_size)
-        TV._enforce_phase_velocity_boundary!(reference.flow.velocity, solver, reference.flow.time)
+        TV._enforce_phase_velocity_boundary!(
+            reference.flow.velocity, solver, reference.flow.time, Int[],
+        )
         TV._mark_inactive_phase_velocities!(reference.flow.velocity, reference.interface)
         state = TV._two_velocity_flow_workspace!(workspace.two_phase, solver.two_phase)
         work = state.projection_workspace

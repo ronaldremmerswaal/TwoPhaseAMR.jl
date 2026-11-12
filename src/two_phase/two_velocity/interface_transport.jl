@@ -154,12 +154,15 @@ endpoints when the subface sits at the far end of its interval.
         face, face_index, donor, liquid_carrier::Bool, geometry,
     ) where {T}
     full_lo, full_hi = _face_local_tangent_interval(field.mesh, donor, face)
-    full_width = T(full_hi - full_lo)
     open_aperture = isnothing(geometry) ? one(T) :
         @inbounds(geometry.aperture[face_index])
     phase_aperture = liquid_carrier ?
         @inbounds(work.liquid_aperture[face_index]) :
         @inbounds(work.gas_aperture[face_index])
+    return _frozen_subface_width(T(full_hi - full_lo), phase_aperture, open_aperture)
+end
+
+@inline function _frozen_subface_width(full_width::T, phase_aperture, open_aperture) where {T}
     return min(
         clamp(phase_aperture, zero(T), open_aperture) * full_width,
         clamp(open_aperture, zero(T), one(T)) * full_width,

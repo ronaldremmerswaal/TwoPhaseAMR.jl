@@ -12,15 +12,24 @@ function mixture_density(field::InterfaceField{T}, density::NTuple{2}) where {T}
     return _mixture_density!(result, field, density)
 end
 
+@inline _staggered_liquid_fraction(field::InterfaceField{T}, ::Nothing, face) where {T} =
+    _staggered_liquid_fraction(
+    field.mesh.blocks, field.conditional_fraction.blocks, field.mesh.halo, face, T,
+)
+
+"""Liquid fraction of a full staggered dual volume from plain arrays: the
+leaf blocks, the conditional-fraction block matrices and the halo width (the
+form threaded loops capture, see `_parallel_for`)."""
 @inline function _staggered_liquid_fraction(
-        field::InterfaceField{T}, ::Nothing, face,
+        leaf_blocks, fraction_blocks, halo, face, ::Type{T},
     ) where {T}
-    hm = field.mesh.blocks[face.minus.block].spacing[face.axis]
-    hp = field.mesh.blocks[face.plus.block].spacing[face.axis]
+    minus, plus = face.minus, face.plus
+    hm = @inbounds leaf_blocks[minus.block].spacing[face.axis]
+    hp = @inbounds leaf_blocks[plus.block].spacing[face.axis]
     return clamp(
         (
-            hm * _conditional_fraction(field, face.minus) +
-                hp * _conditional_fraction(field, face.plus)
+            hm * @inbounds(fraction_blocks[minus.block][minus.i + halo, minus.j + halo]) +
+                hp * @inbounds(fraction_blocks[plus.block][plus.i + halo, plus.j + halo])
         ) / (hm + hp),
         zero(T), one(T),
     )

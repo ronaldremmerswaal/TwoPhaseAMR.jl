@@ -136,7 +136,9 @@ function _project_regridded_two_velocity!(
     model = solver.two_phase
     state = _two_velocity_flow_workspace!(workspace.two_phase, model)
     state.projection_solver isa CMDGFMProjectionSolver && reconstruct!(model.interface)
-    _enforce_phase_velocity_boundary!(velocity, solver, time)
+    _enforce_phase_velocity_boundary!(
+        velocity, solver, time, workspace.two_phase.inactive_failures,
+    )
     # Preserve transferred physical pressure. CMDGFM needs zero scratch for an
     # absolute projection.
     correction_pressure = workspace.projection.divergence

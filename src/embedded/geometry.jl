@@ -136,13 +136,23 @@ function _cell_solid_line_fraction(
     )
 end
 
-function _face_local_tangent_interval(mesh, ref, face)
+_face_local_tangent_interval(mesh, ref, face) =
+    _face_local_tangent_interval(mesh.blocks, mesh.extent, mesh.periodic, ref, face)
+
+"""Tangential interval of `face` in the normalized coordinates of cell `ref`,
+from the leaf blocks and the domain extent and periodicity (the plain-data
+form threaded loops capture)."""
+@inline function _face_local_tangent_interval(leaf_blocks, extent, periodic, ref, face)
     tangent = 3 - face.axis
-    center = cellcenter(mesh, ref.block, ref.i, ref.j)
-    spacing = mesh.blocks[ref.block].spacing[tangent]
+    block = @inbounds leaf_blocks[ref.block]
+    center = (
+        block.origin[1] + (ref.i - 1 / 2) * block.spacing[1],
+        block.origin[2] + (ref.j - 1 / 2) * block.spacing[2],
+    )
+    spacing = block.spacing[tangent]
     lo = _wrapped_delta(
         face.center[tangent] - face.area / 2 - center[tangent],
-        mesh.extent[tangent], mesh.periodic[tangent],
+        extent[tangent], periodic[tangent],
     ) / spacing
     hi = lo + face.area / spacing
     return lo, hi

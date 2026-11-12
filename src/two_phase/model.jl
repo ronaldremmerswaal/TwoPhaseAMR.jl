@@ -45,14 +45,17 @@ mutable struct TwoPhaseFlowWorkspace{T, M, D, S, C, A, N, V}
     diffusion_cache::C
     forward::Bool
     two_velocity::Base.RefValue{Union{Nothing, V}}
+    # Per-chunk flags of `_mark_inactive_phase_velocities!` in the stepping
+    # stages (resized on use).
+    inactive_failures::Vector{Int}
 
     function TwoPhaseFlowWorkspace{T, M, D, S, C, A, N, V}(
             advection, momentum, acceleration, diffusion, diffusion_solver,
-            density, diffusion_cache, forward, two_velocity,
+            density, diffusion_cache, forward, two_velocity, inactive_failures,
         ) where {T, M, D, S, C, A, N, V}
         return new{T, M, D, S, C, A, N, V}(
             advection, momentum, acceleration, diffusion, diffusion_solver,
-            density, diffusion_cache, forward, two_velocity,
+            density, diffusion_cache, forward, two_velocity, inactive_failures,
         )
     end
 end
@@ -148,5 +151,6 @@ function TwoPhaseFlowWorkspace(
         advection, momentum, acceleration,
         diffusion, diffusion_solver, density, diffusion_cache, true,
         Ref{Union{Nothing, velocity_type}}(velocity_state),
+        isnothing(reuse_workspace) ? Int[] : reuse_workspace.inactive_failures,
     )
 end

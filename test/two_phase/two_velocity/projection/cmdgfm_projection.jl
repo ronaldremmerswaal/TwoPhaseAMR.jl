@@ -974,7 +974,7 @@ end
     # rejected both before a fixed step and during automatic CFL setup.
     incompatible_preparation = open_flow(ZeroGradientVelocity(), 0.4)
     @test_throws ArgumentError TwoPhaseAMR._enforce_phase_velocity_boundary!(
-        incompatible_preparation.velocity, incompatible_preparation.system, 0.0,
+        incompatible_preparation.velocity, incompatible_preparation.system, 0.0, Int[],
     )
     incompatible = open_flow(ZeroGradientVelocity(), 0.4)
     @test_throws ArgumentError step!(
@@ -988,7 +988,7 @@ end
     # compatible ZeroGradient outlet remains usable without a correction.
     for (outlet, speed) in ((Outflow(), 0.4), (ZeroGradientVelocity(), 1.0))
         flow = open_flow(outlet, speed)
-        TwoPhaseAMR._enforce_phase_velocity_boundary!(flow.velocity, flow.system, 0.0)
+        TwoPhaseAMR._enforce_phase_velocity_boundary!(flow.velocity, flow.system, 0.0, Int[])
         for phase in 1:2
             values = flow.velocity[phase].boundary
             for side in (-1, 1)
