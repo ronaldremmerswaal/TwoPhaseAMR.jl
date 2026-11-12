@@ -11,8 +11,10 @@ A uniform inflow passes an embedded circular cylinder while adaptive blocks foll
 | **Physics** | Single phase, density 1, unit free-stream speed and unit cylinder diameter. The default is `reynolds=100` (viscosity 0.01); the gallery uses `reynolds=200` (viscosity 0.005). The domain is `[-4, 10] × [-4, 4]`; left inflow is `(1, 0)`, the right is outflow, and top and bottom use zero-gradient velocity. |
 | **Algorithms** | Embedded `GeometryField` with PLIC solid geometry, staggered Lax–Wendroff advection, implicit-midpoint diffusion and pressure projection. Pressure uses CG/tree multigrid; diffusion uses tree multigrid and selects CG or BiCGSTAB by matrix symmetry. Geometry and vorticity indicators drive AMR above the base level, with update interval and coarsen delay 5. |
 | **Worth varying** | `reynolds=100` changes viscosity; `max_level=3` changes finest resolution and AMR availability; `final_time=40` changes the simulated duration; `dt=nothing` selects automatic steps. At `max_level ≤ 1`, the example disables dynamic criteria. |
-| **Validated against** | The gallery's `t=30–50` mean pressure drag is `1.02563` and its filtered-lift crossing estimate is `St=0.2303`, respectively 4.0% below and 17.6% above the two-dimensional Re = 200 results of [Qu et al. (2013), Table 3](https://doi.org/10.1016/j.jfluidstructs.2013.02.007): `C_D,p=1.068`, `St=0.1958` (their total drag is `1.316`). The lift FFT estimate rises from `0.1978` over the transient `t=7–22` window, close to the reference, to `0.2362` over `t=30–50`. Increasing `H/D` from 8 to 10 barely changed the latter peak, so this tested blockage change does not explain the discrepancy; larger domain effects remain untested. The level-4 comparison is inconclusive because only transient data were obtained. Short downstream distance and outflow, AMR wake coarsening, and late-time evolution are possible causes, not established ones. See the [sensitivity table](#results). This is not a grid- or domain-independent benchmark; pressure drag excludes viscous stress. |
-| **Cost** | Default: level 3, `T=40`, runtime and final cells unmeasured. The gallery uses level 3 and `T=50`, with 83169 steps and 6160 final cells; setup and simulation took 1349 s on one thread. The larger figure setting uses level 4 and `T=50`. |
+| **Validated against** | The gallery's `t=30–50` mean pressure drag is `0.82701` and its filtered-lift crossing estimate is `St=0.2227`, respectively 22.6% below and 13.7% above the two-dimensional Re = 200 results of [Qu et al. (2013), Table 3](https://doi.org/10.1016/j.jfluidstructs.2013.02.007): `C_D,p=1.068`, `St=0.1958` (their total drag is `1.316`). Short downstream distance and outflow, AMR wake coarsening, the 16 cells per diameter, and late-time evolution are possible causes, not established ones. This is not a grid- or domain-independent benchmark; pressure drag excludes viscous stress. |
+| **Cost** | Default: level 3, `T=40`, runtime and final cells unmeasured. The gallery uses level 3 and `T=50`, with 83169 steps, 1458 mesh updates and 6016 final cells; setup and simulation took 899.6 s and, with rendering, 930.8 s on one thread. The larger figure setting uses level 4 and `T=50`. |
+
+Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded.
 
 ## Setup
 
@@ -56,9 +58,21 @@ The hero shows final vorticity, gray leaf-block outlines and the reconstructed s
 
 ![Vortex shedding behind the cylinder](assets/shedding.gif)
 
-The last 20 time units of the docs run (48 retained keyframes from approximately `t=30.42` to `t=50`): vorticity with a fixed range of ±3, AMR block outlines and the embedded cylinder in gray.
+The last 20 time units of the docs run `t=30.42–50`: the GIF samples 48 output frames on a uniform simulation-time grid, each showing the nearest of the 48 retained keyframes, over vorticity with a fixed range of ±3, AMR block outlines and the embedded cylinder in gray.
 
-For the frequency estimate, lift was sampled every 0.05 time units, averaged over an 11-sample window, and its upward mean crossings used to estimate the period. The residual of the raw sampled lift minus the smoothed signal has RMS `0.05367`, about 5.13% of the smoothed lift amplitude; this noise and the limited averaging window should be considered in the comparison. Initial pressure force samples are deliberately `NaN`, because the impulsive-start state is not a developed force. These diagnostics exclude viscous stresses.
+For the frequency estimate, lift was sampled every 0.05 time units, averaged over an 11-sample window, and its upward mean crossings used to estimate the period. Over `t=30–50` the five upward crossings are `30.27`, `34.76`, `39.25`, `43.74` and `48.23`, giving `St=0.2227`. The residual of the raw sampled lift minus the smoothed signal has RMS `0.00814`, about 2.3% of the smoothed lift amplitude. Initial pressure force samples are deliberately `NaN`, because the impulsive-start state is not a developed force. These diagnostics exclude viscous stresses.
+
+Only the gallery configuration above has been regenerated with the current numerics. Earlier sensitivity runs on this page (a wider `[-4,10] × [-5,5]` domain, vorticity thresholds 0.15 and 0.10, and level-4 refinement) predate the current projection, cut-cell, transport and solver changes and have not been repeated, so their old values are no longer evidence about this code. They are archived below for provenance; no drag or Strouhal convergence claim is made from them.
+
+### Pre-fix sensitivity runs (archived, not repeated)
+
+The following measurements were made with the numerics as of asset commit
+`091ca21f` (2026-11-09, "Regenerate gravity examples after cut-cell fixes"),
+before the current projection, cut-cell, transport and solver changes. They are
+kept for provenance only: they have not been repeated, their force histories are
+not on disk, and they are **not** evidence about the current code. In particular
+the `Gallery` row here is the old gallery value (mean pressure drag `1.02563`,
+`St=0.2303`), which the current run replaced with `0.82701` and `0.2227`.
 
 | Run | Domain | D/H | Levels | D/h | St (FFT / crossings) | Mean pressure drag | Lift noise RMS / amplitude | Runtime |
 | --- | --- | ---: | --- | ---: | --- | ---: | --- | ---: |
@@ -99,6 +113,8 @@ Re = 200, so the gallery window may also contain transient effects.
 For context, Qu et al. (§4.4.2) cite experimental `St=0.182–0.184` near
 Re = 200, including [Norberg (1994)](https://doi.org/10.1017/S0022112094003332);
 these are three-dimensional physical wakes, unlike the two-dimensional example.
+
+At level 3 the cylinder has only 16 cells per diameter, and the gallery window covers about four to five shedding cycles; Qu et al. report reaching the saturated two-dimensional state around `t=60` at Re = 200, so the window may still contain transient effects. For context, Qu et al. (§4.4.2) cite experimental `St=0.182–0.184` near Re = 200, including [Norberg (1994)](https://doi.org/10.1017/S0022112094003332); these are three-dimensional physical wakes, unlike the two-dimensional example.
 
 ## Variations
 
