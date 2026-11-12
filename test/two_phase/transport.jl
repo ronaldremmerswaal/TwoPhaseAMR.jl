@@ -906,7 +906,10 @@ end
     # eq:momentum:cfl: with a solid the cut-donor strip bound limits every
     # outgoing flux by its donor's open strip, and the phase schedules weigh
     # the fluxes by those same strips, so the dual Courant number stays at most
-    # nu^dagger also where the open dual volumes are small (#72).
+    # nu^dagger also where the open dual volumes are small (#72). This is a
+    # regression guard on one fixture (it passes on the pre-#71 schedule too);
+    # the evidence for the bound is the sweep over random cut meshes recorded
+    # in the issue and in sec:momentum:cfl.
     interface, carrier = cut_momentum_fixture()
     momentum = MomentumAdvectionWorkspace(interface)
     scalars = ntuple(axis -> PhaseFaceScalar{axis}(interface), 2)
@@ -954,15 +957,29 @@ end
         periodic = (true, true), max_level = 1,
         refine = (key, origin, extent) -> key == BlockKey(0, 1, 1),
     )
+    function band_stream_velocity()
+        velocity = FaceVelocity(mesh)
+        psi(x, y) = sinpi(2x / 12) * sinpi(2y / 12)
+        for (index, face) in pairs(mesh.faces)
+            x, y = face.center
+            h = face.area / 2
+            flux = face.axis == 1 ?
+                psi(x, y + h) - psi(x, y - h) :
+                -(psi(x + h, y) - psi(x - h, y))
+            velocity.interior[index] = flux / face.area
+        end
+        return velocity
+    end
     for (cx, cy, r, direction, at) in (
             (4.15, 5.2, 0.16, -1.0, (4.0, 5.25)),
             (4.05, 5.2, 0.1, 1.0, (4.0, 5.75)),
         )
         levelset(x, y) = hypot(x - cx, y - cy) - r
-        velocity = FaceVelocity(
+        zero_at(x, y) = hypot(x - at[1], y - at[2]) < 1.0e-9 ? 0.0 : 1.0
+        uniform_velocity = FaceVelocity(
             mesh, (x, y, t, axis) -> axis == 1 ? direction : 0.0,
         )
-        zero_at(x, y) = hypot(x - at[1], y - at[2]) < 1.0e-9 ? 0.0 : 1.0
+        velocity = uniform_velocity
 
         field = InterfaceField(mesh, levelset; lipschitz = 1)
         reconstruct!(field)
@@ -977,6 +994,31 @@ end
         @test minimum(q.liquid.interior) >= -1.0e-12
         @test maximum(q.liquid.interior) <= 1 + 1.0e-12
         @test integrate(q, :liquid) ≈ amount atol = 1.0e-12 * max(abs(amount), 1)
+
+        # The same two experiments with the CTU switch effectively off (the
+        # bulk branch, whose face state moves the net volume at one value) and
+        # with a non-uniform, discretely solenoidal velocity, whose hanging
+        # dual faces carry partial volumes of both signs.
+        for (velocity, ctu_threshold) in (
+                (uniform_velocity, 1.0e-12),
+                (band_stream_velocity(), 1.0e-12),
+                (band_stream_velocity(), 0.5),
+            )
+            field = InterfaceField(mesh, levelset; lipschitz = 1)
+            reconstruct!(field)
+            work = WYAdvectionWorkspace(field; ctu_threshold)
+            dt = stable_timestep(velocity, work)
+            q = PhaseFaceScalar{1}(field; liquid = zero_at, gas = 1.0)
+            amount = integrate(q, :liquid)
+            advect!(
+                field, velocity, dt, work; staggered_scalars = (q,),
+                scheme = Upwind(), amr_interface_scheme = Upwind(),
+            )
+            @test minimum(q.liquid.interior) >= -1.0e-12
+            @test maximum(q.liquid.interior) <= 1 + 1.0e-12
+            @test integrate(q, :liquid) ≈ amount atol =
+                1.0e-12 * max(abs(amount), 1)
+        end
 
         field = InterfaceField(mesh, levelset; lipschitz = 1)
         reconstruct!(field)

@@ -316,9 +316,15 @@ function _phase_drain_limit!(
         end
         content = _phase_dual_volume(schedule, output) *
             _phase_fraction(old_fraction, output, liquid)
-        outflow > content || continue
-        @inbounds excess[output] = (outflow - content) / outflow
+        # A relative tolerance: a vanishing content with a round-off outflow
+        # is not a drained unknown.
+        drained = outflow - content
+        drained > T(128) * eps(T) * outflow || continue
+        # Without an inflow there is nothing to blend towards: keep the own
+        # value, never a value left over from an earlier sweep or phase.
+        @inbounds flush[output] = values[output]
         inflow > zero(T) && (@inbounds flush[output] = entering / inflow)
+        @inbounds excess[output] = drained / outflow
     end
     return excess
 end
@@ -406,11 +412,19 @@ end
         cm, cp, nm, np, ctu_threshold, scheme,
         amr_interface_scheme, excess, flush,
     )
-    if min(nm, np) < ctu_threshold
+    excess_minus = @inbounds excess[face.minus]
+    excess_plus = @inbounds excess[face.plus]
+    if min(nm, np) < ctu_threshold ||
+            excess_minus > zero(excess_minus) || excess_plus > zero(excess_plus)
         # For a split method, term-wise upwinding of the partial interpolated
         # volume fluxes is the corner-transport-upwind flux of
         # eq:momentum:ctu-exchange: upwinding the net volume plus a
         # counter-flow exchange between the two unknowns of the dual face.
+        # A limited unknown takes this flux in the bulk branch as well: the
+        # bulk state moves the net volume of the face at one value, while
+        # `_phase_drain_limit!` counts the partial volumes by sign, so the two
+        # only agree on the outflow of a limited unknown when every partial is
+        # upwinded.
         return _ctu_phase_transport(
             face, schedule, flux, mesh, values, excess, flush,
         )
@@ -420,11 +434,6 @@ end
     vp = _phase_dual_volume(schedule, face.plus)
     selected = _phase_connection_scheme(face, scheme, amr_interface_scheme)
     state = _phase_bulk_state(face, schedule, values, volume, vm, vp, selected)
-    sender = volume >= 0 ? face.minus : face.plus
-    weight = @inbounds excess[sender]
-    if weight > zero(weight)
-        state += weight * (@inbounds(flush[sender]) - state)
-    end
     return volume, volume * (values[face.minus] - state),
         volume * (values[face.plus] - state)
 end

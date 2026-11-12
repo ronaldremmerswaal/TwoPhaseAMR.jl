@@ -695,9 +695,11 @@ With a solid the open volumes are small, and the argument above fails. The
 cut-donor bound of \cref{sec:vof:cfl} restores it: it limits every outgoing
 flux by its donor's open strip, the same strip whose half the staggered
 volume of the receiving unknown interpolates, and the phase schedules weigh
-the fluxes by those strips (\cref{eq:momentum:open-fractions}). Over random
-cut meshes with a level transition $\mathcfl_g/\wycflval$ stayed at one to
-round-off, at $\wycflval=\half$ and $\wycflval=0.3$, and
+the fluxes by those strips (\cref{eq:momentum:open-fractions}). Over $25$
+random $2{:}1$ cut meshes with a solid and a level transition, swept with the
+\apitype{Upwind}, \apitype{LaxWendroff} and \apitype{MonotonizedCentral}
+states and both directional sweeps, at $\wycflval=\half$ and
+$\wycflval=0.3$, $\mathcfl_g/\wycflval$ stayed at $1.000000000000000$, and
 \testsym{test/two_phase/transport.jl}{Dual Courant number next to a solid}
 holds the bound on the cut fixture; the supremum over the states the older
 per-cell bound admits reached $3.3$ before that bound was in place
@@ -952,8 +954,18 @@ flux carries, not the flux), and with the excess fraction
 $\xi_f=\max(0,1-\stagvol{f}\stagfrac{\phase}{f}/O_f)$ the coefficients of
 the old value, $\max(0,\stagvol{f}\stagfrac{\phase}{f}-O_f)$, and of the
 entering values, $I_f-\xi_f O_f$, are both non-negative and sum to the new
-content $\stagvol{f}\stagfrac{\phase}{f}-O_f+I_f$: the update is again a
-convex combination. On a conforming patch the cell-wise bound keeps
+content $\stagvol{f}\stagfrac{\phase}{f}-O_f+I_f$. The mean is taken over the
+values the neighbouring unknowns carry at the start of the sweep, not over
+their limited ones, so where a neighbour is itself limited the mean is a
+convex combination of the raw values: the coefficients above stay
+non-negative, but no new extremum appeared in $3000$ random hanging
+configurations only up to $5\times10^{-14}$, i.e.\ as observed behaviour, not
+as a proved property of that case. A limited unknown takes the term-wise flux
+of~\cref{eq:momentum:ctu-exchange} in both branches of the switch: the bulk
+state moves the net volume of a face at one value, while the limiter counts
+the partial volumes by sign, so the two agree on the outflow of a limited
+unknown only when every partial is upwinded. On a conforming patch the
+cell-wise bound keeps
 $O_f\le\stagvol{f}\stagfrac{\phase}{f}$, so $\xi_f=0$ and the
 transport is unchanged; the limiter acts only at level transitions, where
 \testsym{test/two_phase/transport.jl}{Staggered transport stays bounded at a hanging segment}
