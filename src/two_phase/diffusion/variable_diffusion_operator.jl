@@ -2,12 +2,13 @@ function _staggered_diffusion_operator(
         mesh::BlockTreeMesh, viscosity::CellField, boundary, T;
         construction_cache = nothing, reuse = nothing, cache_layer = 1,
         geometry = nothing,
+        averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     )
     cache = isnothing(construction_cache) ?
         VariableDiffusionConstructionCache(T) : construction_cache
     return _variable_staggered_diffusion(
         mesh, viscosity, boundary, T;
-        cache, reuse, cache_layer, geometry,
+        cache, reuse, cache_layer, geometry, averaging,
     )
 end
 
@@ -15,6 +16,7 @@ function _variable_staggered_diffusion(
         mesh, viscosity::CellField, boundary, ::Type{T};
         cache = VariableDiffusionConstructionCache(T), reuse = nothing,
         cache_layer = 1, geometry = nothing,
+        averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     ) where {T}
     viscosity.mesh === mesh || throw(ArgumentError("viscosity field must share the operator mesh"))
     boundary isa FreeSlip || (boundary isa NoSlip && boundary.velocity isa StationaryWall) ||
@@ -213,14 +215,14 @@ function _variable_staggered_diffusion(
     end
     stress_work = isnothing(reuse) ? T[] : reuse.stress_work
     resize!(stress_work, length(measures))
-    _parallel_csr_row_mul!(
-        stress_work, interpolation_transpose, cell_work,
-    )
+    cell_inverse_work = isnothing(reuse) ? T[] : reuse.cell_inverse_work
+    resize!(cell_inverse_work, length(refs))
     weights = isnothing(reuse) ? T[] : reuse.stress_weights
     resize!(weights, length(measures))
-    for index in eachindex(weights)
-        @inbounds weights[index] = measures[index] * exp(stress_work[index])
-    end
+    _fill_stress_weights!(
+        weights, measures, stress_work, cell_inverse_work,
+        interpolation_transpose, cell_work, averaging,
+    )
     stiffness_pointers = isnothing(reuse) ? Int[] : reuse.stiffness_pointers
     stiffness_stresses = isnothing(reuse) ? Int[] : reuse.stiffness_stresses
     stiffness_factors = isnothing(reuse) ? T[] : reuse.stiffness_factors
@@ -248,15 +250,69 @@ function _variable_staggered_diffusion(
     end
     _release_stress_vertices!(cache)
     return VariableStaggeredDiffusionOperator(
-        mesh, stiffness, volumes, boundary, strain, strain_transpose,
+        mesh, stiffness, volumes, boundary, averaging, strain, strain_transpose,
         wall_reaction_strain, dirichlet_faces, interpolation, interpolation_transpose,
-        measures, weights, cell_work, stress_work,
+        measures, weights, cell_work, cell_inverse_work, stress_work,
         stiffness_pointers, stiffness_stresses, stiffness_factors,
         stiffness_refresh_offsets,
     )
 end
 
-"""Refresh the stress-location geometric mean without rebuilding geometric
+"""Fill the stress-row weights `measures .* row viscosity` from the per-cell
+log viscosities, with the phase-viscosity averaging rule of the operator.
+
+Every row of the strain map is a strain at a stress location whose viscosity
+is mixed from the cell quarters that the row spans, with interpolation weights
+`w_c` (the cell's share of the stress location, `sum_c w_c = 1`). A single-cell
+row -- a normal-stress row or a wall row -- takes its cell's viscosity.
+
+[`HarmonicViscosityAveraging`](@ref) uses the series conductance
+`1 / sum_c (w_c / mu_c)`: a centred shear row differences velocities across
+the cells of its vertex, so the tangential traction it transmits is continuous
+only if those quarters act in series.
+[`GeometricViscosityAveraging`](@ref) uses the thesis' `prod_c mu_c^w_c`,
+i.e. the volume-fraction-weighted geometric mean evaluated with the
+interpolated fraction.
+
+A row without cells is the isolated prescribed-face algebraic row; it keeps
+unit viscosity.
+"""
+function _fill_stress_weights!(
+        weights, measures, stress_work, cell_inverse_work,
+        interpolation_transpose, cell_log_viscosity,
+        ::HarmonicViscosityAveraging,
+    )
+    @_parallel for index in eachindex(cell_inverse_work)
+        @inbounds cell_inverse_work[index] = exp(-cell_log_viscosity[index])
+    end
+    _parallel_csr_row_mul!(
+        stress_work, interpolation_transpose, cell_inverse_work,
+    )
+    @_parallel for index in eachindex(weights)
+        @inbounds reciprocal = stress_work[index]
+        @inbounds weights[index] =
+            iszero(reciprocal) ? measures[index] :
+            measures[index] / reciprocal
+    end
+    return weights
+end
+
+function _fill_stress_weights!(
+        weights, measures, stress_work, cell_inverse_work,
+        interpolation_transpose, cell_log_viscosity,
+        ::GeometricViscosityAveraging,
+    )
+    _parallel_csr_row_mul!(
+        stress_work, interpolation_transpose, cell_log_viscosity,
+    )
+    @_parallel for index in eachindex(weights)
+        @inbounds weights[index] =
+            measures[index] * exp(stress_work[index])
+    end
+    return weights
+end
+
+"""Refresh the stress-location mixture viscosity without rebuilding geometric
 strain and interpolation stencils. This is used after every VOF update."""
 function _update_log_dynamic_viscosity!(
         operator::VariableStaggeredDiffusionOperator{T},
@@ -267,14 +323,12 @@ function _update_log_dynamic_viscosity!(
     )
     cell_log_viscosity === operator.cell_work ||
         copyto!(operator.cell_work, cell_log_viscosity)
-    _parallel_csr_row_mul!(
-        operator.stress_work, operator.stress_interpolation_transpose,
-        operator.cell_work,
+    _fill_stress_weights!(
+        operator.stress_weights, operator.stress_measures,
+        operator.stress_work, operator.cell_inverse_work,
+        operator.stress_interpolation_transpose, operator.cell_work,
+        operator.averaging,
     )
-    @_parallel for index in 1:length(operator.stress_weights)
-        @inbounds operator.stress_weights[index] =
-            operator.stress_measures[index] * exp(operator.stress_work[index])
-    end
     isempty(operator.stiffness_pointers) && return operator
     stiffness_values = nonzeros(operator.stiffness)
     offsets = operator.stiffness_refresh_offsets
@@ -303,20 +357,39 @@ function _update_dynamic_viscosity!(
             "phase dynamic viscosities must be finite and positive"
         )
     )
-    log_gas = log(phases[2])
-    log_jump = log(phases[1]) - log_gas
+    # log of the cell mixture; the same rule mixes it at the stress rows.
     mesh = field.mesh
     nx, ny = mesh.block_size
     h = mesh.halo
     cells_per_block = nx * ny
-    _parallel_block_columns(mesh) do b, first_j, last_j
-        fraction = @inbounds field.conditional_fraction.blocks[b]
-        offset = (b - 1) * cells_per_block
-        @inbounds for j in first_j:last_j, i in 1:nx
-            index = offset + (j - 1) * nx + i
-            operator.cell_work[index] = muladd(
-                fraction[i + h, j + h], log_jump, log_gas,
-            )
+    if operator.averaging isa HarmonicViscosityAveraging
+        # log of the series mixture 1 / (c / liquid + (1 - c) / gas) is not
+        # affine in the fraction, unlike the geometric one.
+        inverse_liquid = inv(phases[1])
+        inverse_jump = inverse_liquid - inv(phases[2])
+        inverse_gas = inv(phases[2])
+        _parallel_block_columns(mesh) do b, first_j, last_j
+            fraction = @inbounds field.conditional_fraction.blocks[b]
+            offset = (b - 1) * cells_per_block
+            @inbounds for j in first_j:last_j, i in 1:nx
+                index = offset + (j - 1) * nx + i
+                operator.cell_work[index] = -log(
+                    muladd(fraction[i + h, j + h], inverse_jump, inverse_gas),
+                )
+            end
+        end
+    else
+        log_gas = log(phases[2])
+        log_jump = log(phases[1]) - log_gas
+        _parallel_block_columns(mesh) do b, first_j, last_j
+            fraction = @inbounds field.conditional_fraction.blocks[b]
+            offset = (b - 1) * cells_per_block
+            @inbounds for j in first_j:last_j, i in 1:nx
+                index = offset + (j - 1) * nx + i
+                operator.cell_work[index] = muladd(
+                    fraction[i + h, j + h], log_jump, log_gas,
+                )
+            end
         end
     end
     return _update_log_dynamic_viscosity!(operator, operator.cell_work)
@@ -326,19 +399,32 @@ function _staggered_diffusion_operator(
         field::InterfaceField; viscosity::NTuple{2}, boundary = NoSlip(),
         construction_cache = nothing, reuse = nothing,
         cache_layer = 1,
+        averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     )
-    mu = dynamic_viscosity(field; viscosity)
+    mu = dynamic_viscosity(field; viscosity, averaging)
     return _staggered_diffusion_operator(
         field.mesh; viscosity = mu, boundary, construction_cache, reuse,
-        cache_layer, geometry = field.geometry,
+        cache_layer, geometry = field.geometry, averaging,
     )
 end
 
 
+"""
+    StaggeredDiffusionOperator(field::InterfaceField;
+                               viscosity, boundary=NoSlip(),
+                               averaging=HarmonicViscosityAveraging())
+
+Assemble the two-phase stress operator `div(2 mu D(u))` of an interface field.
+`viscosity` is the `(liquid, gas)` dynamic-viscosity tuple and `averaging` the
+phase-viscosity mixture rule, see [`HarmonicViscosityAveraging`](@ref).
+"""
 function StaggeredDiffusionOperator(
         field::InterfaceField; viscosity::NTuple{2}, boundary = NoSlip(),
+        averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     )
-    return _staggered_diffusion_operator(field; viscosity, boundary)
+    return _staggered_diffusion_operator(
+        field; viscosity, boundary, averaging,
+    )
 end
 
 function _zero_variable_diffusion_constraints!(values, operator)
