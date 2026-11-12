@@ -507,8 +507,17 @@ end
     # (0.77, 0.35); liquid fills the wedge above the wall and below the plane.
     wedge = InterfaceField(mesh; geometry, contact_angle = nothing, init = 0)
     initialize!(wedge, (0.2, 1.0), 0.5)
-    conditional = wedge.conditional_fraction
-    near_interface = [any(c -> 0 < c < 1, block) for block in conditional.blocks]
+    # A block borders the interface when one of its cells, halo included, holds
+    # both phases in its open part. Read the stored area fractions here rather
+    # than the derived conditional fraction, so the expectation does not
+    # restate the implementation's mixed-cell test.
+    near_interface = [
+        any(
+            index -> 0 < wedge.fraction.blocks[b][index] <
+                geometry.open_fraction.blocks[b][index],
+            eachindex(wedge.fraction.blocks[b]),
+        ) for b in eachindex(mesh.blocks)
+    ]
     cells = TwoPhaseAMR._cell_references(mesh)
     wetted = [
         ref for ref in cells
@@ -574,6 +583,57 @@ end
         families += 1
     end
     @test families == 4
+end
+
+@testset "Contact-line refinement reaches a fixed point at a level step (#148)" begin
+    # A wall whose fine cells are not cut (it lies on fine cell faces) and a
+    # sloped wall that cuts them: both meet a static free surface inside the
+    # level-jump block, and neither may keep changing the mesh.
+    cases = (
+        # wall normal, wall offset, level-jump block origin, surface normal,
+        # surface offset
+        ((-0.23, 1.0), 0.17, (0.75, 0.25), (0.2, 1.0), 0.5),
+        ((0.0, 1.0), 33 / 64, (0.25, 0.5), (0.2, 1.0), 0.575),
+    )
+    for (wall_normal, wall_offset, jump, surface_normal, surface_offset) in cases
+        @testset "wall $wall_normal offset $wall_offset" begin
+            mesh = BlockTreeMesh(
+                base_mesh = (16, 16), block_size = (8, 8), max_level = 2,
+                periodic = (false, false),
+                adaptation = MeshAdaptationOptions(coarsen_delay = 1),
+                refine = (key, origin, extent) -> key.level == 0 || (
+                    key.level == 1 && isapprox(origin[1], jump[1]; atol = 1.0e-12) &&
+                        isapprox(origin[2], jump[2]; atol = 1.0e-12)
+                ),
+            )
+            solid = InterfaceField(mesh; contact_angle = nothing)
+            initialize!(solid, wall_normal, wall_offset)
+            geometry = GeometryField(solid)
+            interface = InterfaceField(
+                mesh; geometry, contact_angle = nothing, init = 0
+            )
+            initialize!(interface, surface_normal, surface_offset)
+            workspace = AMRWorkspace(mesh, geometry, interface)
+            indicator = CurvatureRefinementIndicator(
+                interface; cells_per_radius = 8
+            )
+            changes = Bool[]
+            for step in 1:26
+                stats = adapt!(workspace, indicator; step, force = true)
+                @test stats.attempted
+                push!(changes, stats.changed)
+                if stats.changed
+                    # Re-sample the stationary fields after the transfer.
+                    initialize!(interface, surface_normal, surface_offset)
+                    refresh_geometry!(geometry)
+                end
+            end
+            # Six attempts settle the level step; further passes must keep the
+            # mesh unchanged, in particular no refine/coarsen cycle.
+            @test !any(changes[7:26])
+            @test isbalanced(mesh)
+        end
+    end
 end
 
 @testset "in-place conservative adaptive field transfer" begin

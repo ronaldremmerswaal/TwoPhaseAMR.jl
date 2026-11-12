@@ -77,11 +77,12 @@ would immediately refine, so the family is kept. Covered cells are excluded
 from that test, because their conditional fraction is zero by construction,
 not gas; without the exclusion every window crossing the solid would span both
 phases and the family would never coarsen (#118). The halo of a coarse block
-whose neighbours are finer is restricted from the liquid and open fractions
-with the same weights for the same reason: averaging per-cell ratios would
-count a covered neighbour as gas and make the block appear to border the
-interface. Together these rules let the contact line refine without the
-refine/coarsen cycle that made it unresolved (#148).
+whose neighbours are finer is the restriction of the liquid and open fractions
+(their weighted ratio, see the interface chapter of the technical reference):
+it is the value transport, reconstruction and the forces use, and averaging
+per-cell ratios instead would count a covered neighbour as gas and make the
+block appear to border the interface. Together these rules let the contact
+line refine without the refine/coarsen cycle that made it unresolved (#148).
 
 The interface-band criterion has different semantics: covered solid cells
 have conditional liquid fraction zero, so liquid touching a solid can make a

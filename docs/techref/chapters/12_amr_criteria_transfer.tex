@@ -238,7 +238,8 @@ values \srcsym{src/interface/height_functions.jl}{_fill_height_values!}. Tests:
 \testsym{test/mesh/adaptivity.jl}{AMR criterion time windows and level bounds},
 \testsym{test/mesh/adaptivity.jl}{Curvature ignores liquid-filled sloped solid cuts (#118)},
 \testsym{test/mesh/adaptivity.jl}{Curvature refines contact-line cells of a wall-cut liquid wedge (#148)}, and
-\testsym{test/mesh/adaptivity.jl}{Curvature keeps contact-line families across the interface (#148)}.
+\testsym{test/mesh/adaptivity.jl}{Curvature keeps contact-line families across the interface (#148)}, and
+\testsym{test/mesh/adaptivity.jl}{Contact-line refinement reaches a fixed point at a level step (#148)}.
 \end{implnote}
 
 \subsection{Vorticity}\label{sec:amr:vorticity}
@@ -530,11 +531,7 @@ up to rounding, and the open fraction, apertures and open dual volumes are
 recomputed from it (\cref{sec:cutcells:time}). The child's open part
 in~\cref{eq:amr:vof} is cut by the same parent plane, so
 $\phasefrac{\liq}{c_r}\le\openfrac{c_r}$ up to rounding and the conditional
-fraction of every child stays in $[0,1]$. Halo values follow the same two
-quantities: a coarse block whose donor is finer restricts the liquid and open
-fractions with the donor weights and takes their ratio, never the mean of the
-per-cell conditional fractions, so a covered donor cell does not read as gas
-and spuriously mark the block as bordering the interface (\issue{148}).
+fraction of every child stays in $[0,1]$.
 
 \emph{Phase scalars.} The intrinsic values $\avar^{\phase}_c$ of a
 \apitype{PhaseScalar} are transferred with the weights

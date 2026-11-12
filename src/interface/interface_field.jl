@@ -297,6 +297,9 @@ function _restrict_conditional_halo!(field::InterfaceField{T}, geometry) where {
     @_parallel for entry_index in 1:length(mesh.halo_entries)
         entry = @inbounds mesh.halo_entries[entry_index]
         entry.physical_boundary && continue
+        # A single same-level or coarser donor already carries the ratio
+        # itself; only a restriction from several finer donors can differ.
+        entry.donor_count > 1 || continue
         liquid = zero(T)
         available = zero(T)
         stop = entry.first_donor + entry.donor_count - 1
