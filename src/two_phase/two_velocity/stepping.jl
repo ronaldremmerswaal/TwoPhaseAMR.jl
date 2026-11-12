@@ -9,7 +9,7 @@ function _copy_velocity!(
 end
 
 function _enforce_phase_velocity_boundary!(
-        velocity::TwoPhaseVelocity, solver, time,
+        velocity::TwoPhaseVelocity, solver, time, inactive_failures,
     )
     if solver.boundary isa Union{NoSlip, FreeSlip}
         enforce_no_permeation!(velocity)
@@ -24,14 +24,16 @@ function _enforce_phase_velocity_boundary!(
     end
     isnothing(solver.geometry) ||
         enforce_geometry_no_slip!(velocity, solver.geometry)
-    _mark_inactive_phase_velocities!(velocity, solver.two_phase.interface)
+    _mark_inactive_phase_velocities!(
+        velocity, solver.two_phase.interface, inactive_failures,
+    )
     return velocity
 end
 
 
 @inline _enforce_current_velocity_boundary!(
-    velocity::TwoPhaseVelocity, solver, time,
-) = _enforce_phase_velocity_boundary!(velocity, solver, time)
+    velocity::TwoPhaseVelocity, solver, time, inactive_failures,
+) = _enforce_phase_velocity_boundary!(velocity, solver, time, inactive_failures)
 
 
 function _transport_substep!(
@@ -180,7 +182,9 @@ function _diffusion_substep!(
         state.diffused_mixture, state.mixture_velocity;
         dirichlet_faces = diffusion.dirichlet_faces,
     )
-    _mark_inactive_phase_velocities!(velocity, model.interface)
+    _mark_inactive_phase_velocities!(
+        velocity, model.interface, workspace.two_phase.inactive_failures,
+    )
     return velocity
 end
 
@@ -305,7 +309,7 @@ function step!(
     state = _two_velocity_flow_workspace!(phase, model)
     _copy_velocity!(state.old_velocity, velocity)
     _enforce_phase_velocity_boundary!(
-        state.old_velocity, solver, current_time,
+        state.old_velocity, solver, current_time, phase.inactive_failures,
     )
     inherited_flux = time_step == reference_step ? nothing :
         _capture_two_velocity_inherited_flux!(solver, workspace, state)
@@ -318,14 +322,14 @@ function step!(
     convected = state.convected
     _body_force_substep!(convected, time_step, midpoint, force)
     _enforce_phase_velocity_boundary!(
-        convected, solver, midpoint,
+        convected, solver, midpoint, phase.inactive_failures,
     )
     _diffusion_substep!(
         velocity, solver, workspace, time_step, current_time, model;
         tolerance = dimensionless_tolerance, max_cycles = cycle_limit,
     )
     _enforce_phase_velocity_boundary!(
-        velocity, solver, current_time + time_step,
+        velocity, solver, current_time + time_step, phase.inactive_failures,
     )
     phase_forces = model.sigma > zero(T) || any(!iszero, model.gravity)
     pressure_operator = _two_velocity_pressure_operator!(

@@ -600,3 +600,174 @@ const BOTH_PATHS = (1, typemax(Int))
         @test occursin("reduction scratch has 0 entries", message_of(failure))
     end
 end
+
+@testset "two-phase face kernels are bitwise serial" begin
+    # More than one fixed reduction chunk of faces, so the chunked marking,
+    # checks and maxima are threaded at grain 1.
+    mesh = BlockTreeMesh(base_mesh = (32, 48), block_size = (8, 8), periodic = (true, false))
+    interface = InterfaceField(mesh, (x, y) -> y - 0.5 - 0.05cospi(2x); lipschitz = 1)
+    @test TwoPhaseAMR._reduction_chunks(length(mesh.faces)) > 1
+    field(x, y, time, axis) = axis == 1 ? sinpi(2y) * cospi(x) : 0.3sinpi(2x) * y
+    phase_velocity() = (FaceVelocity(mesh, field), FaceVelocity(mesh, field))
+    enforce(velocity) = (enforce_no_permeation!(velocity); velocity)
+    reference = enforce(phase_velocity())
+    with_parallel_grain(SERIAL_GRAIN) do
+        TwoPhaseAMR._mark_inactive_phase_velocities!(reference, interface, Int[])
+    end
+    threaded = enforce(phase_velocity())
+    failures = Int[]
+    with_parallel_grain(1) do
+        TwoPhaseAMR._mark_inactive_phase_velocities!(threaded, interface, failures)
+    end
+    for phase in 1:2
+        @test isequal(threaded[phase].interior, reference[phase].interior)
+        @test isequal(threaded[phase].boundary, reference[phase].boundary)
+    end
+    @test any(isnan, threaded[1].interior) && any(isnan, threaded[2].interior)
+
+    # The first active non-finite face is reported, whatever the thread count.
+    active = findall(isfinite, threaded[2].interior)
+    broken = map(copy, threaded)
+    broken[2].interior[active[end]] = NaN
+    broken[1].interior[findfirst(isfinite, broken[1].interior)] = Inf
+    expected = findfirst(isfinite, threaded[1].interior)
+    messages = map((1, SERIAL_GRAIN)) do grain
+        with_parallel_grain(grain) do
+            message_of(
+                thrown_exception() do
+                    TwoPhaseAMR._mark_inactive_phase_velocities!(map(copy, broken), interface, Int[])
+                end
+            )
+        end
+    end
+    @test messages[1] == messages[2]
+    @test occursin("phase-1 velocity on face $expected", messages[1])
+
+    # Interior and boundary failures at the same time: the interior error wins
+    # (its chunk flags are filled before the serial boundary pass) and names
+    # the first failing face, liquid before gas. Every thread count reports
+    # the same face and phase.
+    both_phases = filter(
+        index -> isfinite(threaded[1].interior[index]) &&
+            isfinite(threaded[2].interior[index]),
+        eachindex(threaded[1].interior),
+    )
+    active_boundary = [
+        index for (index, face) in pairs(mesh.boundary_faces) if
+            TwoPhaseAMR._phase_cell_is_active(interface, face.cell, :liquid)
+    ]
+    @test !isempty(both_phases) && !isempty(active_boundary)
+    simultaneous = map(copy, threaded)
+    simultaneous[1].interior[first(both_phases)] = NaN
+    simultaneous[2].interior[first(both_phases)] = Inf
+    simultaneous[1].boundary[first(active_boundary)] = NaN
+    simultaneous[2].boundary[first(active_boundary)] = Inf
+    messages = map((1, SERIAL_GRAIN)) do grain
+        with_parallel_grain(grain) do
+            message_of(
+                thrown_exception() do
+                    TwoPhaseAMR._mark_inactive_phase_velocities!(
+                        map(copy, simultaneous), interface, Int[],
+                    )
+                end
+            )
+        end
+    end
+    @test messages[1] == messages[2] ==
+        "ArgumentError: non-finite active phase-1 velocity on face $(first(both_phases))"
+    # With the interior values valid the boundary pass reports its own first
+    # failing face, liquid before gas, at every thread count.
+    boundary_only = map(copy, threaded)
+    boundary_only[1].boundary[first(active_boundary)] = NaN
+    boundary_only[2].boundary[first(active_boundary)] = Inf
+    messages = map((1, SERIAL_GRAIN)) do grain
+        with_parallel_grain(grain) do
+            message_of(
+                thrown_exception() do
+                    TwoPhaseAMR._mark_inactive_phase_velocities!(
+                        map(copy, boundary_only), interface, Int[],
+                    )
+                end
+            )
+        end
+    end
+    @test messages[1] == messages[2] ==
+        "ArgumentError: non-finite active phase-1 boundary velocity on face $(first(active_boundary))"
+
+    # WY frozen-interface bound: exact fixed-chunk maxima, also with the
+    # velocity checks threaded; allocation-free face maxima.
+    work = WYAdvectionWorkspace(interface)
+    TwoPhaseAMR._freeze_phase_apertures!(interface, work)
+    bounds = map((SERIAL_GRAIN, 1)) do grain
+        with_parallel_grain(grain) do
+            TwoPhaseAMR._frozen_interface_stable_timestep(threaded, work)
+        end
+    end
+    @test isfinite(bounds[1]) && bounds[1] === bounds[2]
+    with_parallel_grain(1) do
+        TwoPhaseAMR._frozen_face_maximum(threaded, work, nothing)
+        @test (@allocated TwoPhaseAMR._frozen_face_maximum(threaded, work, nothing)) == 0
+    end
+    gas_failure = map(copy, threaded)
+    gas_failure[2].interior[active[1]] = NaN
+    messages = map((1, SERIAL_GRAIN)) do grain
+        with_parallel_grain(grain) do
+            message_of(
+                thrown_exception() do
+                    TwoPhaseAMR._frozen_interface_stable_timestep(gas_failure, work)
+                end
+            )
+        end
+    end
+    @test messages[1] == messages[2] == "ArgumentError: active gas velocity must be finite"
+    # Both phases invalid: the liquid error wins, as in the serial order.
+    both = map(copy, gas_failure)
+    both[1].interior[findlast(isfinite, both[1].interior)] = Inf
+    messages = map((1, SERIAL_GRAIN)) do grain
+        with_parallel_grain(grain) do
+            message_of(
+                thrown_exception() do
+                    TwoPhaseAMR._frozen_interface_stable_timestep(both, work)
+                end
+            )
+        end
+    end
+    @test messages[1] == messages[2] == "ArgumentError: active liquid velocity must be finite"
+    # Boundary and interior failures at the same time: the errors follow the
+    # serial phase order (liquid interior, liquid boundary, gas interior, gas
+    # boundary), the same at every thread count. A liquid boundary failure
+    # therefore wins over a gas interior failure...
+    active_gas_boundary = [
+        index for (index, face) in pairs(mesh.boundary_faces) if
+            TwoPhaseAMR._phase_cell_is_active(interface, face.cell, :gas)
+    ]
+    @test !isempty(active_gas_boundary)
+    mixed = map(copy, threaded)
+    mixed[2].interior[active[1]] = NaN
+    mixed[1].boundary[first(active_boundary)] = one(eltype(mixed[1].boundary))
+    messages = map((1, SERIAL_GRAIN)) do grain
+        with_parallel_grain(grain) do
+            message_of(
+                thrown_exception() do
+                    TwoPhaseAMR._frozen_interface_stable_timestep(mixed, work)
+                end
+            )
+        end
+    end
+    @test messages[1] == messages[2] ==
+        "ArgumentError: WY requires zero active phase boundary velocity"
+    # ...while within one phase the interior failure comes first.
+    interior_first = map(copy, mixed)
+    interior_first[1].boundary[first(active_boundary)] = zero(eltype(mixed[1].boundary))
+    interior_first[2].boundary[first(active_gas_boundary)] = one(eltype(mixed[2].boundary))
+    messages = map((1, SERIAL_GRAIN)) do grain
+        with_parallel_grain(grain) do
+            message_of(
+                thrown_exception() do
+                    TwoPhaseAMR._frozen_interface_stable_timestep(interior_first, work)
+                end
+            )
+        end
+    end
+    @test messages[1] == messages[2] == "ArgumentError: active gas velocity must be finite"
+end

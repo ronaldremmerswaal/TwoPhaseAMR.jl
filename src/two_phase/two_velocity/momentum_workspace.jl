@@ -11,6 +11,8 @@ struct TwoVelocityMomentumAdvectionWorkspace{
     interface::InterfaceField{T, M, G}
     x::X
     y::Y
+    # Per-chunk flags of `_mark_inactive_phase_velocities!` (resized on use).
+    inactive_failures::Vector{Int}
 end
 
 """
@@ -26,7 +28,7 @@ function MomentumAdvectionWorkspace(
     _validate_two_phase_velocity(velocity, interface.mesh, T)
     return TwoVelocityMomentumAdvectionWorkspace(
         interface, PhaseFaceScalar{1}(interface),
-        PhaseFaceScalar{2}(interface),
+        PhaseFaceScalar{2}(interface), Int[],
     )
 end
 
@@ -45,7 +47,7 @@ function _reconfigure_momentum_workspace!(
     (workspace.interface === interface && uniform == old_uniform) || return (
         TwoVelocityMomentumAdvectionWorkspace(
             interface, PhaseFaceScalar{1}(interface),
-            PhaseFaceScalar{2}(interface),
+            PhaseFaceScalar{2}(interface), workspace.inactive_failures,
         )
     )
     for component in (workspace.x, workspace.y)
@@ -54,7 +56,7 @@ function _reconfigure_momentum_workspace!(
         _finish_phase_face_transfer!(component)
     end
     return TwoVelocityMomentumAdvectionWorkspace(
-        interface, workspace.x, workspace.y,
+        interface, workspace.x, workspace.y, workspace.inactive_failures,
     )
 end
 
@@ -158,5 +160,7 @@ function _finish_phase_momentum!(
         workspace::TwoVelocityMomentumAdvectionWorkspace,
     )
     _copy_momentum_velocity!(destination, workspace)
-    return _mark_inactive_phase_velocities!(destination, workspace.interface)
+    return _mark_inactive_phase_velocities!(
+        destination, workspace.interface, workspace.inactive_failures,
+    )
 end

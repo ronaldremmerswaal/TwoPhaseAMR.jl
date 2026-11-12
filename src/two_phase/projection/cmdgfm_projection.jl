@@ -222,6 +222,8 @@ mutable struct CMDGFMProjectionWorkspace{T, M <: BlockTreeMesh}
     scaling::_ProjectionKrylovScaling{T}
     pressure_cache::CMDGFMPressureCache{T, M}
     initial_guess_used::Bool
+    # Per-chunk flags of `_mark_inactive_phase_velocities!` (resized on use).
+    inactive_failures::Vector{Int}
 end
 
 function CMDGFMProjectionWorkspace(
@@ -236,6 +238,7 @@ function CMDGFMProjectionWorkspace(
         FaceField{2}(mesh, T), spzeros(T, 0, 0), spzeros(T, 0, 0),
         T[], T[], Int[], Int[], CMDGFMJumpStencil{T}[], nothing,
         nothing, T[], _ProjectionKrylovScaling(T), CMDGFMPressureCache(T, typeof(mesh)), false,
+        Int[],
     )
 end
 
@@ -1441,7 +1444,7 @@ function project!(
     max_iterations > 0 || throw(
         ArgumentError("max_iterations must be strictly positive"),
     )
-    _mark_inactive_phase_velocities!(velocity, interface)
+    _mark_inactive_phase_velocities!(velocity, interface, workspace.inactive_failures)
     assembled = _assemble_cmdgfm_system!(
         solver, workspace, dt, velocity;
         shared_operator = _pressure_operator, shared_multigrid = _pressure_multigrid,
@@ -1604,7 +1607,7 @@ function _project_cmdgfm_assembled!(
     end
     fill_halo!(pressure)
 
-    _mark_inactive_phase_velocities!(velocity, interface)
+    _mark_inactive_phase_velocities!(velocity, interface, workspace.inactive_failures)
     mixture_constraint = _cmdgfm_cell_flux!(
         workspace.pressure_cache.cell_flux,
         assembled.data, interface, velocity
