@@ -4,117 +4,16 @@ struct MomentumAdvectionWorkspace{T, M <: BlockTreeMesh, WX, WY, F <: InterfaceF
     y::MomentumComponentWorkspace{2, T, M, WY}
 end
 
-# The open staggered volume interpolates each cell with half of the open
-# strip behind the face. At a split coarse side this strip is generally not
-# the same fraction of the open cell as the geometric fraction of the side.
-# Rebuild the phase-flux factorization with those open-volume fractions so its
-# divergence commutes with the same interpolation used for staggered density.
+# The one-velocity momentum shares the phase workspace of the staggered phase
+# scalars, open-strip factorization included (`_open_strip_phase_schedule`), so
+# its divergence commutes with the staggered density of
+# `_phase_face_average!`.
 function _momentum_advection_workspace(
-        tendency::FaceField{Axis, T}, rates::FaceField{Axis, T},
-        geometry::GeometryField, forward; reuse_flux = nothing,
-    ) where {Axis, T}
-    mesh = tendency.mesh
-    schedule = _geometry_phase_schedule(geometry, Val(Axis))
-    # Uniform cut cells and uncut hanging cells already use the correct
-    # geometric weights. Avoid rebuilding incidences for that common case.
-    needs_correction = false
-    for face in mesh.faces
-        face.axis == Axis || continue
-        for ref in (face.minus, face.plus)
-            side_fraction = face.area / mesh.blocks[ref.block].spacing[3 - Axis]
-            open = _get(geometry.open_fraction, ref)
-            if side_fraction < one(T) && zero(T) < open < one(T)
-                needs_correction = true
-                break
-            end
-        end
-        needs_correction && break
-    end
-    needs_correction || return StaggeredAdvectionWorkspace(
-        tendency, rates, schedule, forward,
-    )
-    incidences, global_to_local, _ = _component_incidences(mesh, Val(Axis), T)
-    nx, ny = mesh.block_size
-    local_index = length(geometry.dual_volumes[Axis])
-    for (boundary_index, face) in pairs(mesh.boundary_faces)
-        face.axis == Axis || continue
-        local_index += 1
-        fraction = T(face.area / mesh.blocks[face.cell.block].spacing[3 - Axis])
-        push!(
-            incidences[_cell_index(face.cell, nx, ny)],
-            ComponentFaceIncidence(
-                local_index, length(mesh.faces) + boundary_index, face.side, fraction,
-            ),
-        )
-    end
-
-    changed = false
-    for (cell_index, cell_faces) in pairs(incidences)
-        block = (cell_index - 1) ÷ (nx * ny) + 1
-        local_cell = (cell_index - 1) % (nx * ny)
-        ref = CellRef(block, local_cell % nx + 1, local_cell ÷ nx + 1)
-        open = _get(geometry.open_fraction, ref)
-        zero(T) < open < one(T) || continue
-        for index in eachindex(cell_faces)
-            incidence = cell_faces[index]
-            incidence.fraction < one(T) || continue
-            face = incidence.global_index <= length(mesh.faces) ?
-                mesh.faces[incidence.global_index] :
-                mesh.boundary_faces[incidence.global_index - length(mesh.faces)]
-            lo, hi = _face_local_tangent_interval(mesh, ref, face)
-            bounds = Axis == 1 ? (-0.5, 0.5, lo, hi) : (lo, hi, -0.5, 0.5)
-            fraction = T(_open_subcell_area(geometry.solid, ref, bounds...) / open)
-            changed |= fraction != incidence.fraction
-            cell_faces[index] = ComponentFaceIncidence(
-                incidence.local_index, incidence.global_index, incidence.side, fraction,
-            )
-        end
-    end
-
-    if changed
-        # Match `_bounded_phase_schedule`'s normal stars and transverse
-        # product plan, changing only the cell-to-face partition fractions.
-        coefficients = Dict{NTuple{3, Int}, T}()
-        for (index, face) in pairs(mesh.faces)
-            if face.axis == Axis
-                centre = global_to_local[index]
-                for (cell, sign) in ((face.minus, one(T)), (face.plus, -one(T)))
-                    for other in incidences[_cell_index(cell, nx, ny)]
-                        other.global_index == index && continue
-                        _add_amr_flux_weight!(
-                            coefficients, other.local_index, centre, index,
-                            sign * other.fraction / 2,
-                        )
-                    end
-                end
-            else
-                minus = incidences[_cell_index(face.minus, nx, ny)]
-                plus = incidences[_cell_index(face.plus, nx, ny)]
-                for side in (-1, 1), a in minus, b in plus
-                    a.side == side == b.side || continue
-                    _add_amr_flux_weight!(
-                        coefficients, a.local_index, b.local_index, index,
-                        a.fraction * b.fraction / 2,
-                    )
-                end
-            end
-        end
-        for face in schedule.faces
-            for pointer in face.first_weight:(face.first_weight + face.weight_count - 1)
-                key = (face.minus, face.plus, schedule.flux_indices[pointer])
-                schedule.flux_weights[pointer] = coefficients[key]
-            end
-        end
-    end
-    return StaggeredAdvectionWorkspace(tendency, rates, schedule, forward)
-end
-
-function _momentum_advection_workspace(
-        tendency::FaceField, rates::FaceField, ::Nothing, forward;
+        tendency::FaceField, rates::FaceField, geometry, forward;
         reuse_flux = nothing,
     )
     return _phase_advection_workspace(
-        tendency, rates, nothing, forward; reuse_flux,
+        tendency, rates, geometry, forward; reuse_flux,
     )
 end
 
@@ -136,7 +35,9 @@ function _momentum_component_workspace(
     return MomentumComponentWorkspace(
         value, FaceField{Axis}(mesh, T),
         FaceField{Axis}(mesh, T), FaceField{Axis}(mesh, T), FaceField{Axis}(mesh, T),
-        advection, ntuple(_ -> zeros(T, face_count), 6)...
+        advection, ntuple(_ -> zeros(T, face_count), 6)...,
+        PhaseDrainLimiter(T, face_count, advection),
+        PhaseDrainLimiter(T, face_count, advection),
     )
 end
 
@@ -183,11 +84,14 @@ function _reconfigure_momentum_component!(
         resize!(values, face_count)
         fill!(values, zero(T))
     end
+    _resize_drain_limiter!(component.liquid_limiter, face_count, advection)
+    _resize_drain_limiter!(component.gas_limiter, face_count, advection)
     return MomentumComponentWorkspace(
         component.value, component.source, component.fraction,
         component.predicted_fraction, component.increment, advection,
         component.old_fraction, component.new_fraction,
         component.values, component.sources, component.delta, component.rates,
+        component.liquid_limiter, component.gas_limiter,
     )
 end
 
@@ -288,11 +192,20 @@ function _advect_momentum_component!(
     sources = _pack_phase_faces!(component.sources, component.source)
     delta = component.delta
     schedule = component.advection.schedule
+    for (flux, liquid, limiter) in (
+            (work.liquid_flux, true, component.liquid_limiter),
+            (work.gas_flux, false, component.gas_limiter),
+        )
+        _phase_drain_limit!(
+            limiter.excess, limiter.flush, limiter.suspect,
+            component.advection, schedule, flux, values, oldc, liquid, axis,
+        )
+    end
     @_parallel for output in 1:length(values)
         value = zero(eltype(delta))
-        for (rho, flux, liquid) in (
-                (density[1], work.liquid_flux, true),
-                (density[2], work.gas_flux, false),
+        for (rho, flux, liquid, limiter) in (
+                (density[1], work.liquid_flux, true, component.liquid_limiter),
+                (density[2], work.gas_flux, false, component.gas_limiter),
             )
             for pointer in component.advection.dual_offsets[output]:(
                     component.advection.dual_offsets[output + 1] - 1
@@ -309,6 +222,7 @@ function _advect_momentum_component!(
                     face, schedule, flux, mesh, values,
                     cm, cp, nm, np, ctu_threshold,
                     scheme, amr_interface_scheme,
+                    limiter.excess, limiter.flush,
                 )
                 sign = @inbounds component.advection.dual_signs[pointer]
                 value += rho * sign * (

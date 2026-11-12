@@ -1,3 +1,36 @@
+"""
+    _overdrain_suspects(workspace)
+
+Unknowns whose phase update can drain more phase than their staggered content
+holds. A level transition weighs a partial flux by the strip of the receiving
+unknown while the cut-donor bound limits it by the strip of the donating cell,
+so only those unknowns need the outflow limiter of `_phase_drain_limit!`; on a
+conforming patch the cell-wise outflow bound keeps the own-value coefficient
+non-negative.
+"""
+function _overdrain_suspects(
+        workspace::StaggeredAdvectionWorkspace{Axis, T, M, S},
+    ) where {Axis, T, M, S}
+    return falses(length(workspace.dual_offsets) - 1)
+end
+function _overdrain_suspects(
+        workspace::StaggeredAdvectionWorkspace{Axis, T, M, S},
+    ) where {Axis, T, M, S <: AMRDualAdvectionSchedule}
+    schedule = workspace.schedule
+    suspect = falses(length(workspace.dual_offsets) - 1)
+    for output in eachindex(suspect)
+        for pointer in workspace.dual_offsets[output]:(
+                workspace.dual_offsets[output + 1] - 1
+            )
+            if schedule.faces[workspace.dual_faces[pointer]].refinement_interface
+                suspect[output] = true
+                break
+            end
+        end
+    end
+    return suspect
+end
+
 function _phase_advection_workspace(
         tendency::FaceField{Axis, T}, rates::FaceField{Axis, T}, geometry::G,
         forward; reuse_flux = nothing,
@@ -12,8 +45,115 @@ function _phase_advection_workspace(
     # Rebuild this part; never alias it to the uncut mesh-only cache.
     return StaggeredAdvectionWorkspace(
         tendency, rates,
-        _geometry_phase_schedule(geometry, Val(Axis)), forward
+        _open_strip_phase_schedule(
+            _geometry_phase_schedule(geometry, Val(Axis)), geometry, Val(Axis),
+        ),
+        forward
     )
+end
+
+# The open staggered volume interpolates each cell with half of the open strip
+# behind the face (eq:momentum:volumes, eq:momentum:interpolation). At a split
+# coarse side that strip is generally not the same fraction of the open cell as
+# the geometric fraction of the side, so the phase-flux factorization must use
+# the open-volume fractions for its divergence to commute with the same
+# interpolation that forms the staggered fraction (eq:momentum:mass-identity,
+# condition (b)). Every phase schedule -- one-velocity momentum, two-velocity
+# momentum and the staggered phase scalars -- shares this factorization.
+function _open_strip_phase_schedule(
+        schedule, geometry::GeometryField{T}, ::Val{Axis},
+    ) where {T, Axis}
+    mesh = geometry.mesh
+    # Uniform cut cells and uncut hanging cells already use the correct
+    # geometric weights. Avoid rebuilding incidences for that common case.
+    needs_correction = false
+    for face in mesh.faces
+        face.axis == Axis || continue
+        for ref in (face.minus, face.plus)
+            side_fraction = face.area / mesh.blocks[ref.block].spacing[3 - Axis]
+            open = _get(geometry.open_fraction, ref)
+            if side_fraction < one(T) && zero(T) < open < one(T)
+                needs_correction = true
+                break
+            end
+        end
+        needs_correction && break
+    end
+    needs_correction || return schedule
+
+    incidences, global_to_local, _ = _component_incidences(mesh, Val(Axis), T)
+    nx, ny = mesh.block_size
+    local_index = length(geometry.dual_volumes[Axis])
+    for (boundary_index, face) in pairs(mesh.boundary_faces)
+        face.axis == Axis || continue
+        local_index += 1
+        fraction = T(face.area / mesh.blocks[face.cell.block].spacing[3 - Axis])
+        push!(
+            incidences[_cell_index(face.cell, nx, ny)],
+            ComponentFaceIncidence(
+                local_index, length(mesh.faces) + boundary_index, face.side, fraction,
+            ),
+        )
+    end
+
+    changed = false
+    for (cell_index, cell_faces) in pairs(incidences)
+        block = (cell_index - 1) ÷ (nx * ny) + 1
+        local_cell = (cell_index - 1) % (nx * ny)
+        ref = CellRef(block, local_cell % nx + 1, local_cell ÷ nx + 1)
+        open = _get(geometry.open_fraction, ref)
+        zero(T) < open < one(T) || continue
+        for index in eachindex(cell_faces)
+            incidence = cell_faces[index]
+            incidence.fraction < one(T) || continue
+            face = incidence.global_index <= length(mesh.faces) ?
+                mesh.faces[incidence.global_index] :
+                mesh.boundary_faces[incidence.global_index - length(mesh.faces)]
+            lo, hi = _face_local_tangent_interval(mesh, ref, face)
+            bounds = Axis == 1 ? (-0.5, 0.5, lo, hi) : (lo, hi, -0.5, 0.5)
+            fraction = T(_open_subcell_area(geometry.solid, ref, bounds...) / open)
+            changed |= fraction != incidence.fraction
+            cell_faces[index] = ComponentFaceIncidence(
+                incidence.local_index, incidence.global_index, incidence.side, fraction,
+            )
+        end
+    end
+
+    changed || return schedule
+    # Match `_bounded_phase_schedule`'s normal stars and transverse product
+    # plan, changing only the cell-to-face partition fractions.
+    coefficients = Dict{NTuple{3, Int}, T}()
+    for (index, face) in pairs(mesh.faces)
+        if face.axis == Axis
+            centre = global_to_local[index]
+            for (cell, sign) in ((face.minus, one(T)), (face.plus, -one(T)))
+                for other in incidences[_cell_index(cell, nx, ny)]
+                    other.global_index == index && continue
+                    _add_amr_flux_weight!(
+                        coefficients, other.local_index, centre, index,
+                        sign * other.fraction / 2,
+                    )
+                end
+            end
+        else
+            minus = incidences[_cell_index(face.minus, nx, ny)]
+            plus = incidences[_cell_index(face.plus, nx, ny)]
+            for side in (-1, 1), a in minus, b in plus
+                a.side == side == b.side || continue
+                _add_amr_flux_weight!(
+                    coefficients, a.local_index, b.local_index, index,
+                    a.fraction * b.fraction / 2,
+                )
+            end
+        end
+    end
+    for face in schedule.faces
+        for pointer in face.first_weight:(face.first_weight + face.weight_count - 1)
+            key = (face.minus, face.plus, schedule.flux_indices[pointer])
+            schedule.flux_weights[pointer] = coefficients[key]
+        end
+    end
+    return schedule
 end
 
 function _phase_advection_workspace(field::FaceField{Axis, T}, geometry) where {Axis, T}
@@ -53,7 +193,7 @@ function PhaseFaceScalar{Axis}(interface::InterfaceField{T, M}; liquid = 1, gas 
     end
     workspace = _phase_advection_workspace(l, interface.geometry)
     count = length(l.interior) + length(l.boundary)
-    scratch = PhaseFaceAdvectionScratch(T, count)
+    scratch = PhaseFaceAdvectionScratch(T, count, workspace)
     return PhaseFaceScalar{
         Axis, T, M, typeof(scratch), typeof(workspace), typeof(interface),
     }(
@@ -111,29 +251,111 @@ function integrate(quantity::PhaseFaceScalar, phase::Symbol)
     return result
 end
 
+# The fluctuation form of an unknown is a convex combination of its old value
+# and the values that enter it exactly when the phase volume leaving it,
+# O = sum of its positive partial volumes, is at most the phase content
+# V_f * alpha_f it holds at the start of the sweep: the own-value coefficient
+# is (V alpha - O)/(V alpha_new) (eq:momentum:own-coefficient). On a conforming
+# patch the cell-wise outflow bound gives O <= V alpha. At a hanging segment the
+# factorization weighs a partial flux by the strip of the receiving unknown and
+# bounds it by the strip of the donating cell, so a draining control volume can
+# lose more phase than its interpolated content holds, for every state
+# (including the net-volume upwind one): a phase scalar 0 among neighbours 1
+# became 1.98 there (issue #70).
+#
+# The excess O - V alpha of such an unknown leaves at the mean of the values
+# that enter it instead of at its own value. Its update stays the conservative
+# one -- every partial volume is valued once, for its sender and its receiver
+# alike -- and becomes a convex combination, because the coefficients of the
+# old value, (V alpha - O(1 - excess)), and of the entering values, I - O
+# excess, are then both non-negative and sum to V alpha_new.
+@inline function _phase_fraction(values, index, liquid::Bool)
+    return liquid ? @inbounds(values[index]) :
+        one(eltype(values)) - @inbounds(values[index])
+end
+
+@inline function _phase_limited_value(values, excess, flush, index)
+    value = @inbounds values[index]
+    weight = @inbounds excess[index]
+    return weight > zero(weight) ?
+        value + weight * (@inbounds(flush[index]) - value) : value
+end
+
+# Excess outflow of every unknown of one phase, and the mean value of what
+# enters it, for the values of this sweep. Convergent patches are skipped: the
+# cell-wise outflow bound keeps their own-value coefficient non-negative.
+function _phase_drain_limit!(
+        excess, flush, suspect, workspace, schedule, flux, values,
+        old_fraction, liquid::Bool, axis,
+    )
+    T = eltype(values)
+    fill!(excess, zero(T))
+    @_parallel for output in 1:length(values)
+        suspect[output] || continue
+        outflow = inflow = entering = zero(T)
+        for pointer in workspace.dual_offsets[output]:(
+                workspace.dual_offsets[output + 1] - 1
+            )
+            face_index = @inbounds workspace.dual_faces[pointer]
+            face = schedule.faces[face_index]
+            face.axis == axis || continue
+            minus_side = @inbounds workspace.dual_signs[pointer] > 0
+            for k in face.first_weight:(face.first_weight + face.weight_count - 1)
+                partial = @inbounds schedule.flux_weights[k] *
+                    flux[schedule.flux_indices[k]]
+                leaving = minus_side ? max(partial, zero(T)) : max(-partial, zero(T))
+                inflow_part = minus_side ? max(-partial, zero(T)) : max(partial, zero(T))
+                outflow += leaving
+                inflow += inflow_part
+                entering += inflow_part *
+                    (
+                    minus_side ? @inbounds(values[face.plus]) :
+                        @inbounds(values[face.minus])
+                )
+            end
+        end
+        content = _phase_dual_volume(schedule, output) *
+            _phase_fraction(old_fraction, output, liquid)
+        # A relative tolerance: a vanishing content with a round-off outflow
+        # is not a drained unknown.
+        drained = outflow - content
+        drained > T(128) * eps(T) * outflow || continue
+        # Without an inflow there is nothing to blend towards: keep the own
+        # value, never a value left over from an earlier sweep or phase.
+        @inbounds flush[output] = values[output]
+        inflow > zero(T) && (@inbounds flush[output] = entering / inflow)
+        @inbounds excess[output] = drained / outflow
+    end
+    return excess
+end
+
 @inline function _ctu_phase_transport(
         face, schedule::UniformDualAdvectionSchedule,
-        flux, mesh, values
+        flux, mesh, values, excess, flush,
     )
     a = face.area * flux[face.flux_a] / (2mesh.faces[face.flux_a].area)
     b = face.area * flux[face.flux_b] / (2mesh.faces[face.flux_b].area)
     m, p = face.minus, face.plus
-    qa = a >= 0 ? values[m] : values[p]
-    qb = b >= 0 ? values[m] : values[p]
+    qm = _phase_limited_value(values, excess, flush, m)
+    qp = _phase_limited_value(values, excess, flush, p)
+    qa = a >= 0 ? qm : qp
+    qb = b >= 0 ? qm : qp
     return a + b,
         a * (values[m] - qa) + b * (values[m] - qb),
         a * (values[p] - qa) + b * (values[p] - qb)
 end
 @inline function _ctu_phase_transport(
         face, schedule::AMRDualAdvectionSchedule,
-        flux, mesh, values
+        flux, mesh, values, excess, flush,
     )
     volume = minus_difference = plus_difference = zero(eltype(flux))
     m, p = face.minus, face.plus
+    qm = _phase_limited_value(values, excess, flush, m)
+    qp = _phase_limited_value(values, excess, flush, p)
     for k in face.first_weight:(face.first_weight + face.weight_count - 1)
         partial = schedule.flux_weights[k] * flux[schedule.flux_indices[k]]
         volume += partial
-        upwind = partial >= 0 ? values[m] : values[p]
+        upwind = partial >= 0 ? qm : qp
         minus_difference += partial * (values[m] - upwind)
         plus_difference += partial * (values[p] - upwind)
     end
@@ -188,13 +410,24 @@ end
 @inline function _phase_transport(
         face, schedule, flux, mesh, values,
         cm, cp, nm, np, ctu_threshold, scheme,
-        amr_interface_scheme
+        amr_interface_scheme, excess, flush,
     )
-    if min(nm, np) < ctu_threshold
+    excess_minus = @inbounds excess[face.minus]
+    excess_plus = @inbounds excess[face.plus]
+    if min(nm, np) < ctu_threshold ||
+            excess_minus > zero(excess_minus) || excess_plus > zero(excess_plus)
         # For a split method, term-wise upwinding of the partial interpolated
-        # volume fluxes is the CTU flux of thesis §pt1:momentum:flux_interp_ctu.
-        # Keeping the partial terms separate cancels fluid in transit.
-        return _ctu_phase_transport(face, schedule, flux, mesh, values)
+        # volume fluxes is the corner-transport-upwind flux of
+        # eq:momentum:ctu-exchange: upwinding the net volume plus a
+        # counter-flow exchange between the two unknowns of the dual face.
+        # A limited unknown takes this flux in the bulk branch as well: the
+        # bulk state moves the net volume of the face at one value, while
+        # `_phase_drain_limit!` counts the partial volumes by sign, so the two
+        # only agree on the outflow of a limited unknown when every partial is
+        # upwinded.
+        return _ctu_phase_transport(
+            face, schedule, flux, mesh, values, excess, flush,
+        )
     end
     volume = _phase_dual_flux(face, schedule, flux, mesh)
     vm = _phase_dual_volume(schedule, face.minus)
@@ -265,6 +498,12 @@ function _advect_phase_faces_workspace!(
         values = _pack_phase_faces!(q.scratch.values, field)
         inc = q.scratch.increment
         fill!(inc, zero(T))
+        limiter = q.scratch.limiter
+        excess, flush = limiter.excess, limiter.flush
+        _phase_drain_limit!(
+            excess, flush, limiter.suspect, workspace, schedule, flux,
+            values, liquid_fraction, liquid, axis,
+        )
         @_parallel for output in 1:length(values)
             value = zero(eltype(values))
             for pointer in workspace.dual_offsets[output]:(
@@ -285,7 +524,7 @@ function _advect_phase_faces_workspace!(
                 _, minus_difference, plus_difference = _phase_transport(
                     face, schedule, flux, mesh, values,
                     cm, cp, nm, np, ctu_threshold,
-                    scheme, amr_interface_scheme,
+                    scheme, amr_interface_scheme, excess, flush,
                 )
                 sign = @inbounds workspace.dual_signs[pointer]
                 value += sign * (
