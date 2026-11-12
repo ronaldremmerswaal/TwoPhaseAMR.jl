@@ -516,6 +516,117 @@ function _embedded_cartesian_tangent_conductance(
     return measure / distance
 end
 
+# Signed distance from `point` to the PLIC plane of cell `ref`, measured along
+# the physical normal. The plane is stored in normalized cell coordinates, so
+# the metric divides by the anisotropic spacing and then by the norm.
+function _embedded_plic_distance(
+        geometry::GeometryField{T}, ref, point,
+    ) where {T}
+    mesh = geometry.mesh
+    spacing = mesh.blocks[ref.block].spacing
+    center = cellcenter(mesh, ref.block, ref.i, ref.j)
+    normal_x = _get(geometry.solid.normal_x, ref)
+    normal_y = _get(geometry.solid.normal_y, ref)
+    dx = _wrapped_delta(
+        point[1] - center[1], mesh.extent[1], mesh.periodic[1],
+    ) / T(spacing[1])
+    dy = _wrapped_delta(
+        point[2] - center[2], mesh.extent[2], mesh.periodic[2],
+    ) / T(spacing[2])
+    return T(
+        (normal_x * dx + normal_y * dy - _get(geometry.solid.intercept, ref)) /
+            hypot(normal_x / T(spacing[1]), normal_y / T(spacing[2])),
+    )
+end
+
+# Length of the part of a cut-cell PLIC segment inside the tangential strip
+# [tangent_lo, tangent_hi] and the component-direction half-strip of one dual
+# node. A convex strip cut by the PLIC line has exactly that clipped piece as
+# the wall boundary of its open part.
+function _embedded_cut_wall_measure(
+        geometry::GeometryField{T}, ::Val{Axis}, ref,
+        tangent_lo, tangent_hi, side, segment,
+    ) where {T, Axis}
+    mesh = geometry.mesh
+    half = T(0.5)
+    axis_lo, axis_hi = side < 0 ? (-half, zero(T)) : (zero(T), half)
+    lower = Axis == 1 ? (axis_lo, T(tangent_lo)) : (T(tangent_lo), axis_lo)
+    upper = Axis == 1 ? (axis_hi, T(tangent_hi)) : (T(tangent_hi), axis_hi)
+    first, last = segment
+    delta = (last[1] - first[1], last[2] - first[2])
+    parameter_lo, parameter_hi = zero(T), one(T)
+    for dimension in 1:2
+        if iszero(delta[dimension])
+            lower[dimension] <= first[dimension] <= upper[dimension] ||
+                return zero(T)
+        else
+            lo = (lower[dimension] - first[dimension]) / delta[dimension]
+            hi = (upper[dimension] - first[dimension]) / delta[dimension]
+            lo, hi = minmax(lo, hi)
+            parameter_lo = max(parameter_lo, lo)
+            parameter_hi = min(parameter_hi, hi)
+            parameter_hi > parameter_lo || return zero(T)
+        end
+    end
+    spacing = mesh.blocks[ref.block].spacing
+    portion = parameter_hi - parameter_lo
+    return max(
+        zero(T), hypot(
+            portion * delta[1] * T(spacing[1]),
+            portion * delta[2] * T(spacing[2]),
+        ),
+    )
+end
+
+# No-slip closure of a cut-cell PLIC segment. The segment is split among the
+# dual nodes by the tangential strips of the two component faces and by the
+# mid-plane of the component direction, so every piece is owned once. A
+# fluid-side node $f$ satisfies $u_w = u_f - d_f\,\partial_n u$ with $u_w = 0$,
+# so the flux through its piece $A_f$ is $(A_f/d_f)u_f$: a Dirichlet
+# conductance that is exact for linear data. A node whose centre lies inside
+# the solid carries its piece with the same magnitude and the opposite sign,
+# which limits the rows of those nodes to first order; they are kept as
+# diffusion unknowns because the cut-cell projection updates the same faces.
+function _push_embedded_cut_wall!(
+        connections, geometry::GeometryField{T}, ::Val{Axis}, ref, cell_faces,
+        segment, midpoint, global_to_local,
+    ) where {T, Axis}
+    mesh = geometry.mesh
+    spacing = mesh.blocks[ref.block].spacing
+    floor = T(1.0e-6) * min(spacing...)
+    for first in cell_faces
+        first.side < 0 || continue
+        first_face = mesh.faces[first.global_index]
+        first_lo, first_hi = _face_local_tangent_interval(mesh, ref, first_face)
+        for second in cell_faces
+            second.side > 0 || continue
+            second_face = mesh.faces[second.global_index]
+            second_lo, second_hi = _face_local_tangent_interval(
+                mesh, ref, second_face,
+            )
+            lo = max(T(first_lo), T(second_lo))
+            hi = min(T(first_hi), T(second_hi))
+            hi > lo || continue
+            for (incidence, side, face) in (
+                    (first, -1, first_face), (second, 1, second_face),
+                )
+                measure = _embedded_cut_wall_measure(
+                    geometry, Val(Axis), ref, lo, hi, side, segment,
+                )
+                measure > zero(T) || continue
+                distance = abs(_embedded_plic_distance(geometry, ref, face.center))
+                push!(
+                    connections, WallDiffusionConnection(
+                        global_to_local[incidence.global_index],
+                        measure / max(distance, floor), midpoint, true,
+                    ),
+                )
+            end
+        end
+    end
+    return connections
+end
+
 function _embedded_wall_connections(
         geometry::GeometryField{T}, ::Val{Axis},
         incidences, global_to_local, aligned,
@@ -537,75 +648,33 @@ function _embedded_wall_connections(
             midpoint = ((p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2)
             length = hypot(p1[1] - p0[1], p1[2] - p0[2])
             length > zero(T) || continue
-            # Cartesian segments use their wall-normal distance and owned
-            # portion. Tilted cuts use a different closure, whose limit is
-            # not continuous at an aligned wall; see issue #110.
+            # Cartesian segments recovered from the face aperture use their
+            # wall-normal distance and owned portion. A reconstructed PLIC
+            # segment of a cut cell, Cartesian or tilted, uses the cut-wall
+            # closure below.
             wall_axis = _embedded_cartesian_wall_axis(segment, T)
+            if !isnothing(cut)
+                _push_embedded_cut_wall!(
+                    connections, geometry, Val(Axis), ref, incidences[cell_index],
+                    segment, midpoint, global_to_local,
+                )
+                continue
+            end
             for incidence in incidences[cell_index]
-                face = mesh.faces[incidence.global_index]
-                if wall_axis != 0 && (wall_axis != Axis || isnothing(cut))
-                    if wall_axis != Axis
-                        conductance = _embedded_cartesian_tangent_conductance(
-                            geometry, Val(Axis), ref, incidence, segment, midpoint,
-                        )
-                        conductance > zero(T) || continue
-                        push!(
-                            connections,
-                            WallDiffusionConnection(
-                                incidence.local_index, conductance, midpoint, true,
-                            ),
-                        )
-                        continue
-                    else
-                        # The on-wall normal face is removed from the unknowns.
-                        # The opposite face still needs the half-conductance
-                        # missing from the aperture-weighted dual flux.
-                        side = segment[1][Axis] < zero(T) ? -1 : 1
-                        incidence.side == side && continue
-                        tangent = 3 - Axis
-                        strip_lo, strip_hi = T.(_face_local_tangent_interval(mesh, ref, face))
-                        lo, hi = minmax(segment[1][tangent], segment[2][tangent])
-                        measure = max(
-                            zero(T), min(hi, strip_hi) - max(lo, strip_lo),
-                        ) * T(leaf.spacing[tangent]) / T(2)
-                        tangential = false
-                    end
-                    measure > zero(T) || continue
-                    distance = abs(
-                        _wrapped_delta(
-                            face.center[wall_axis] - midpoint[wall_axis],
-                            mesh.extent[wall_axis], mesh.periodic[wall_axis],
-                        )
-                    )
-                    distance = max(T(distance), T(0.25) * min(leaf.spacing...))
-                    push!(
-                        connections,
-                        WallDiffusionConnection(
-                            incidence.local_index, measure / distance,
-                            midpoint, tangential,
-                        ),
-                    )
-                    continue
-                end
-                distance = hypot(
-                    _wrapped_delta(
-                        face.center[1] - midpoint[1], mesh.extent[1],
-                        mesh.periodic[1],
-                    ),
-                    _wrapped_delta(
-                        face.center[2] - midpoint[2], mesh.extent[2],
-                        mesh.periodic[2],
-                    ),
+                # A normal grid-aligned wall coincides with a component face,
+                # which is prescribed zero and removed from the unknowns. The
+                # mid-plane measure of its normal contact already carries the
+                # full Dirichlet flux to that face, so no wall connection is
+                # added here; a tangential face owns its part of the segment.
+                wall_axis == Axis && continue
+                conductance = _embedded_cartesian_tangent_conductance(
+                    geometry, Val(Axis), ref, incidence, segment, midpoint,
                 )
-                distance = max(
-                    T(distance), T(0.25) * min(leaf.spacing...),
-                )
+                conductance > zero(T) || continue
                 push!(
                     connections,
                     WallDiffusionConnection(
-                        global_to_local[incidence.global_index],
-                        T(0.5) * incidence.fraction * length / distance,
-                        midpoint, true,
+                        incidence.local_index, conductance, midpoint, true,
                     ),
                 )
             end
@@ -959,7 +1028,11 @@ function _open_dual_trace(
             hi = lo + open_width
         end
     end
-    return lo, (lo + hi) / 2, hi
+    # Each half of the cell's open trace belongs to the dual face on that side
+    # of the cell centre, as on an uncut cell. Splitting at the midpoint of the
+    # surviving open part would move the dual boundary whenever the solid clips
+    # one side.
+    return lo, clamp(offset, lo, hi), hi
 end
 function _open_dual_trace(
         mesh::BlockTreeMesh, ::Val{Axis}, ref, side, flux_face, ::Type{T},
@@ -975,6 +1048,89 @@ function _open_dual_trace(
     return offset - width / 2, offset, offset + width / 2
 end
 
+
+# The advection flux star measures a normal contact by the apertures of the
+# two primal flux faces flanking it. For an uncut row that average is the
+# interface measure, but at a cut cell the flanking faces lie inside the solid
+# and a closed face removes half of the interface. Replace the measure of every
+# same-level normal contact by the open area of the interface itself: the cell
+# mid-plane, clipped by the solid over the tangential overlap of the two dual
+# faces. Callers on an unembedded mesh retain the advection measures.
+@inline _cut_cell_normal_measures!(connections, ::BlockTreeMesh, ::Val, incidences) =
+    connections
+
+function _cut_cell_normal_measures!(
+        connections::Vector{DualDiffusionConnection{T}},
+        geometry::GeometryField{T}, ::Val{Axis}, incidences,
+    ) where {T, Axis}
+    mesh = geometry.mesh
+    solid = geometry.solid
+    nx, ny = mesh.block_size
+    tangent = 3 - Axis
+    positions = Dict{Tuple{Int, Int}, Int}()
+    for (position, connection) in pairs(connections)
+        connection.axis == Axis || continue
+        positions[(connection.minus, connection.plus)] = position
+    end
+    extra = DualDiffusionConnection{T}[]
+    for (cell_index, cell_faces) in pairs(incidences)
+        length(cell_faces) >= 2 || continue
+        block_index = (cell_index - 1) ÷ (nx * ny) + 1
+        cell_local = (cell_index - 1) % (nx * ny)
+        ref = CellRef(block_index, cell_local % nx + 1, cell_local ÷ nx + 1)
+        spacing = T(mesh.blocks[block_index].spacing[Axis])
+        tangent_spacing = T(mesh.blocks[block_index].spacing[tangent])
+        for first in cell_faces
+            first.side < 0 || continue
+            first_face = mesh.faces[first.global_index]
+            first_lo, first_hi = _face_local_tangent_interval(mesh, ref, first_face)
+            for second in cell_faces
+                second.side > 0 || continue
+                first.local_index == second.local_index && continue
+                second_face = mesh.faces[second.global_index]
+                distance = _component_face_distance(
+                    mesh, first_face.center, second_face.center, Axis,
+                )
+                # Only the two faces of one cell, one cell width apart, meet at
+                # that cell's mid-plane. Level-transition contacts keep the
+                # schedule measure.
+                abs(distance - spacing) <= 256eps(T) * spacing || continue
+                second_lo, second_hi = _face_local_tangent_interval(
+                    mesh, ref, second_face,
+                )
+                lo = max(T(first_lo), T(second_lo))
+                hi = min(T(first_hi), T(second_hi))
+                hi > lo || continue
+                solid_fraction = clamp(
+                    T(_cell_solid_line_fraction(solid, ref, Axis, zero(T), lo, hi)),
+                    zero(T), one(T),
+                )
+                measure = (hi - lo) * (one(T) - solid_fraction) * tangent_spacing
+                # A mid-plane that is entirely solid leaves the two faces with
+                # no diffusive path; keep the schedule measure so a cut
+                # control volume never loses its only normal contact.
+                measure > zero(T) || continue
+                minus, plus = minmax(first.local_index, second.local_index)
+                position = get(positions, (minus, plus), 0)
+                if position > 0
+                    existing = connections[position]
+                    connections[position] = DualDiffusionConnection(
+                        minus, plus, Axis, measure, existing.distance,
+                        existing.refinement_interface,
+                    )
+                else
+                    push!(
+                        extra, DualDiffusionConnection(
+                            minus, plus, Axis, measure, T(distance), true,
+                        ),
+                    )
+                end
+            end
+        end
+    end
+    append!(connections, extra)
+    return connections
+end
 
 function _geometric_diffusion_connections(
         geometry, ::Val{Axis}, schedule::AMRDualAdvectionSchedule{T}, incidences,
@@ -1043,6 +1199,7 @@ function _geometric_diffusion_connections(
     connections = _dual_diffusion_connections(
         mesh, schedule, local_to_global; excluded_fluxes,
     )
+    _cut_cell_normal_measures!(connections, geometry, Val(Axis), incidences)
     append!(connections, transverse_connections)
     _add_split_side_diffusion_connections!(
         connections, geometry, Val(Axis), incidences,
@@ -1414,8 +1571,16 @@ Embedded walls include surfaces aligned with cell faces as well as PLIC cuts.
 For Cartesian wall segments the tangential closure uses the wall-normal distance
 and the portion of the segment owned by the dual face. A wall-aligned normal
 velocity is prescribed zero and removed from the diffusion unknowns.
-Transverse contact measures use overlaps of the bisected open traces, including
-across AMR interfaces. Centred contacts share a linear-exact gradient;
+A cut-cell PLIC segment, Cartesian or tilted, is split among the dual faces by
+their tangential strips and by the mid-plane of the component direction; the
+conductance of a piece is its length divided by the perpendicular distance from
+the node to the reconstructed plane, which reproduces the wall flux of a linear
+velocity exactly. A node whose centre lies inside the solid keeps its piece, so
+every positive-aperture face stays a projection degree of freedom.
+Normal contacts take the open area of the cell mid-plane, so a closed flanking
+primal face cannot halve them. Transverse contact measures use overlaps of the
+bisected open traces, including across AMR interfaces, and a clipped open trace
+is bisected at the cell centre. Centred contacts share a linear-exact gradient;
 wall-adjacent orphans use a Dirichlet partner when available, while remaining
 orphans use flux-local two-point stencils. Domain-wall measures belong only
 to the dual strips that touch the wall.

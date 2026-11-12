@@ -174,6 +174,13 @@ contact construction. With a solid, the constructor of
 uses the cut-cell schedule of \cref{sec:momentum:dual} (weights times
 apertures, open volumes $\opendualvol{f}$, one where they vanish) and rebuilds
 the transverse connections from the open traces of the cells.
+A normal connection between the two unknowns of one cell takes the open area
+of that cell's mid-plane over the tangential overlap of the two faces: the
+schedule average halves whenever one of the two primal faces flanking the
+connection is closed, which is exactly the wall-adjacent row (\issue{110}).
+The open trace of a cut cell is bisected at the cell centre, as on an uncut
+cell, so a clipped trace does not move the boundary of a staggered dual
+strip.
 Across an open face $h$ of axis $t\neq k$ between two cells,
 the extent of each cell along $k$ is clipped to the open part of its side on
 $h$ and bisected, each half belonging to the unknown of that cell on its
@@ -203,26 +210,42 @@ segment on the side of $f$, owned whole by the segment of a split side that
 touches the wall, for a normal one the part of the wall segment over $f$;
 connections whose segment is covered are dropped). Embedded segments come
 from cut cells and from uncut open cells sharing a face with a covered cell
-(adjacent faces on one side are merged). For a non-axis-aligned PLIC segment
-of length $\meas{\interface^{\solid}_c}$ and midpoint
-$\pos{\interface^{\solid}_c}$, the coefficient for an unknown $f$ of
-component $k$ on a side of $c$ is
-\begin{equation}\label{eq:viscosity:cut}
-  \wallcond{w}=\frac{\half\sidefrac{c}{f}\meas{\interface^{\solid}_c}}
-    {\max\roundpar{\abs{\pos{f}-\pos{\interface^{\solid}_c}}_2,\ \tfrac14\min_t\cellwidth{c}{t}}}
-  \quad(\text{omitted for \apitype{FreeSlip}\code{()}}).
-\end{equation}
-For a Cartesian wall segment, including an exactly axis-aligned PLIC segment,
-a tangential face owns the part of the segment within its dual strip; its
+(adjacent faces on one side are merged). For a Cartesian wall segment recovered
+from the face aperture, a tangential face owns the part of the segment within
+its dual strip; its
 conductance is that length divided by the wall-normal distance to the face,
 bounded below by one quarter of the smallest cell width. In particular, an
 open tangential node a distance $h/2$ from a grid-aligned wall uses
 $\meas{f}/(h/2)$, not a distance to the primal-cell segment midpoint.
+A reconstructed PLIC segment of a cut cell, Cartesian or tilted, is split
+among the dual faces of that cell by the tangential strip of a component face
+and the half of the cell on that face's side, so the pieces partition the
+segment and each piece is owned once. The wall distance of an unknown $f$ is
+the \emph{perpendicular} distance $d_f$ to the reconstructed plane of its
+cell, not the distance to the segment midpoint, and the conductance is
+\begin{equation}\label{eq:viscosity:cut}
+  \wallcond{w}=\frac{\meas{\interface^{\solid}_{c,f}}}
+    {\max\roundpar{\abs{d_f},\ 10^{-6}\min_t\cellwidth{c}{t}}}
+  \quad(\text{omitted for \apitype{FreeSlip}\code{()}}),
+\end{equation}
+with $\meas{\interface^{\solid}_{c,f}}$ the length of the piece. The factor
+$\tfrac12\sidefrac{c}{f}$ of the previous closure is gone because the pieces
+already partition the segment. A fluid-side unknown satisfies
+$0=\velo_w=\velo_f-d_f\partial_n\velo$ for the wall-normal derivative
+$\partial_n\velo$, so $\wallcond{w}\velo_f$ equals the wall flux
+$\meas{\interface^{\solid}_{c,f}}\partial_n\velo$ of a linear profile
+exactly. A node whose centre lies inside the solid carries its piece with the
+same magnitude and the opposite sign: it has no fluid on the wall side, and
+prescribing it would remove a face that the cut-cell projection updates. Its
+rows therefore stay first order, which is the remaining defect of
+\issue{110}.
 Where a grid-aligned wall coincides with a normal component face, that face is
-prescribed zero and removed from the diffusion unknowns. The aperture-weighted
-flux supplies half the wall-normal conductance to the opposite face, and the
-embedded connection supplies the other half, including for
-\apitype{FreeSlip}\code{()}. The retained principal stiffness block also
+prescribed zero and removed from the diffusion unknowns. The mid-plane contact
+of the adjacent cell is fully open there and carries the whole Dirichlet flux
+to the eliminated face, for both wall types; no separate wall connection is
+added, because an aperture-weighted half contact plus a compensating half
+connection is the same matrix split differently. The retained principal
+stiffness block also
 carries flux to the eliminated face. Its integrated reaction, the negative
 column sum of the eliminated-to-retained stiffness block applied to the
 retained velocities, is stored separately from wall connections and included
@@ -241,9 +264,16 @@ to zero at the start of every step and after projection
 as well as cut walls (\issue{79}). The aligned-wall manufactured Helmholtz
 solution now converges at second order on uniform and composite meshes in the
 maximum, $L^2$ and $L^1$ norms (\issue{106};
-\code{test/operators/embedded_wall_rows.jl}). The non-Cartesian PLIC closure
-remains approximately first order in the corresponding sloped-wall comparison,
-and is not continuous in general in the tilted-wall limit (\issue{110}).
+\code{test/operators/embedded_wall_rows.jl}). A cut-cell PLIC segment now uses
+its own reconstructed plane, and every cut-wall row of a fluid-side unknown is
+exact for a linear velocity, but the manufactured Helmholtz solution on a
+tilted wall still converges with observed $L^2$ orders of $1.1$ to $1.4$, and
+$0.74$ on the composite grid, rather than two (\issue{110};
+\code{test/operators/embedded_wall_rows.jl}). The remaining first-order error
+sits in the cut cells' interior contact measures, which are rebuilt from
+bisected one-dimensional traces; a node whose centre lies inside the solid
+also carries its wall piece with the flux sign of a fluid-side node, which a
+symmetric non-negative stiffness cannot avoid.
 The constructor builds when a solid cuts cells at a level transition
 (\issue{78}). Rows at a level transition can have a truncation error of order
 one; the derivation audit measured $0.09$ for $\abs{\Delta\velo}\le0.31$ on
@@ -405,9 +435,12 @@ conditional fractions. At a sharp viscosity jump perpendicular to a shear
 difference this mean is not the harmonic coefficient required for exact
 traction transmission. Cartesian embedded-wall rows use the owned segment
 length divided by the wall-normal distance as in the componentwise operator;
-non-Cartesian PLIC walls retain the midpoint-distance conductance
-$\wallcond{w}$ of~\cref{eq:viscosity:cut}. The two closures are not
-continuous in the tilted-wall limit (\issue{110}). Wall rows use the viscosity
+a non-Cartesian PLIC wall retains the earlier midpoint-distance conductance,
+half the open fraction of the face times the segment length divided by the
+distance from the face centre to the segment midpoint, bounded below by a
+quarter of the smallest cell width. That closure, and the cut closure
+of~\cref{eq:viscosity:cut}, are not continuous in the tilted-wall limit
+(\issue{110}). Wall rows use the viscosity
 of the cell of their solid segment; covered unknowns outside the constrained
 wall neighbourhood retain their algebraic penalty and the viscosity of
 $\cminus{f}$. The integrated stiffness and the operator returned by
