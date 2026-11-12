@@ -117,15 +117,31 @@ _projection_summary_fields(::CMDGFMProjectionStats) = (
     :preconditioner, :mixture_divergence, :mixture_volume_defect,
     :normal_velocity_defect, :momentum_identity_error,
 )
-function _print_projection_summary(io::IO, stats::_ProjectionSummaryStats)
+function _print_projection_summary(
+        io::IO, run::ProjectionRunStats, stats::_ProjectionSummaryStats,
+    )
     println(io, "  pressure projection:")
-    _summary_property(io, "converged", converged(stats); indent = "    ")
-    _summary_property(io, "iterations", iterations(stats); indent = "    ")
-    print(io, "    residual: ")
-    _summary_value(io, initial_residual(stats))
-    print(io, " -> ")
-    _summary_value(io, final_residual(stats))
-    println(io)
+    _summary_property(io, "solves this run", run.solves; indent = "    ")
+    _summary_property(io, "iterations this run", run.iterations; indent = "    ")
+    run.without_iterations > 0 && _summary_property(
+        io, "solves that did no work", run.without_iterations; indent = "    ",
+    )
+    _summary_property(io, "converged", run.converged; indent = "    ")
+    if _has_projection_reduction(run)
+        _summary_property(
+            io, "last working solve iterations", run.last_iterations;
+            indent = "    ",
+        )
+        print(io, "    last working solve residual: ")
+        _summary_value(io, run.last_initial_residual)
+        print(io, " -> ")
+        _summary_value(io, run.last_final_residual)
+        println(io)
+    else
+        _summary_property(
+            io, "last working solve residual", "none"; indent = "    ",
+        )
+    end
     for name in _projection_summary_fields(stats)
         _summary_property(
             io, replace(string(name), '_' => ' '), getfield(stats, name);
@@ -194,10 +210,12 @@ end
 
 Print a detailed summary of a completed [`FlowSimulation`](@ref) run. The
 report describes the physical/numerical model, final mesh, step and AMR
-counts, latest pressure-projection convergence, and the initial/final value of
-every simulation-owned diagnostic. `result` is the named tuple returned by
-[`simulate!`](@ref); the low-level result without cumulative counts is also
-accepted. Residuals use each solver's native norm.
+counts, the run's accumulated pressure-projection work (iterations, the number
+of solves that needed none, and the residual of the last solve that did work)
+together with the latest solve's convergence flags, and the initial/final
+value of every simulation-owned diagnostic. `result` is the named tuple
+returned by [`simulate!`](@ref); the low-level result without cumulative
+counts is also accepted. Residuals use each solver's native norm.
 """
 function print_simulation_summary(
         io::IO, flow::FlowSimulation, result::NamedTuple,
@@ -230,7 +248,7 @@ function print_simulation_summary(
         io, "refinement criteria", length(flow.system.adaptivity.criteria);
         indent = "    ",
     )
-    _print_projection_summary(io, result.pressure)
+    _print_projection_summary(io, result.projection, result.pressure)
     _print_diagnostic_summary(io, flow)
     return nothing
 end

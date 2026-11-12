@@ -754,9 +754,9 @@ the chapters state and that are tracked by issues open at the audited commit;
     Limitation & Issue & Section\\
     \midrule
     \multicolumn{3}{@{}l}{\emph{Mesh, operators and interface}}\\
-    A periodic direction with two cells per period: the face displacement is
-      ambiguous, so the gradient does not support it and the multigrid keeps
-      four cells per periodic axis
+    A periodic direction with two cells per period is resolved by the face
+      orientation of each face, so the gradient supports it; the multigrid
+      coarsest level keeps four cells per periodic axis
       & \issue{36} & \cref{sec:mesh:forest,sec:solvers:hierarchy}\\
     Dirichlet halo values are imposed at the slot centre, half a cell beyond
       the wall
@@ -764,9 +764,6 @@ the chapters state and that are tracked by issues open at the audited commit;
     The cut-cell metric replaces a vanishing open dual volume by the number
       one, which depends on the unit of length
       & \issue{42} & \cref{sec:setting:elliptic}\\
-    Level-set initialisation with a Lipschitz bound can fail for a level set
-      that touches a grid line tangentially
-      & \issue{49} & \cref{sec:interface:init}\\
     \multicolumn{3}{@{}l}{\emph{Transport and time step}}\\
     At the stable step, a cut coarse donor at a level transition can stop the
       WY transport or leave a fraction outside $[0,1]$, as can the frozen

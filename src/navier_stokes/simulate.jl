@@ -28,7 +28,9 @@ A chunk boundary between physical steps nevertheless introduces a shortened
 step and can change the trajectory. If the initial bound is infinite, the step
 is capped at one 128th of the requested simulation interval, ensuring at least
 128 steps before the target time. Returns the final time, number of steps,
-latest physical-step projection statistics, the number of topology changes,
+latest physical-step projection statistics, the accumulated projection
+statistics of this call (`projection`; see [`ProjectionRunStats`](@ref)), the
+number of topology changes,
 `unresolved_curvature_faces`, the sum of unresolved surface-tension faces
 across completed steps in this call, and `stopped`, which is `true` when the
 observer ended the run early. The latest step's unresolved-curvature count is
@@ -99,6 +101,7 @@ function _simulate!(
     stats = velocity isa FaceVelocity ?
         _one_velocity_pressure_solver!(solver, workspace).stats :
         solver.pressure_solver.stats
+    projection_run = ProjectionRunStats(T)
     stats_ref = observer isa NoObserver ? nothing : Ref{Any}(stats)
     selection = workspace.simulation_step
     same_run = _same_simulation_step(flow)
@@ -178,6 +181,7 @@ function _simulate!(
                 _step_started = step_started, _stats_ref = stats_ref,
                 _defer_selection_save = true,
             )
+            _accumulate_projection!(projection_run, stats)
             last_step = T(step_size)
             defect_step = selection.defect_dt
             current_time = next_time
@@ -239,6 +243,7 @@ function _simulate!(
     end
     return (
         time = current_time, steps = step_count, pressure = stats,
+        projection = projection_run,
         mesh_updates = flow.mesh_updates - initial_mesh_updates,
         unresolved_curvature_faces = flow.unresolved_curvature_faces - initial_unresolved,
         stopped,
