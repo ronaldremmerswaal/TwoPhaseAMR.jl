@@ -91,31 +91,39 @@ function run_example(;
         kwargs...,
     )
     flow = FlowSimulation(mesh, physics; flow_options...)
+    # Wall segments of the cut cells (cell, normal, its norm, length), kept
+    # for one geometry revision: every regrid refreshes the geometry, which
+    # bumps it. The force diagnostics then visit the cut cells only.
+    cut_cells = Tuple{CellRef, NTuple{2, Float64}, Float64, Float64}[]
+    cut_revision = Ref(typemax(UInt))
+    function current_cut_cells()
+        cut_revision[] == geometry.revision && return cut_cells
+        empty!(cut_cells)
+        nx, ny = mesh.block_size
+        for block in eachindex(mesh.blocks), j in 1:ny, i in 1:nx
+            ref = CellRef(block, i, j)
+            segment = TwoPhaseAMR._local_plic_segment(geometry.solid, ref)
+            isnothing(segment) && continue
+            (first, last), spacing = segment, mesh.blocks[block].spacing
+            length = hypot((last[1] - first[1]) * spacing[1], (last[2] - first[2]) * spacing[2])
+            normal = (
+                TwoPhaseAMR._get(geometry.solid.normal_x, ref) / spacing[1],
+                TwoPhaseAMR._get(geometry.solid.normal_y, ref) / spacing[2],
+            )
+            scale = hypot(normal...)
+            iszero(scale) || push!(cut_cells, (ref, normal, scale, length))
+        end
+        cut_revision[] = geometry.revision
+        return cut_cells
+    end
     function pressure_force(state, axis)
         # The impulsive-start sample is not a developed force. At the first
         # t=1e-6 step the smoke test measured raw force 691362 (>100), so a
         # magnitude cutoff would also discard valid completed-step samples.
         iszero(state.time) && return NaN
         force = 0.0
-        nx, ny = mesh.block_size
-        for block in eachindex(mesh.blocks), j in 1:ny, i in 1:nx
-            ref = CellRef(block, i, j)
-            segment = TwoPhaseAMR._local_plic_segment(geometry.solid, ref)
-            isnothing(segment) && continue
-            leaf = mesh.blocks[block]
-            first, last = segment
-            length = hypot(
-                (last[1] - first[1]) * leaf.spacing[1],
-                (last[2] - first[2]) * leaf.spacing[2],
-            )
-            normal = (
-                TwoPhaseAMR._get(geometry.solid.normal_x, ref) / leaf.spacing[1],
-                TwoPhaseAMR._get(geometry.solid.normal_y, ref) / leaf.spacing[2],
-            )
-            scale = hypot(normal...)
-            iszero(scale) && continue
-            force -= TwoPhaseAMR._get(state.pressure, ref) *
-                normal[axis] / scale * length
+        for (ref, normal, scale, length) in current_cut_cells()
+            force -= TwoPhaseAMR._get(state.pressure, ref) * normal[axis] / scale * length
         end
         return 2force
     end

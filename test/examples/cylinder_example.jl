@@ -39,4 +39,43 @@ end
     @test any(block -> block.key.level == 2, mesh.blocks)
     @test mesh.adaptation.last_update_step > 2
     test_finite_example_fields(run.flow)
+    # The force diagnostics sum over cut cells collected once per geometry
+    # revision. Every topology change must bump the revision, and after every
+    # step, regrids included, both forces equal a scan of every cell bit for
+    # bit.
+    geometry = run.flow.system.geometry
+    function scanned_force(axis)
+        force = 0.0
+        nx, ny = mesh.block_size
+        for block in eachindex(mesh.blocks), j in 1:ny, i in 1:nx
+            ref = CellRef(block, i, j)
+            segment = TwoPhaseAMR._local_plic_segment(geometry.solid, ref)
+            isnothing(segment) && continue
+            spacing = mesh.blocks[block].spacing
+            length = hypot(
+                (segment[2][1] - segment[1][1]) * spacing[1],
+                (segment[2][2] - segment[1][2]) * spacing[2],
+            )
+            normal = (
+                TwoPhaseAMR._get(geometry.solid.normal_x, ref) / spacing[1],
+                TwoPhaseAMR._get(geometry.solid.normal_y, ref) / spacing[2],
+            )
+            scale = hypot(normal...)
+            iszero(scale) && continue
+            force -= TwoPhaseAMR._get(run.flow.pressure, ref) * normal[axis] / scale * length
+        end
+        return 2force
+    end
+    topology_changes = 0
+    for _ in 1:12
+        block_keys, revision = [block.key for block in mesh.blocks], geometry.revision
+        step!(run.flow, 1.0e-4)
+        if block_keys != [block.key for block in mesh.blocks]
+            topology_changes += 1
+            @test geometry.revision != revision
+        end
+        @test last(diagnostic_history(run.flow, :pressure_drag).values) === scanned_force(1)
+        @test last(diagnostic_history(run.flow, :pressure_lift).values) === scanned_force(2)
+    end
+    @test topology_changes > 0
 end
