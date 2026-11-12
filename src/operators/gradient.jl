@@ -52,8 +52,18 @@ At a physical boundary the normal pressure correction is homogeneous Neumann:
 the boundary face gradient is exactly zero. Vertex patches cut by a wall use
 the diagonal half-face metric, while complete interior patches retain the AMR
 Riesz map. Thus the cell divergence remains the primal operator and the
-pressure operator is still symmetric positive semidefinite. An operator owns
-one scratch vector and must not be shared by concurrent kernels.
+pressure operator is still symmetric positive semidefinite.
+
+A periodic direction is resolved through the covering space: each face
+displacement is the centre-to-centre offset whose normal component is signed by
+the face orientation (the plus cell always lies on the +axis side of the face)
+and whose magnitude is the shortest periodic image. A periodic direction
+resolved by only two cells is therefore supported: the half-period tie of the
+centre difference cannot flip the seam displacement, and the resulting metric
+is the ordinary diagonal MAC metric of that direction.
+
+An operator owns one scratch vector and must not be shared by concurrent
+kernels.
 """
 struct GradientOperator{
         T, M <: BlockTreeMesh, R <: AbstractInverseFaceMetric{T}, C,
@@ -76,13 +86,34 @@ end
     return delta - round(delta / extent) * extent
 end
 
+# Displacement of the plus cell centre relative to the minus cell centre in the
+# covering space, chosen so that the shared face lies between them.
+#
+# Topology fixes the sign of the normal component: `_match_sides!` always makes
+# the plus cell the one on the +axis side of the face, so the normal component
+# is positive by construction. Only its magnitude is taken from the periodic
+# wrap. This resolves the half-period tie of a periodic direction with exactly
+# two cells, where the centre difference is +-L/2 and the two candidate images
+# have the same length: `round(-0.5) == -0.0` would otherwise keep the
+# negative image and reverse the seam displacement. The tangential component
+# keeps its wrapped sign, which is unambiguous because the tangential offset of
+# the two centres is at most half a coarse cell, hence below L/4 for any
+# direction resolved by two cells or more.
 @inline function _face_displacement(mesh::BlockTreeMesh, face::InteriorFace)
     minus = cellcenter(mesh, face.minus.block, face.minus.i, face.minus.j)
     plus = cellcenter(mesh, face.plus.block, face.plus.i, face.plus.j)
-    return (
-        _wrapped_delta(plus[1] - minus[1], mesh.extent[1], mesh.periodic[1]),
-        _wrapped_delta(plus[2] - minus[2], mesh.extent[2], mesh.periodic[2]),
+    axis = face.axis
+    tangent = 3 - axis
+    normal = abs(
+        _wrapped_delta(
+            plus[axis] - minus[axis], mesh.extent[axis], mesh.periodic[axis]
+        )
     )
+    tangential = _wrapped_delta(
+        plus[tangent] - minus[tangent],
+        mesh.extent[tangent], mesh.periodic[tangent],
+    )
+    return axis == 1 ? (normal, tangential) : (tangential, normal)
 end
 
 @inline function _vertex_key(

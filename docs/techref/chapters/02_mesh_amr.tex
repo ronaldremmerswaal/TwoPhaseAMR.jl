@@ -77,8 +77,10 @@ wrapped across periodic seams, so the balance does not depend on the rounding of
 block coordinates; a comparison of floating-point coordinates could miss blocks
 that touch when the domain extents are not exactly representable, and violated
 \cref{eq:mesh:grading} there until \issue{46} was fixed (PR~\#92). A periodic
-direction with exactly two level-0 cells is not supported by the gradient
-(\issue{36}).
+direction with exactly two level-0 cells is supported: the half-period tie of
+the centre-to-centre difference is settled by the face orientation, whose
+normal component fixes the sign of the face displacement (\issue{36};
+\testsym{test/mesh/topology.jl}{periodic direction resolved by exactly two cells}).
 
 The thesis writes $\minwidth=2^{-\level}\basemesh$ for the width of the finest
 cells, with $\level$ the number of refinement levels~\thesis{\S2.5}. Here
