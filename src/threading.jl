@@ -36,10 +36,16 @@ are the package's only launch primitives.
 
 Every index must own its outputs: results may not depend on which thread or in
 which order indices run, so the serial and threaded paths are bitwise
-identical. Reductions use fixed chunk schedules instead. `f` must not throw;
-record failures in owned outputs and throw after the launch. Polyester runs
-`f` on its worker threads, so any user callback reached from `f` must be
-thread-safe.
+identical. Reductions use fixed chunk schedules instead.
+
+`f` must not throw: Polyester rethrows an exception from the calling thread's
+range as itself but one from a worker's range as a `TaskFailedException`,
+while the other ranges keep running. A check whose outcome depends on the data
+is therefore fused into the loop: the body records the failure in an owned,
+preallocated output (one slot per iteration or per chunk, never `push!`) and
+the caller throws after the launch. Cheap input checks may instead run serially
+before the loop. User callbacks are never called from `f`; they run serially on
+the calling task.
 
 Polyester passes a closure that captures arrays to its workers in a heap box
 (a few dozen bytes per threaded launch); per-cell loops therefore use
@@ -77,6 +83,38 @@ function _check_parallel_body(expression::Expr, in_nested_loop = false)
     return nothing
 end
 
+"""Map every `NaN` to the canonical `NaN` of its type, so that a maximum
+returns the same bits whichever `NaN` term it meets first."""
+@inline _canonical_nan(value) = isnan(value) ? oftype(value, NaN) : value
+
+"""
+    _fold_chunk_maxima(initial, partials, chunks)
+
+Fold the chunk maxima `partials[1:chunks]` of a fixed-chunk maximum into
+`initial`. Each chunk covers `_reduction_range(chunk, n)`; `max` is exact, so
+with the canonical `NaN` terms of `_canonical_nan` the result is equal to the
+old serial maximum up to the `NaN` payload (`NaN` terms are canonicalised, so
+a `NaN` result always has the canonical bits) and is bitwise equal for every
+thread count. Threaded maxima that run every step or solver iteration
+use this with partials owned by their workspace, which keeps them
+allocation-free.
+"""
+@inline function _fold_chunk_maxima(initial, partials, chunks)
+    result = initial
+    for chunk in 1:chunks
+        result = max(result, @inbounds partials[chunk])
+    end
+    return result
+end
+
+"""Grow `partials` to hold one entry per fixed reduction chunk of `n` items
+(allocates only when the topology grows)."""
+@inline function _reduction_partials!(partials, n)
+    chunks = _reduction_chunks(n)
+    length(partials) < chunks && resize!(partials, chunks)
+    return partials
+end
+
 """
     @_parallel [work = expression] for index in range ... end
 
@@ -87,7 +125,14 @@ and the `Polyester.@batch` loop of the threaded path, which captures the
 body's arrays directly, so neither path allocates. `continue` skips an
 element; `break` and `return` are rejected. Assigning a variable of the
 enclosing function from the body is a race on the threaded path; bodies only
-write owned array entries.
+write owned array entries, including a preallocated failure flag that the
+caller inspects after the launch.
+
+Variables used in the body must not shadow a function of the calling module
+(a local `values`, `schedule`, `parent`, `time`, ...): Polyester leaves such
+names to a closure, which allocates 48–64 B per threaded launch. Bodies that
+capture a struct rather than its arrays also allocate (Polyester boxes the
+argument tuple), so hot loops capture arrays and scalars only.
 """
 macro _parallel(arguments...)
     isempty(arguments) && throw(ArgumentError("@_parallel requires a for loop"))
@@ -142,6 +187,96 @@ macro _parallel(arguments...)
     return esc(expression)
 end
 
+"""Length of one fixed reduction chunk.
+
+Threaded reductions split `1:n` into chunks of this length whose boundaries
+depend only on `n`. Each chunk is reduced in index order and the chunk results
+are folded in chunk order, so the result is the same for every thread count;
+for `n <= _REDUCTION_CHUNK` it equals the plain left-to-right reduction.
+"""
+const _REDUCTION_CHUNK = 1024
+
+@inline _reduction_chunks(number_of_items) = cld(number_of_items, _REDUCTION_CHUNK)
+@inline _reduction_range(chunk, number_of_items) =
+    ((chunk - 1) * _REDUCTION_CHUNK + 1):min(number_of_items, chunk * _REDUCTION_CHUNK)
+
+"""Element stride between the per-chunk blocks of a fixed-chunk reduction:
+`labels` rounded up to a multiple of 8 `Float64`, i.e. a whole 64-byte cache
+line for the solver's `Float64` sums, so that chunks owned by different tasks
+never write the same line (false sharing). Only the layout changes."""
+@inline _chunk_stride(labels) = max(1, cld(labels, 8) * 8)
+
+# Terms of the slot sums. Singleton modes keep the threaded chunk loop free of
+# closure arguments, which Polyester would box on every launch.
+@inline _slot_term(::Val{:plain}, terms, weights, item) = @inbounds terms[item]
+@inline _slot_term(::Val{:weighted}, terms, weights, item) =
+    @inbounds weights[item] * terms[item]
+@inline _slot_term(::Val{:absolute}, terms, weights, item) = abs(@inbounds terms[item])
+
+"""
+    _chunked_slot_sums!(sums, partials, slots, terms, weights, mode)
+
+Set `sums[k]` to the sum over the items `i` with `slots[i] == k` (zero skips
+the item) of `terms[i]` (`mode = Val(:plain)`), `weights[i] * terms[i]`
+(`Val(:weighted)`) or `abs(terms[i])` (`Val(:absolute)`). The items are summed
+in index order within fixed chunks of `_REDUCTION_CHUNK` items, and the chunk
+sums are added in chunk order: the result does not depend on the thread count
+and, for at most one chunk, equals the plain index-order sum; for more chunks
+the grouping differs from it by rounding. `partials` is caller-owned scratch
+holding one stride of sums per chunk (resized once, then allocation-free); the
+stride is rounded up to a multiple of 8 `Float64`, so neighbouring chunks never
+write the same cache line. The padding changes no arithmetic.
+"""
+function _chunked_slot_sums!(
+        sums::AbstractVector{T}, partials::Vector{T}, slots::AbstractVector{<:Integer},
+        terms::AbstractVector, weights, mode::Val,
+    ) where {T}
+    fill!(sums, zero(T))
+    number_of_items = length(terms)
+    chunks = _reduction_chunks(number_of_items)
+    if chunks <= 1
+        for item in 1:number_of_items
+            slot = @inbounds slots[item]
+            iszero(slot) && continue
+            @inbounds sums[slot] += _slot_term(mode, terms, weights, item)
+        end
+        return sums
+    end
+    labels = length(sums)
+    chunk_stride = _chunk_stride(labels)
+    length(partials) < (chunks - 1) * chunk_stride + labels &&
+        resize!(partials, (chunks - 1) * chunk_stride + labels)
+    @_parallel work = _REDUCTION_CHUNK for chunk in 1:chunks
+        offset = (chunk - 1) * chunk_stride
+        if labels == 1
+            # One component (the common case): accumulate in a register,
+            # the same additions in the same order.
+            total = zero(T)
+            for item in _reduction_range(chunk, number_of_items)
+                iszero(@inbounds slots[item]) && continue
+                total += _slot_term(mode, terms, weights, item)
+            end
+            @inbounds partials[offset + 1] = total
+            continue
+        end
+        for slot in 1:labels
+            @inbounds partials[offset + slot] = zero(T)
+        end
+        for item in _reduction_range(chunk, number_of_items)
+            slot = @inbounds slots[item]
+            iszero(slot) && continue
+            @inbounds partials[offset + slot] += _slot_term(mode, terms, weights, item)
+        end
+    end
+    for chunk in 1:chunks
+        offset = (chunk - 1) * chunk_stride
+        for slot in 1:labels
+            @inbounds sums[slot] += partials[offset + slot]
+        end
+    end
+    return sums
+end
+
 """Traverse block-backed cell data with one dense column range per work item.
 
 Serial execution (one thread, or fewer cells than the grain) visits each
@@ -151,6 +286,8 @@ blocks per thread, the columns of each block are split into tiles so that a
 one-block uniform mesh still uses all threads.
 
 `f(block, first_j, last_j)` must own every output in the supplied column range.
+A check whose outcome depends on the data records its result in such an output,
+one slot per column, and the caller throws after the launch.
 """
 function _parallel_block_columns(f::F, mesh) where {F}
     nx, ny = mesh.block_size

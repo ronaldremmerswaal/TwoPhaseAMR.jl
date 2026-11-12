@@ -204,6 +204,60 @@ end
     return -tolerance <= liquid <= open + tolerance
 end
 
+"""Throw the WY bound violation recorded by a column-scheduled increment sweep.
+
+The sweep records a violation in an owned per-column flag and never throws;
+this runs on the calling task after the launch, so the exception is the
+package's own for every thread count and names the offending cell.
+"""
+function _throw_wy_fraction_failure(
+        field::InterfaceField{T}, work::WYAdvectionWorkspace, axis, flags,
+    ) where {T}
+    index = 0
+    for candidate in eachindex(flags)
+        if !iszero(@inbounds flags[candidate])
+            index = candidate
+            break
+        end
+    end
+    iszero(index) && return nothing
+    mesh = work.mesh
+    nx, ny = mesh.block_size
+    halo = mesh.halo
+    block = (index - 1) ÷ ny + 1
+    j = index - (block - 1) * ny
+    i = Int(@inbounds flags[index])
+    ii, jj = i + halo, j + halo
+    conditional = @inbounds field.conditional_fraction.blocks[block]
+    fraction_increment = @inbounds work.increment.blocks[block]
+    indicator_values = @inbounds work.indicator.blocks[block]
+    open_values = isnothing(field.geometry) ? nothing :
+        @inbounds field.geometry.open_fraction.blocks[block]
+    c = @inbounds conditional[ii, jj] + fraction_increment[ii, jj]
+    open = isnothing(open_values) ? one(T) : @inbounds open_values[ii, jj]
+    cell = (block - 1) * nx * ny + (j - 1) * nx + i
+    flux_details = map(
+        work.cell_face_offsets[cell]:(work.cell_face_offsets[cell + 1] - 1),
+    ) do pointer
+        face_index = work.cell_faces[pointer]
+        face = mesh.faces[face_index]
+        (
+            face = face_index, face_axis = face.axis,
+            orientation = work.cell_face_orientations[pointer],
+            open_flux = work.open_flux[face_index],
+            liquid_flux = work.liquid_flux[face_index],
+        )
+    end
+    error(
+        "WY conditional fraction out of bounds: $c " *
+            "in cell $(CellRef(block, i, j)); axis=$axis, " *
+            "old=$(conditional[ii, jj]), " *
+            "increment=$(fraction_increment[ii, jj]), " *
+            "open=$open, " *
+            "indicator=$(indicator_values[ii, jj]), faces=$flux_details",
+    )
+end
+
 function _advect_wy!(
         field::InterfaceField{T}, velocity, dt,
         work::WYAdvectionWorkspace{T}; scalars = (), staggered_scalars = (),
@@ -355,13 +409,24 @@ function _advect_wy!(
                     gas_fraction_increment / effective_volume : zero(T)
             end
         end
+        # The update sweep's bounds check is fused into the increment loop: a
+        # violation is recorded in an owned per-column flag and thrown here,
+        # after the launch, so the threaded body never throws.
+        _wy_failure_flags!(work)
         _parallel_block_columns(mesh) do b, first_j, last_j
             indicator = @inbounds work.indicator.blocks[b]
+            conditional = @inbounds field.conditional_fraction.blocks[b]
+            increment_values = @inbounds work.increment.blocks[b]
+            open_values = isnothing(geometry) ? nothing :
+                @inbounds geometry.open_fraction.blocks[b]
+            failures = work.conditional_failure
             cellvolume = mesh.blocks[b].volume
             offset = (b - 1) * cells_per_block
             @inbounds for j in first_j:last_j, i in 1:nx
                 cell = offset + (j - 1) * nx + i
                 ii, jj = i + halo, j + halo
+                open = isnothing(open_values) ? one(T) : open_values[ii, jj]
+                effective_volume = cellvolume * open
                 for k in eachindex(scalars), phase in 1:2
                     liquid_phase = phase == 1
                     values = liquid_phase ? scalars[k].liquid : scalars[k].gas
@@ -431,9 +496,6 @@ function _advect_wy!(
                         intrinsic = values_block[ii, jj]
                         chi = liquid_phase ? indicator[ii, jj] :
                             1 - indicator[ii, jj]
-                        open = isnothing(geometry) ? one(T) :
-                            geometry.open_fraction.blocks[b][ii, jj]
-                        effective_volume = cellvolume * open
                         effective_volume > zero(T) || continue
                         increment += orientation / effective_volume * (
                             (source_block[ii, jj] - chi * intrinsic) * volume +
@@ -442,8 +504,12 @@ function _advect_wy!(
                     end
                     increments[k][phase].blocks[b][ii, jj] = increment
                 end
+                _wy_fraction_in_bounds(
+                    conditional[ii, jj] + increment_values[ii, jj], open,
+                ) || (failures[(b - 1) * mesh.block_size[2] + j] = Int32(i))
             end
         end
+        _throw_wy_fraction_failure(field, work, axis, work.conditional_failure)
         for k in eachindex(staggered_scalars)
             _advect_phase_faces!(
                 staggered_scalars[k], work, axis, face_sources[k],
@@ -458,41 +524,15 @@ function _advect_wy!(
         _parallel_block_columns(mesh) do b, first_j, last_j
             fraction = @inbounds field.fraction.blocks[b]
             conditional = @inbounds field.conditional_fraction.blocks[b]
-            indicator_values = @inbounds work.indicator.blocks[b]
             fraction_increment = @inbounds work.increment.blocks[b]
             gas_fraction_increment = @inbounds work.gas_increment.blocks[b]
             gas_carrier_values = @inbounds work.gas_carrier.blocks[b]
             open_values = isnothing(geometry) ? nothing :
                 @inbounds geometry.open_fraction.blocks[b]
-            offset = (b - 1) * cells_per_block
             @inbounds for j in first_j:last_j, i in 1:nx
                 ii, jj = i + halo, j + halo
                 c = conditional[ii, jj] + fraction_increment[ii, jj]
                 open = isnothing(open_values) ? one(T) : open_values[ii, jj]
-                if !_wy_fraction_in_bounds(c, open)
-                    cell = offset + (j - 1) * nx + i
-                    flux_details = map(
-                        work.cell_face_offsets[cell]:
-                            (work.cell_face_offsets[cell + 1] - 1),
-                    ) do pointer
-                        face_index = work.cell_faces[pointer]
-                        face = mesh.faces[face_index]
-                        (
-                            face = face_index, face_axis = face.axis,
-                            orientation = work.cell_face_orientations[pointer],
-                            open_flux = work.open_flux[face_index],
-                            liquid_flux = work.liquid_flux[face_index],
-                        )
-                    end
-                    error(
-                        "WY conditional fraction out of bounds: $c " *
-                            "in cell $(CellRef(b, i, j)); axis=$axis, " *
-                            "old=$(conditional[ii, jj]), " *
-                            "increment=$(fraction_increment[ii, jj]), " *
-                            "open=$open, " *
-                            "indicator=$(indicator_values[ii, jj]), faces=$flux_details",
-                    )
-                end
                 c = clamp(c, zero(T), one(T))
                 snap = field.fraction_floor
                 c = c <= snap ? zero(T) : c >= 1 - snap ? one(T) : c

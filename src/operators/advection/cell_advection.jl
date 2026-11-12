@@ -100,14 +100,15 @@ function FaceVelocity(x::FaceField{1, TX, M}, y::FaceField{2, TY, M}) where {TX,
     return velocity
 end
 
-"""Resample `f(x, y, time, axis)` into an existing `FaceVelocity`."""
+"""Resample `f(x, y, time, axis)` into an existing `FaceVelocity`.
+
+`f` is evaluated serially on the calling task, in face order.
+"""
 function set_velocities!(velocity::FaceVelocity, f; time = 0)
-    @_parallel for index in 1:length(velocity.mesh.faces)
-        face = velocity.mesh.faces[index]
+    for (index, face) in pairs(velocity.mesh.faces)
         @inbounds velocity.interior[index] = f(face.center[1], face.center[2], time, face.axis)
     end
-    @_parallel for index in 1:length(velocity.mesh.boundary_faces)
-        face = velocity.mesh.boundary_faces[index]
+    for (index, face) in pairs(velocity.mesh.boundary_faces)
         @inbounds velocity.boundary[index] = f(face.center[1], face.center[2], time, face.axis)
     end
     return velocity
@@ -253,7 +254,8 @@ function advect!(
         @inbounds workspace.interior_flux[index] =
             dt * speed * state * face.area
     end
-    @_parallel for index in 1:length(mesh.boundary_faces)
+    # Serial: a `Dirichlet` inflow value is a user callback.
+    for index in 1:length(mesh.boundary_faces)
         face = mesh.boundary_faces[index]
         @inbounds coordinate_speed = velocity.boundary[index]
         outward_speed = face.side * coordinate_speed

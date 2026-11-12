@@ -589,6 +589,27 @@ which the bound does not apply, and exceeds the factor by up to $15\,\%$. On
 every level of these and of the fixtures of \cref{tab:solvers:counts}
 $\gershbound{}=2$, so $\jacobiweight{}=\chkSolvOmegaUniform$.
 
+\emph{Threaded sums.} The component sums
+$\mathsf{v}_{\compcells}^{\transpose}\mathsf{x}$ and
+$\onevec_{\compcells}^{\transpose}\rhsvec$ in~\eqref{eq:solvers:projectors}
+are evaluated in fixed chunks of 1024 cells: each chunk is summed in cell
+order and the chunk sums are added in chunk order. The chunk boundaries depend
+only on the number of cells, so the result, and every solve, is bitwise the
+same for any number of threads; a level of at most 1024 cells is summed
+left to right as before.
+
+\emph{Threaded transfers.} Prolongation and its transpose run the package's
+own products for every thread count: a fine cell gathers its coarse neighbours
+with \srcsym{src/solvers/multigrid/hierarchy.jl}{_prolongate!} in increasing
+coarse index and a coarse cell sums its fine cells with
+\srcsym{src/solvers/multigrid/hierarchy.jl}{_restrict!} in stored order, both
+starting from zero and fusing with \texttt{muladd}. The unthreaded path uses
+the same kernels, because SparseArrays' \texttt{mul!} fuses only from Julia
+1.12; using it on one thread would make the result depend on the Julia
+version. The row schedule of the prolongation is cached per matrix object and
+non-zero count, so the values may be refreshed in place but the sparsity
+pattern may not change at constant non-zero count.
+
 \subsection{Refresh and reuse}\label{sec:solvers:reuse}
 \emph{Coefficient refresh.} On a fixed mesh a new face coefficient, as for a
 two-phase pressure operator after the interface has moved, refreshes the

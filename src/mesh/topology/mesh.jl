@@ -208,11 +208,17 @@ mutable struct MeshTopologyCache{T}
     phase_transport::Tuple{
         _PhaseTransportCacheEntry{1, T}, _PhaseTransportCacheEntry{2, T},
     }
+    # Indices of the physical-boundary halo entries, in schedule order. Halo
+    # filling reads this instead of scanning the whole schedule.
+    physical_halos::Union{Nothing, Vector{Int}}
 
     # Only the explicit type-parameter constructor is meaningful when the
     # optional connectivity entries are all empty.
     MeshTopologyCache{T}() where {T} =
-        new{T}(Ref{Nothing}(nothing), zero(UInt), nothing, (nothing, nothing))
+        new{T}(
+        Ref{Nothing}(nothing), zero(UInt), nothing, (nothing, nothing),
+        nothing,
+    )
 end
 
 MeshTopologyCache(::Type{T}) where {T} = MeshTopologyCache{T}()
@@ -244,7 +250,26 @@ function _invalidate_mesh_topology_cache!(mesh::BlockTreeMesh)
     cache.generation += one(UInt)
     cache.cells = nothing
     cache.phase_transport = (nothing, nothing)
+    cache.physical_halos = nothing
     return mesh
+end
+
+"""Indices of the physical-boundary halo entries, in schedule order.
+
+Precollected once per halo schedule so that `fill_halo!` need not scan the
+whole schedule when no boundary callback asks for it. The returned vector is
+shared with the mesh cache and must not be mutated.
+"""
+function _physical_halo_entries(mesh::BlockTreeMesh)
+    cache = mesh.topology_cache
+    entries = cache.physical_halos
+    isnothing(entries) || return entries
+    indices = Int[]
+    for (index, entry) in pairs(mesh.halo_entries)
+        entry.physical_boundary && push!(indices, index)
+    end
+    cache.physical_halos = indices
+    return indices
 end
 
 function _mesh_cell_connectivity(mesh::BlockTreeMesh{T}) where {T}

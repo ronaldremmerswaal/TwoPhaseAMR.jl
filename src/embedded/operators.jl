@@ -77,7 +77,8 @@ function advect!(
         @inbounds workspace.interior_flux[index] =
             dt * speed * state * face.area * geometry.aperture[index]
     end
-    @_parallel for index in eachindex(mesh.boundary_faces)
+    # Serial: a `Dirichlet` inflow value is a user callback.
+    for index in eachindex(mesh.boundary_faces)
         face = mesh.boundary_faces[index]
         @inbounds coordinate_speed = velocity.boundary[index]
         outward_speed = face.side * coordinate_speed
