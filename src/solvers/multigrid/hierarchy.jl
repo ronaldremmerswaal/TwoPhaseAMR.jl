@@ -44,6 +44,17 @@ mutable struct TransferRowSchedule{S}
     offsets::Vector{Int}
     columns::Vector{Int}
     entries::Vector{Int}
+
+    # `S` only occurs inside a union of field types, so the constructor Julia
+    # would generate implicitly leaves it unbound in the method signature (an
+    # "Unbound type parameters" error for Aqua on Julia 1.11). Declaring the
+    # inner constructor explicitly takes the parameter from the constructed
+    # type; `new` converts the arguments to the field types.
+    function TransferRowSchedule{S}(
+            source, offsets, columns, entries
+        ) where {S}
+        return new{S}(source, offsets, columns, entries)
+    end
 end
 
 TransferRowSchedule(::Type{S}) where {S} =
