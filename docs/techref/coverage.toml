@@ -2448,6 +2448,7 @@ check = "solv_cmdgfm_cases"
 "src/navier_stokes/independent_step.jl" = { class = "orchestration", chapters = ["ch:overview"] }
 "src/navier_stokes/options.jl" = { class = "orchestration", chapters = ["ch:overview"] }
 "src/navier_stokes/projection.jl" = { class = "equation", chapters = ["ch:projection"] }
+"src/navier_stokes/projection_stats.jl" = { class = "storage", chapters = ["ch:projection", "ch:solvers", "ch:verification"] }
 "src/navier_stokes/simulate.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:mesh-amr", "ch:vof-transport", "ch:forces", "ch:projection", "ch:amr-criteria-transfer", "ch:stability-accuracy"] }
 "src/navier_stokes/stages.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:forces"] }
 "src/navier_stokes/system.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:viscosity"] }
