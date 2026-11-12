@@ -13,14 +13,18 @@ using Test, TwoPhaseAMR
     final_time = 1.0
     # Short-time total drag at t=1 on the two fixed uniform grids, measured
     # with a symmetric start. An absolute 0.02 band allows solver/platform
-    # variation (about 2-2.5% of drag) while detecting drift; these transient
-    # values are not the paper's developed-wake coefficients. Both runs end
-    # with a shortened step. The resolution-4 value (cylinder diameter about
-    # four cells) moved 0.79274 -> 0.86871 with the cut-cell diffusion
-    # connections of #100 and -> 0.89447 with the incremental projection of
-    # #90 (drag at the last full step 0.88888); resolution 8 stayed within
-    # 0.005 of 1.05059.
-    reference_drag = (0.89447292, 1.050593)
+    # variation (about 2% of drag on the coarser grid) while detecting drift;
+    # these transient values are not the paper's developed-wake coefficients.
+    # Both runs end with a shortened step. The resolution-4 value (cylinder
+    # diameter about four cells) moved 0.79274 -> 0.86871 with the cut-cell
+    # diffusion connections of #100, -> 0.89447 with the incremental
+    # projection of #90 (drag at the last full step 0.88888) and -> 0.94591
+    # with the reconstructed cut-wall closure of #110, which also moved
+    # resolution 8 from 1.05059 to 1.34872. That shift is an accuracy gain,
+    # not a drift: total drag at 4/8/16 cells per diameter is
+    # 0.94591 / 1.34872 / 1.38064 (#110), so the 8->16 change is 2.4 %,
+    # against 17 % for 0.89447 / 1.05059 / 1.244 before it.
+    reference_drag = (0.94590674, 1.3487198)
     studies = map(resolutions) do resolution
         cylinder_flow(;
             block_size = (14resolution, 8resolution),
