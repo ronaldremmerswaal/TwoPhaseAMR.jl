@@ -122,7 +122,10 @@ Loop form of `_parallel_for` for a 1-based `AbstractVector` `range` (such as
 `1:n` or `eachindex(vector)`), with the same ownership rules and serial
 cut-off. The body is expanded twice: a plain `for` loop for the serial path
 and the `Polyester.@batch` loop of the threaded path, which captures the
-body's arrays directly, so neither path allocates. `continue` skips an
+body's arrays directly, so neither path allocates per item. The threaded path
+still pays whatever Polyester packs for a launch: on Julia 1.11 its closure
+argument is boxed (16-32 B measured per launch), while from 1.12 on a warm
+launch allocates nothing. `continue` skips an
 element; `break` and `return` are rejected. Assigning a variable of the
 enclosing function from the body is a race on the threaded path; bodies only
 write owned array entries, including a preallocated failure flag that the
