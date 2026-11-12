@@ -12,7 +12,9 @@ A prescribed reversing vortex stretches a circular liquid patch and then returns
 | **Algorithms** | Weymouth–Yue geometric VOF advection with alternating sweep order and CFL `0.4`; `:lhf` PLIC reconstruction with WY fallback. Interface and curvature refinement use minimum level 1 (clamped to `max_level`) and 8 cells per radius, with adaptation every 5 steps and coarsening delay 2; there is no pressure or diffusion solver. |
 | **Worth varying** | `max_level=5` controls the finest mesh; `final_time=8.0` changes both the run duration and the reversal period; `reconstruction_method=:lhf` selects the PLIC normal method (`:lhf_ghf` and `:wy` are also supported). |
 | **Validated against** | The exact reversing flow returns to its initial shape and conserves liquid volume. At docs size `abs(V(T)-V(0)) = 4.75607e-11`; a geometric shape-error norm was not measured. |
-| **Cost** | The default level-5 run is unmeasured. Docs: level 3, `T=8`, 1661 steps, 64 regrids and 1792 final cells; setup and simulation took 87.98 s. Incremental generator compilation, including rendering, was 40.30 s in a shared single-thread process. |
+| **Cost** | The default level-5 run is unmeasured. Docs: level 3, `T=8`, 1661 steps, 64 regrids and 1792 final cells; setup and simulation took 84.21 s and the whole figure script 111.3 s on one thread, including first-use compilation and rendering. |
+
+Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded.
 
 ## Setup
 
@@ -58,7 +60,7 @@ The hero shows liquid fraction and reconstructed interface at the initial state,
 
 ![Volume fraction during the reversing vortex flow](assets/reversal.gif)
 
-The 21 retained states of the docs run: the circle is stretched into a spiral until `T/2` and returns as the flow reverses.
+The GIF samples 21 output frames on a uniform simulation-time grid over the whole run, each showing the nearest retained keyframe: the circle is stretched into a spiral until `T/2` and returns as the flow reverses.
 
 The overlay compares the retained initial and final PLIC segments; the volume curve integrates the stored fractions over actual AMR cell areas. The final absolute volume error is `4.75607e-11`; this is not a measurement of geometric shape recovery.
 

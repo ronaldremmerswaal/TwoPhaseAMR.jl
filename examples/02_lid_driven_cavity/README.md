@@ -12,9 +12,11 @@ A moving lid spins up a viscous fluid in a square cavity, exposing the transient
 | **Algorithms** | Staggered velocity, Lax–Wendroff momentum advection, implicit-midpoint diffusion and pressure projection. Pressure uses CG/tree multigrid; diffusion uses tree multigrid and selects CG or BiCGSTAB by matrix symmetry. The mesh is uniformly refined to `max_level=1`, with no dynamic AMR. |
 | **Worth varying** | `reynolds=100` changes viscosity; `max_level=1` changes uniform resolution; `final_time=15` changes the simulated duration; `dt=nothing` uses automatic steps, while a numerical `dt` fixes them. |
 | **Validated against** | Exact incompressibility gives a zero reference for `:divergence_norm`; at docs size the final volume-weighted norm is `2.39154e-7`, and `:kinetic_energy` is `0.0327184` at `t=15`. The steady [Ghia et al. benchmark](https://doi.org/10.1016/0021-9991(82)90058-4) is not compared here. |
-| **Cost** | Default: level 1, `T=15`, 1024 cells and automatic steps; runtime unmeasured. Docs: same grid and duration, fixed `dt=0.005`, 3000 steps; setup and simulation took 6.34 s. Incremental generator compilation, including rendering, was 11.59 s in a shared single-thread process. |
+| **Cost** | Default: level 1, `T=15`, 1024 cells and 1900 automatic steps; setup and simulation took 2.41 s warm and 13.8 s on the first call, which includes compilation. Docs: same grid and duration, fixed `dt=0.005`, 3000 steps; setup and simulation took 13.49 s and the whole figure script 27.00 s, including first-use compilation and rendering. |
 
-The fixed step is deliberately smaller than the current advective stability bound; an older audit's `dt=0.05` no longer passes that bound.
+Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded.
+
+The fixed step is deliberately smaller than the current advective stability bound; a coarser `dt=0.05` is not stable on this grid.
 
 ## Setup
 

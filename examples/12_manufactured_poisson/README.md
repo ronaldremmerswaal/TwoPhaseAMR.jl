@@ -12,7 +12,9 @@ A periodic two-phase manufactured solution measures pressure and phase-gradient 
 | **Algorithms** | A uniform `resolution × resolution` mesh and `:lhf` interface reconstruction; no AMR. The projection is CMDGFM with BiCGSTAB and a tree-GMG/active-jump-ILU block preconditioner. |
 | **Worth varying** | `resolution=32` changes the uniform grid; `density=(1000.0,1.0)` changes the two phase coefficients; `tolerance=1e-9` and `max_iterations=5000` control the solve. |
 | **Validated against** | Gauge-aligned pressure and physical phase gradients are compared with the manufactured fields. At `resolution=32`, pressure RMS/max errors are `1.04378/8.98783`. |
-| **Cost** | `:docs` and `:default` both solve at `resolution=32` (1024 cells); image dimensions differ. In a shared single-thread gallery process, setup and solve took 5.92 s; incremental generator compilation, including rendering, was 37.21 s. |
+| **Cost** | `:docs` and `:default` both solve at `resolution=32` (1024 cells); image dimensions differ. On one thread, setup and solve took 11.86 s, including compilation, and the whole figure script 39.7 s in a warm environment. |
+
+Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded.
 
 ## Setup
 

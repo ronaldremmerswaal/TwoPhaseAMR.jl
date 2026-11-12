@@ -14,7 +14,9 @@ The wave breaks within the first period. The snapshot comes from a separate leve
 | **Algorithms** | One velocity by default; WY geometric VOF, `:lhf` PLIC with WY fallback, CGFM surface tension, Lax–Wendroff momentum advection and implicit-midpoint viscosity. Pressure and two-phase diffusion use CG with tree-geometric multigrid. AMR combines the interface indicator through `t=0.01`, curvature at 8 cells per radius, and vorticity thresholds `0.2` and `0.2/3`; adaptation is attempted every step with coarsen delay 2. |
 | **Worth varying** | `steepness=0.55` changes the initialized wave and frequency; `bond=1000` changes surface tension; `reynolds=4e4` changes viscosity; `density_ratio=850` changes gas density; `max_level=5` sets the refinement ceiling; `final_time=nothing` selects one nominal period. |
 | **Validated against** | At docs size, the final interface after two periods, at 200 evenly spaced `x` positions, differs from the analytical third-order *initial* profile by sample RMS `0.0449043` and maximum `0.103414`. This approximate Stokes profile is not an exact solution of the viscous, capillary, two-phase problem. |
-| **Cost** | `run_example` default: `max_level=5`, one period, runtime and final cells unmeasured. Gallery `:docs`: `max_level=4`, two periods (`T≈4.39705`), 2308 steps and 6208 final cells; setup and simulation took 141.00 s in a single-thread shared gallery process, including incremental compilation. The separate level-5 first-period hero and impact-location runs took 286.51 s. Gallery `:default` uses `max_level=6`, two periods. |
+| **Cost** | `run_example` default: `max_level=5`, one period, runtime and final cells unmeasured. Gallery `:docs`: `max_level=4`, two periods (`T≈4.39705`), 2308 steps and 6208 final cells; setup and simulation took 163.7 s on one thread, including first-use compilation, and the separate level-5 first-period hero and impact-location runs took 297.5 s. The whole figure script took 519.6 s. Gallery `:default` uses `max_level=6`, two periods. |
+
+Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded.
 
 ## Setup
 
@@ -74,4 +76,4 @@ The two-velocity option uses the script's phase-specific initializer; the displa
 
 - [stokes3_wave.jl](stokes3_wave.jl): analytical initialization and simulation.
 - [make_figures.jl](make_figures.jl): profile, vorticity, animation, and repository README animation generation.
-- `assets/`: generated PNGs (breaking snapshot, profile, final vorticity), the docs-run GIF, and the light and dark repository README GIFs (`readme_light.gif`, `readme_dark.gif`): the evenly spaced keyframes of the level-5 first-period run from `t/T=0.5` to `1`, over plunging, impact and splash-up, with one vorticity range (the 99.9 % quantile of its magnitude) for all frames.
+- `assets/`: generated PNGs (breaking snapshot, profile, final vorticity), the docs-run GIF, and the light and dark repository README GIFs (`readme_light.gif`, `readme_dark.gif`): 81 output frames on a uniform simulation-time grid over `t/T=0.475–1`, each showing the nearest of 49 level-5 keyframes, over plunging, impact and splash-up, with one vorticity range (the 99.9 % quantile of its magnitude) for all frames.

@@ -47,16 +47,9 @@ diffusion inertia identical.
     ) where {T}
     mesh = field.mesh
     axis = face.axis
-    tangent = 3 - axis
     weighted = volume = zero(T)
     for ref in (face.minus, face.plus)
-        center = cellcenter(mesh, ref.block, ref.i, ref.j)
-        spacing = mesh.blocks[ref.block].spacing[tangent]
-        lo = _wrapped_delta(
-            face.center[tangent] - face.area / 2 - center[tangent],
-            mesh.extent[tangent], mesh.periodic[tangent],
-        ) / spacing
-        hi = lo + face.area / spacing
+        lo, hi = _face_local_tangent_interval(mesh, ref, face)
         # Keep the two argument layouts separate: with Float32 geometry,
         # `lo`/`hi` can be Float64, so splatting a branch-dependent tuple
         # forces dynamic dispatch and boxes the solid interface on every face.

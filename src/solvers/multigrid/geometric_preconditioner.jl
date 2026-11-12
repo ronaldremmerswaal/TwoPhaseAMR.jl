@@ -450,10 +450,7 @@ function _refresh_multigrid_level!(
     matrix_transpose isa SparseMatrixCSC || throw(
         ArgumentError("assembled multigrid level has no sparse row form"),
     )
-    size(matrix_transpose) == reverse(size(matrix)) || throw(
-        ArgumentError("multigrid row-form size changed on fixed topology"),
-    )
-    transpose!(matrix_transpose, matrix)
+    _refresh_matrix_transpose!(matrix_transpose, level.transpose_map, matrix)
     level.volumes = volumes
     level.prolongation = prolongation
     length(level.inverse_diagonal) == size(matrix, 1) ||
