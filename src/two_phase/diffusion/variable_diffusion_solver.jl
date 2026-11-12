@@ -18,6 +18,13 @@ mutable struct VariableStaggeredDiffusionSolver{
     stats::LinearSolverStats{T}
 end
 
+"""`dt/2`-scaled stiffness plus the diagonal inertia of a variable-diffusion matrix.
+
+The matrix keeps the sparsity of `operator.stiffness`, so every column is
+traversed once and its diagonal entry is the one whose row equals its column:
+the update needs no search. `inertia` is returned as the vector the caller
+reuses for later refreshes.
+"""
 function _variable_diffusion_matrix(operator, density, dt)
     T = eltype(operator.volumes)
     length(density) == length(operator.volumes) ||
@@ -26,20 +33,25 @@ function _variable_diffusion_matrix(operator, density, dt)
         throw(ArgumentError("density must be finite and positive"))
     inertia = T.(density) .* operator.volumes
     matrix = copy(operator.stiffness)
-    matrix.nzval .*= T(dt) / 2
     rows = rowvals(matrix)
+    values = nonzeros(matrix)
+    half_step = T(dt) / 2
+    # Construction and topology change: the diagonal pattern is verified here,
+    # naming the column, so the per-step refresh can index it blindly.
     for column in axes(matrix, 2)
-        diagonal = 0
+        found = false
         for pointer in nzrange(matrix, column)
-            if rows[pointer] == column
-                diagonal = pointer
-                break
+            row = @inbounds rows[pointer]
+            value = half_step * @inbounds(values[pointer])
+            if row == column
+                found = true
+                value += @inbounds inertia[column]
             end
+            @inbounds values[pointer] = value
         end
-        iszero(diagonal) && error(
+        found || error(
             "variable diffusion stiffness has no diagonal at index $column",
         )
-        @inbounds matrix.nzval[diagonal] += inertia[column]
     end
     return matrix, inertia
 end
@@ -51,32 +63,26 @@ function _refresh_variable_diffusion_matrix_from_inertia!(
     length(inertia) == length(operator.volumes) || throw(
         DimensionMismatch("one inertia value per staggered volume is required"),
     )
-    matrix.colptr == operator.stiffness.colptr &&
-        rowvals(matrix) == rowvals(operator.stiffness) || throw(
-        ArgumentError("diffusion matrix and stiffness sparsity differ"),
+    # The matrix is built with the sparsity of `operator.stiffness` and never
+    # changes it, so its diagonal entries are found by their row index in one
+    # fused pass: no search here and no serial validation before the launch.
+    size(matrix, 2) == length(inertia) || throw(
+        DimensionMismatch("diffusion matrix and inertia sizes differ"),
     )
     matrix_values = nonzeros(matrix)
     stiffness_values = nonzeros(operator.stiffness)
-    half_step = T(dt) / 2
-    @_parallel for index in 1:length(matrix_values)
-        @inbounds matrix_values[index] = half_step * stiffness_values[index]
-    end
+    length(matrix_values) == length(stiffness_values) || throw(
+        ArgumentError("diffusion matrix and stiffness sparsity differ"),
+    )
     rows = rowvals(matrix)
-    # Validate serially: the threaded update must not throw.
-    for column in 1:size(matrix, 2)
-        any(pointer -> rows[pointer] == column, nzrange(matrix, column)) || error(
-            "variable diffusion stiffness has no diagonal at index $column",
-        )
-    end
+    half_step = T(dt) / 2
     @_parallel for column in 1:size(matrix, 2)
-        diagonal = 0
         for pointer in nzrange(matrix, column)
-            if rows[pointer] == column
-                diagonal = pointer
-                break
-            end
+            value = half_step * @inbounds(stiffness_values[pointer])
+            @inbounds matrix_values[pointer] =
+                (@inbounds rows[pointer]) == column ?
+                value + inertia[column] : value
         end
-        @inbounds matrix_values[diagonal] += inertia[column]
     end
     return matrix
 end
@@ -157,6 +163,12 @@ function _reconfigure_variable_diffusion_solver!(
     typeof(operator) === typeof(solver.action.operator) || return nothing
     typeof(preconditioner) === typeof(solver.preconditioner) || return nothing
     _validate_krylov_preconditioner(solver.krylov, preconditioner, solver.krylov_options)
+    # Reconfigured after mesh adaptation: validate the sparsity on this
+    # topology-change path, not in every per-step refresh.
+    matrix.colptr == operator.stiffness.colptr &&
+        rowvals(matrix) == rowvals(operator.stiffness) || throw(
+        ArgumentError("diffusion matrix and stiffness sparsity differ"),
+    )
     solver.matrix = matrix
     solver.inertia = inertia
     action = solver.action

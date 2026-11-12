@@ -195,15 +195,19 @@ end
 
 Fill same-level, coarse--fine, periodic, and physical halos using the schedule
 built with the mesh. Fine-to-coarse values are conservative area averages;
-coarse-to-fine values use piecewise-constant prolongation. A `Dirichlet`
-value function is evaluated serially, before the threaded interior halos.
+coarse-to-fine values use piecewise-constant prolongation.
+
+Every halo donor is an interior cell, so a physical halo never reads another
+halo and its position in the schedule does not affect the result. A `Dirichlet`
+value function is a user callback, though: it is evaluated serially on the
+calling task before the threaded pass, which then skips the physical entries.
 """
 function fill_halo!(field::CellField, boundary::AbstractBoundaryCondition = ZeroGradient(); time = 0)
     mesh = field.mesh
     serial_boundary = boundary isa Dirichlet
     if serial_boundary
-        for entry in mesh.halo_entries
-            entry.physical_boundary || continue
+        for entry_index in _physical_halo_entries(mesh)
+            entry = @inbounds mesh.halo_entries[entry_index]
             _set!(field, _boundary_value(boundary, field, entry, time), entry.destination)
         end
     end

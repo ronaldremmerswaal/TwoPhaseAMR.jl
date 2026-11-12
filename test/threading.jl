@@ -1,3 +1,5 @@
+using LinearAlgebra: diag
+using SparseArrays: sparse
 using TwoPhaseAMR: @_parallel, _parallel_for, _parallel_block_columns, _PARALLEL_GRAIN
 
 # Run `f` with every loop above `grain` work units threaded.
@@ -9,6 +11,47 @@ function with_parallel_grain(f, grain)
     finally
         _PARALLEL_GRAIN[] = previous
     end
+end
+
+# Grain high enough that every loop takes its serial branch.
+const SERIAL_GRAIN = typemax(Int) ÷ 4
+
+# Exception `f` throws and its message, or `nothing`. A Polyester worker's
+# exception would arrive wrapped as a `TaskFailedException`, so callers assert
+# the type as well as the text; a diagnostic that names the offending cell,
+# block or face is part of the documented behaviour.
+function thrown_exception(f)
+    try
+        f()
+    catch err
+        return (err, sprint(showerror, err))
+    end
+    return nothing
+end
+
+# Message of a failure returned by `thrown_exception`, or "" when `f` threw
+# nothing.
+message_of(failure) = isnothing(failure) ? "" : failure[2]
+
+# Two-level jump of an adaptive workspace whose only field is a cell field:
+# the old buffers are staged and the mesh is refined twice without a transfer.
+function two_level_jump_workspace()
+    mesh = BlockTreeMesh(block_size = (8, 8), max_level = 3, periodic = (true, true))
+    field = CellField(mesh, (x, y) -> x)
+    workspace = AMRWorkspace(mesh, field)
+    buffer = only(workspace.field_buffers)
+    TwoPhaseAMR._copy_geometry_snapshot!(workspace)
+    TwoPhaseAMR._stage_field!(buffer, workspace)
+    for step in (1, 2)
+        TwoPhaseAMR._collect_active_nodes!(workspace)
+        TwoPhaseAMR._apply_refinement_actions!(
+            workspace, fill(:refine, length(workspace.leaf_nodes)), step,
+        )
+    end
+    TwoPhaseAMR._collect_active_nodes!(workspace)
+    TwoPhaseAMR._build_face_transfer_geometry!(workspace)
+    TwoPhaseAMR._rebuild_mesh_schedules!(workspace)
+    return workspace, buffer, field
 end
 
 function parallel_loop_features(values)
@@ -96,14 +139,21 @@ expand_parallel(loop) = macroexpand(TwoPhaseAMR, :(@_parallel $loop))
 end
 
 @testset "parallel failures and user callbacks" begin
-    # Inputs are validated before threaded loops, which therefore never
-    # surface a TaskFailedException from a Polyester worker.
+    # Data-dependent checks are fused into the threaded loops and recorded in
+    # owned flags; the caller throws after the launch, so the failure is the
+    # package's own exception rather than a Polyester worker's
+    # `TaskFailedException`.
     mesh = BlockTreeMesh(base_mesh = (32, 32), block_size = (8, 8), periodic = (false, false))
     interface = InterfaceField(mesh, (x, y) -> y - 0.5; lipschitz = 1)
     interface.fraction.blocks[end][3, 3] = 2.0
-    with_parallel_grain(1) do
-        @test_throws ArgumentError TwoPhaseAMR._refresh_conditional_fraction!(interface)
+    failure = with_parallel_grain(1) do
+        thrown_exception() do
+            TwoPhaseAMR._refresh_conditional_fraction!(interface)
+        end
     end
+    @test isa(failure, Tuple{ArgumentError, String})
+    @test occursin("liquid volume fraction", message_of(failure))
+    @test occursin("CellRef(", message_of(failure))
 
     active = trues(ncells(mesh))
     volumes = TwoPhaseAMR._cell_volumes(mesh, Float64)
@@ -115,11 +165,14 @@ end
     operator_volumes = copy(operator.volumes)
     inconsistent = copy(volumes)
     inconsistent[end] = 0.0
-    with_parallel_grain(1) do
-        @test_throws ArgumentError TwoPhaseAMR._update_elliptic_activity!(
-            operator, active, inconsistent,
-        )
+    failure = with_parallel_grain(1) do
+        thrown_exception() do
+            TwoPhaseAMR._update_elliptic_activity!(operator, active, inconsistent)
+        end
     end
+    @test isa(failure, Tuple{ArgumentError, String})
+    @test occursin("positive volume", message_of(failure))
+    @test occursin("CellRef(", message_of(failure))
     @test operator.constraints == constraints
     @test operator.volumes == operator_volumes
 
@@ -145,6 +198,155 @@ end
     @test length(calls) ==
         ncells(mesh) + length(mesh.faces) + length(mesh.boundary_faces) + physical_halos
     @test all(==(Threads.threadid()), calls)
+end
+
+@testset "recorded failures in threaded kernels" begin
+    # A check whose outcome depends on the data is fused into the threaded
+    # loop: the body records the failure in an owned, preallocated flag and the
+    # caller throws after the launch, so the error is the package's own and the
+    # diagnostic names the offending cell, block or face.
+
+    # WY conditional-fraction bounds, checked in the increment sweep.
+    mesh = BlockTreeMesh(base_mesh = (16, 16), block_size = (8, 8), periodic = (true, true))
+    interface = InterfaceField(
+        mesh, (x, y) -> 0.25 + 0.1sinpi(2x) * sinpi(2y); lipschitz = 1,
+    )
+    velocity = FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ? 1.0 : 0.5)
+    advection = WYAdvectionWorkspace(interface)
+    dt = stable_timestep(velocity, advection)
+    interface.conditional_fraction.blocks[2][3, 3] = 5.0
+    failure = with_parallel_grain(1) do
+        thrown_exception() do
+            advect!(
+                interface, velocity, dt, advection;
+                check_timestep = false, initial_geometry_prepared = true,
+            )
+        end
+    end
+    @test isa(failure, Tuple{ErrorException, String})
+    @test occursin("WY conditional fraction out of bounds", message_of(failure))
+    @test occursin("CellRef(2, 2, 2)", message_of(failure))
+
+    # AMR cell transfer rejects a two-level jump before the buffers are taken
+    # apart, so the field is intact.
+    adaptation, buffer, field = two_level_jump_workspace()
+    failure = with_parallel_grain(1) do
+        thrown_exception() do
+            TwoPhaseAMR._transfer_cell_field!(buffer, adaptation)
+        end
+    end
+    @test isa(failure, Tuple{ArgumentError, String})
+    @test occursin("more than one level", message_of(failure))
+    @test occursin("BlockKey", message_of(failure))
+    @test isempty(field.blocks)
+
+    # AMR face transfer records the faces without old data and throws after
+    # the launch, naming the first one.
+    face_mesh = BlockTreeMesh(block_size = (8, 8), max_level = 2, periodic = (true, true))
+    face_velocity = FaceVelocity(face_mesh)
+    face_adaptation = AMRWorkspace(face_mesh, face_velocity)
+    face_buffer = only(face_adaptation.field_buffers)
+    TwoPhaseAMR._copy_geometry_snapshot!(face_adaptation)
+    TwoPhaseAMR._stage_field!(face_buffer, face_adaptation)
+    TwoPhaseAMR._build_face_transfer_geometry!(face_adaptation)
+    TwoPhaseAMR._rebuild_mesh_schedules!(face_adaptation)
+    empty!(face_adaptation.old_faces)
+    empty!(face_adaptation.old_boundary_faces)
+    TwoPhaseAMR._build_face_transfer_geometry!(face_adaptation)
+    failure = with_parallel_grain(1) do
+        thrown_exception() do
+            TwoPhaseAMR._transfer_face_field!(face_buffer, face_adaptation)
+        end
+    end
+    @test isa(failure, Tuple{ArgumentError, String})
+    @test occursin(
+        "could not locate old face data for a new face: face ",
+        message_of(failure),
+    )
+
+    # The reaction update uses the diagonal slots located at assembly, so a
+    # warm refresh still assembles `diffusion*stiffness + reaction*volumes`.
+    reaction_mesh = BlockTreeMesh(base_mesh = (16, 16), block_size = (8, 8), periodic = (true, true))
+    reaction_volumes = TwoPhaseAMR._cell_volumes(reaction_mesh, Float64)
+    operator = EllipticOperator(
+        reaction_mesh; face_coefficient = ones(length(reaction_mesh.faces)),
+        reaction = 0.75, active_cells = trues(ncells(reaction_mesh)),
+        volumes = reaction_volumes,
+    )
+    assembled = Matrix(operator.matrix)
+    with_parallel_grain(1) do
+        TwoPhaseAMR._update_elliptic_face_coefficient!(
+            operator, copy(operator.face_coefficient),
+        )
+    end
+    @test Matrix(operator.matrix) == assembled
+    @test diag(operator.matrix) ==
+        operator.diffusion .* diag(operator.stiffness) .+
+        operator.reaction .* reaction_volumes
+
+    # A stiffness pattern without a diagonal entry is rejected when the matrix
+    # is built, naming the column, instead of in the per-step refresh.
+    without_diagonal = (
+        volumes = [1.0, 1.0],
+        stiffness = sparse([1, 2], [1, 1], [2.0, -1.0], 2, 2),
+    )
+    failure = thrown_exception() do
+        TwoPhaseAMR._variable_diffusion_matrix(without_diagonal, [1.0, 1.0], 0.5)
+    end
+    @test isa(failure, Tuple{ErrorException, String})
+    @test occursin("no diagonal at index 2", message_of(failure))
+
+    # `fill_halo!` with a `Dirichlet` callback gives exactly the serially
+    # filled halos, and every physical halo holds the callback value.
+    halo_mesh = BlockTreeMesh(base_mesh = (32, 32), block_size = (8, 8), periodic = (false, false))
+    threaded_field = CellField(halo_mesh)
+    serial_field = CellField(halo_mesh)
+    initialize!(threaded_field, (x, y) -> x + 2y)
+    initialize!(serial_field, (x, y) -> x + 2y)
+    boundary = Dirichlet((x, y, time) -> x - y + time)
+    with_parallel_grain(1) do
+        fill_halo!(threaded_field, boundary; time = 0.5)
+    end
+    with_parallel_grain(SERIAL_GRAIN) do
+        fill_halo!(serial_field, boundary; time = 0.5)
+    end
+    @test threaded_field.blocks == serial_field.blocks
+    for entry_index in TwoPhaseAMR._physical_halo_entries(halo_mesh)
+        entry = halo_mesh.halo_entries[entry_index]
+        @test TwoPhaseAMR._get(threaded_field, entry.destination) ==
+            entry.center[1] - entry.center[2] + 0.5
+    end
+end
+
+@testset "threaded batch exceptions" begin
+    # Polyester only hands a batch to a worker thread when there are two or
+    # more, so with one thread the recorded-failure tests above exercise the
+    # serial expansion of the same body. State that instead of passing
+    # silently, and check the recorded-failure contract on the threaded path.
+    if Threads.nthreads() < 2
+        @test_skip Threads.nthreads() >= 2
+    else
+        values = zeros(8)
+        flags = falses(8)
+        function record_failure!(values, flags)
+            fill!(flags, false)
+            with_parallel_grain(1) do
+                @_parallel for index in eachindex(values)
+                    values[index] = index
+                    index == 8 && (flags[index] = true)
+                end
+            end
+            index = findfirst(flags)
+            isnothing(index) && return nothing
+            throw(ArgumentError("recorded failure at index $index"))
+        end
+        failure = thrown_exception() do
+            record_failure!(values, flags)
+        end
+        @test isa(failure, Tuple{ArgumentError, String})
+        @test occursin("recorded failure at index 8", message_of(failure))
+        @test values == 1:8
+    end
 end
 
 @testset "shared-memory kernel scheduling" begin

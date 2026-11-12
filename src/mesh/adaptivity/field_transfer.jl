@@ -91,6 +91,23 @@ function _transfer_cell_field!(
     resize!(workspace.reused_old_blocks, length(workspace.old_blocks))
     fill!(workspace.reused_old_blocks, false)
 
+    h = workspace.mesh.halo
+    # Validate before the buffer is taken apart and before the threaded
+    # transfer, whose body must not throw: a rejected topology leaves the field
+    # untouched.
+    for block in workspace.mesh.blocks
+        haskey(workspace.old_indices, block.key) && continue
+        block.key.level > 0 &&
+            haskey(workspace.old_indices, _parent_key(block.key)) && continue
+        all(child -> haskey(workspace.old_indices, child), _child_keys(block.key)) ||
+            throw(
+            ArgumentError(
+                "mesh adaptation changed by more than one level in one update: " *
+                    "no old data brackets block $(block.key)",
+            )
+        )
+    end
+
     for block in workspace.mesh.blocks
         old_index = get(workspace.old_indices, block.key, 0)
         if !iszero(old_index)
@@ -99,20 +116,6 @@ function _transfer_cell_field!(
         else
             push!(field.blocks, _acquire_cell_block!(buffer))
         end
-    end
-
-    h = workspace.mesh.halo
-    # Validate before the threaded transfer: its body must not throw.
-    for block in workspace.mesh.blocks
-        haskey(workspace.old_indices, block.key) && continue
-        block.key.level > 0 &&
-            haskey(workspace.old_indices, _parent_key(block.key)) && continue
-        all(child -> haskey(workspace.old_indices, child), _child_keys(block.key)) ||
-            throw(
-            ArgumentError(
-                "mesh adaptation changed by more than one level in one update"
-            )
-        )
     end
     _prepare_parallel_prolongation!(buffer.prolongation, workspace)
     _parallel_for(
@@ -476,6 +479,30 @@ function _conserve_face_momentum!(field, axis, target, mesh)
     return field
 end
 
+"""Throw the recorded face-transfer gap, naming the first unlocated face.
+
+The threaded transfer only sets `unlocated`; this runs on the calling task
+after the launch, so the exception is the package's own for every thread
+count.
+"""
+function _throw_unlocated_face!(unlocated, faces)
+    index = 0
+    for candidate in eachindex(unlocated)
+        if @inbounds unlocated[candidate]
+            index = candidate
+            break
+        end
+    end
+    iszero(index) && return nothing
+    face = @inbounds faces[index]
+    throw(
+        ArgumentError(
+            "could not locate old face data for a new face: face $index " *
+                "at $(face.center) with axis $(face.axis)",
+        ),
+    )
+end
+
 function _transfer_face_field!(
         buffer::FaceAMRFieldBuffer,
         workspace::AMRWorkspace
@@ -513,8 +540,7 @@ function _transfer_face_field!(
         )
         return nothing
     end
-    any(unlocated) &&
-        throw(ArgumentError("could not locate old face data for a new face"))
+    _throw_unlocated_face!(unlocated, mesh.faces)
     resize!(workspace.boundary_face_local_indices, length(mesh.boundary_faces))
     local_indices = (0, 0)
     for (global_index, face) in pairs(mesh.boundary_faces)
@@ -540,8 +566,7 @@ function _transfer_face_field!(
         )
         return nothing
     end
-    any(unlocated) &&
-        throw(ArgumentError("could not locate old face data for a new face"))
+    _throw_unlocated_face!(unlocated, mesh.boundary_faces)
     field isa FaceVelocity &&
         _preserve_refined_divergence!(field, buffer, workspace)
     for (index, axis) in pairs(_field_axes(field))

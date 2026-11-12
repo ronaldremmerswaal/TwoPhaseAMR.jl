@@ -38,6 +38,10 @@ mutable struct WYAdvectionWorkspace{T, M <: BlockTreeMesh, F}
     const cell_faces::Vector{Int}
     const cell_face_orientations::Vector{Int8}
     const topology::Vector{BlockKey}
+    # Owned WY bound flags, one zero entry per block column: the value of an
+    # entry is the column index of a cell whose conditional fraction left
+    # `[0, open]` in the sweep being validated.
+    const conditional_failure::Vector{Int32}
     const ctu_threshold::T
     const diagnostics::PhaseFluxDiagnostics{T}
 end
@@ -66,9 +70,20 @@ function WYAdvectionWorkspace(
         zeros(T, number_of_faces), zeros(T, number_of_faces),
         fill(false, isnothing(field.geometry) ? 0 : number_of_faces),
         offsets, faces, Int8.(-signs),
-        [block.key for block in mesh.blocks], threshold,
+        [block.key for block in mesh.blocks],
+        zeros(Int32, nblocks(mesh) * mesh.block_size[2]), threshold,
         PhaseFluxDiagnostics(T),
     )
+end
+
+"""Clear and return the owned WY bound flags of one column-scheduled sweep."""
+function _wy_failure_flags!(workspace::WYAdvectionWorkspace)
+    mesh = workspace.mesh
+    flags = workspace.conditional_failure
+    length(flags) == nblocks(mesh) * mesh.block_size[2] ||
+        resize!(flags, nblocks(mesh) * mesh.block_size[2])
+    fill!(flags, zero(eltype(flags)))
+    return flags
 end
 
 
@@ -131,6 +146,11 @@ function _reconfigure_wy_workspace!(
     append!(workspace.cell_face_orientations, Int8.(-signs))
     empty!(workspace.topology)
     append!(workspace.topology, (block.key for block in field.mesh.blocks))
+    resize!(
+        workspace.conditional_failure,
+        nblocks(field.mesh) * field.mesh.block_size[2],
+    )
+    fill!(workspace.conditional_failure, zero(Int32))
     _reset!(workspace.diagnostics)
     return workspace
 end

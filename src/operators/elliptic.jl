@@ -217,6 +217,20 @@ end
     error("sparse topology is missing a required entry")
 end
 
+"""Stored CSC slot of every diagonal entry of a fixed-pattern `matrix`.
+
+An assembled elliptic matrix keeps its sparsity for the lifetime of the
+operator, so the tree's diagonal is located once, here; coefficient refreshes
+index these slots directly and their threaded bodies cannot throw.
+"""
+function _elliptic_diagonal_pointers(matrix::SparseMatrixCSC)
+    pointers = Vector{Int}(undef, size(matrix, 1))
+    for index in eachindex(pointers)
+        pointers[index] = _csc_stored_pointer(matrix, index, index)
+    end
+    return pointers
+end
+
 function _complete_elliptic_stiffness_pattern(
         mesh::BlockTreeMesh,
         gradient_operator::GradientOperator{T},
@@ -348,7 +362,9 @@ has neither an open Dirichlet conductance nor a nonzero connection to an
 imposed inactive cell. Gauges are applied only to those components.
 
 Pass `assemble_matrix = false` for a factorized operator without an assembled
-matrix; then `matrix` is `nothing`.
+matrix; then `matrix` is `nothing`. The diagonal slots of an assembled matrix
+are located once, at construction; a coefficient refresh reuses them so its
+threaded body cannot throw.
 """
 mutable struct EllipticOperator{T, M <: BlockTreeMesh, G <: GradientOperator{T}}
     mesh::M
@@ -362,6 +378,10 @@ mutable struct EllipticOperator{T, M <: BlockTreeMesh, G <: GradientOperator{T}}
     boundary_diagonal::Vector{T}
     stiffness::SparseMatrixCSC{T, Int}
     matrix::Union{Nothing, SparseMatrixCSC{T, Int}}
+    # Stored CSC slot of every diagonal entry, in cell order, or empty for a
+    # matrix-free operator. The sparsity is fixed at assembly, so the search
+    # runs once here rather than in every coefficient refresh.
+    diagonal_pointers::Vector{Int}
     volumes::Vector{T}
     constraints::Vector{T}
     reaction::T
@@ -564,21 +584,21 @@ function EllipticOperator(
             mesh, gradient_operator,
             _integrated_stiffness(mesh, gradient_operator, coefficients),
         )
+        diagonal_pointers = _elliptic_diagonal_pointers(stiffness)
+        stiffness_values = nonzeros(stiffness)
         for cell in eachindex(boundary_diagonal)
-            _add_existing_sparse!(stiffness, cell, cell, boundary_diagonal[cell])
+            @inbounds stiffness_values[diagonal_pointers[cell]] +=
+                boundary_diagonal[cell]
         end
+        # The matrix is a value-scaled copy of the same sparsity, so it uses
+        # the same diagonal slots.
         matrix = copy(stiffness)
-        nonzeros(matrix) .*= diffusion_value
+        matrix_values = nonzeros(matrix)
+        matrix_values .*= diffusion_value
         if !iszero(reaction_value)
-            matrix_rows = rowvals(matrix)
             for column in axes(matrix, 2)
-                for pointer in nzrange(matrix, column)
-                    if matrix_rows[pointer] == column
-                        @inbounds nonzeros(matrix)[pointer] +=
-                            reaction_value * volumes[column]
-                        break
-                    end
-                end
+                @inbounds matrix_values[diagonal_pointers[column]] +=
+                    reaction_value * volumes[column]
             end
         end
         refresh_map = _elliptic_coefficient_refresh_map(
@@ -590,12 +610,13 @@ function EllipticOperator(
         # Only the factorized action is available on a matrix-free level.
         stiffness = spzeros(T, 0, 0)
         matrix = nothing
+        diagonal_pointers = Int[]
         refresh_map = nothing
     end
     operator = EllipticOperator{T, M, typeof(gradient_operator)}(
         mesh, gradient_operator, coefficients, sqrt.(coefficients),
         sides, boundary_material, apertures, boundary_gradient, boundary_diagonal,
-        stiffness, matrix, volumes, constraints,
+        stiffness, matrix, diagonal_pointers, volumes, constraints,
         reaction_value, diffusion_value, _cell_references(mesh),
         refresh_map, inactive_condition, nothing, false,
     )
@@ -624,14 +645,6 @@ function _replace_face_coefficient(
         operator, boundary_face_coefficient,
     )
     return _update_elliptic_face_coefficient!(operator, coefficients)
-end
-
-@inline function _add_existing_sparse!(
-        matrix::SparseMatrixCSC, row::Int, column::Int, value
-    )
-    pointer = _csc_stored_pointer(matrix, row, column)
-    @inbounds nonzeros(matrix)[pointer] += value
-    return matrix
 end
 
 """Update boundary coefficients and nullspace metadata.
@@ -699,10 +712,10 @@ function _update_elliptic_face_coefficient!(
             @inbounds stiffness_values[transpose_pointer] = average
         end
     end
+    stiffness_diagonal = operator.diagonal_pointers
     for cell in eachindex(operator.boundary_diagonal)
-        _add_existing_sparse!(
-            operator.stiffness, cell, cell, operator.boundary_diagonal[cell],
-        )
+        @inbounds stiffness_values[stiffness_diagonal[cell]] +=
+            operator.boundary_diagonal[cell]
     end
     _impose_inactive_constraints!(operator.stiffness, operator.constraints)
 
@@ -716,14 +729,14 @@ function _update_elliptic_face_coefficient!(
             operator.diffusion * stiffness_values[index]
     end
     if !iszero(operator.reaction)
-        # Validate serially: the threaded update must not throw.
-        for index in eachindex(operator.volumes)
-            _csc_stored_pointer(matrix, index, index)
-        end
-        @_parallel for index in 1:length(operator.volumes)
-            pointer = _csc_stored_pointer(matrix, index, index)
-            @inbounds matrix_values[pointer] +=
-                operator.reaction * operator.volumes[index]
+        # The diagonal slots were located at assembly, so this body cannot
+        # throw and needs no serial validation pass.
+        diagonal_pointers = operator.diagonal_pointers
+        volumes = operator.volumes
+        reaction = operator.reaction
+        @_parallel for index in eachindex(diagonal_pointers)
+            pointer = @inbounds diagonal_pointers[index]
+            @inbounds matrix_values[pointer] += reaction * volumes[index]
         end
     end
     _impose_inactive_constraints!(matrix, operator.constraints)
@@ -750,7 +763,10 @@ function _update_elliptic_activity!(
     for index in eachindex(operator.constraints)
         active_cells[index] == (T(volumes[index]) > zero(T)) || throw(
             ArgumentError(
-                "active elliptic cells must have positive volume",
+                "active elliptic cells must have positive volume: cell " *
+                    "$(operator.references[index]) is " *
+                    "active=$(active_cells[index]) with " *
+                    "volume=$(volumes[index])",
             )
         )
     end

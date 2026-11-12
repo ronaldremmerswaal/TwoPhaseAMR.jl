@@ -68,6 +68,11 @@ struct InterfaceField{T, M <: BlockTreeMesh, G} <: AbstractMeshField{T}
     phase_gas_aperture::Vector{T}
     phase_apertures_valid::Base.RefValue{Bool}
     phase_aperture_updates::Base.RefValue{UInt}
+    # Owned flags of the last conditional-fraction refresh, one entry per block
+    # column: `(i, value)` of a cell whose fraction left `[0, open]`, or
+    # `(0, 0)` when the column is valid. Preallocated so the fused check in the
+    # threaded refresh allocates nothing.
+    conditional_failure::Vector{Tuple{Int32, T}}
     fraction_floor::T
     reconstruction_method::Symbol
     contact_angles::NTuple{4, Union{Nothing, T}}
@@ -123,6 +128,7 @@ function InterfaceField(
         CellField(fraction.mesh, T), HeightFunctionCache(T),
         CellField(fraction.mesh, T), BlockKey[], Ref(false), Ref(UInt(0)),
         T[], T[], Ref(false), Ref(UInt(0)),
+        Tuple{Int32, T}[],
         floor,
         reconstruction_method, angles,
         geometry, isnothing(embedded) ? nothing : T(embedded),
@@ -189,39 +195,74 @@ end
 @inline _conditional_fraction(field::InterfaceField, ref::CellRef) =
     _get(field.conditional_fraction, ref)
 
+"""Throw the bound violation recorded by a conditional-fraction refresh.
+
+The refresh records the first offending cell of each block column in an owned,
+preallocated flag and never throws; this runs on the calling task after the
+launch, so the exception is the package's own for every thread count.
+"""
+function _throw_conditional_fraction_failure(
+        field::InterfaceField{T}, failures,
+    ) where {T}
+    index = 0
+    for candidate in eachindex(failures)
+        if !iszero(@inbounds failures[candidate][1])
+            index = candidate
+            break
+        end
+    end
+    iszero(index) && return nothing
+    ny = field.mesh.block_size[2]
+    block = (index - 1) ÷ ny + 1
+    j = index - (block - 1) * ny
+    flag, value = @inbounds failures[index]
+    i = Int(flag)
+    h = field.mesh.halo
+    open = isnothing(field.geometry) ? nothing :
+        @inbounds field.geometry.open_fraction.blocks[block]
+    available = isnothing(open) ? one(T) : @inbounds open[i + h, j + h]
+    throw(
+        ArgumentError(
+            "liquid volume fraction $value lies outside [0,$available] " *
+                "in cell $(CellRef(block, i, j))",
+        ),
+    )
+end
+
+"""Clamp `fraction` into `[0, open]` and refresh the conditional fraction.
+
+The bounds check is fused into the threaded refresh: it records the offending
+cell in an owned, preallocated flag and the throw follows the launch, so the
+error is the same for every thread count. Because the check shares its pass
+with the clamp, a rejected fraction is not restored: cells visited before the
+offending one are already clamped.
+"""
 function _refresh_conditional_fraction!(field::InterfaceField{T}) where {T}
     geometry = field.geometry
     mesh = field.mesh
     nx, ny = mesh.block_size
     h = mesh.halo
     _resize_interface_cache!(field.conditional_fraction)
-    # Validate serially: the threaded update must not throw.
-    for block in 1:nblocks(mesh)
-        physical = @inbounds field.fraction.blocks[block]
-        open = isnothing(geometry) ? nothing :
-            @inbounds geometry.open_fraction.blocks[block]
-        for j in 1:ny, i in 1:nx
-            available = isnothing(open) ? one(T) : open[i + h, j + h]
-            value = physical[i + h, j + h]
-            tolerance = T(128) * eps(T) * max(one(T), available)
-            isfinite(value) && value >= -tolerance &&
-                value <= available + tolerance || throw(
-                ArgumentError(
-                    "liquid volume fraction $value lies outside [0,$available] " *
-                        "in cell $(CellRef(block, i, j))",
-                )
-            )
-        end
-    end
+    failures = field.conditional_failure
+    length(failures) == nblocks(mesh) * ny || resize!(failures, nblocks(mesh) * ny)
+    fill!(failures, (Int32(0), zero(T)))
     _parallel_block_columns(mesh) do block, first_j, last_j
         physical = @inbounds field.fraction.blocks[block]
         conditional = @inbounds field.conditional_fraction.blocks[block]
         open = isnothing(geometry) ? nothing :
             @inbounds geometry.open_fraction.blocks[block]
+        column_failures = field.conditional_failure
+        # Read through the captured field rather than capturing the mesh, so
+        # this launch keeps its capture tuple (and allocation) unchanged.
+        columns = field.mesh.block_size[2]
         @inbounds for j in first_j:last_j, i in 1:nx
             ii, jj = i + h, j + h
             available = isnothing(open) ? one(T) : open[ii, jj]
-            value = clamp(physical[ii, jj], zero(T), available)
+            raw = physical[ii, jj]
+            tolerance = T(128) * eps(T) * max(one(T), available)
+            isfinite(raw) && raw >= -tolerance && raw <= available + tolerance ||
+                (column_failures[(block - 1) * columns + j] = (Int32(i), raw))
+            value = clamp(raw, zero(T), available)
             ratio = available > zero(T) ? value / available : zero(T)
             if ratio <= field.fraction_floor
                 value = zero(T)
@@ -234,6 +275,7 @@ function _refresh_conditional_fraction!(field::InterfaceField{T}) where {T}
             conditional[ii, jj] = ratio
         end
     end
+    _throw_conditional_fraction_failure(field, failures)
     fill_halo!(field.fraction)
     fill_halo!(field.conditional_fraction)
     return field.conditional_fraction
