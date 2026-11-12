@@ -445,16 +445,19 @@ function _refresh_multigrid_level!(
         level::MultigridLevel{T}, matrix, volumes, prolongation;
         singular = false,
     ) where {T}
-    level.matrix = matrix
     matrix_transpose = level.matrix_transpose
     matrix_transpose isa SparseMatrixCSC || throw(
         ArgumentError("assembled multigrid level has no sparse row form"),
     )
+    size(matrix_transpose) == reverse(size(matrix)) || throw(
+        ArgumentError("multigrid row-form size changed on fixed topology"),
+    )
+    length(level.inverse_diagonal) == size(matrix, 1) ||
+        throw(ArgumentError("multigrid level size changed on fixed topology"))
+    level.matrix = matrix
     _refresh_matrix_transpose!(matrix_transpose, level.transpose_map, matrix)
     level.volumes = volumes
     level.prolongation = prolongation
-    length(level.inverse_diagonal) == size(matrix, 1) ||
-        throw(ArgumentError("multigrid level size changed on fixed topology"))
     column_pointers = matrix_transpose.colptr
     rows = rowvals(matrix_transpose)
     matrix_values = nonzeros(matrix_transpose)

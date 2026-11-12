@@ -186,6 +186,18 @@ function _refresh_matrix_transpose!(
     return matrix_transpose
 end
 
+"""Stored transpose of `matrix` and its recorded `SparseTransposeMap`, built
+by one counting sort (the pattern and value bits of `copy(transpose(matrix))`,
+also for rectangular and empty matrices)."""
+function _stored_transpose(matrix::SparseMatrixCSC{T, Int}) where {T}
+    transpose_map = SparseTransposeMap()
+    matrix_transpose = SparseMatrixCSC(
+        size(matrix, 2), size(matrix, 1), ones(Int, size(matrix, 1) + 1), Int[], T[],
+    )
+    _refresh_matrix_transpose!(matrix_transpose, transpose_map, matrix)
+    return matrix_transpose, transpose_map
+end
+
 # Each fine output is one row of the prolongation, accumulated from zero with
 # `muladd` in increasing column order. This kernel is the definition of the
 # product for every thread count; it deliberately does not fall back to
@@ -799,7 +811,8 @@ function _multigrid_level(
         volumes::Vector{T},
         prolongation; singular = false,
     ) where {T}
-    matrix_transpose = copy(transpose(matrix))
+    # The first refresh of this level is already the threaded gather.
+    matrix_transpose, transpose_map = _stored_transpose(matrix)
     inverse_diagonal = collect(diag(matrix))
     row_sums = zeros(T, size(matrix, 1))
     column_pointers = matrix_transpose.colptr
@@ -816,7 +829,7 @@ function _multigrid_level(
     )
     number_of_cells = size(matrix, 1)
     return MultigridLevel(
-        matrix, matrix_transpose, SparseTransposeMap(),
+        matrix, matrix_transpose, transpose_map,
         volumes, prolongation,
         TransferRowSchedule(typeof(prolongation)),
         inverse_diagonal, relaxation_weight,
