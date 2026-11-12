@@ -8,10 +8,12 @@
 #   * `_match_sides!` (src/mesh/topology/mesh.jl:782): the face between two cells is the
 #     overlap of their sides; `minus` is the cell whose right/top side lies on the common
 #     line, `plus` the cell whose left/bottom side lies on it; area = overlap length;
-#   * `_face_displacement` (src/operators/gradient.jl:79): d_f = centre(plus) - centre(minus);
-#   * `_vertex_key` (src/operators/gradient.jl:88): a face belongs to the patches of the
+#   * `_face_displacement` (src/operators/gradient.jl:102): d_f = centre(plus) - centre(minus),
+#     with the sign of the normal component fixed by the face orientation and its magnitude
+#     taken from the shortest periodic image (half-period tie resolved, #36);
+#   * `_vertex_key` (src/operators/gradient.jl:119): a face belongs to the patches of the
 #     two endpoints of its overlap segment;
-#   * `_local_inverse_metric` (src/operators/gradient.jl:139): rows area*d_f' of Y and
+#   * `_local_inverse_metric` (src/operators/gradient.jl:153): rows area*d_f' of Y and
 #     (1/2) e_axis' of N, T = Y'N.
 #
 # Lattice units: all lengths are integers in units of the smallest cell side at the vertex

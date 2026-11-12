@@ -695,18 +695,21 @@ observed orders; first-order shear across an aligned material viscosity jump
 with the geometric-mean vertex viscosity (\issue{113}), not tested; a
 CMDGFM projection with the ILU
 preconditioner that stops unconverged with iterations left (\issue{126});
-conjugate gradients with non-symmetric multigrid cycles (\issue{128}); a
-degenerate vertex patch with two cells per periodic period, which limits the
-coarsest multigrid level (\issue{36}). The open bugs \issue{117} and
-\issue{118} (refinement criteria) and \issue{127} (an allocation contract) do
+conjugate gradients with non-symmetric multigrid cycles (\issue{128}). The open
+bugs \issue{117} and \issue{118} (refinement criteria) and \issue{127} (an
+allocation contract) do
 not affect accuracy. Since
 the audited commit, PR~\#125 has fixed \issue{117} and \issue{118}
 (\cref{sec:amr:band,sec:amr:curvature}), PR~\#130 \issue{126} and
 \issue{127}, \issue{121}, the one-phase \code{cfl} range, is fixed by the
 step check of~\cref{eq:stab:check}, which now uses the top of the accepted
-range (\cref{sec:stab:bounds}), and \issue{49}, a level-set initialisation
+range (\cref{sec:stab:bounds}); \issue{49}, a level-set initialisation
 that could fail for valid input, is fixed by the certified acceptance
-of~\cref{sec:interface:init}; the others are open. Open
+of~\cref{sec:interface:init}; and \issue{36} is fixed: a periodic direction
+with two cells is resolved by the face orientation, whose normal component
+fixes the sign of the seam displacement, while the multigrid coarsest level
+still keeps four cells per periodic axis (\cref{sec:solvers:hierarchy}). The
+others are open. Open
 investigations: unbounded CTU fluxes at hanging dual faces (\issue{70}), dual
 Courant numbers above one next to a solid (\issue{72}), and the fallback for
 orphaned edges at open walls (\issue{99}).

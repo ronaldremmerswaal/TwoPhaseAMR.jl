@@ -754,9 +754,9 @@ the chapters state and that are tracked by issues open at the audited commit;
     Limitation & Issue & Section\\
     \midrule
     \multicolumn{3}{@{}l}{\emph{Mesh, operators and interface}}\\
-    A periodic direction with two cells per period: the face displacement is
-      ambiguous, so the gradient does not support it and the multigrid keeps
-      four cells per periodic axis
+    A periodic direction with two cells per period is resolved by the face
+      orientation of each face, so the gradient supports it; the multigrid
+      coarsest level keeps four cells per periodic axis
       & \issue{36} & \cref{sec:mesh:forest,sec:solvers:hierarchy}\\
     Dirichlet halo values are imposed at the slot centre, half a cell beyond
       the wall
