@@ -207,11 +207,14 @@ measure-weighted offset along $t$; and an offset connection left without such
 a group, where a level transition meets a wall normal to $k$, takes the zero
 normal velocity of a \apitype{NoSlip} or \apitype{FreeSlip} wall as a
 Dirichlet partner, interpolating the far unknown to the wall distance of the
-near one (exact for linear profiles that vanish at the wall). Where the wall
-prescribes no value (an \apitype{Outflow}, \apitype{ZeroGradientVelocity} or
-\apitype{Inflow} side, whose row is a derivative and not a wall value), the
-connection is differenced on the tangential level of one of its ends instead:
-the
+near one (exact for linear profiles that vanish at the wall). An
+\apitype{Inflow} side prescribes that velocity too, so it closes the connection
+the same way with the prescribed value; because the wall values of the two
+signed corrections sit at the two faces' own tangential positions, that form is
+exact for inflow data constant along the wall and first order for data that
+varies along it. At \apitype{Outflow} and \apitype{ZeroGradientVelocity} walls
+no value is prescribed, so the connection is differenced on the tangential
+level of one of its ends instead: the
 endpoint that has a neighbour on its own level spanning the contact, and that
 neighbour. Differencing the offset pair itself would carry the tangential
 derivative of the offset into the $t$ derivative, with weight
@@ -376,7 +379,9 @@ and \testsym{test/operators/staggered_diffusion.jl}{domain-wall diffusion uses o
 \testsym{test/operators/staggered_diffusion.jl}{cut-cell Helmholtz convergence at walls and level transitions (#87)}
 (order at least $1.8$ in the maximum norm),
 \testsym{test/operators/staggered_diffusion.jl}{orphan transverse rows are linear-exact at open walls (#99)},
-\testsym{test/operators/staggered_diffusion.jl}{non-Dirichlet sides share the orphan closure (#99)}
+\testsym{test/operators/staggered_diffusion.jl}{open sides share the orphan closure (#99)},
+\testsym{test/operators/staggered_diffusion.jl}{inflow wall-contact closure is exact for constant wall data (#99)}
+and \testsym{test/operators/staggered_diffusion.jl}{inflow wall-contact closure is first order for varying wall data (#99)}
 and \testsym{test/operators/staggered_diffusion.jl}{orphan transverse rows converge on a manufactured field (#99)},
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{Grid-aligned embedded walls have the cut-wall limit}
 (\issue{79}, also for the operator of \cref{sec:viscosity:stress}).

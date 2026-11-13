@@ -1486,16 +1486,21 @@ function _cut_cell_transverse_stencils(
         wall.boundary_axis == Axis && !wall.tangential || continue
         side_boundary = boundary isa VelocityBoundaryConditions ?
             _side_boundary(boundary, Axis, wall.boundary_side) : boundary
-        side_boundary isa Union{NoSlip, FreeSlip} || continue
+        # A no-slip, free-slip or inflow side prescribes the wall-normal
+        # velocity itself; an outflow or zero-gradient side does not.
+        side_boundary isa Union{NoSlip, FreeSlip, Inflow} || continue
         push!(wall_rows, (wall.degree_of_freedom, wall.boundary_side))
     end
     # An unpaired contact is closed against the wall when the wall value is
-    # known, interpolating the far unknown to the wall distance of the near
-    # one. Everywhere else the offset pair cannot be differenced directly: that
-    # difference carries the tangential derivative of the offset. It is
-    # differenced on a level-matched pair of unknowns instead, which is exact
-    # for affine velocities, and on the weighted minimum-norm derivative of the
-    # unembedded transition where no level-matched face is available.
+    # known (a stationary or moving no-slip wall, a free-slip wall, or an
+    # inflow side), interpolating the far unknown to the wall distance of the
+    # near one; that form is exact for wall data constant along the wall and
+    # first order for wall data that varies along it. Everywhere else the
+    # offset pair cannot be differenced directly: that difference carries the
+    # tangential derivative of the offset. It is differenced on a level-matched
+    # pair of unknowns instead, which is exact for affine velocities, and on
+    # the weighted minimum-norm derivative of the unembedded transition where
+    # no level-matched face is available.
     adjacency = nothing
     for edge in skew_edges
         haskey(stencils, edge) && continue
@@ -1660,11 +1665,12 @@ Normal contacts take the open area of the cell mid-plane, so a closed flanking
 primal face cannot halve them. Transverse contact measures use overlaps of the
 bisected open traces, including across AMR interfaces, and a clipped open trace
 is bisected at the cell centre. Centred contacts share a linear-exact gradient;
-an orphaned contact takes the wall-normal velocity of a no-slip or free-slip
-wall as a Dirichlet partner and otherwise differences a level-matched pair of
-unknowns, which is exact for affine velocities; where no level-matched face is
-available it keeps the linear-exact minimum-norm derivative of the unembedded
-transition. Domain-wall measures belong only to the dual strips
+an orphaned contact takes the prescribed wall-normal velocity of a no-slip,
+free-slip or inflow wall as a Dirichlet partner (exact for wall data constant
+along the wall, first order for wall data that varies along it) and otherwise
+differences a level-matched pair of unknowns, which is exact for affine
+velocities; where no level-matched face is available it keeps the linear-exact
+minimum-norm derivative of the unembedded transition. Domain-wall measures belong only to the dual strips
 that touch the wall.
 Advection flux-star redistribution between sibling faces is not a diffusive
 interface.

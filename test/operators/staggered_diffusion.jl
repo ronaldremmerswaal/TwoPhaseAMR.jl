@@ -1023,11 +1023,10 @@ end
     end
 end
 
-@testset "non-Dirichlet sides share the orphan closure (#99)" begin
-    # The closure of an orphaned transverse contact is a derivative row, so it
-    # must not depend on which non-Dirichlet condition a side carries: an
-    # inflowing velocity is prescribed along the wall, but the row that spans
-    # the contact stays the level-matched difference in all three cases.
+@testset "open sides share the orphan closure (#99)" begin
+    # The closure of an orphaned transverse contact is a derivative row, so the
+    # two sides that prescribe no wall value share it; an inflow side
+    # prescribes one and closes the contact against the wall instead.
     function transverse_rows(side)
         mesh = BlockTreeMesh(
             base_mesh = (16, 16), block_size = (4, 4), extent = (1.0, 1.0),
@@ -1071,7 +1070,100 @@ end
     open_rows = transverse_rows(Outflow())
     @test !isempty(open_rows)
     @test transverse_rows(ZeroGradientVelocity()) == open_rows
-    @test transverse_rows(Inflow(inflow_value)) == open_rows
+    @test transverse_rows(Inflow(inflow_value)) != open_rows
+end
+
+# Worst manufactured-solve error at the dofs of the two-point (wall-contact)
+# transverse rows of an all-inflow fixture, whose level transition ends at the
+# bottom and top walls.
+function _inflow_orphan_errors(n, exact, laplacian)
+    mesh = BlockTreeMesh(
+        base_mesh = (n, n), block_size = (4, 4), extent = (1.0, 1.0),
+        periodic = (false, false), max_level = 1,
+        refine = (key, origin, extent) -> key.level == 0 && origin[1] < 0.5,
+    )
+    geometry = GeometryField(mesh, (x, y) -> 1.0; lipschitz = 1)
+    boundary = VelocityBoundaryConditions(
+        left = Inflow((x, y, time, axis) -> exact(x, y)),
+        right = Inflow((x, y, time, axis) -> exact(x, y)),
+        bottom = Inflow((x, y, time, axis) -> exact(x, y)),
+        top = Inflow((x, y, time, axis) -> exact(x, y)),
+    )
+    operator = StaggeredDiffusionOperator(geometry; viscosity = 1.0, boundary)
+    shift = 0.1
+    worst = 0.0
+    for (axis, component) in enumerate((operator.x, operator.y))
+        points = [mesh.faces[index].center for index in component.local_to_global]
+        values = [exact(point...) for point in points]
+        volumes = component.volumes
+        sources = zeros(Float64, length(points))
+        for connection in component.wall_connections
+            TwoPhaseAMR._include_wall_connection(boundary, connection) || continue
+            sources[connection.degree_of_freedom] += connection.conductance *
+                TwoPhaseAMR._wall_value(boundary, connection, 0.0, axis, Float64)
+        end
+        right_hand_side = volumes .* (
+            values .- shift .* [laplacian(point...) for point in points]
+        ) .+ shift .* sources
+        matrix = spdiagm(0 => volumes) + shift * component.stiffness
+        error = abs.(matrix \ right_hand_side .- values)
+        schedule = TwoPhaseAMR._cut_cell_dual_schedule(geometry, Val(axis), false)
+        incidences, _, _ = TwoPhaseAMR._component_incidences(
+            mesh, Val(axis), Float64,
+        )
+        _, local_to_global = TwoPhaseAMR._component_local_to_global(mesh, axis)
+        connections = TwoPhaseAMR._geometric_diffusion_connections(
+            geometry, Val(axis), schedule, incidences, local_to_global,
+        )
+        stencils = TwoPhaseAMR._cut_cell_transverse_stencils(
+            mesh, connections, local_to_global, copy(component.wall_connections),
+            boundary, Val(axis), Float64,
+        )
+        isnothing(stencils) && continue
+        normal = 3 - axis
+        for connection in connections
+            connection.axis == normal || continue
+            first = mesh.faces[local_to_global[connection.minus]].center
+            second = mesh.faces[local_to_global[connection.plus]].center
+            TwoPhaseAMR._component_face_distance(mesh, first, second, axis) >
+                256eps() * mesh.extent[axis] || continue
+            indices, _ = stencils[(connection.minus, connection.plus)]
+            length(indices) == 2 || continue
+            worst = max(worst, maximum(error[indices]))
+        end
+    end
+    return worst
+end
+
+@testset "inflow wall-contact closure is exact for constant wall data (#99)" begin
+    # With inflow data that do not vary along the wall the wall-contact form is
+    # exact for profiles linear in the wall-normal direction, so the field
+    # 1 + 3y -- whose wall data are constant along every wall and whose
+    # laplacian vanishes -- is reproduced at the orphan rows to round-off.
+    errors = [
+        _inflow_orphan_errors(
+            n, (x, y) -> 1 + 3y, (x, y) -> 0.0,
+        ) for n in (16, 32, 64)
+    ]
+    println("issue99 inflow constant wall data errors=$errors")
+    @test all(error -> error <= 1.0e-10, errors)
+end
+
+@testset "inflow wall-contact closure is first order for varying wall data (#99)" begin
+    # The two signed corrections of the wall-contact form sit at the two faces'
+    # own tangential positions, so inflow data that vary along the wall leave a
+    # first-order residual: the field (1 + 3x)(1 + 3y) is reproduced at the
+    # orphan rows only to first order.
+    errors = [
+        _inflow_orphan_errors(
+            n, (x, y) -> (1 + 3x) * (1 + 3y), (x, y) -> 3.0,
+        ) for n in (16, 32, 64)
+    ]
+    orders = log2.(errors[1:2] ./ errors[2:3])
+    println("issue99 inflow varying wall data errors=$errors eoc=$orders")
+    @test all(diff(errors) .< 0)
+    @test 0.8 <= orders[1] <= 1.3
+    @test 0.8 <= orders[2] <= 1.3
 end
 
 @testset "orphan transverse rows converge on a manufactured field (#99)" begin
