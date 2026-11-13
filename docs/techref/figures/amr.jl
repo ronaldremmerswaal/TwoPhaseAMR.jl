@@ -393,11 +393,19 @@ function amr_band_replica(field, labels, level, ring)
     nx, ny = mesh.block_size
     h = mesh.halo
     floor = field.fraction_floor
+    open_fraction = isnothing(field.geometry) ? nothing : field.geometry.open_fraction
     expected = Vector{Symbol}(undef, nblocks(mesh))
     indices = Dict(block.key => b for (b, block) in pairs(mesh.blocks))
+    # Covered cells hold no fluid and are no phase sample (issues 118, 119).
+    open_at(b, i, j) = isnothing(open_fraction) ? one(floor) : open_fraction.blocks[b][h + i, h + j]
     for (b, block) in pairs(mesh.blocks)
-        values = field.conditional_fraction.blocks[b][(h + 1 - ring):(h + nx + ring), (h + 1 - ring):(h + ny + ring)]
-        near = minimum(values) < 1 - floor && maximum(values) > floor
+        low, high = one(floor), zero(floor)
+        for j in (1 - ring):(ny + ring), i in (1 - ring):(nx + ring)
+            open_at(b, i, j) > 0 || continue
+            value = field.conditional_fraction.blocks[b][h + i, h + j]
+            low, high = min(low, value), max(high, value)
+        end
+        near = low < 1 - floor && high > floor
         expected[b] = near ? (block.key.level < level ? :refine : block.key.level > level ? :coarsen : :keep) : :coarsen
     end
 
@@ -418,11 +426,12 @@ function amr_band_replica(field, labels, level, ring)
         all(!iszero, children) && all(b -> expected[b] === :coarsen, children) || continue
         lo = ntuple(k -> block.origin[k] - 2ring * block.spacing[k], 2)
         hi = ntuple(k -> block.origin[k] + 2block.extent[k] + 2ring * block.spacing[k], 2)
-        low, high = Inf, -Inf
+        low, high = one(floor), zero(floor)
         for (b, other) in pairs(mesh.blocks), j in 1:ny, i in 1:nx
             cell_lo = (other.origin[1] + (i - 1) * other.spacing[1], other.origin[2] + (j - 1) * other.spacing[2])
             cell_hi = (cell_lo[1] + other.spacing[1], cell_lo[2] + other.spacing[2])
             all(k -> overlaps(lo[k], hi[k], cell_lo[k], cell_hi[k], mesh.extent[k], mesh.periodic[k]), 1:2) || continue
+            open_at(b, i, j) > 0 || continue
             value = field.conditional_fraction.blocks[b][h + i, h + j]
             low, high = min(low, value), max(high, value)
         end
@@ -517,9 +526,9 @@ function amr_vorticity_errors(velocity)
     return errors
 end
 
-# Blocks refined by a band without a liquid--gas interface in block and ring
-# (wetted solid boundary), and blocks refined by the curvature criterion
-# without a mixed cell, next to a solid (issues 119 and 118, respectively).
+# Blocks that a band or the curvature criterion refines without a liquid--gas
+# mixed cell in block and ring, next to a solid. Both counts must stay zero: a
+# covered cell holds no fluid and is not gas (issues 119 and 118).
 function amr_solid_artifacts()
     mesh = BlockTreeMesh(;
         base_mesh = (16, 16), block_size = (8, 8), extent = (1.0, 1.0),
@@ -896,7 +905,7 @@ function amr_outputs(write_output)
     @assert transfer.periodic <= 1.0e-13 && transfer.wall_min > 1.0e-5 && transfer.affine <= 1.0e-13
     @assert transfer.snapped > 0 && transfer.snapped_volume <= 1.0e-15
     @assert indicators.mismatches == 0 && 3.5 < indicators.ratio < 4.5
-    @assert indicators.artifacts.wetted > 0 && indicators.artifacts.curvature == 0
+    @assert indicators.artifacts.wetted == 0 && indicators.artifacts.curvature == 0
     @assert indicators.cycle.period == 1 && indicators.still.period == 1
     @assert flows.validation <= 1.0e-12
     @assert flows.one.transferred <= 1.0e3 * flows.one.tolerance && flows.one.growth <= 1.0e-15

@@ -812,12 +812,59 @@ end
     return periodic ? mod(coordinate, domain_size) : coordinate
 end
 
-function _insert_side!(table, key, side, lo, hi, cell)
-    lower, upper = get!(table, key) do
-        (RawSide[], RawSide[])
+"""
+    _lattice_sides(blocks, block_size, max_level, Val(axis), lines, periodic)
+
+Cell sides on the lattice lines normal to `axis`, grouped by canonical line
+coordinate `c in 0:lines` with a stable counting sort: the sides of the cells
+below (left of) line `c` are `lower[lower_offsets[c + 1]:(lower_offsets[c + 2] - 1)]`
+and those of the cells above it `upper[...]` likewise, each sorted by `lo`.
+"""
+function _lattice_sides(blocks, block_size, max_level, ::Val{Axis}, lines, periodic) where {Axis}
+    nx, ny = block_size
+    lower_offsets = zeros(Int, lines + 2)
+    upper_offsets = zeros(Int, lines + 2)
+    for block in blocks, j in 1:ny, i in 1:nx
+        low, high, _, _ = _cell_side_lattice(block, nx, ny, max_level, i, j, Val(Axis))
+        lower_offsets[_canonical_coordinate(high, lines, periodic) + 2] += 1
+        upper_offsets[_canonical_coordinate(low, lines, periodic) + 2] += 1
     end
-    push!(side > 0 ? lower : upper, RawSide(lo, hi, cell))
-    return table
+    lower_offsets[1] = upper_offsets[1] = 1
+    for line in 1:(lines + 1)
+        lower_offsets[line + 1] += lower_offsets[line]
+        upper_offsets[line + 1] += upper_offsets[line]
+    end
+    lower_next = lower_offsets[1:(lines + 1)]
+    upper_next = upper_offsets[1:(lines + 1)]
+    lower = Vector{RawSide}(undef, lower_offsets[end] - 1)
+    upper = Vector{RawSide}(undef, upper_offsets[end] - 1)
+    for (b, block) in pairs(blocks), j in 1:ny, i in 1:nx
+        low, high, tangent_low, tangent_high =
+            _cell_side_lattice(block, nx, ny, max_level, i, j, Val(Axis))
+        side = RawSide(tangent_low, tangent_high, CellRef(b, i, j))
+        line = _canonical_coordinate(high, lines, periodic) + 1
+        lower[lower_next[line]] = side
+        lower_next[line] += 1
+        line = _canonical_coordinate(low, lines, periodic) + 1
+        upper[upper_next[line]] = side
+        upper_next[line] += 1
+    end
+    # Tangential intervals on one side of a line are disjoint: `lo` is unique.
+    for line in 1:(lines + 1)
+        sort!(view(lower, lower_offsets[line]:(lower_offsets[line + 1] - 1)); by = s -> s.lo)
+        sort!(view(upper, upper_offsets[line]:(upper_offsets[line + 1] - 1)); by = s -> s.lo)
+    end
+    return lower_offsets, lower, upper_offsets, upper
+end
+
+"""Normal (`low`, `high`) and tangential lattice bounds of cell `(i, j)` of
+`block` for the lines normal to `Axis`, on the finest lattice of `max_level`."""
+@inline function _cell_side_lattice(block, nx, ny, max_level, i, j, ::Val{Axis}) where {Axis}
+    scale = 1 << (max_level - block.key.level)
+    xlo = block.key.i * nx * scale + (i - 1) * scale
+    ylo = block.key.j * ny * scale + (j - 1) * scale
+    return Axis == 1 ? (xlo, xlo + scale, ylo, ylo + scale) :
+        (ylo, ylo + scale, xlo, xlo + scale)
 end
 
 @inline function _valid_face_cell(ref::CellRef, nblocks, nx, ny)
@@ -863,50 +910,37 @@ face list `faces` (see `_check_face_schedules`), which holds `count` faces of
 function _build_face_schedules(
         blocks, base_mesh, block_size, origin, extent, periodic,
     )
-    nx, ny = block_size
     # Use the finest active leaf, not the mesh's unused refinement ceiling.
     max_level = maximum(block.key.level for block in blocks)
     sx, sy = base_mesh .* (1 << max_level)
-    vertical = Dict{Int, Tuple{Vector{RawSide}, Vector{RawSide}}}()
-    horizontal = Dict{Int, Tuple{Vector{RawSide}, Vector{RawSide}}}()
-
-    for (b, block) in pairs(blocks)
-        scale = 1 << (max_level - block.key.level)
-        block_x = block.key.i * nx * scale
-        block_y = block.key.j * ny * scale
-        for j in 1:ny, i in 1:nx
-            cell = CellRef(b, i, j)
-            xlo = block_x + (i - 1) * scale
-            xhi = xlo + scale
-            ylo = block_y + (j - 1) * scale
-            yhi = ylo + scale
-            _insert_side!(vertical, _canonical_coordinate(xlo, sx, periodic[1]), -1, ylo, yhi, cell)
-            _insert_side!(vertical, _canonical_coordinate(xhi, sx, periodic[1]), 1, ylo, yhi, cell)
-            _insert_side!(horizontal, _canonical_coordinate(ylo, sy, periodic[2]), -1, xlo, xhi, cell)
-            _insert_side!(horizontal, _canonical_coordinate(yhi, sy, periodic[2]), 1, xlo, xhi, cell)
-        end
-    end
-
     T = eltype(blocks[1].origin)
     faces = InteriorFace{T}[]
     boundaries = BoundaryFace{T}[]
-    _match_sides!(faces, boundaries, vertical, 1, origin, extent, (sx, sy))
-    _match_sides!(faces, boundaries, horizontal, 2, origin, extent, (sx, sy))
+    _match_sides!(
+        faces, boundaries,
+        _lattice_sides(blocks, block_size, max_level, Val(1), sx, periodic[1]),
+        1, origin, extent, (sx, sy),
+    )
+    _match_sides!(
+        faces, boundaries,
+        _lattice_sides(blocks, block_size, max_level, Val(2), sy, periodic[2]),
+        2, origin, extent, (sx, sy),
+    )
     _check_face_schedules(faces, boundaries, length(blocks), block_size)
     return faces, boundaries
 end
 
-function _match_sides!(faces, boundaries, table, axis, origin, extent, lattice_size)
+function _match_sides!(faces, boundaries, sides, axis, origin, extent, lattice_size)
+    lower_offsets, lower, upper_offsets, upper = sides
     tangential_axis = 3 - axis
     normal_scale = extent[axis] / lattice_size[axis]
     tangent_scale = extent[tangential_axis] / lattice_size[tangential_axis]
-    # Lattice-coordinate order: deterministic, independent of Dict iteration.
-    for coordinate in sort!(collect(keys(table)))
-        lower, upper = table[coordinate]
-        sort!(lower; by = s -> s.lo)
-        sort!(upper; by = s -> s.lo)
-        li = ui = 1
-        while li <= length(lower) && ui <= length(upper)
+    # Lattice-coordinate order, each line's sides in increasing `lo`.
+    for line in 1:(length(lower_offsets) - 1)
+        coordinate = line - 1
+        li, lower_stop = lower_offsets[line], lower_offsets[line + 1] - 1
+        ui, upper_stop = upper_offsets[line], upper_offsets[line + 1] - 1
+        while li <= lower_stop && ui <= upper_stop
             lside, uside = lower[li], upper[ui]
             lo, hi = max(lside.lo, uside.lo), min(lside.hi, uside.hi)
             if lo < hi
@@ -918,10 +952,10 @@ function _match_sides!(faces, boundaries, table, axis, origin, extent, lattice_s
             lside.hi <= uside.hi && (li += 1)
             uside.hi <= lside.hi && (ui += 1)
         end
-        for side in @view(lower[li:end])
+        for side in @view(lower[li:lower_stop])
             _push_boundary!(boundaries, side, axis, 1, coordinate, origin, extent, lattice_size)
         end
-        for side in @view(upper[ui:end])
+        for side in @view(upper[ui:upper_stop])
             _push_boundary!(boundaries, side, axis, -1, coordinate, origin, extent, lattice_size)
         end
     end

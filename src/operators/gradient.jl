@@ -20,17 +20,24 @@ Base.isequal(left::GradientMetricKey, right::GradientMetricKey) =
     isequal(left.descriptors, right.descriptors)
 Base.hash(key::GradientMetricKey, seed::UInt) = hash(key.descriptors, seed)
 
-"""Persistent local geometry templates and scratch shared across AMR topologies."""
+"""Persistent local geometry templates and scratch shared across AMR topologies:
+the vertex-key and COO arrays of `_assemble_inverse_metric` grow only."""
 mutable struct GradientConstructionCache{T}
     local_metrics::Dict{GradientMetricKey{T}, Matrix{T}}
     key_scratch::Vector{Tuple{Int, T, T, T}}
     hits::Int
     misses::Int
+    first_keys::Vector{Int}
+    second_keys::Vector{Int}
+    rows::Vector{Int}
+    columns::Vector{Int}
+    coefficients::Vector{T}
 end
 
 GradientConstructionCache(::Type{T}) where {T} =
     GradientConstructionCache{T}(
     Dict{GradientMetricKey{T}, Matrix{T}}(), Tuple{Int, T, T, T}[], 0, 0,
+    Int[], Int[], Int[], Int[], T[],
 )
 
 """
@@ -288,16 +295,24 @@ function _assemble_inverse_metric(
         mesh::BlockTreeMesh, ::Type{T}, cache::GradientConstructionCache{T},
     ) where {T}
     number_of_faces = length(mesh.faces)
-    rows = Int[]
-    columns = Int[]
-    coefficients = T[]
+    rows = empty!(cache.rows)
+    columns = empty!(cache.columns)
+    coefficients = empty!(cache.coefficients)
     sizehint!(rows, 8number_of_faces)
     sizehint!(columns, 8number_of_faces)
     sizehint!(coefficients, 8number_of_faces)
-    # Sort packed vertex keys stably. Endpoint order is face order, so stable
-    # sorting preserves the previous per-patch contribution order.
+    # Order the endpoints by vertex key with two stable counting sorts (the
+    # second lattice coordinate, then the first). Endpoint order is face
+    # order, so this preserves the previous per-patch contribution order.
+    # The keys are stored one-based, as counting-sort targets, and on the
+    # lattice of the finest active level: every vertex of an active cell lies
+    # on it, so dividing by `2^shift` is exact and order-preserving, and the
+    # sort ranges do not grow with the unused refinement ceiling.
+    shift = mesh.max_level - maximum(block -> block.key.level, mesh.blocks)
+    mask = (1 << shift) - 1
     metric_faces = Vector{MetricFace{T}}(undef, number_of_faces)
-    endpoints = Vector{UInt128}(undef, 2number_of_faces)
+    first_keys = resize!(cache.first_keys, 2number_of_faces)
+    second_keys = resize!(cache.second_keys, 2number_of_faces)
     for (index, face) in pairs(mesh.faces)
         displacement = _face_displacement(mesh, face)
         @inbounds metric_faces[index] = MetricFace(
@@ -306,27 +321,31 @@ function _assemble_inverse_metric(
         )
         for endpoint in 1:2
             key = _vertex_key(mesh, face, endpoint)
-            @inbounds endpoints[2index - 2 + endpoint] =
-                (UInt128(key[1]) << 64) | UInt128(key[2])
+            iszero(key[1] & mask) && iszero(key[2] & mask) ||
+                error("vertex key off the finest active lattice")
+            @inbounds first_keys[2index - 2 + endpoint] = (key[1] >> shift) + 1
+            @inbounds second_keys[2index - 2 + endpoint] = (key[2] >> shift) + 1
         end
     end
-    order = sortperm(endpoints)
+    lattice = _finest_lattice_size(mesh) .>> shift
+    _, by_second = _grouped_output_schedule(second_keys, lattice[2] + 1)
+    _, by_first = _grouped_output_schedule(first_keys[by_second], lattice[1] + 1)
+    order = by_second[by_first]
     faces = MetricFace{T}[]
     position = 1
     while position <= length(order)
-        packed_key = @inbounds endpoints[order[position]]
-        key = (
-            Int(packed_key >> 64),
-            Int(packed_key & UInt128(typemax(UInt64))),
-        )
+        first_key = @inbounds first_keys[order[position]]
+        second_key = @inbounds second_keys[order[position]]
         empty!(faces)
         while position <= length(order) &&
-                (@inbounds endpoints[order[position]]) == packed_key
+                (@inbounds first_keys[order[position]]) == first_key &&
+                (@inbounds second_keys[order[position]]) == second_key
             face_index = (@inbounds order[position] + 1) >> 1
             push!(faces, @inbounds metric_faces[face_index])
             position += 1
         end
-        if _physical_vertex(mesh, key) || length(faces) <= 2
+        vertex = ((first_key - 1) << shift, (second_key - 1) << shift)
+        if _physical_vertex(mesh, vertex) || length(faces) <= 2
             _append_boundary_patch_metric!(rows, columns, coefficients, faces)
             continue
         end

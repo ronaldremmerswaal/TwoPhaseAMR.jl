@@ -441,7 +441,10 @@ end
             [
                 (
                     ghost.block, ghost.i, ghost.j,
-                    [(donor.cell, donor.bounds, donor.weight) for donor in ghost.donors],
+                    [
+                        (donor.cell, donor.bounds, donor.weight) for donor in
+                            height_cache.donors[ghost.first_donor .+ (0:(ghost.donor_count - 1))]
+                    ],
                 )
                     for ghost in height_cache.ghosts
             ],
