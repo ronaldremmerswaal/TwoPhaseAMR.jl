@@ -241,7 +241,8 @@ end
         fill!(resize!(work.predictor, length(assembly.dof_face)), 0.0)
         resize!(work.velocity, length(assembly.dof_face))
         TwoPhaseAMR._mimetic_recover!(work, -dt .* potential)
-        gathered = TwoPhaseAMR._mimetic_gather!(zeros(0), assembly, flow.velocity)
+        gathered = zeros(0)
+        TwoPhaseAMR._mimetic_gather!(gathered, assembly, flow.velocity)
         @test maximum(abs, gathered .- work.velocity) <= 1.0e-12 * dt * force
         stats = TwoPhaseAMR._project_two_velocity!(
             flow.velocity, flow.pressure, flow.system, flow.workspace, state, dt;
@@ -305,6 +306,7 @@ end
     case = _mimetic_case(n, flat; density = (10.0, 1.0))
     velocity = _mimetic_velocity(case, predictor)
     pressure = CellField(case.mesh)
+    before = deepcopy(velocity)
     stats = project!(velocity, pressure, case.solver, 1.0e-2, case.workspace; tolerance = 1.0e-12)
     @test stats.converged
     @test stats.gridline_faces == n
@@ -312,6 +314,27 @@ end
     @test abs(stats.energy_identity_defect) <= 1.0e-12
     @test abs(stats.momentum_change[1]) <= 1.0e-12 * length(case.mesh.faces) *
         maximum(abs, case.workspace.metric_predictor)
+    # Without cut cells 𝓜 is the diagonal phase mass W; identifying the phase
+    # values is part of the orthogonal projection, so Pythagoras holds in the
+    # full two-phase norm, including the jump energy removed on the interface.
+    function phase_energy(fields)
+        data = case.workspace.face_data
+        return sum(eachindex(case.mesh.faces)) do index
+            volume = case.mesh.face_dual_volumes[index]
+            sum(1:2) do phase
+                mass = (phase == 1 ? data.liquid_mass : data.gas_mass)[index]
+                value = fields[phase][index]
+                mass > 0 && isfinite(value) ? volume * mass * value^2 : 0.0
+            end
+        end
+    end
+    initial = (before[1].interior, before[2].interior)
+    final = (velocity[1].interior, velocity[2].interior)
+    initial_energy = phase_energy(initial)
+    @test abs(
+        initial_energy - phase_energy(final) -
+            phase_energy((initial[1] .- final[1], initial[2] .- final[2])),
+    ) <= 1.0e-12 * initial_energy
     # Normal continuity on the interface faces, idempotence.
     for (index, face) in pairs(case.mesh.faces)
         face.axis == 2 && abs(face.center[2] - 0.5) < 1.0e-12 || continue

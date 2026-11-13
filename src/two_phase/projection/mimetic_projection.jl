@@ -17,13 +17,12 @@ struct MimeticProjectionSolver{T, I, M <: AbstractCutCellMetric}
     density::NTuple{2, T}
     metric::M
     allow_wall_cuts::Bool
-    preconditioner_coefficient::Symbol
 end
 
 function MimeticProjectionSolver(
         interface::InterfaceField{T}; density = (one(T), one(T)),
         metric::AbstractCutCellMetric = MFDCutCellMetric(),
-        _allow_wall_cuts = false, _preconditioner_coefficient = :diagonal_metric,
+        _allow_wall_cuts = false,
     ) where {T}
     T === Float64 || throw(ArgumentError("MimeticProjection requires Float64"))
     rho = (T(density[1]), T(density[2]))
@@ -34,10 +33,8 @@ function MimeticProjectionSolver(
         ArgumentError("MimeticProjection does not support embedded solid geometry"),
     )
     _mimetic_uniform_spacing(interface.mesh)
-    _preconditioner_coefficient in (:diagonal_metric, :metric_diagonal, :mixture_density) ||
-        throw(ArgumentError("unknown mimetic preconditioner coefficient"))
     return MimeticProjectionSolver{T, typeof(interface), typeof(metric)}(
-        interface, rho, metric, Bool(_allow_wall_cuts), _preconditioner_coefficient,
+        interface, rho, metric, Bool(_allow_wall_cuts),
     )
 end
 
@@ -112,7 +109,9 @@ end
 `mixture_volume_defect` is `dt * max(abs(div(u_mix)))` of the projected state;
 `target_defect` the same relative to an inherited mixture-flux target.
 `energy_identity_defect` is `(E(u*) - E(u⁺) - E(u* - u⁺)) / E(u*)` in the norm
-of the metric `𝓜`. `momentum_change` is the change of the first-moment
+of the metric `𝓜`; on grid-line interface faces `E(u*)` and `E(u* - u⁺)`
+include the energy of the phase-velocity jump that identifying the two phase
+values removes. `momentum_change` is the change of the first-moment
 momentum `e_iᵀ𝓜u` and `momentum_wall_force` the wall term `dt (D e_i)ᵀ p` it
 must equal; `transported_momentum_change` is the change of the transported
 momentum `e_iᵀWu` with the diagonal phase masses `W`, which this projection
@@ -202,7 +201,7 @@ function _mimetic_assemble!(
     _mimetic_assemble_from_data!(
         workspace, solver.metric, mesh, data, flags, boundary_aperture,
         boundary_low, solver.density; allow_wall_cuts = solver.allow_wall_cuts,
-        coefficient = solver.preconditioner_coefficient, gridline,
+        gridline,
     )
     assembly.revision = revision
     return assembly
@@ -213,7 +212,7 @@ operators from given face geometry (see `_assemble_cut_cell_metric!`)."""
 function _mimetic_assemble_from_data!(
         workspace::MimeticProjectionWorkspace{T}, metric, mesh, data, flags,
         boundary_aperture, boundary_low, density; allow_wall_cuts = false,
-        coefficient = :diagonal_metric, gridline = nothing,
+        gridline = nothing,
     ) where {T}
     if !_mimetic_topology_current(workspace.topology, mesh)
         workspace.topology = _mimetic_topology(mesh)
@@ -263,28 +262,16 @@ function _mimetic_assemble_from_data!(
     resize!(workspace.cell_residual, cells)
     resize!(workspace.cell_scratch, cells)
     resize!(workspace.multiplier, cells)
-    # Face coefficient of the preconditioning pressure operator, in units of
-    # 1/rho: Σ_π (a|f|)² / 𝓜_rr with 𝓜_rr the diagonal phase mass of the
-    # code (:diagonal_metric, i.e. D W⁻¹ Dᵀ), the diagonal of 𝓜
-    # (:metric_diagonal), or the inverse mixture density (:mixture_density).
+    # Face coefficient of the preconditioning pressure operator `D W⁻¹ Dᵀ`, in
+    # units of 1/rho: Σ_π (a|f|)² / W_r with W_r the diagonal phase mass.
     beta = resize!(workspace.preconditioner_coefficient, length(mesh.faces))
     fill!(beta, zero(T))
     for dof in eachindex(assembly.dof_face)
-        face = assembly.dof_face[dof]
-        area = mesh.faces[face].area
-        if coefficient === :mixture_density
-            beta[face] += assembly.dof_mass[dof] / area^2
-            continue
-        end
         aperture = assembly.dof_aperture[dof]
         iszero(aperture) && continue
-        diagonal = coefficient === :diagonal_metric ? assembly.dof_mass[dof] :
-            assembly.band_position[dof] > 0 ?
-            assembly.band_matrix[assembly.band_position[dof], assembly.band_position[dof]] :
-            assembly.diagonal[dof]
-        beta[face] += aperture^2 * area^2 / diagonal
+        face = assembly.dof_face[dof]
+        beta[face] += aperture^2 * mesh.faces[face].area^2 / assembly.dof_mass[dof]
     end
-    coefficient === :mixture_density && (beta .= inv.(beta))
     return assembly
 end
 
@@ -326,24 +313,33 @@ function mul!(destination, op::_MimeticSchurOperator{T}, source) where {T}
     return destination
 end
 
-"""Phase values of `velocity` on the degrees of freedom of the assembly."""
+"""Phase values of `velocity` on the degrees of freedom of the assembly.
+
+Returns the kinetic energy `Σ m_l m_g / (m_l + m_g) (u^l - u^g)²` that
+identifying the phase values of the grid-line faces removes."""
 function _mimetic_gather!(values, assembly, velocity)
     resize!(values, length(assembly.dof_face))
+    removed = zero(eltype(values))
     for dof in eachindex(assembly.dof_face)
         face = assembly.dof_face[dof]
         phase = assembly.dof_phase[dof]
-        # An identified grid-line value starts from the 𝓜-orthogonal (mass-
-        # weighted) projection of the two phase values onto u^l = u^g.
-        value = phase == 3 ?
-            assembly.dof_liquid_weight[dof] * velocity[1].interior[face] +
-            (one(eltype(values)) - assembly.dof_liquid_weight[dof]) * velocity[2].interior[face] :
+        value = if phase == 3
+            # An identified grid-line value starts from the 𝓜-orthogonal
+            # (mass-weighted) projection of the two phase values onto u^l = u^g.
+            liquid, gas = velocity[1].interior[face], velocity[2].interior[face]
+            weight = assembly.dof_liquid_weight[dof]
+            removed += assembly.dof_mass[dof] * weight * (one(weight) - weight) *
+                (liquid - gas)^2
+            weight * liquid + (one(weight) - weight) * gas
+        else
             velocity[phase].interior[face]
+        end
         isfinite(value) || throw(
             ArgumentError("non-finite active phase velocity on face $face"),
         )
         values[dof] = value
     end
-    return values
+    return removed
 end
 
 """Write (or with `add`, add) the value of `dof` to its phase velocity; an
@@ -534,7 +530,7 @@ function project!(
     _mark_inactive_phase_velocities!(velocity, interface)
     assembly = _mimetic_assemble!(solver, workspace)
     _mimetic_boundary_flux!(workspace.boundary_flux, solver, workspace, velocity)
-    _mimetic_gather!(workspace.predictor, assembly, velocity)
+    removed_energy = _mimetic_gather!(workspace.predictor, assembly, velocity)
     preconditioner = _mimetic_preconditioner!(solver, workspace)
     # Warm start from the previous pressure; the first cell is the anchor.
     cells = length(workspace.references)
@@ -546,7 +542,7 @@ function project!(
     weight = isnothing(_inherited_cell_flux) ? zero(T) : one(T) - T(dt) / T(_reference_dt)
     result = _mimetic_solve!(
         workspace, T(dt), preconditioner, _inherited_cell_flux, weight;
-        tolerance = T(tolerance), max_iterations,
+        tolerance = T(tolerance), max_iterations, removed_energy,
     )
     projected = workspace.velocity
     for dof in eachindex(projected)
@@ -576,11 +572,12 @@ end
 `workspace.multiplier` holds the initial guess of `λ = dt p` (zero in the
 anchor cell) and returns the solution; `workspace.velocity` returns the
 projected phase values. The target outflow is `-weight` times the inherited
-(negative integrated) cell flux.
+(negative integrated) cell flux. `removed_energy` is the jump energy removed
+by gathering (see `_mimetic_gather!`); it enters the energy identity.
 """
 function _mimetic_solve!(
         workspace::MimeticProjectionWorkspace{T}, dt, preconditioner, inherited,
-        weight; tolerance, max_iterations,
+        weight; tolerance, max_iterations, removed_energy = zero(T),
     ) where {T}
     assembly = workspace.assembly
     topology = workspace.topology
@@ -637,7 +634,9 @@ function _mimetic_solve!(
     projected = workspace.velocity
     mp = _mimetic_metric_product!(workspace.metric_predictor, workspace, predictor)
     mv = _mimetic_metric_product!(workspace.metric_velocity, workspace, projected)
-    energy_before = dot(predictor, mp)
+    # The removed grid-line jump energy is 𝓜-orthogonal to the identified
+    # space: it adds to E(u*) and to E(u* - u⁺) alike.
+    energy_before = dot(predictor, mp) + removed_energy
     energy_after = dot(projected, mv)
     energy_correction = energy_before - 2dot(projected, mp) + energy_after
     identity = energy_before > zero(T) ?
