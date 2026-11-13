@@ -54,13 +54,19 @@ the diagonal half-face metric, while complete interior patches retain the AMR
 Riesz map. Thus the cell divergence remains the primal operator and the
 pressure operator is still symmetric positive semidefinite.
 
-A periodic direction is resolved through the covering space: each face
-displacement is the centre-to-centre offset whose normal component is signed by
-the face orientation (the plus cell always lies on the +axis side of the face)
-and whose magnitude is the shortest periodic image. A periodic direction
-resolved by only two cells is therefore supported: the half-period tie of the
-centre difference cannot flip the seam displacement, and the resulting metric
-is the ordinary diagonal MAC metric of that direction.
+Face displacements are evaluated on the integer lattice of the block keys, not
+as a difference of absolute cell centres: the normal component is the mean of
+the two cells' widths and the tangential component is the lattice centre offset
+scaled by the finest spacing. Both are exact, so the operator of a translated
+mesh is bitwise the operator of the same mesh at the origin.
+
+A periodic direction is resolved through the covering space: the normal
+component of the displacement is signed by the face orientation (the plus cell
+always lies on the +axis side of the face) and only the tangential component
+takes its sign from the shortest periodic image. A periodic direction resolved
+by only two cells is therefore supported: the half-period tie of the centre
+offset cannot flip the seam displacement, and the resulting metric is the
+ordinary diagonal MAC metric of that direction.
 
 An operator owns one scratch vector and must not be shared by concurrent
 kernels.
@@ -86,33 +92,61 @@ end
     return delta - round(delta / extent) * extent
 end
 
+# Tangential offset of two cell centres, from the integer lattice rather than
+# from their absolute centres. The offset is twice the centre difference in
+# finest-lattice cells, an integer, so it is exact however far the domain sits
+# from the origin; a difference of the centres themselves cancels there (at
+# origin 1e12 a 0.15-wide cell keeps only about 1e-3 of its width).
+@inline function _tangential_centre_offset(mesh::BlockTreeMesh, face::InteriorFace)
+    axis = 3 - face.axis
+    lattice = _finest_lattice_size(mesh)
+    blocks = mesh.blocks
+    minus_low, minus_scale = _cell_lattice_bounds(mesh, blocks, face.minus, lattice)
+    plus_low, plus_scale = _cell_lattice_bounds(mesh, blocks, face.plus, lattice)
+    offset = 2 * plus_low[axis] + plus_scale[axis] -
+        2 * minus_low[axis] - minus_scale[axis]
+    if mesh.periodic[axis]
+        # Shortest periodic image, in integer arithmetic. The two cells of a
+        # face share a tangential interval, so the offset is at most half a
+        # coarse cell and the reduction is a no-op for the schedules built
+        # today; it keeps the covering-space displacement right if a schedule
+        # ever pairs cells across a tangent seam, where
+        # `delta - round(delta / extent) * extent` cancelled two nearly equal
+        # large numbers. Every lattice low index lies in [0, period/2), so one
+        # step suffices, and an exact half period keeps its sign, as the centre
+        # difference would.
+        period = 2 * lattice[axis]
+        offset > lattice[axis] && (offset -= period)
+        offset < -lattice[axis] && (offset += period)
+    end
+    return offset * (_spacing_at_level(mesh, mesh.max_level)[axis] / 2)
+end
+
 # Displacement of the plus cell centre relative to the minus cell centre in the
 # covering space, chosen so that the shared face lies between them.
 #
+# Both components come from level spacings and integer lattice offsets, never
+# from subtracting two absolute centres: the centre offset is a small difference
+# of large numbers once the origin is far from zero, and the cancellation there
+# degrades every metric entry it enters.
+#
 # Topology fixes the sign of the normal component: `_match_sides!` always makes
 # the plus cell the one on the +axis side of the face, so the normal component
-# is positive by construction. Only its magnitude is taken from the periodic
-# wrap. This resolves the half-period tie of a periodic direction with exactly
-# two cells, where the centre difference is +-L/2 and the two candidate images
-# have the same length: `round(-0.5) == -0.0` would otherwise keep the
-# negative image and reverse the seam displacement. The tangential component
-# keeps its wrapped sign, which is unambiguous because the tangential offset of
-# the two centres is at most half a coarse cell, hence below L/4 for any
-# direction resolved by two cells or more.
+# is positive by construction. It is the mean of the two cells' widths normal to
+# the face, the same distance `_face_dual_volumes` uses. This resolves the
+# half-period tie of a periodic direction with exactly two cells, where the
+# centre offset is +-L/2 and the two candidate images have the same length: the
+# wrapped sign of the centre difference would reverse the seam displacement.
+# The tangential component keeps its wrapped sign, which is unambiguous because
+# the tangential offset of the two centres is at most half a coarse cell, hence
+# below L/4 for any direction resolved by two cells or more.
 @inline function _face_displacement(mesh::BlockTreeMesh, face::InteriorFace)
-    minus = cellcenter(mesh, face.minus.block, face.minus.i, face.minus.j)
-    plus = cellcenter(mesh, face.plus.block, face.plus.i, face.plus.j)
     axis = face.axis
-    tangent = 3 - axis
-    normal = abs(
-        _wrapped_delta(
-            plus[axis] - minus[axis], mesh.extent[axis], mesh.periodic[axis]
-        )
-    )
-    tangential = _wrapped_delta(
-        plus[tangent] - minus[tangent],
-        mesh.extent[tangent], mesh.periodic[tangent],
-    )
+    normal = (
+        mesh.blocks[face.minus.block].spacing[axis] +
+            mesh.blocks[face.plus.block].spacing[axis]
+    ) / 2
+    tangential = _tangential_centre_offset(mesh, face)
     return axis == 1 ? (normal, tangential) : (tangential, normal)
 end
 
