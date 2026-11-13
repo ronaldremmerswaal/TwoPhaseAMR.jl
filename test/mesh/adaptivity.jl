@@ -636,6 +636,94 @@ end
     end
 end
 
+@testset "Interface band skips covered cells of a wetted wall (#119)" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (8, 8), max_level = 2,
+        periodic = (false, false),
+        adaptation = MeshAdaptationOptions(coarsen_delay = 0),
+        refine = (key, origin, extent) -> key.level == 0,
+    )
+    # An embedded slab in an all-liquid domain: its wall is wetted along its
+    # whole length and the domain holds no liquid-gas interface.
+    slab = (x, y) -> max(abs(x - 0.5) - 0.25, abs(y - 0.5) - 0.3)
+    geometry = GeometryField(mesh, slab; lipschitz = 1)
+    liquid = InterfaceField(mesh; geometry, init = 1)
+    cells = TwoPhaseAMR._cell_references(mesh)
+    @test any(
+        ref -> 0 < TwoPhaseAMR._get(geometry.open_fraction, ref) < 1, cells,
+    )
+    @test all(cells) do ref
+        conditional = TwoPhaseAMR._conditional_fraction(liquid, ref)
+        iszero(TwoPhaseAMR._get(geometry.open_fraction, ref)) ?
+            iszero(conditional) : conditional == 1
+    end
+    labels = Vector{Symbol}(undef, nblocks(mesh))
+    # The solid band still finds the wall, so the fixture is not vacuous.
+    @test all(
+        ==(:refine),
+        refinement_labels!(
+            labels, GeometryRefinementIndicator(geometry; level = 2),
+        ),
+    )
+    indicator = InterfaceRefinementIndicator(liquid; level = 2)
+    @test all(==(:coarsen), refinement_labels!(labels, indicator))
+    workspace = AMRWorkspace(mesh, geometry, liquid)
+    stats = adapt!(workspace, indicator; step = 1, force = true)
+    @test stats.coarsened_families > 0
+    @test all(block -> iszero(block.key.level), mesh.blocks)
+end
+
+@testset "Interface band keeps refining a wetted contact line (#119)" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (8, 8), max_level = 2,
+        periodic = (false, false),
+        refine = (key, origin, extent) -> key.level == 0,
+    )
+    solid = InterfaceField(mesh; contact_angle = nothing)
+    initialize!(solid, (-0.23, 1.0), 0.17)
+    geometry = GeometryField(solid)
+    # A liquid wedge between the sloping wall and a free surface that meets it
+    # at (0.77, 0.35): the contact line is a genuine liquid-gas boundary.
+    wedge = InterfaceField(mesh; geometry, contact_angle = nothing, init = 0)
+    initialize!(wedge, (0.2, 1.0), 0.5)
+    # A block is near when a cell of its own or of its one-cell halo holds both
+    # phases in its open part; read the stored area fractions so the
+    # expectation does not restate the implementation's mixed-cell test.
+    near = [
+        any(
+            index -> 0 < wedge.fraction.blocks[b][index] <
+                geometry.open_fraction.blocks[b][index],
+            eachindex(wedge.fraction.blocks[b]),
+        ) for b in eachindex(mesh.blocks)
+    ]
+    cells = TwoPhaseAMR._cell_references(mesh)
+    wetted = [
+        ref for ref in cells
+            if TwoPhaseAMR._conditional_fraction(wedge, ref) == 1 &&
+            0 < TwoPhaseAMR._get(geometry.open_fraction, ref) < 1
+    ]
+    @test !isempty(wetted)
+    @test any(ref -> near[ref.block], wetted)
+    @test any(ref -> !near[ref.block], wetted)
+
+    labels = Vector{Symbol}(undef, nblocks(mesh))
+    refinement_labels!(labels, InterfaceRefinementIndicator(wedge; level = 2))
+    @test all(
+        b -> labels[b] === (near[b] ? :refine : :coarsen),
+        eachindex(mesh.blocks),
+    )
+    # The contact-line cells refine with the free surface; the wetted wall away
+    # from it coarsens, because a covered cell is no interface evidence.
+    @test all(
+        ref -> labels[ref.block] === :refine,
+        filter(ref -> near[ref.block], wetted),
+    )
+    @test all(
+        ref -> labels[ref.block] === :coarsen,
+        filter(ref -> !near[ref.block], wetted),
+    )
+end
+
 @testset "in-place conservative adaptive field transfer" begin
     options = MeshAdaptationOptions(
         update_interval = 2, coarsen_delay = 3, minimum_level = 0

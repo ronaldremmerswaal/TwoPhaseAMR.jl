@@ -41,7 +41,10 @@ independent `minimum_level` and `maximum_level` bounds. The fixed-band criteria
 one exact target `level`: blocks near the phase interface or embedded solid
 boundary move toward that level, while blocks outside the band request
 coarsening. With a nonzero buffer, both detect boundaries aligned with faces
-between blocks through halo jumps. Their `buffer_cells` keyword (default 1,
+between blocks through halo jumps. Covered cells hold no fluid, so the phase
+band skips them: their conditional liquid fraction is zero by construction,
+not gas, and a wetted solid boundary is not an interface on its own (#119).
+Their `buffer_cells` keyword (default 1,
 between 0 and the mesh halo width) specifies the number of halo-cell rings
 examined at each block's level. Before allowing a sibling family at or below
 the target level to coarsen, the criteria also conservatively examine the
@@ -84,10 +87,9 @@ per-cell ratios instead would count a covered neighbour as gas and make the
 block appear to border the interface. Together these rules let the contact
 line refine without the refine/coarsen cycle that made it unresolved (#148).
 
-The interface-band criterion has different semantics: covered solid cells
-have conditional liquid fraction zero, so liquid touching a solid can make a
-block appear near an interface even far from a liquid–gas contact line.
-Consequently the band can still refine wetted solid boundaries.
+The interface band tests the same conditional fractions, so a wetted solid
+boundary away from a liquid–gas interface no longer refines it: only a
+genuine interface within reach of the block's halo ring does (#119).
 
 Every built-in indicator also accepts `xmin`, `xmax`, `ymin`, and `ymax`,
 defaulting to an unbounded region. A block participates when its closed

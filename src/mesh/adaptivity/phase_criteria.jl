@@ -7,7 +7,11 @@ Refine blocks intersecting the interface or its cell-halo neighbourhood to a
 fixed level. Pure blocks request coarsening unless their sibling family must
 be retained to prevent the prospective parent's band from refining it again.
 Aligned interfaces between pure cells are detected through halo fraction jumps
-as well as mixed cells. The criterion is active for `t_init <= time <= t_end`.
+as well as mixed cells. A cell whose open part is empty holds no fluid and is
+not a phase sample: its conditional fraction is zero by construction, not gas,
+so a liquid-filled region that touches an embedded solid is not near without a
+liquid--gas interface (#119). The criterion is active for
+`t_init <= time <= t_end`.
 Only blocks intersecting the closed spatial region are eligible; outside it
 the indicator requests `:coarsen`.
 """
@@ -38,19 +42,19 @@ end
 _indicator_field(indicator::InterfaceRefinementIndicator) = indicator.field
 
 # Whether a family's window — the parent block plus a ring of `2r` child cells
-# on the common finest-level lattice — spans both phases. The band guards treat
-# every cell as a phase sample; the contact-line guard skips covered cells,
-# whose conditional fraction is zero by construction rather than gas (#118).
+# on the common finest-level lattice — spans both phases. `open_fraction` is the
+# geometry's open-cell fraction, or `nothing` where the field has no solid: a
+# covered cell holds no fluid and is not a phase sample, because its conditional
+# fraction is zero by construction rather than gas (#118, #119).
 # `key` is the family's lower-left child, so its two-block span is the parent's;
 # `indices` and `candidates` are the caller's per-pass lookup and buffer.
 function _family_window_spans_both_phases(
-        candidates, field, key, r, indices; skip_covered::Bool
+        candidates, field, key, r, indices; open_fraction
     )
     mesh = field.mesh
     nx, ny = mesh.block_size
     h = mesh.halo
     floor = field.fraction_floor
-    open_fraction = skip_covered ? field.geometry.open_fraction : nothing
     lattice = mesh.base_mesh .<< mesh.max_level
     scale = 1 << (mesh.max_level - key.level)
     lower = ((key.i * nx - 2r) * scale, (key.j * ny - 2r) * scale)
@@ -100,7 +104,7 @@ function _family_window_spans_both_phases(
                 @inbounds open_fraction.blocks[index]
             @inbounds for j in (h + jmin):(h + jmax), i in (h + imin):(h + imax)
                 # A covered cell holds no fluid: its conditional fraction is
-                # zero by construction, not gas (#118).
+                # zero by construction, not gas (#118, #119).
                 isnothing(open) || open[i, j] > 0 || continue
                 value = values[i, j]
                 low = min(low, value)
@@ -119,6 +123,8 @@ end
 function _protect_fixed_band_coarsening!(labels, field, target, r)
     iszero(target) && return labels
     mesh = field.mesh
+    geometry = field.geometry
+    open_fraction = isnothing(geometry) ? nothing : geometry.open_fraction
     indices = Dict(block.key => b for (b, block) in pairs(mesh.blocks))
     candidates = Int[]
     for block in mesh.blocks
@@ -131,7 +137,7 @@ function _protect_fixed_band_coarsening!(labels, field, target, r)
         all(i -> labels[i] === :coarsen, children) || continue
 
         _family_window_spans_both_phases(
-            candidates, field, key, r, indices; skip_covered = false,
+            candidates, field, key, r, indices; open_fraction,
         ) || continue
         for child in children
             labels[child] = :keep
@@ -149,12 +155,22 @@ function _fixed_interface_refinement_labels!(
     _refresh_conditional_fraction!(field)
     nx, ny = mesh.block_size
     h, r = mesh.halo, buffer_cells
+    geometry = field.geometry
     _parallel_for(nblocks(mesh); work = _block_work()) do b
         block = mesh.blocks[b]
-        values = @view field.conditional_fraction.blocks[b][
-            (h + 1 - r):(h + nx + r), (h + 1 - r):(h + ny + r),
-        ]
-        low, high = extrema(values)
+        values = @inbounds field.conditional_fraction.blocks[b]
+        open = isnothing(geometry) ? nothing :
+            @inbounds geometry.open_fraction.blocks[b]
+        low, high = one(eltype(values)), zero(eltype(values))
+        for j in (h + 1 - r):(h + ny + r), i in (h + 1 - r):(h + nx + r)
+            # A covered cell holds no fluid: its conditional fraction is zero
+            # by construction, not gas, so it is no evidence of an interface
+            # and must not refine a wetted solid boundary (#119).
+            isnothing(open) || @inbounds(open[i, j]) > 0 || continue
+            value = @inbounds values[i, j]
+            low = min(low, value)
+            high = max(high, value)
+        end
         near = low < 1 - field.fraction_floor &&
             high > field.fraction_floor
         labels[b] = near ? (
@@ -439,10 +455,11 @@ function _protect_contact_line_coarsening!(labels, field, wetted, r)
         all(i -> labels[i] === :coarsen, children) || continue
         any(i -> wetted[i], children) || continue
 
-        # `skip_covered` keeps covered cells out of the phase extrema: their
-        # conditional fraction is zero by construction, not gas (#118).
+        # Covered cells stay out of the phase extrema: their conditional
+        # fraction is zero by construction, not gas (#118).
         _family_window_spans_both_phases(
-            candidates, field, key, r, indices; skip_covered = true,
+            candidates, field, key, r, indices;
+            open_fraction = geometry.open_fraction,
         ) || continue
         for child in children
             labels[child] = :keep
