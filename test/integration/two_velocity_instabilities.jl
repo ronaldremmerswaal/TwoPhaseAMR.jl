@@ -200,11 +200,11 @@ end
                 "method=frozen factors=$(temporal.factors) " *
                 "errors=$(temporal.errors)",
         )
-        # Fixed-grid spatial error can mask or cancel temporal error.
-        # At DR=1000 the archived frozen errors were (0.464936, 0.505470,
-        # 0.496933).
+        # Refining the time step at fixed spatial resolution must never
+        # increase the error. Measured on main: DR=1 0.2313, 0.1644, 0.1280
+        # and DR=1000 0.4361, 0.3493, 0.2909.
         @test all(isfinite, temporal.errors)
-        @test maximum(temporal.errors) <= 1.5first(temporal.errors)
+        @test all(diff(collect(temporal.errors)) .<= 0)
     end
 end
 

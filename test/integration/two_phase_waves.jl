@@ -325,12 +325,21 @@ end
                 "model=$method_name factors=(1.0, 0.5, 0.25) ",
                 "errors=$temporal_errors",
             )
-            # At fixed spatial resolution temporal and spatial errors can
-            # cancel: DR=1 frozen gave 0.006525, 0.007361, 0.010889 as
-            # dt was halved twice (maximum/base = 1.67). Guard against
-            # more than a factor-two increase rather than monotonicity.
+            # Refining the time step at fixed spatial resolution must never
+            # increase the error: it converges to the spatial error, as the
+            # one-velocity model above does.
             @test all(isfinite, temporal_errors)
-            @test maximum(temporal_errors) <= 2first(temporal_errors)
+            temporal_monotone = all(diff(temporal_errors) .<= 0)
+            if density_ratio == 1
+                # NUMERICS CONCERN (#178): at density ratio one the
+                # two-velocity error grows as dt is halved twice
+                # (0.00655, 0.00782, 0.01137), so some per-step error of the
+                # two-velocity step does not scale with dt. Remove the broken
+                # marker when #178 is fixed.
+                @test_broken temporal_monotone
+            else
+                @test temporal_monotone
+            end
         end
 
         # At density ratio one a gravity-only perturbation has zero frequency.
