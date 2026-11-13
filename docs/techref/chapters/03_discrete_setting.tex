@@ -75,7 +75,17 @@ describes.
 \code{mesh.face_dual_volumes} (uncut, in the order of \code{mesh.faces}):
 \srcsym{src/mesh/topology/mesh.jl}{_face_dual_volumes}; displacements
 \srcsym{src/operators/gradient.jl}{_face_displacement}. Rebuilt with the face
-lists after every regrid.
+lists after every regrid. The displacement is evaluated on the level lattice of
+\cref{sec:mesh:forest}, not as the difference of the two centroids: its normal
+component is the mean cell width of~\cref{eq:setting:dual-volume} and its
+tangential component twice the centre offset in finest cells, an integer,
+scaled by the finest level spacing. A centroid difference is a small difference
+of large numbers and loses the offset when the domain sits far from the origin
+(at origin $10^{12}$ a $0.15$-wide cell keeps only $\approx10^{-3}$ of its
+offset), whereas the lattice form is exact: the operator of a
+translated mesh is bitwise the operator of the untranslated one
+(\issue{163};
+\testsym{test/operators/gradient.jl}{face displacement is independent of the mesh origin}).
 \end{implnote}
 
 \section{Open (cut-cell) measures}\label{sec:setting:open}
