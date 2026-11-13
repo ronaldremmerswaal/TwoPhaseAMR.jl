@@ -764,22 +764,11 @@ the chapters state and that are tracked by issues open at the audited commit;
     The cut-cell metric replaces a vanishing open dual volume by the number
       one, which depends on the unit of length
       & \issue{42} & \cref{sec:setting:elliptic}\\
-    Level-set initialisation with a Lipschitz bound can fail for a level set
-      that touches a grid line tangentially
-      & \issue{49} & \cref{sec:interface:init}\\
     \multicolumn{3}{@{}l}{\emph{Transport and time step}}\\
     At the stable step, a cut coarse donor at a level transition can stop the
       WY transport or leave a fraction outside $[0,1]$, as can the frozen
       phase subfaces of a cut donor; the run-time checks stop the run
       & \issue{52}, \issue{56} & \cref{sec:stab:gaps}\\
-    The two-phase CTU flux of momentum and staggered scalars is not bounded
-      at hanging dual faces
-      & \issue{70} & \cref{dev:momentum:ctu-hanging}\\
-    The two-velocity mass--momentum identity fails at split coarse cut sides
-      & \issue{71} & \cref{sec:momentum:two-velocity}\\
-    Lax--Wendroff and limited face states next to a solid can see a dual
-      Courant number above one
-      & \issue{72} & \cref{sec:momentum:cfl}\\
     \multicolumn{3}{@{}l}{\emph{Viscosity}}\\
     Orphaned transverse edges at outflow, zero-gradient and inflow walls next
       to a level transition keep a two-point difference that is not exact for

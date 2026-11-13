@@ -55,6 +55,7 @@ export AbstractWallBoundaryCondition, NoSlip, FreeSlip
 export VelocityBoundaryConditions, Inflow, Outflow, ZeroGradientVelocity
 export enforce_velocity_boundary!
 export StaggeredDiffusionOperator, diffusion!
+export AbstractViscosityAveraging, HarmonicViscosityAveraging, GeometricViscosityAveraging
 export LinearSolverOptions, MultigridOptions
 export AdvectionOptions, NavierStokesOptions, Adaptivity
 export SinglePhase, TwoPhase, SurfaceTension
@@ -82,6 +83,7 @@ export harmonic_face_coefficients, weighted_gradient!
 export TreeGeometricMultigridPreconditioner
 export EllipticSolver
 export LinearSolverStats, solve!, residual_norms
+export ProjectionRunStats
 export algebraic_multigrid_preconditioner, incomplete_lu_preconditioner
 export incomplete_cholesky_preconditioner
 export ProjectionWorkspace, project!
@@ -134,6 +136,8 @@ include("operators/advection/staggered_schemes.jl")
 include("operators/advection/staggered_schedules.jl")
 include("operators/advection/staggered_fluxes.jl")
 include("operators/advection/staggered_update.jl")
+# operators
+include("operators/viscosity_averaging.jl")
 # navier_stokes
 include("navier_stokes/options.jl")
 # operators
@@ -148,6 +152,7 @@ include("solvers/multigrid/cycles.jl")
 include("solvers/multigrid/elliptic_solver.jl")
 # navier_stokes
 include("navier_stokes/projection.jl")
+include("navier_stokes/projection_stats.jl")
 include("navier_stokes/implicit_diffusion.jl")
 # interface
 include("interface/height_functions.jl")

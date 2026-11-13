@@ -424,7 +424,7 @@ Tests in the order of \cref{tab:verif:orders}:
 \testsym{test/operators/staggered_diffusion.jl}{composite implicit diffusion is energy contractive (#80)},
 \testsym{test/operators/staggered_diffusion.jl}{cut-cell Helmholtz convergence at walls and level transitions (#87)},
 \testsym{test/operators/embedded_wall_rows.jl}{grid-aligned embedded-wall Helmholtz convergence (#106)},
-\testsym{test/operators/embedded_wall_rows.jl}{inclined embedded-wall Helmholtz comparison (#106)},
+\testsym{test/operators/embedded_wall_rows.jl}{oblique embedded-wall Helmholtz convergence (#110)},
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable stress manufactured bulk convergence},
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable stress shifted solve on fixed and adapted trees},
 \testsym{test/operators/embedded_variable_wall_mms.jl}{two-phase embedded-wall manufactured Helmholtz (#106)},
@@ -534,6 +534,7 @@ Tests in the order of \cref{tab:verif:invariants}:
 \testsym{test/two_phase/forces.jl}{Hydrostatic balance},
 \testsym{test/two_phase/forces.jl}{Hydrostatic liquid at a sloped solid on a composite mesh},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM hydrostatic rest with embedded solids (issue #76)},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM balance needs the projection's force map (#76)},
 \testsym{test/two_phase/forces.jl}{Variable-density balanced CSF and CGFM projection},
 \testsym{test/mesh/adaptivity.jl}{face prolongation is affine exact},
 \testsym{test/mesh/variables.jl}{cell fields, halos, restriction, and prolongation},
@@ -695,8 +696,7 @@ observed orders; first-order shear across an aligned material viscosity jump
 with the geometric-mean vertex viscosity (\issue{113}), not tested; a
 CMDGFM projection with the ILU
 preconditioner that stops unconverged with iterations left (\issue{126});
-conjugate gradients with non-symmetric multigrid cycles (\issue{128}); and a
-level-set initialisation that can fail for valid input (\issue{49}). The open
+conjugate gradients with non-symmetric multigrid cycles (\issue{128}). The open
 bugs \issue{117} and \issue{118} (refinement criteria) and \issue{127} (an
 allocation contract) do
 not affect accuracy. Since
@@ -704,14 +704,19 @@ the audited commit, PR~\#125 has fixed \issue{117} and \issue{118}
 (\cref{sec:amr:band,sec:amr:curvature}), PR~\#130 \issue{126} and
 \issue{127}, \issue{121}, the one-phase \code{cfl} range, is fixed by the
 step check of~\cref{eq:stab:check}, which now uses the top of the accepted
-range (\cref{sec:stab:bounds}), and \issue{36} is fixed: a periodic direction
+range (\cref{sec:stab:bounds}); \issue{49}, a level-set initialisation
+that could fail for valid input, is fixed by the certified acceptance
+of~\cref{sec:interface:init}; and \issue{36} is fixed: a periodic direction
 with two cells is resolved by the face orientation, whose normal component
 fixes the sign of the seam displacement, while the multigrid coarsest level
-still keeps four cells per periodic axis (\cref{sec:solvers:hierarchy}). The
-others are open. Open
-investigations: unbounded CTU fluxes at hanging dual faces (\issue{70}), dual
-Courant numbers above one next to a solid (\issue{72}), and the fallback for
-orphaned edges at open walls (\issue{99}).
+still keeps four cells per periodic axis (\cref{sec:solvers:hierarchy});
+\issue{70} is fixed by the outflow limiter of
+\cref{dev:momentum:ctu-hanging}, \issue{71} by the open-strip phase schedule
+of~\cref{sec:momentum:two-velocity}, and \issue{72} no longer reproduces: the
+cut-donor bound keeps the dual Courant number at or below its limit next to a
+solid (\cref{sec:momentum:cfl}). The
+others are open. The open investigation is the fallback for orphaned edges at
+open walls (\issue{99}).
 
 \emph{Order in time.} No test asserts an order in time
 (\cref{sec:stab:accuracy}). The temporal series at a fixed mesh, with the

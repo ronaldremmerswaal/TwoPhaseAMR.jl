@@ -459,10 +459,12 @@ condition accounts for the volume the sweep cuts
 
 \emph{Momentum Courant numbers next to a solid.} The two-phase momentum
 transport is bounded only through the WY bound, which bounds its dual
-Courant numbers by $\wycflval$ on $2{:}1$-balanced meshes without solid;
-with a solid they reached $3.3\,\wycflval$, and a Lax--Wendroff or limited
-face state next to a solid may see a Courant number above one, for which no
-bound is claimed (\cref{sec:momentum:cfl}, \issue{72}).
+Courant numbers by $\wycflval$ on $2{:}1$-balanced meshes without solid and,
+through the cut-donor strip bound, also with a solid
+(\cref{sec:momentum:cfl}); the measured ratio to $\wycflval$ over random cut
+meshes with a level transition is one to round-off, so the selected Lax--Wendroff
+or limited face state there is a convex combination of its two neighbours as
+well (\issue{72}).
 
 \emph{Energy of the split step.} The full split step is not claimed to be
 energy-stable: the centred and Lax--Wendroff convection add energy in time
@@ -571,7 +573,7 @@ Tests (the asserted lower bounds of \cref{tab:stab:orders}):
 \testsym{test/operators/staggered_diffusion.jl}{composite implicit diffusion is energy contractive (#80)},
 \testsym{test/operators/staggered_diffusion.jl}{cut-cell Helmholtz convergence at walls and level transitions (#87)},
 \testsym{test/operators/embedded_wall_rows.jl}{grid-aligned embedded-wall Helmholtz convergence (#106)},
-\testsym{test/operators/embedded_wall_rows.jl}{inclined embedded-wall Helmholtz comparison (#106)},
+\testsym{test/operators/embedded_wall_rows.jl}{oblique embedded-wall Helmholtz convergence (#110)},
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable stress manufactured bulk convergence},
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable stress shifted solve on fixed and adapted trees},
 \testsym{test/two_phase/transport.jl}{Intrinsic phase scalar AMR transfer convergence};

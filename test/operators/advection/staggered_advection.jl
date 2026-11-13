@@ -625,6 +625,218 @@ end
 end
 
 
+"""Dict accumulation reference of the AMR dual flux weights: the builder before
+the count, prefix sum and fill rewrite."""
+function reference_amr_flux_coefficients(
+        mesh, Axis, ::Type{T}, incidences, global_to_local,
+    ) where {T}
+    nx, ny = mesh.block_size
+    coefficients = Dict{NTuple{3, Int}, T}()
+    for (flux_index, flux_face) in pairs(mesh.faces)
+        if flux_face.axis == Axis
+            centre = global_to_local[flux_index]
+            for (cell, sign) in
+                ((flux_face.minus, one(T)), (flux_face.plus, -one(T)))
+
+                for component_face in
+                    incidences[TwoPhaseAMR._cell_index(cell, nx, ny)]
+
+                    component_face.global_index == flux_index && continue
+                    coefficient = sign * component_face.fraction / 2
+                    add_amr_flux_weight!(
+                        coefficients, component_face.local_index, centre,
+                        flux_index, coefficient,
+                    )
+                end
+            end
+        else
+            minus_faces =
+                incidences[TwoPhaseAMR._cell_index(flux_face.minus, nx, ny)]
+            plus_faces =
+                incidences[TwoPhaseAMR._cell_index(flux_face.plus, nx, ny)]
+            for side in (-1, 1), minus_face in minus_faces,
+                    plus_face in plus_faces
+
+                minus_face.side == side == plus_face.side || continue
+                coefficient = minus_face.fraction * plus_face.fraction / 2
+                add_amr_flux_weight!(
+                    coefficients, minus_face.local_index, plus_face.local_index,
+                    flux_index, coefficient,
+                )
+            end
+        end
+    end
+    return coefficients
+end
+
+function reference_amr_flux_weights(
+        mesh, Axis, ::Type{T}, incidences, global_to_local,
+    ) where {T}
+    coefficients = reference_amr_flux_coefficients(
+        mesh, Axis, T, incidences, global_to_local,
+    )
+    keys_in_order = sort!(
+        [key for key in keys(coefficients) if !iszero(coefficients[key])];
+        by = key -> (key[1], key[2], mesh.faces[key[3]].axis, key[3]),
+    )
+    return [
+        (key[1], key[2], key[3], coefficients[key]) for key in keys_in_order
+    ]
+end
+
+function add_amr_flux_weight!(coefficients, first, second, flux, coefficient)
+    first == second && throw(ArgumentError("degenerate AMR dual connection"))
+    key = first < second ? (first, second, flux) : (second, first, flux)
+    coefficient = first < second ? coefficient : -coefficient
+    coefficients[key] = get(coefficients, key, zero(coefficient)) + coefficient
+    return coefficients
+end
+
+"""Nonzero flux weights of `weights` as `(minus, plus, flux, value)` in the
+builder's storage order."""
+function amr_flux_weight_entries(weights, number_of_unknowns)
+    entries = Tuple{Int, Int, Int, eltype(weights.weights)}[]
+    for minus in 1:number_of_unknowns
+        for position in weights.offsets[minus]:(
+                weights.offsets[minus] + weights.counts[minus] - 1
+            )
+
+            weight = weights.weights[position]
+            iszero(weight) && continue
+            push!(
+                entries,
+                (minus, weights.plus[position], weights.flux[position], weight),
+            )
+        end
+    end
+    return entries
+end
+
+@testset "AMR dual flux weights match a Dict accumulation" begin
+    refine = (key, origin, extent) ->
+    key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0)
+    meshes = (
+        BlockTreeMesh(block_size = (4, 4), max_level = 2, refine = refine),
+        BlockTreeMesh(
+            block_size = (4, 4), periodic = (false, false), max_level = 2,
+            refine = refine,
+        ),
+    )
+    for mesh in meshes, Axis in (1, 2)
+        incidences, global_to_local, volumes = TwoPhaseAMR._component_incidences(
+            mesh, Val(Axis), Float64,
+        )
+        weights = TwoPhaseAMR._amr_flux_weights(
+            mesh, Val(Axis), Float64, incidences, global_to_local, length(volumes),
+        )
+        @test weights isa TwoPhaseAMR._AMRFluxWeights{Float64}
+        @test Base.return_types(
+            TwoPhaseAMR._amr_flux_weights,
+            (
+                typeof(mesh), Val{Axis}, Type{Float64}, typeof(incidences),
+                typeof(global_to_local), Int,
+            ),
+        ) == [TwoPhaseAMR._AMRFluxWeights{Float64}]
+        expected = reference_amr_flux_weights(
+            mesh, Axis, Float64, incidences, global_to_local,
+        )
+        @test !isempty(expected)
+        # Same keys in the same order, zero sums skipped, and bitwise
+        # identical sums.
+        @test amr_flux_weight_entries(weights, length(volumes)) == expected
+        @test_throws ArgumentError TwoPhaseAMR._amr_flux_weights(
+            mesh, Val(Axis), Float64, incidences, global_to_local, 0,
+        )
+    end
+end
+
+"""Cell incidences of component `Axis` with the open-strip side fractions: the
+inputs `_open_strip_phase_schedule` corrects, which the builder consumes."""
+function open_strip_incidences(geometry, ::Type{T}, Axis) where {T}
+    mesh = geometry.mesh
+    incidences, global_to_local, _ = TwoPhaseAMR._component_incidences(
+        mesh, Val(Axis), T,
+    )
+    nx, ny = mesh.block_size
+    local_index = length(geometry.dual_volumes[Axis])
+    for (boundary_index, face) in pairs(mesh.boundary_faces)
+        face.axis == Axis || continue
+        local_index += 1
+        fraction = T(face.area / mesh.blocks[face.cell.block].spacing[3 - Axis])
+        push!(
+            incidences[TwoPhaseAMR._cell_index(face.cell, nx, ny)],
+            TwoPhaseAMR.ComponentFaceIncidence(
+                local_index, length(mesh.faces) + boundary_index, face.side,
+                fraction,
+            ),
+        )
+    end
+    for (cell_index, cell_faces) in pairs(incidences)
+        block = (cell_index - 1) ÷ (nx * ny) + 1
+        local_cell = (cell_index - 1) % (nx * ny)
+        ref = CellRef(block, local_cell % nx + 1, local_cell ÷ nx + 1)
+        open = TwoPhaseAMR._get(geometry.open_fraction, ref)
+        zero(T) < open < one(T) || continue
+        for index in eachindex(cell_faces)
+            incidence = cell_faces[index]
+            incidence.fraction < one(T) || continue
+            face = incidence.global_index <= length(mesh.faces) ?
+                mesh.faces[incidence.global_index] :
+                mesh.boundary_faces[incidence.global_index - length(mesh.faces)]
+            lo, hi = TwoPhaseAMR._face_local_tangent_interval(mesh, ref, face)
+            bounds = Axis == 1 ? (-0.5, 0.5, lo, hi) : (lo, hi, -0.5, 0.5)
+            fraction = T(
+                TwoPhaseAMR._open_subcell_area(geometry.solid, ref, bounds...) /
+                    open,
+            )
+            cell_faces[index] = TwoPhaseAMR.ComponentFaceIncidence(
+                incidence.local_index, incidence.global_index, incidence.side,
+                fraction,
+            )
+        end
+    end
+    return incidences, global_to_local
+end
+
+@testset "open strip phase schedule matches a Dict accumulation" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (4, 4), extent = (8.0, 8.0),
+        max_level = 1,
+        refine = (key, origin, extent) -> key == BlockKey(0, 1, 1),
+    )
+    geometry = GeometryField(
+        mesh, (x, y) -> y - 5.3 - 0.2x; lipschitz = hypot(1, 0.2),
+    )
+    corrected = false
+    for Axis in (1, 2)
+        geometric = TwoPhaseAMR._geometry_phase_schedule(geometry, Val(Axis))
+        schedule = TwoPhaseAMR._geometry_phase_schedule(geometry, Val(Axis))
+        TwoPhaseAMR._open_strip_phase_schedule(schedule, geometry, Val(Axis))
+        corrected |= schedule.flux_weights != geometric.flux_weights
+        incidences, global_to_local = open_strip_incidences(
+            geometry, Float64, Axis,
+        )
+        coefficients = reference_amr_flux_coefficients(
+            mesh, Axis, Float64, incidences, global_to_local,
+        )
+        expected = fill(NaN, length(schedule.flux_weights))
+        for face in schedule.faces
+            for pointer in face.first_weight:(
+                    face.first_weight + face.weight_count - 1
+                )
+
+                expected[pointer] = coefficients[
+                    (face.minus, face.plus, schedule.flux_indices[pointer]),
+                ]
+            end
+        end
+        @test schedule.flux_weights == expected
+    end
+    # A cut coarse cell next to a split side has open strips that differ from
+    # the geometric side fractions, so the corrected path ran.
+    @test corrected
+end
+
 @testset "AMR staggered flux compatibility and stability" begin
     @test default_amr_interface_scheme(Upwind()) isa Upwind
     @test default_amr_interface_scheme(Centred()) isa MonotonizedCentral

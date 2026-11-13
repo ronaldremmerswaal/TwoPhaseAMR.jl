@@ -1,5 +1,5 @@
 using LinearAlgebra: Diagonal, I, Symmetric, dot, eigvals, opnorm
-using SparseArrays: SparseMatrixCSC, nnz, spdiagm
+using SparseArrays: SparseMatrixCSC, nnz, nonzeros, nzrange, rowvals, spdiagm
 using Random: MersenneTwister, rand
 using Krylov
 
@@ -135,6 +135,140 @@ end
     @test_throws ArgumentError TwoPhaseAMR._staggered_diffusion_operator(
         mesh; viscosity, reuse = :invalid,
     )
+end
+
+"""Direct `transpose(E) * Diagonal(W) * E` reference of the stiffness built by
+`_symmetric_stiffness!`, with the former `sortperm` refresh map."""
+function reference_symmetric_stiffness(strain, weights)
+    T = eltype(strain)
+    assembled = transpose(strain) * spdiagm(0 => weights) * strain
+    # Unit entries expose the full structural pattern: outer products that
+    # cancel for the current viscosity must stay stored.
+    unit_strain = copy(strain)
+    fill!(nonzeros(unit_strain), one(T))
+    reference = transpose(unit_strain) * unit_strain
+    reference_rows = rowvals(reference)
+    reference_values = nonzeros(reference)
+    for column in axes(reference, 2), pointer in nzrange(reference, column)
+        row = reference_rows[pointer]
+        reference_values[pointer] =
+            (assembled[row, column] + assembled[column, row]) / 2
+    end
+    positions = Dict{Tuple{Int, Int}, Int}()
+    for column in axes(reference, 2), pointer in nzrange(reference, column)
+        positions[(reference_rows[pointer], column)] = pointer
+    end
+    stress_entries = [Tuple{Int, T}[] for _ in 1:size(strain, 1)]
+    strain_rows = rowvals(strain)
+    strain_values = nonzeros(strain)
+    for column in axes(strain, 2), pointer in nzrange(strain, column)
+        push!(stress_entries[strain_rows[pointer]], (column, strain_values[pointer]))
+    end
+    pointers = Int[]
+    stresses = Int[]
+    factors = T[]
+    for stress in eachindex(stress_entries),
+            (column, column_value) in stress_entries[stress],
+            (row, row_value) in stress_entries[stress]
+
+        pointer = get(positions, (row, column), 0)
+        iszero(pointer) && error("stress refresh changed diffusion sparsity")
+        push!(pointers, pointer)
+        push!(stresses, stress)
+        push!(factors, row_value * column_value)
+    end
+    permutation = sortperm(pointers)
+    permute!(pointers, permutation)
+    permute!(stresses, permutation)
+    permute!(factors, permutation)
+    offsets = Vector{Int}(undef, nnz(reference) + 1)
+    contribution = 1
+    for pointer in 1:nnz(reference)
+        offsets[pointer] = contribution
+        while contribution <= length(pointers) && pointers[contribution] == pointer
+            contribution += 1
+        end
+    end
+    offsets[end] = contribution
+    contribution == length(pointers) + 1 ||
+        error("diffusion coefficient refresh contains an invalid sparse pointer")
+    return reference, pointers, stresses, factors, offsets
+end
+
+@testset "variable-viscosity stiffness matches a direct symmetric assembly" begin
+    refine = (key, origin, extent) ->
+    key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0)
+    meshes = (
+        BlockTreeMesh(block_size = (4, 4), max_level = 2, refine = refine),
+        BlockTreeMesh(
+            block_size = (4, 4), periodic = (false, false), max_level = 2,
+            refine = refine,
+        ),
+    )
+    for mesh in meshes
+        viscosity = CellField(mesh, (x, y) -> 1 + 0.2sinpi(2x) * cospi(2y))
+        operator = TwoPhaseAMR._staggered_diffusion_operator(
+            mesh; viscosity, boundary = FreeSlip(), T = Float64,
+        )
+        reference, pointers, stresses, factors, offsets =
+            reference_symmetric_stiffness(
+            operator.strain, operator.stress_weights,
+        )
+        stiffness = operator.stiffness
+        # Column pointers, row indices and stored values in storage order.
+        @test (stiffness.colptr, rowvals(stiffness), nonzeros(stiffness)) ==
+            (reference.colptr, rowvals(reference), nonzeros(reference))
+        @test operator.stiffness_pointers == pointers
+        @test operator.stiffness_stresses == stresses
+        @test operator.stiffness_factors == factors
+        @test operator.stiffness_refresh_offsets == offsets
+    end
+end
+
+@testset "stiffness reuse survives a shrink and grow chain" begin
+    meshes = (
+        BlockTreeMesh(base_mesh = (8, 8), block_size = (4, 4)),
+        BlockTreeMesh(block_size = (2, 2)),
+        BlockTreeMesh(
+            block_size = (4, 4), periodic = (true, false), max_level = 1,
+            refine = (key, origin, extent) ->
+            key.level == 0 && key.i == 0 && key.j == 0,
+        ),
+        BlockTreeMesh(
+            block_size = (4, 4), max_level = 3,
+            refine = (key, origin, extent) -> key.level <= 2,
+        ),
+        BlockTreeMesh(block_size = (2, 2)),
+        BlockTreeMesh(base_mesh = (8, 8), block_size = (4, 4)),
+    )
+    cache = TwoPhaseAMR.VariableDiffusionConstructionCache(Float64)
+    previous = nothing
+    for mesh in meshes
+        viscosity = CellField(mesh, (x, y) -> 1 + 0.2sinpi(2x) * cospi(2y))
+        reused = TwoPhaseAMR._staggered_diffusion_operator(
+            mesh; viscosity, boundary = FreeSlip(), T = Float64,
+            construction_cache = cache, reuse = previous,
+        )
+        fresh = TwoPhaseAMR._staggered_diffusion_operator(
+            mesh; viscosity, boundary = FreeSlip(), T = Float64,
+        )
+        @test reused.stiffness_pointers == fresh.stiffness_pointers
+        @test reused.stiffness_refresh_offsets == fresh.stiffness_refresh_offsets
+        @test reused.stiffness_stresses == fresh.stiffness_stresses
+        @test reused.stiffness.colptr == fresh.stiffness.colptr
+        @test rowvals(reused.stiffness) == rowvals(fresh.stiffness)
+        @test reused.strain.colptr == fresh.strain.colptr
+        @test rowvals(reused.strain) == rowvals(fresh.strain)
+        # The shared shear-template cache can move an earlier build's stencils
+        # by a few ulps; that effect predates the reuse path.
+        @test nonzeros(reused.stiffness) ≈
+            nonzeros(fresh.stiffness) rtol = 1.0e-13 atol = 0.0
+        @test nonzeros(reused.strain) ≈
+            nonzeros(fresh.strain) rtol = 1.0e-13 atol = 0.0
+        @test reused.stiffness_factors ≈
+            fresh.stiffness_factors rtol = 1.0e-13 atol = 0.0
+        previous = reused
+    end
 end
 
 @testset "staggered diffusion stable core on uniform and AMR meshes" begin

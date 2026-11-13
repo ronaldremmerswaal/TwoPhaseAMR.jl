@@ -14,6 +14,7 @@ mutable struct VariableStaggeredDiffusionOperator{T, M, B}
     stiffness::SparseMatrixCSC{T, Int}
     volumes::Vector{T}
     boundary::B
+    averaging::AbstractViscosityAveraging
     strain::SparseMatrixCSC{T, Int}
     strain_transpose::SparseMatrixCSC{T, Int}
     wall_reaction_strain::SparseMatrixCSC{T, Int}
@@ -23,6 +24,7 @@ mutable struct VariableStaggeredDiffusionOperator{T, M, B}
     stress_measures::Vector{T}
     stress_weights::Vector{T}
     cell_work::Vector{T}
+    cell_inverse_work::Vector{T}
     stress_work::Vector{T}
     stiffness_pointers::Vector{Int}
     stiffness_stresses::Vector{Int}
@@ -320,27 +322,24 @@ refresh contributions of the column."""
     return entries, contributions
 end
 
-@inline function _phase_dynamic_viscosity(c, viscosity::NTuple{2})
-    liquid, gas = viscosity
-    return exp(muladd(c, log(liquid) - log(gas), log(gas)))
-end
-
 """
-    dynamic_viscosity(interface; viscosity)
+    dynamic_viscosity(interface; viscosity, averaging=HarmonicViscosityAveraging())
 
 Return the cell-centred dynamic viscosity used by the one-velocity diffusion
-operator. Following the thesis, the coefficient is the phase-fraction-
-weighted geometric mean
+operator, mixed from the phase viscosities with the conditional liquid
+fraction `c` of the open fluid part of the cell and the phase-viscosity
+averaging rule `averaging`.
 
-`mu = mu_liquid^c * mu_gas^(1-c)`, where `c` is the liquid fraction within the
-open fluid part of a cut cell.
-
-At shear-stress vertices the operator volume-interpolates `c` before applying
-the same formula. Equivalently, it geometrically averages this returned field,
-because `log(mu)` is affine in `c`.
+[`HarmonicViscosityAveraging`](@ref) (the default) gives
+`1 / (c / mu_liquid + (1 - c) / mu_gas)`, the series conductance across the
+interface in a cell; [`GeometricViscosityAveraging`](@ref) gives the thesis'
+diffuse mixture `mu_liquid^c * mu_gas^(1-c)`. The same rule averages the
+viscosity of a stress row from the cell quarters it spans, see
+`_fill_stress_weights!`.
 """
 function dynamic_viscosity(
-        field::InterfaceField{T}; viscosity::NTuple{2}
+        field::InterfaceField{T}; viscosity::NTuple{2},
+        averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     ) where {T}
     phases = T.(viscosity)
     all(mu -> isfinite(mu) && mu > zero(T), phases) ||
@@ -358,7 +357,7 @@ function dynamic_viscosity(
         viscosity_values = @inbounds result.blocks[b]
         @inbounds for j in first_j:last_j, i in 1:nx
             viscosity_values[i + h, j + h] =
-                _phase_dynamic_viscosity(fraction[i + h, j + h], phases)
+                _phase_dynamic_viscosity(fraction[i + h, j + h], phases, averaging)
         end
     end
     return result
