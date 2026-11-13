@@ -20,7 +20,7 @@ end
     scalar = StaggeredDiffusionOperator(mesh; viscosity = 0.2, boundary)
     scalar_compat = TwoPhaseAMR._staggered_diffusion_operator(
         mesh; viscosity = 0.2, boundary, T = Float64,
-        construction_cache = nothing, reuse = nothing, cache_layer = 1,
+        construction_cache = nothing, reuse = nothing,
         geometry = nothing,
     )
     @test scalar isa StaggeredDiffusionOperator
@@ -49,11 +49,11 @@ end
     cache = TwoPhaseAMR.VariableDiffusionConstructionCache(Float64)
     cached = TwoPhaseAMR._staggered_diffusion_operator(
         mesh; viscosity, boundary, T = Float64, construction_cache = cache,
-        cache_layer = 2, geometry = nothing,
+        geometry = nothing,
     )
     reused = TwoPhaseAMR._staggered_diffusion_operator(
         mesh; viscosity, boundary, T = Float64, construction_cache = cache,
-        reuse = cached, cache_layer = 2, geometry = nothing,
+        reuse = cached, geometry = nothing,
     )
     @test variable isa VariableStaggeredDiffusionOperator
     @test reused isa VariableStaggeredDiffusionOperator
@@ -82,12 +82,11 @@ end
     interface_cache = TwoPhaseAMR.VariableDiffusionConstructionCache(Float64)
     cached_interface = TwoPhaseAMR._staggered_diffusion_operator(
         interface; viscosity = phases, boundary,
-        construction_cache = interface_cache, cache_layer = 2,
+        construction_cache = interface_cache,
     )
     reused_interface = TwoPhaseAMR._staggered_diffusion_operator(
         interface; viscosity = phases, boundary,
         construction_cache = interface_cache, reuse = cached_interface,
-        cache_layer = 2,
     )
     @test reused_interface.volumes == interface_operator.volumes
     @test reused_interface.strain == interface_operator.strain
@@ -118,7 +117,7 @@ end
     @test StaggeredDiffusionOperator(mesh; viscosity = Inf).viscosity == Inf
     for invalid_options in (
             (; geometry = :invalid), (; construction_cache = cache),
-            (; reuse = reused), (; cache_layer = 2),
+            (; reuse = reused),
         )
         @test_throws ArgumentError TwoPhaseAMR._staggered_diffusion_operator(
             mesh; viscosity = 0.2, invalid_options...,
@@ -259,14 +258,9 @@ end
         @test rowvals(reused.stiffness) == rowvals(fresh.stiffness)
         @test reused.strain.colptr == fresh.strain.colptr
         @test rowvals(reused.strain) == rowvals(fresh.strain)
-        # The shared shear-template cache can move an earlier build's stencils
-        # by a few ulps; that effect predates the reuse path.
-        @test nonzeros(reused.stiffness) ≈
-            nonzeros(fresh.stiffness) rtol = 1.0e-13 atol = 0.0
-        @test nonzeros(reused.strain) ≈
-            nonzeros(fresh.strain) rtol = 1.0e-13 atol = 0.0
-        @test reused.stiffness_factors ≈
-            fresh.stiffness_factors rtol = 1.0e-13 atol = 0.0
+        @test nonzeros(reused.stiffness) == nonzeros(fresh.stiffness)
+        @test nonzeros(reused.strain) == nonzeros(fresh.strain)
+        @test reused.stiffness_factors == fresh.stiffness_factors
         previous = reused
     end
 end

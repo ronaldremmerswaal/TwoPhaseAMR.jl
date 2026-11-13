@@ -1164,14 +1164,33 @@ tests = [
 ]
 check = "stress_rows_check"
 [[claims]]
-label = "eq:viscosity:shear"
+label = "eq:viscosity:shear-partition"
 sources = [
-  { file = "src/two_phase/diffusion/variable_diffusion_geometry.jl", symbol = "_vertex_derivative" }
+  { file = "src/two_phase/diffusion/variable_diffusion_geometry.jl", symbol = "_shear_nodes!" },
+  { file = "src/two_phase/diffusion/variable_diffusion_geometry.jl", symbol = "_shear_contacts!" }
 ]
 tests = [
-  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Variable stress manufactured bulk convergence" }
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Variable stress shear rows are flux-consistent at level transitions (#112)" }
+]
+[[claims]]
+label = "eq:viscosity:shear"
+sources = [
+  { file = "src/two_phase/diffusion/variable_diffusion_geometry.jl", symbol = "_shear_stencils!" }
+]
+tests = [
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Variable stress manufactured bulk convergence" },
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Variable stress shear rows are flux-consistent at level transitions (#112)" }
 ]
 check = "affine_strain_check"
+[[claims]]
+label = "eq:viscosity:shear-flux"
+sources = [
+  { file = "src/two_phase/diffusion/variable_diffusion_geometry.jl", symbol = "_shear_rows!" }
+]
+tests = [
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Variable stress shear rows are flux-consistent at level transitions (#112)" },
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Variable stress shifted solve on fixed and adapted trees" }
+]
 [[claims]]
 label = "eq:viscosity:weights"
 sources = [

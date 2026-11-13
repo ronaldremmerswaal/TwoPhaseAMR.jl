@@ -409,8 +409,8 @@ are of three kinds:
   \begin{aligned}
   &\text{(normal)} && (\strainmat\velo)_{c,k}=\frac{1}{\meas{\opencell{c}}}\sum_{f\in\faceset{c}\cap\facesaxis{k}\cap\facesint}\orient{c}{f}\,\aperture{f}\meas{f}\,\velo_f,
     && \openfrac{c}>0,\ k=1,2,\\
-  &\text{(shear)} && (\strainmat\velo)_v=(\vderiv{2}\velo_1)_v+(\vderiv{1}\velo_2)_v,
-    && v\in\stressverts,\ \meas{\vertdual{v}}>0,\\
+  &\text{(shear)} && (\strainmat\velo)_r=(\vderiv{2}\velo_1)_{g}+(\vderiv{1}\velo_2)_{g'},
+    && r\in\shearrows,\ \shearregion{r}=\shearregion{g}\cap\shearregion{g'},\ \meas{\shearregion{r}}^{\open}>0,\\
   &\text{(wall)} && (\strainmat\velo)_w=\velo_{f(w)},
     && w\text{ wall or covered unknown},
   \end{aligned}
@@ -426,66 +426,131 @@ separately for wall-reaction evaluation as viscosity changes. Wall rows exist
 for cut cells and uncut open cells sharing a face with a covered cell
 (\issue{79}), and for covered unknowns outside the constrained neighbourhood.
 Cartesian embedded-wall shear is represented by tangential wall rows; the
-corresponding cell contributions are omitted from vertex quadrature to avoid
+corresponding cell quarters are omitted from the shear-row measures to avoid
 counting shear across the solid twice. The normal cell stress already supplies
-the normal flux. For free slip the tangential wall rows are omitted. The
-shear vertices $\stressverts$ are the corners of the leaf cells on the finest
-lattice (periodic images identified). With $\cellmax{v}$ the largest width of
-the cells at $v$, the derivative of component $k$ along $t\neq k$ is
+the normal flux. For free slip the tangential wall rows are omitted.
+
+\emph{Shear partition.} For component $k$ and the tangent $t\neq k$, the
+samples are the unknowns $f\in\facesaxis{k}\cap\facesint$ and the wall faces
+normal to $\unitvec{k}$, whose velocity is zero. The staggered control volume
+of a sample spans the face along $t$ and half of each adjacent cell along
+$k$; these volumes tile the domain. Where the upper side (along $t$) of the
+volume of a sample $a$ meets the lower side of the volume of a sample $b$,
+their overlap is a contact $g=(a,b)\in\shearcontacts{k}$ of measure
+$\meas{g}$; a sample whose volume ends on a wall normal to $\unitvec{t}$ has a
+wall contact with that wall, of measure the width of the volume. With
+$\conndist{g}$ the distance along $t$ between the centre of $a$ and the centre
+of $b$ (or the wall), the region of the contact is the rectangle
+\begin{equation}\label{eq:viscosity:shear-partition}
+  \shearregion{g}=(\text{overlap along }k)\times(\text{centre of }a,\ \text{centre of }b)_t,
+  \qquad
+  \meas{\shearregion{g}}=\meas{g}\conndist{g},
+  \qquad
+  \textstyle\bigcup_{g\in\shearcontacts{k}}\shearregion{g}=\domain ,
+\end{equation}
+a partition of the domain (periodic images identified), because a region is
+the upper half of the volume of $a$ and the lower half of the volume of $b$
+over their overlap. The code works on the doubled finest lattice, on which
+every face centre is an integer point, so the contacts and the intersections
+below are exact. The tangential derivative of a contact is
 \begin{equation}\label{eq:viscosity:shear}
-  (\vderiv{t}\velo_k)_v=\begin{cases}
-    0, & v\text{ on a wall normal to }\unitvec{t},\ \apitype{FreeSlip},\\[2pt]
-    \dfrac{\velo_{\shearpair{+}{v}}-\velo_{\shearpair{-}{v}}}{(\pos{\shearpair{+}{v}}-\pos{\shearpair{-}{v}})_t}, & \text{a pair }\shearpair{\pm}{v}\text{ exists (see below)},\\[8pt]
-    \sum_{j}\shearcoef{j}\velo_{f_j}, & \text{otherwise (least squares)}.
+  (\vderiv{t}\velo_k)_g=\begin{cases}
+    0, & g\text{ a wall contact},\ \apitype{FreeSlip},\\[2pt]
+    \mp\velo_a/\conndist{g}, & g\text{ a wall contact},\ \apitype{NoSlip}\ (\text{upper, lower wall}),\\[2pt]
+    (\velo_b-\velo_a)/\conndist{g}, & a,b\text{ paired},\\[4pt]
+    \pm\Big(\dfrac{1}{M_a}\displaystyle\sum_{g'=(a,b')}\meas{g'}\velo_{b'}-\velo_a\Big)\Big/\bar d_a,
+      & \text{anchored at }a,
   \end{cases}
 \end{equation}
-The pair consists of the nearest unknowns of component $k$ on the line
-through $v$ along $\unitvec{t}$, one on each side, within the radius
-$3\cellmax{v}$; boundary faces count with the value zero, and at a
-no-slip wall normal to $\unitvec{t}$ the wall point $v$ itself, with value
-zero, replaces the missing side (a one-sided difference over half a cell).
-Where one side has no such unknown, as at a hanging vertex for the
-component normal to the transition, the derivative is the weighted
-least-squares stencil on the at most 16 nearest unknowns of component $k$
-within $3\cellmax{v}$ (boundary faces enter the fit with value zero and drop
-out of the row): the coefficients are exact for quadratics,
-$\sum_j\shearcoef{j}\,p(\pos{f_j})=\partial_tp(\pos{v})$ for every quadratic
-$p$, and minimise
-$\sum_j\shearcoef{j}^2\roundpar{1+\abs{\pos{f_j}-\pos{v}}_2^2/\cellmax{v}^2}^2$,
-or are exact for affine $p$ only if the quadratic system is rank deficient
-(smallest singular value below $10^{-10}$ of the largest).
-Every row that contains no wall value is exact for affine velocities (the
-one-sided wall differences and the rows that contain wall values only for
-fields that vanish at the wall); the two-point rows of a symmetric pair and
-the least-squares rows are also exact for quadratics, while the two-point
-rows of an asymmetric pair (one side coarse, one fine: stretching at a level
-transition) are first-order accurate. The affine fallback was not reached on
-the meshes of the derivation audit (\code{proof_review/eq-viscosity-shear/}).
+where wall samples enter with the value zero. Two samples are paired if
+their volumes have equal widths along $k$ (a wall sample counted with its
+mirror image) or if the narrower one has no other contact on that side; the
+code requires paired samples to be collinear. Otherwise, at a level
+transition across $\unitvec{t}$, the narrower sample $a$ (a fine segment
+between two coarse unknowns) anchors all its contacts $g'=(a,b')$ on that
+side, with $M_a=\sum_{g'}\meas{g'}$,
+$\bar d_a=\sum_{g'}\meas{g'}\conndist{g'}/M_a$ and the sign $+$ when the
+partners lie on the upper side; the code requires the partners to be wider
+and centred, $\sum_{g'}\meas{g'}(\pos{b'}-\pos{a})_k=0$. Each derivative is
+then exact for affine velocities (rows with a wall value for fields that
+vanish there), and every derivative of a contact without a wall sample
+annihilates constants. These are the fine--coarse closures of the
+single-phase operator, \cref{eq:viscosity:gradient}.
+
+\emph{Shear rows.} A shear row $r\in\shearrows$ is a nonempty intersection
+$\shearregion{r}=\shearregion{g}\cap\shearregion{g'}$ of a contact $g$ of
+$\velo_1$ and a contact $g'$ of $\velo_2$, whose strain rate is the sum of the
+two derivatives~\cref{eq:viscosity:rows}; rows whose two derivatives both
+vanish identically are omitted. The rows partition the domain once more: they
+are the common refinement of the two contact partitions. On a uniform mesh
+both partitions are the cells of the vertex-centred dual mesh, and every row
+is the classical vertex row with a two-point difference for each component.
+With the measures of \cref{eq:viscosity:weights} (uncut) the force of the
+shear rows on an unknown $f$ of component $k$ is a sum of contact fluxes,
+\begin{equation}\label{eq:viscosity:shear-flux}
+  -\sum_{r\in\shearrows}\meas{\shearregion{r}}\visc_r(\strainmat\velo)_r\,\strainmat_{r,f}
+  =\sum_{g\ni f}\pm\,\ell_{g,f}\,\bar\tau_g,
+  \qquad
+  \bar\tau_g=\frac{1}{\meas{\shearregion{g}}}\sum_{\shearregion{r}\subset\shearregion{g}}\meas{\shearregion{r}}\visc_r(\strainmat\velo)_r ,
+\end{equation}
+because the rows inside a contact region add up to
+$\meas{\shearregion{g}}=\meas{g}\conndist{g}$, which cancels the factor
+$1/\conndist{g}$ of the derivative: the length is $\ell_{g,f}=\meas{g}$ for a
+paired or wall contact. The contacts $g'$ of an anchored group share one
+derivative, so for them $\bar\tau_g$ is the stress averaged over the whole
+group, $\bar\tau_{a}=\sum_{g'}\meas{\shearregion{g'}}\bar\tau_{g'}/(M_a\bar d_a)$:
+the anchor receives $M_a\bar\tau_a$ and each partner $b'$ receives
+$\meas{g'}\bar\tau_a$, not the average over its own region. The group regions
+lie within $O(h)$ of the anchor, so $\bar\tau_a$ is a first-order consistent
+stress at every partner's contact as well. Each staggered volume therefore
+receives on its two tangential sides region- or group-averaged shear stresses
+times lengths that add up to its width. For a constant viscosity and an
+affine velocity every average is the exact stress, so the shear forces cancel
+on every volume whose contacts are free of wall values, at level transitions
+included; for
+smooth fields the fluxes are first-order accurate at transitions and second
+order elsewhere, which gives a second-order solution (checks below). The
+identity needs the measure of the rows of a contact region to be
+$\meas{g}\conndist{g}$ for both components at once. The quarter-cell vertex
+rows used before \issue{112} violate it at a transition: on a straight
+transition with coarse width $2h$ the contacts of both components through a
+coarse corner and through the hanging vertex between two corners have the
+regions $\tfrac32h\times h$, while the quarter cells give
+$\tfrac52h^2$ and $\tfrac12h^2$; the shear forces of an affine velocity did
+not cancel, the truncation error grew as $h^{-1}$ along the transition and
+the solution converged at first order. At the corners of a refined region
+the regions of the two components differ, so no measure per vertex is
+consistent for both, and the rows are their intersections.
 
 \begin{sloppypar}
-Let $\mathcal W_v$ contain the cells whose Cartesian wall segment owns the
-vertex-side shear contribution. The stress weights are the measures of the
-remaining rows times the viscosity there,
+Let $q_{c,v}$ be the quarter of cell $c$ at its corner $v$, and let
+$\mathcal W_r$ contain the quarters $(c,v)$ for which $c$ has a Cartesian wall
+segment with $v$ on its solid side and the contact of row $r$ for the
+wall-tangential component crosses the line through $v$ parallel to the wall:
+that shear across the solid is supplied by the tangential wall rows (on a
+uniform mesh these are the quarters at the wall corners of the cells). The
+stress weights are the measures of the remaining rows times the viscosity
+there,
 \begin{equation}\label{eq:viscosity:weights}
   \begin{gathered}
-  \stressw=\diag{2\meas{\opencell{c}}\visc_c,\ \ \meas{\vertdual{v}}\visc_v,\ \ \wallcond{w}\visc_{c(w)},\ \ 1_{\mathrm{prescribed}}},\\
-  \meas{\vertdual{v}}=\sum_{c\ni v,\ c\notin\mathcal W_v}\tfrac14\openfrac{c}\meas{c},\qquad
-  \frac{1}{\visc_v}=\frac{1}{\meas{\vertdual{v}}}\sum_{c\ni v,\ c\notin\mathcal W_v,\ \openfrac{c}>0}\tfrac14\openfrac{c}\meas{c}\frac{1}{\visc_c},
+  \stressw=\diag{2\meas{\opencell{c}}\visc_c,\ \ \meas{\shearregion{r}}^{\open}\visc_r,\ \ \wallcond{w}\visc_{c(w)},\ \ 1_{\mathrm{prescribed}}},\\
+  \meas{\shearregion{r}}^{\open}=\sum_{(c,v)\notin\mathcal W_r}\openfrac{c}\,\meas{\shearregion{r}\cap q_{c,v}},\qquad
+  \frac{1}{\visc_r}=\frac{1}{\meas{\shearregion{r}}^{\open}}\sum_{(c,v)\notin\mathcal W_r,\ \openfrac{c}>0}\openfrac{c}\,\meas{\shearregion{r}\cap q_{c,v}}\frac{1}{\visc_c},
   \end{gathered}
 \end{equation}
-so that $\visc_v$ is the open-volume-weighted harmonic mean of the viscosities
-of the cell quarters the vertex spans. This is the series conductance across
-those quarters: the centred difference
+so that $\visc_r$ is the open-area-weighted harmonic mean of the viscosities
+of the cell parts the row covers (on a uniform mesh, the four quarters at a
+vertex). This is the series conductance across those cells: the centred difference
 \cref{eq:viscosity:shear} differences two velocities through cells that lie in
 series, so their traction $\visc\partial_t\velo_k$ is transmitted exactly only
 if the coefficient is the harmonic mean. For a layer aligned with the shear and
-$\visc=(2,1)$ the vertex coefficient is $4/3$; the geometric mean
+$\visc=(2,1)$ the row coefficient is $4/3$; the geometric mean
 $\sqrt{2}$ overestimates the flux by $2\sqrt{\visc_1\visc_2}/(\visc_1+\visc_2)$,
 $6.07\,\%$ there, and the 1-D shear across such a layer converges with order
 $0.8$--$1.0$ instead of $2$ (\issue{113}). With
 \apitype{GeometricViscosityAveraging} the operator uses the thesis'
 $\prod_c\visc_c^{w_c}$, the geometric mean at the open-volume fraction, and
-reproduces that behaviour; both rules keep $\visc_v>0$, so the stiffness
+reproduces that behaviour; both rules keep $\visc_r>0$, so the stiffness
 remains symmetric positive semidefinite and the energy balance of
 \cref{sec:viscosity:time} holds for either. Cartesian embedded-wall rows use the owned segment
 length divided by the wall-normal distance as in the componentwise operator;
@@ -511,7 +576,7 @@ semidefinite, and its quadratic form is the discrete dissipation
 \begin{equation}\label{eq:viscosity:quadratic}
   \velo^{\transpose}\strainmat^{\transpose}\stressw\strainmat\velo
   =\sum_{c,k}2\visc_c\meas{\opencell{c}}(\partial_k\velo_k)_c^2
-  +\sum_{v}\visc_v\meas{\vertdual{v}}\roundpar{(\vderiv{2}\velo_1)_v+(\vderiv{1}\velo_2)_v}^2
+  +\sum_{r\in\shearrows}\visc_r\meas{\shearregion{r}}^{\open}\roundpar{(\vderiv{2}\velo_1)_{g(r)}+(\vderiv{1}\velo_2)_{g'(r)}}^2
   +\sum_{w}\wallcond{w}\visc_{c(w)}\velo_{f(w)}^2
   +\sum_{f\in\mathrm{prescribed}}\velo_f^2 ,
 \end{equation}
@@ -520,7 +585,10 @@ in~\cref{eq:viscosity:dissipation}, which it approximates to second order
 for a constant viscosity, also on composite meshes (derivation audit,
 \code{proof_review/eq-viscosity-quadratic/}); for constant viscosity and
 $\divergence\Velo=0$ the operator approximates $\visc\Delta\Velo$ to second
-order on a uniform mesh (\code{proof_review/eq-viscosity-operator/}). The
+order on a uniform mesh (\code{proof_review/eq-viscosity-operator/}). At a
+level transition the truncation error is $O(1)$ but in the flux
+form~\cref{eq:viscosity:shear-flux} with first-order fluxes, and the solution
+converges at second order (\issue{112}). The
 kernel of the stiffness consists of the constant components on a periodic
 mesh and of the constant tangential component in a channel that is periodic
 along free-slip walls; a no-slip wall or a solid makes it definite. The
@@ -531,8 +599,8 @@ Only the stationary \apitype{NoSlip}\code{()} and \apitype{FreeSlip}\code{()}
 are accepted; moving walls and \apitype{VelocityBoundaryConditions} are
 rejected. When the interface moves only $\stressw$ changes: the code
 refreshes $\visc_c$ from the transported fractions before every viscous step
-and keeps $\strainmat$ until the next regrid, after which unchanged shear
-stencils are restored from a cache keyed by their local face geometry.
+and keeps $\strainmat$ until the next regrid, which rebuilds the contacts and
+rows from the lattice topology.
 \end{sloppypar}
 
 \input{figures/viscosity}
@@ -558,22 +626,44 @@ cut fixture has \chkViscWallRows\ wall rows. For the six affine velocities
 and both constants, the \chkViscAffineRows\ rows more than four coarse cells
 from the domain edges return the exact strain rates to $\chkViscAffine$,
 on the walled and on the periodic composite mesh.
+On fixed composite trees (\issue{112}) the affine velocities give exact shear
+rates and vanishing shear forces on every staggered volume at least two coarse
+cells from the walls and periodic seams, with no-slip and free-slip walls,
+the rows partition the periodic domain, the stiffness is symmetric positive
+semidefinite and its kernel contains the unconstrained constant components
+(\testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable stress shear rows are flux-consistent at level transitions (#112)}).
+The shifted solve $(\dualvolmat+0.01\,\strainmat^{\transpose}\stressw\strainmat)\velo=\dots$
+for a manufactured no-slip velocity with $\visc=1+\tfrac14\cos(2\pi x)$ on the
+walled tree with a doubly refined corner block converges with the orders
+$2.01$, $2.01$ in $L^2$ and $2.00$, $1.95$ in the maximum norm ($n=8\to32$
+cells per block side; before \issue{112}: $0.99$, $1.01$ in $L^2$ and $0.62$,
+$0.80$ in the maximum norm), both for the fixed and the adapted tree
+(\testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable stress shifted solve on fixed and adapted trees}).
+In a wider study (constant and variable viscosity, periodic and walled,
+corner and strip refinement, $n=8\to64$) the $L^2$ orders are $1.96$--$2.03$
+and the maximum-norm orders $1.53$--$2.00$, rising to $1.84$--$2.00$ at the
+finest pair; the largest truncation error within three fine cells of a
+transition stays between $3$ and $19$, where it grew as $h^{-1}$ before
+(from $1.6\cdot10^2$--$7.2\cdot10^2$ at $n=8$ to $6.5\cdot10^2$--$3.0\cdot10^3$
+at $n=32$).
 
 \begin{deviation}{Two-phase stress rows}\label{dev:viscosity:stress}
 The thesis locates the off-diagonal strain at the edges of the cells and
 needs no interpolation on a rectilinear mesh, with the viscosity from the
 volume fractions interpolated to the edges~\thesis{eq.~(7.52), \S7.5.1}. The
-code uses the conditional fractions, places the shear rows at the cell
-corners with the open quarter-cell volumes, and replaces the two-point
-difference by the least-squares stencil~\cref{eq:viscosity:shear} where a
-side of the line through a corner has no unknown, as at hanging vertices;
-it closes no-slip walls by one-sided differences and adds wall rows for the
-embedded solid. The cell and vertex mixtures are harmonic (series) by default,
+code uses the conditional fractions and places the shear rows on the
+intersections of the contact regions of the two velocity components
+(\cref{eq:viscosity:shear-partition}); on a conforming mesh these are the
+vertex-centred dual cells with the open quarter-cell volumes, at level
+transitions they keep the contact fluxes of both components consistent,
+with the anchored fine--coarse derivatives of~\cref{eq:viscosity:shear}
+(\issue{112}). The code closes no-slip walls by one-sided differences and
+adds wall rows for the embedded solid. The cell and row mixtures are harmonic (series) by default,
 \cref{eq:viscosity:viscosity,eq:viscosity:weights}; the thesis'
 volume-fraction-weighted geometric mean remains available as
 \apitype{GeometricViscosityAveraging} through the \code{viscosity_averaging}
 option of \apitype{NavierStokesOptions}, because it is a diffuse model whose
-vertex coefficient does not transmit the tangential traction across an aligned
+row coefficient does not transmit the tangential traction across an aligned
 interface at second order (\issue{113}).
 \end{deviation}
 
@@ -586,10 +676,9 @@ in \srcsym{src/two_phase/diffusion/variable_diffusion_operator.jl}{_variable_sta
 \srcsym{src/operators/viscosity_averaging.jl}{GeometricViscosityAveraging})
 ~\cref{eq:viscosity:viscosity}; stress-row mixtures
 \srcsym{src/two_phase/diffusion/variable_diffusion_operator.jl}{_fill_stress_weights!}~\cref{eq:viscosity:weights};
-vertices
-\srcsym{src/two_phase/diffusion/variable_diffusion_geometry.jl}{_stress_vertices!},
-shear stencils \srcsym{src/two_phase/diffusion/variable_diffusion_geometry.jl}{_vertex_derivative}
-(cached by \srcsym{src/two_phase/diffusion/variable_diffusion_geometry.jl}{_cached_vertex_derivative!})~\cref{eq:viscosity:shear};
+shear partition \srcsym{src/two_phase/diffusion/variable_diffusion_geometry.jl}{_shear_contacts!}~\cref{eq:viscosity:shear-partition},
+derivatives \srcsym{src/two_phase/diffusion/variable_diffusion_geometry.jl}{_shear_stencils!}~\cref{eq:viscosity:shear},
+shear rows \srcsym{src/two_phase/diffusion/variable_diffusion_geometry.jl}{_shear_rows!}~\cref{eq:viscosity:rows,eq:viscosity:shear-flux};
 embedded wall rows \srcsym{src/embedded/operators.jl}{_embedded_variable_wall_stresses};
 stiffness \srcsym{src/two_phase/diffusion/variable_diffusion_geometry.jl}{_symmetric_stiffness!};
 refresh \srcsym{src/two_phase/diffusion/variable_diffusion_operator.jl}{_update_dynamic_viscosity!};
@@ -599,6 +688,8 @@ Tests: \testsym{test/two_phase/variable_staggered_diffusion.jl}{Factorized varia
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable coupled stress diffusion},
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable stress manufactured bulk convergence},
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{variable diffusion is independent of base-root partitioning},
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable stress shear rows are flux-consistent at level transitions (#112)},
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable stress shifted solve on fixed and adapted trees},
 \testsym{test/operators/embedded_variable_wall_mms.jl}{two-phase embedded-wall manufactured Helmholtz (#106)},
 \testsym{test/operators/embedded_variable_wall_mms.jl}{two-phase aligned-wall constraints and reactions (#106)}.
 \end{implnote}

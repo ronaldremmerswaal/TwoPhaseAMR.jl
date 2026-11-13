@@ -746,17 +746,16 @@ end
 
 function _staggered_diffusion_operator(
         mesh::M, viscosity, boundary, T;
-        construction_cache = nothing, reuse = nothing, cache_layer = 1,
+        construction_cache = nothing, reuse = nothing,
         geometry = nothing,
         averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     ) where {M <: BlockTreeMesh}
     isnothing(geometry) || throw(
         ArgumentError("geometry applies only to variable diffusion here"),
     )
-    isnothing(construction_cache) && isnothing(reuse) &&
-        cache_layer == 1 || throw(
+    isnothing(construction_cache) && isnothing(reuse) || throw(
         ArgumentError(
-            "construction_cache, reuse, and non-default cache_layer apply only to variable diffusion",
+            "construction_cache and reuse apply only to variable diffusion",
         ),
     )
     # A constant viscosity has no phase mixture to average.

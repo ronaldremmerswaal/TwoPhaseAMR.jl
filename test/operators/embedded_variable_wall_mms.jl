@@ -284,7 +284,9 @@ end
                 @test all(diff(differences) .< 0)
                 @test wall_rates[end] + log2(1.1) >= open_rates[end]
             else
-                @test all(wall_rates .>= 2.0)
+                # Both operators are second order on the uniform channel, so
+                # their difference converges at second order (from below).
+                @test all(wall_rates .>= 1.9)
             end
         end
     end

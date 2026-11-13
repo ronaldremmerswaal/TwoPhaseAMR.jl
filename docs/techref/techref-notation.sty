@@ -805,14 +805,18 @@
 \DefineNotation{\stressw}{\mathsf{W}_{\visc}}{\stressw}
   {Diagonal stress weights, measure times viscosity (\cref{eq:viscosity:weights})}
   {\code{stress_weights}}{new}
-\DefineNotation{\stressverts}{\cvset{V}^{\mathrm{s}}}{\stressverts}
-  {Shear-stress vertices: corners of leaf cells}{\code{_stress_vertices!}}{\S7.5.1}
-\DefineNotation[1]{\vertdual}{\omega^{\mathrm{v}}_{#1}}{\meas{\vertdual{v}}}
-  {Quarter-cell (open) volume of a stress vertex (\cref{eq:viscosity:weights})}
-  {\code{measures}}{new}
-\DefineNotation[1]{\vderiv}{\mathfrak{d}_{#1}}{(\vderiv{t}\velo)_v}
-  {Shear derivative stencil at a vertex (\cref{eq:viscosity:shear})}
-  {\code{_vertex_derivative}}{new}
+\DefineNotation{\shearrows}{\cvset{R}^{\mathrm{s}}}{\shearrows}
+  {Shear rows: nonempty intersections of the contact regions of the two components (\cref{eq:viscosity:shear-partition})}
+  {\code{_shear_rows!}}{\S7.5.1}
+\DefineNotation[1]{\shearcontacts}{\cvset{G}^{\mathrm{s}}_{#1}}{\shearcontacts{k}}
+  {Tangential contacts of the samples of component $k$ (\cref{eq:viscosity:shear-partition})}
+  {\code{_shear_contacts!}}{new}
+\DefineNotation[1]{\shearregion}{\mathcal{Q}_{#1}}{\meas{\shearregion{g}}}
+  {Region of a shear contact or shear row (\cref{eq:viscosity:shear-partition,eq:viscosity:weights})}
+  {\code{ShearContact}, \code{measures}}{new}
+\DefineNotation[1]{\vderiv}{\mathfrak{d}_{#1}}{(\vderiv{t}\velo_k)_g}
+  {Tangential derivative across a shear contact (\cref{eq:viscosity:shear})}
+  {\code{_shear_stencils!}}{new}
 \DefineNotation{\massmat}{\mathsf{M}_{\dens}}{\massmat}
   {Staggered inertia $\diag{\stagdens_f\stagvol{f}}$ of the viscous solve}{\code{inertia}}{(T3)}
 \DefineNotation{\strainrate}{\+{\mathrm{D}}}{\strainrate(\Velo)}
@@ -820,12 +824,6 @@
 \DefineNotation[2]{\conncoef}{\mathfrak{c}_{#1,#2}}{\conncoef{g}{f}}
   {Coefficient of $\velo_f$ in the derivative across connection $g$ (\cref{eq:viscosity:gradient})}
   {\code{_gradient_stencil}}{new}
-\DefineNotation[1]{\shearcoef}{\mathfrak{s}_{#1}}{\shearcoef{j}}
-  {Coefficient of a least-squares shear derivative (\cref{eq:viscosity:shear})}
-  {\code{_vertex_derivative}}{new}
-\DefineNotation[2]{\shearpair}{f^{#1}_{#2}}{\shearpair{\pm}{v}}
-  {Nearest unknowns on both sides of a vertex along a line (\cref{eq:viscosity:shear})}
-  {\code{low_index}, \code{high_index}}{new}
 \DefineNotation[1]{\faceone}{\mathbf{1}^{[#1]}}{\faceone{k}}
   {Indicator of the faces of axis $k$ (constant velocity component)}{}{new}
 \DefineNotation{\resvec}{\mathsf{r}}{\resvec}{Residual vector of a linear solve}{\code{residual}}{new}
