@@ -1,4 +1,4 @@
-# case=r10_thin model=one n=32 cells=1024 steps=154 wall=6.206 umin=-0.171159 umax=0.874174 fmin=0 fmax=1 infinite=0 failed=no
+# case=r10_thin model=one n=32 cells=1024 steps=154 wall=0.754 umin=-0.171159 umax=0.874174 fmin=0 fmax=1 infinite=0 failed=no
 t,eta_re,eta_im
 0.00000000,2.000000000000e-04,1.291373163559e-16
 0.01685368,2.031460447027e-04,-5.582346739669e-06
