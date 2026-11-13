@@ -214,19 +214,25 @@ eigenvector `(c, s)` of `λ₂` (that of `λ₁` is `(-s, c)`)."""
     return mean - radius, mean + radius, cos(angle), sin(angle)
 end
 
-"""Pressure point of a cut cell in unit cell coordinates (eq. mimetic-point)
-and the liquid closing vector `η = Σ_k a_k n_k` (eq. mimetic-gram, in units of
-`h`).
+"""Pressure point of a cut cell in unit cell coordinates (eqs. mimetic-point,
+mimetic-interval) and the liquid closing vector `η = Σ_k a_k n_k` (eq.
+mimetic-gram, in units of `h`).
 
-The Gram tensors of the cell are symmetric exactly on the line `η × x* = τ`,
-`τ = Σ_k a_k n_k × x^l_k`; the pressure point is the point of that line
-closest to the interface of the data, the mean of the phase boundaries on
-the partially wetted sides (if every side is wetted by one phase only: the
-mean of the midpoints of the sides of the minority phase). If `η` vanishes,
-or the point would lie more than `1.5h` from the centre, it is that mean.
+With `M = Σ_k a_k n_k (x^l_k)ᵀ` the liquid Gram tensor at `x*` is
+`G^l = M - η x*ᵀ` and the gas one `G^g = I - G^l`. For `η ≠ 0` both are
+symmetric exactly on the line `η × x* = τ`, `τ = M₁₂ - M₂₁`. The data point
+is the point of that line closest to the interface of the data, the mean of
+the phase boundaries on the partially wetted sides (if every side is wetted by
+one phase only: the mean of the midpoints of the sides of the minority phase).
+It is kept if `0 ⪯ G^l ⪯ I` there; otherwise it moves along the line into
+the admissible interval (`_mimetic_admissible_point`). For `η = 0` the tensors
+do not depend on `x*`; the point satisfies the kernel condition instead
+(`_mimetic_kernel_point`). A point more than `1.5h` from the centre is
+replaced by the data mean (the cell is then defective).
 """
 function _mimetic_pressure_point(apertures::NTuple{4, T}, starts) where {T}
-    ex = ey = tau = sx = sy = zero(T)
+    ex = ey = sx = sy = zero(T)
+    m11 = m12 = m21 = m22 = zero(T)
     crossed = 0
     for k in 1:4
         a = apertures[k]
@@ -234,7 +240,10 @@ function _mimetic_pressure_point(apertures::NTuple{4, T}, starts) where {T}
         (qx, qy), (lx, ly), _ = _mimetic_side_parts(T, k, a, starts[k])
         ex += a * nx
         ey += a * ny
-        tau += a * (nx * ly - ny * lx)
+        m11 += a * nx * lx
+        m12 += a * nx * ly
+        m21 += a * ny * lx
+        m22 += a * ny * ly
         if zero(T) < a < one(T)
             sx += qx
             sy += qy
@@ -253,15 +262,82 @@ function _mimetic_pressure_point(apertures::NTuple{4, T}, starts) where {T}
         end
     end
     xr, yr = crossed > 0 ? (sx / crossed, sy / crossed) : (zero(T), zero(T))
-    xs, ys = xr, yr
     e2 = ex^2 + ey^2
     if e2 > T(1.0e-18)
-        defect = tau - (ex * yr - ey * xr)
-        xs -= defect * ey / e2
-        ys += defect * ex / e2
+        defect = (m12 - m21) - (ex * yr - ey * xr)
+        xs, ys = _mimetic_admissible_point(
+            m11, m12, m21, m22, ex, ey, xr - defect * ey / e2, yr + defect * ex / e2,
+        )
+    else
+        xs, ys = _mimetic_kernel_point(apertures, starts, m11, (m12 + m21) / 2, m22, xr, yr)
     end
     hypot(xs, ys) > T(1.5) && ((xs, ys) = (xr, yr))
     return xs, ys, ex, ey
+end
+
+"""Move the point `(xs, ys)` of the symmetry line along `η` into the interval
+where `0 ⪯ G^l ⪯ I` (eq. mimetic-interval), unless it lies there already.
+
+In the frame `η̂ = η/|η|`, `e = η̂^⊥` the entries `g₂₂ = eᵀG^l e` and
+`g₁₂ = η̂ᵀG^l e` do not change along the line and `g₁₁(s) = g₁₁(0) - s|η|` at
+`x* + s η̂`; an admissible point exists if and only if `0 ≤ g₂₂ ≤ 1` and
+`g₁₂² ≤ g₂₂(1 - g₂₂)`, and then `g₁₁ ∈ [g₁₂²/g₂₂, 1 - g₁₂²/(1 - g₂₂)]`. The
+point moves to the nearest point of that interval shrunk by 1 % of its width
+at both ends, where both tensors are positive definite. Without an admissible
+point it stays (the cell is defective)."""
+function _mimetic_admissible_point(m11, m12, m21, m22, ex, ey, xs, ys)
+    T = typeof(xs)
+    tolerance = T(1.0e-12)
+    c = sqrt(ex^2 + ey^2)
+    hx, hy = ex / c, ey / c
+    px, py = -hy, hx
+    g11, g22 = m11 - ex * xs, m22 - ey * ys
+    g12 = ((m12 - ex * ys) + (m21 - ey * xs)) / 2
+    q11 = hx * (g11 * hx + g12 * hy) + hy * (g12 * hx + g22 * hy)
+    q12 = hx * (g11 * px + g12 * py) + hy * (g12 * px + g22 * py)
+    q22 = px * (g11 * px + g12 * py) + py * (g12 * px + g22 * py)
+    -tolerance <= q22 <= one(T) + tolerance || return xs, ys
+    q22 = clamp(q22, zero(T), one(T))
+    lo = q22 > T(1.0e-14) ? q12^2 / q22 : (abs(q12) < tolerance ? zero(T) : T(Inf))
+    hi = one(T) - q22 > T(1.0e-14) ? one(T) - q12^2 / (one(T) - q22) :
+        (abs(q12) < tolerance ? one(T) : -T(Inf))
+    lo > hi + tolerance && return xs, ys
+    smin, smax = (q11 - hi) / c, (q11 - lo) / c
+    smin - T(1.0e-9) <= zero(T) <= smax + T(1.0e-9) && return xs, ys
+    width = smax - smin
+    s = clamp(zero(T), smin + width / 100, smax - width / 100)
+    return xs + s * hx, ys + s * hy
+end
+
+"""Pressure point of a cut cell with `η = 0`: the Gram tensors `G^l` (symmetric
+part `[g11 g12; g12 g22]`) and `G^g = I - G^l` do not depend on `x*`, and a
+block with `m N = R` needs `ker G ⊂ ker R`. For every eigenvector `v` with
+eigenvalue `0` of `G^l` (or `1`: kernel of `G^g`) the component `v ⋅ x*` is
+set to the wetted-length weighted mean of `v ⋅ x_k` over the sides of that
+phase, which satisfies the condition when the `v ⋅ x_k` agree (a film along a
+grid line: its mid-height); the other component is that of the data point."""
+function _mimetic_kernel_point(apertures::NTuple{4, T}, starts, g11, g12, g22, xs, ys) where {T}
+    lambda1, lambda2, c, s = _mimetic_symmetric_eigen(g11, g12, g22)
+    tolerance = T(1.0e-10)
+    for (lambda, vx, vy) in ((lambda1, -s, c), (lambda2, c, s))
+        for phase in 1:2
+            (phase == 1 ? lambda : one(T) - lambda) <= tolerance || continue
+            total = weighted = zero(T)
+            for k in 1:4
+                b = phase == 1 ? apertures[k] : one(T) - apertures[k]
+                b > zero(T) || continue
+                _, liquid, gas = _mimetic_side_parts(T, k, apertures[k], starts[k])
+                mx, my = phase == 1 ? liquid : gas
+                total += b
+                weighted += b * (vx * mx + vy * my)
+            end
+            total > zero(T) || continue
+            shift = weighted / total - (vx * xs + vy * ys)
+            xs += shift * vx
+            ys += shift * vy
+        end
+    end
+    return xs, ys
 end
 
 """Gram block of one phase of a cut cell in unit coordinates (eqs.
@@ -373,7 +449,8 @@ function _mimetic_fill_gram_block!(
             (fqx * (q11 * frx + q12 * fry) + fqy * (q12 * frx + q22 * fry))
         return Lq * projector * Lr / 2
     end
-    for q in 1:m, r in 1:m
+    # Upper triangle, mirrored: the block is symmetric bitwise.
+    for q in 1:m, r in q:m
         rqx, rqy = moments[q, 1], moments[q, 2]
         rrx, rry = moments[r, 1], moments[r, 2]
         value = rqx * (i11 * rrx + i12 * rry) + rqy * (i12 * rrx + i22 * rry) + stabiliser(q, r)
@@ -383,7 +460,7 @@ function _mimetic_fill_gram_block!(
             value += -sr * stabiliser(q, gamma) - sq * stabiliser(gamma, r) +
                 sq * sr * stabiliser(gamma, gamma)
         end
-        block[q, r] = value
+        block[q, r] = block[r, q] = value
     end
     return block
 end

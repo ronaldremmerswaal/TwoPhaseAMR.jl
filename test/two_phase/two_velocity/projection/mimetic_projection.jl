@@ -368,10 +368,12 @@ function _mm_block(edges)
 end
 
 # MMd blocks of one unit cell from the package: pressure point and, per phase,
-# the block, the Gram tensor G = Σ n_k R_kᵀ and the consistency flag.
-function _mmd_cell(apertures, starts)
+# the block, the Gram tensor G = Σ n_k R_kᵀ and the consistency flag. `point`
+# replaces the package's pressure point.
+function _mmd_cell(apertures, starts; point = nothing)
     TP = TwoPhaseAMR
     xs, ys, ex, ey = TP._mimetic_pressure_point(apertures, starts)
+    isnothing(point) || ((xs, ys) = point)
     phases = map(1:2) do phase
         block, sides, lengths, moments = zeros(4, 4), zeros(Int, 4), zeros(4), zeros(4, 2)
         m, consistent = TP._mimetic_gram_block!(
@@ -381,6 +383,21 @@ function _mmd_cell(apertures, starts)
         (; block = block[1:m, 1:m], gram = normals' * moments[1:m, :], normals, moments = moments[1:m, :], consistent)
     end
     return (xs, ys), phases
+end
+
+# The note's data point: the point of the symmetry line η × x* = τ closest to
+# the mean of the phase boundaries on the partially wetted sides.
+function _mmd_data_point(apertures, starts)
+    TP = TwoPhaseAMR
+    parts = [TP._mimetic_side_parts(Float64, k, apertures[k], starts[k]) for k in 1:4]
+    crossed = [first(parts[k]) for k in 1:4 if 0 < apertures[k] < 1]
+    xr, yr = sum(first, crossed) / length(crossed), sum(last, crossed) / length(crossed)
+    normals = [TP._mimetic_normal(Float64, k) for k in 1:4]
+    ex = sum(apertures[k] * normals[k][1] for k in 1:4)
+    ey = sum(apertures[k] * normals[k][2] for k in 1:4)
+    tau = sum(apertures[k] * (normals[k][1] * parts[k][2][2] - normals[k][2] * parts[k][2][1]) for k in 1:4)
+    defect = (tau - (ex * yr - ey * xr)) / (ex^2 + ey^2)
+    return xr - defect * ey, yr + defect * ex
 end
 
 @testset "Mimetic Gram blocks: the MM block where the polygon exists, degenerate data" begin
@@ -409,18 +426,59 @@ end
     end
     # Zero-area phase: the liquid wets one per cent of the bottom only. Its
     # pressure point is the wetted midpoint, G = 0 and the liquid block
-    # vanishes (its value takes inertia from the cell across and the ties);
-    # the gas block is consistent with G = I.
+    # vanishes (block SPD needs G ≻ 0: ker m = N ker G); the value takes its
+    # inertia from the cell across the face, else from the lumped term below.
+    # The gas block is consistent with G = I.
     point, phases = _mmd_cell((0.01, 0.0, 0.0, 0.0), (true, false, false, false))
     @test all(isapprox.(point, (-0.495, -0.5); atol = 1.0e-15))
     @test phases[1].consistent && phases[2].consistent
     @test maximum(abs, phases[1].gram) <= 1.0e-15
     @test maximum(abs, phases[1].block) <= 1.0e-15
     @test phases[2].gram ≈ I atol = 1.0e-15
-    # No admissible pressure point (prop. gram(e)): the liquid wets the bottom
-    # of the right side and the top of the left side with equal apertures,
-    # η = 0 and τ ≠ 0 (two chords). Both Gram tensors are asymmetric; the
-    # blocks are the least-squares fallback, symmetric positive definite.
+    # A liquid sliver near a grid line (a Rayleigh–Taylor state at h = λ/16):
+    # at the data point G^l has the eigenvalue -3e-5 (the point lies 1e-4 h
+    # beyond the top face). Along the symmetry line an admissible interval
+    # exists; the pressure point is clamped into it and both blocks are
+    # consistent and positive definite.
+    sliver = ((0.0, 9.0e-5, 0.39584, 0.00049), (false, false, true, true))
+    _, unclamped = _mmd_cell(sliver...; point = _mmd_data_point(sliver...))
+    @test !unclamped[1].consistent && minimum(eigvals(Symmetric(unclamped[1].gram))) < -1.0e-5
+    point, phases = _mmd_cell(sliver...)
+    @test point[2] < 0.5
+    for result in phases
+        @test result.consistent
+        @test result.gram ≈ result.gram' atol = 1.0e-15
+        @test result.block * result.normals ≈ result.moments atol = 1.0e-12
+        @test isposdef(Symmetric(result.block))
+    end
+    # A film along a grid line, η = 0 (liquid at the bottom of the left and
+    # right sides): G^l = diag(t, 0) for every point, and the kernel condition
+    # fixes the height of the pressure point to the film's mid-height (the
+    # data point, the film's top, is inconsistent).
+    film = ((0.0, 0.2, 0.0, 0.2), (false, true, false, false))
+    _, unclamped = _mmd_cell(film...; point = (0.0, -0.3))
+    @test !unclamped[1].consistent
+    point, phases = _mmd_cell(film...)
+    @test all(isapprox.(point, (0.0, -0.4); atol = 1.0e-15))
+    @test phases[1].gram ≈ [0.2 0.0; 0.0 0.0] atol = 1.0e-15
+    for result in phases
+        @test result.consistent
+        @test result.block * result.normals ≈ result.moments atol = 1.0e-14
+        @test isposdef(Symmetric(result.block))
+    end
+    # No admissible pressure point on the line (counterexample of the
+    # derivation check, two corner pieces): g22(1 - g22) < g12². The cell is
+    # defective; its blocks are the least-squares fallback, SPD.
+    corners = ((0.5, 0.0, 0.3, 0.1), (true, false, true, false))
+    _, phases = _mmd_cell(corners...)
+    @test !all(result -> result.consistent, phases)
+    for result in phases
+        @test result.block ≈ result.block' atol = 1.0e-15
+        @test isposdef(Symmetric(result.block))
+    end
+    # η = 0 and τ ≠ 0: the liquid wets the bottom of the right side and the top
+    # of the left side with equal apertures (two chords). No point makes the
+    # Gram tensors symmetric; the cell is defective with SPD fallback blocks.
     point, phases = _mmd_cell((0.0, 0.3, 0.0, 0.3), (false, true, false, true))
     @test _mm_polygon((0.0, 0.3, 0.0, 0.3), (false, true, false, true), 1)[2] == 2
     for result in phases
@@ -429,36 +487,44 @@ end
         @test result.block ≈ result.block' atol = 1.0e-15
         @test isposdef(Symmetric(result.block))
     end
-    # Assembled, such a cell is counted as defective. Synthetic face data on a
-    # gas-filled mesh: only the left and right faces of one cell are wetted.
+    # Assembled on synthetic face data of a gas-filled mesh. (i) Only the left
+    # and right faces of one cell are wetted: that cell is defective, its two
+    # neighbours hold zero-area liquid with zero blocks, and the liquid values
+    # take their inertia from the defective cell. (ii) Only a sliver of one
+    # horizontal face is wetted: both of its cells give the liquid value a
+    # zero block, so it gets the lumped mass, counted in `lumped_values`. The
+    # assembled metric stays positive definite in both.
     n = 8
     case = _mimetic_case(n, (x, y) -> 1.0)
     mesh = case.mesh
     TP = TwoPhaseAMR
     topology = TP._mimetic_topology(mesh)
     cell = TP._cell_index(CellRef(1, 4, 4), n, n)
-    right, left = topology.sides[2, cell], topology.sides[4, cell]
     faces = length(mesh.faces)
-    fraction = zeros(faces)
-    aperture = zeros(faces)
-    flags = zeros(Int8, faces)
-    for (face, low) in ((right, true), (left, false))
-        fraction[face] = 0.1
-        aperture[face] = 0.3
-        flags[face] = low ? TP._MIMETIC_LIQUID_LOW : TP._MIMETIC_LIQUID_HIGH
-    end
-    data = (;
-        liquid_fraction = fraction, liquid_aperture = aperture, gas_aperture = 1 .- aperture,
-        liquid_mass = fraction, gas_mass = 1 .- fraction,
-    )
     boundaries = length(mesh.boundary_faces)
-    assembly = TP._mimetic_assemble_from_data!(
-        case.workspace, MFDCutCellMetric(), mesh, data, flags, zeros(boundaries),
-        falses(boundaries), (1.0, 1.0),
-    )
-    @test assembly.cut_cells == 3 && assembly.defective_cells == 1
-    @test assembly.lumped_values == 0
-    @test isposdef(Symmetric(Matrix(assembly.band_matrix)))
+    for (wetted, expected) in (
+            (((topology.sides[2, cell], true, 0.3), (topology.sides[4, cell], false, 0.3)), (3, 1, 0)),
+            (((topology.sides[3, cell], true, 0.01),), (2, 0, 1)),
+        )
+        fraction = zeros(faces)
+        aperture = zeros(faces)
+        flags = zeros(Int8, faces)
+        for (face, low, a) in wetted
+            fraction[face] = a / 3
+            aperture[face] = a
+            flags[face] = low ? TP._MIMETIC_LIQUID_LOW : TP._MIMETIC_LIQUID_HIGH
+        end
+        data = (;
+            liquid_fraction = fraction, liquid_aperture = aperture, gas_aperture = 1 .- aperture,
+            liquid_mass = fraction, gas_mass = 1 .- fraction,
+        )
+        assembly = TP._mimetic_assemble_from_data!(
+            case.workspace, MFDCutCellMetric(), mesh, data, flags, zeros(boundaries),
+            falses(boundaries), (1.0, 1.0),
+        )
+        @test (assembly.cut_cells, assembly.defective_cells, assembly.lumped_values) == expected
+        @test isposdef(Symmetric(Matrix(assembly.band_matrix)))
+    end
 end
 
 @testset "Mimetic projection rejects cut cells at walls" begin

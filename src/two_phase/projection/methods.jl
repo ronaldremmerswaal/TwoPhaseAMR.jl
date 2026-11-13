@@ -36,14 +36,16 @@ phase the block is `R G⁺ Rᵀ + S` with the Gram tensor
 `G = Σ_k b_k h n_k (x_k - x*)ᵀ` of the wetted sides (wetted lengths `b_k h`
 from the shared face apertures, outward normals `n_k`, wetted midpoints `x_k`)
 and the rows `R = [b_k h (x_k - x*)ᵀ]`. The pressure point `x*` lies on the
-line where `G` is symmetric, next to the interface of the data, and `S` is the
-MFD stabilisation of the wetted sides closed by one slaved edge. Away from the
-interface the metric is the diagonal phase mass. No phase polygon is formed:
-the shared apertures need not bound one. Where they do, `G = |P| I` and the
-block is the classical MFD block of the polygon (candidate MM). A cell whose
-Gram tensor has no consistent block gets least-squares consistent blocks
-(eigenvalues raised to `0.02h²`) and is counted in
-`MimeticProjectionStats.defective_cells`.
+line where `G` is symmetric, next to the interface of the data and inside the
+interval of that line where both phases' Gram tensors are positive
+semi-definite (for cells whose wetted parts balance, `η = Σ_k b_k h n_k = 0`:
+where `ker G ⊂ ker R`), and `S` is the MFD stabilisation of the wetted sides
+closed by one slaved edge. Away from the interface the metric is the diagonal
+phase mass. No phase polygon is formed: the shared apertures need not bound
+one. Where they do, `G = |P| I` and the block is the classical MFD block of
+the polygon (candidate MM). A cell without a consistent block (no admissible
+pressure point) gets least-squares consistent blocks (eigenvalues raised to
+`0.02h²`) and is counted in `MimeticProjectionStats.defective_cells`.
 
 A phase value on a face that the phase does not reach follows a donor.
 `small_cell_stabilization` adds the audit's ad hoc tie
