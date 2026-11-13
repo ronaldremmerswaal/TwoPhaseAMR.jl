@@ -541,7 +541,7 @@ function phase_check()
         liquid = clip_halfplane(open, (n1, n2), a; keep_less = true)
         worst_intercept = max(worst_intercept, abs(shoelace(liquid) - c * shoelace(open)))
     end
-    worst_aperture = 0.0; worst_partition = 0.0; mixed_faces = 0
+    worst_aperture = 0.0; worst_partition = 0.0; mixed_faces = 0; rule_faces = 0
     for (index, face) in pairs(mesh.faces)
         open = geometry.aperture[index]
         liquid, gas = AMR._phase_face_apertures(field, index)
@@ -555,18 +555,29 @@ function phase_check()
             open
         else
             mixed_faces += 1
-            clamp(
-                (
-                    liquid_trace_independent(field, geometry, face.minus, face, 0.5) +
-                        liquid_trace_independent(field, geometry, face.plus, face, -0.5)
-                ) / 2, 0.0, open
-            )
+            minus_trace = liquid_trace_independent(field, geometry, face.minus, face, 0.5)
+            plus_trace = liquid_trace_independent(field, geometry, face.plus, face, -0.5)
+            minus_fraction = AMR._get(field.conditional_fraction, face.minus)
+            plus_fraction = AMR._get(field.conditional_fraction, face.plus)
+            minus_pure = iszero(minus_fraction) || isone(minus_fraction)
+            plus_pure = iszero(plus_fraction) || isone(plus_fraction)
+            # The pure-neighbour rule: exactly one pure cell and a strictly
+            # partial trace of the other cell take the pure cell's value.
+            trace = minus_pure == plus_pure ? nothing :
+                minus_pure ? plus_trace : minus_trace
+            if !isnothing(trace) && 0 < trace < 1
+                rule_faces += 1
+                clamp(minus_pure ? minus_fraction : plus_fraction, 0.0, open)
+            else
+                clamp((minus_trace + plus_trace) / 2, 0.0, open)
+            end
         end
         worst_aperture = max(worst_aperture, abs(mine - liquid))
     end
     @assert worst_intercept <= 1.0e-14 && worst_aperture <= 1.0e-15 && worst_partition <= 1.0e-15
     return (;
         worst_intercept, triple_cells, worst_aperture, worst_partition, mixed_faces,
+        rule_faces,
     )
 end
 

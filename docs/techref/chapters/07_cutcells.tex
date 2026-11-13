@@ -108,7 +108,10 @@ the open divergence conservative and the cut-cell gradient its negative
 adjoint (\cref{sec:setting:divergence,sec:setting:elliptic}); the covered rule
 closes faces on a grid-aligned solid boundary, where both cells are pure and
 the average would otherwise be $\half$. The phase apertures of
-\cref{sec:interface:apertures} split $\aperture{f}$ into liquid and gas parts.
+\cref{sec:interface:apertures} split $\aperture{f}$ into liquid and gas parts;
+the split takes the pure neighbour's value instead of the mean on a face where
+exactly one cell is pure and the other's trace is a corner clip, while
+$\aperture{f}$ itself stays the average of the two solid traces.
 
 \emph{Checks} (\code{figures/generate.jl}). On the cylinder fixture
 (\chkCutFacesTotal\ interior faces, \chkCutFaces\ of them partially open), an
@@ -126,8 +129,12 @@ average of the two solid traces with the covered rule, and the phase apertures
 split it, $\phaseaperture{\gas}{f}=\aperture{f}-\phaseaperture{\liq}{f}$.
 On a face without a covered cell, $\aperture{f}$ equals the sum of the thesis' phase
 apertures, $\half\sum_{c\in\cellset{f}}(\phasetrace{\liq}{c}{f}+\phasetrace{\gas}{c}{f})
-=\half\sum_{c\in\cellset{f}}\traceap{c}{f}$ (the clamp
-in~\cref{eq:interface:phase-aperture} is then inactive up to round-off). If a cell of
+= \half\sum_{c\in\cellset{f}}\traceap{c}{f}$ (the clamp
+in~\cref{eq:interface:phase-aperture} is then inactive up to round-off) --- except
+on a face where exactly one cell is pure and the other's trace is strictly
+partial, where the code takes the pure cell's phase value instead of the mean,
+so the identity misses by the half of the corner clip; the sum of the two phase
+apertures is $\aperture{f}$ there as well. If a cell of
 $\cellset{f}$ is covered, the thesis' sum is half of the open trace of the other cell
 (one half at a grid-aligned solid boundary), the code's is zero.
 \end{deviation}

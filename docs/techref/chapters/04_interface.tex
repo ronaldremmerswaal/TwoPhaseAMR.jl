@@ -687,9 +687,29 @@ cells give $0$ or the open trace $\traceap{c}{f}$). On an interior face,
 \end{equation}
 on a boundary face $\phaseaperture{\liq}{f}=\operatorname{clamp}(\phasetrace{\liq}{\cbnd{f}}{f},0,\aperture{f})$,
 and on every face $\phaseaperture{\gas}{f}=\aperture{f}-\phaseaperture{\liq}{f}$.
-The pure-phase cases keep an absent phase exactly closed. The apertures belong
-to the reconstructed state: they are computed once per reconstruction and read
-by the CFL bound, the two-velocity transport and the projection.
+The pure-phase cases keep an absent phase exactly closed.
+
+The mean is replaced on a face with exactly one pure cell $\hat{c}$ and one cut
+cell $c$ whose trace there is strictly partial, $0<\phasetrace{\liq}{c}{f}<1$:
+the aperture then takes the pure cell's own value,
+$\operatorname{clamp}(\condfrac{\liq}{\hat{c}},0,\aperture{f})$, instead of
+$\half(\condfrac{\liq}{\hat{c}}+\phasetrace{\liq}{c}{f})$. Such a trace is a
+\emph{corner clip}: the PLIC line of the cut cell crosses the shared face and
+leaves the cell through an adjacent one, so the liquid it puts on the shared
+face is a corner interval. The pure cell has no liquid corner there --- its trace
+is exactly $0$ or the open trace --- so the mean halves a clip that belongs to
+one cell only and gives the pure cell a partially wetted face it does not
+have; the phase fluxes through the face then disagree with both cells'
+reconstructions. The rule needs no size test: the trace is either $0$ or the
+open trace on the pure side, and any strictly partial trace of the cut cell is
+a corner clip of its line. Two cut cells and two pure cells keep the mean, as
+does a cut trace that reaches the whole face,
+$\phasetrace{\liq}{c}{f}\in\{0,1\}$. The rule only re-splits
+$\aperture{f}$: the open aperture of \cref{eq:cutcells:trace} and the gas
+complement are unchanged, so $\phaseaperture{\liq}{f}+\phaseaperture{\gas}{f}
+=\aperture{f}$ still holds. The apertures belong to the reconstructed state:
+they are computed once per reconstruction and read by the CFL bound, the
+two-velocity transport and the projection.
 
 The public \apifun{interface_height} returns, for a column in direction $k$ at
 transverse position $\coordk{t}$ (wrapped if periodic), the height obtained by
@@ -706,7 +726,8 @@ no cell of the column may be cut by a solid; otherwise it throws.
 
 \emph{Checks} (\code{figures/generate.jl}). On the \chkPhaseFaces\ faces with
 both phases of the sloped-wall fixture, an independent evaluation
-of~\cref{eq:interface:liquid-trace,eq:interface:phase-aperture} agrees with the
+of~\cref{eq:interface:liquid-trace,eq:interface:phase-aperture} and of the
+pure-neighbour rule agrees with the
 code to $\chkPhaseApertureDiff$; $\phaseaperture{\liq}{f}+\phaseaperture{\gas}{f}=\aperture{f}$
 holds to $\chkPhasePartition$.
 
