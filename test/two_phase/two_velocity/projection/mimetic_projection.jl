@@ -294,3 +294,73 @@ end
         @test_throws ArgumentError project!(velocity, CellField(wall.mesh), wall.solver, 1.0, wall.workspace)
     end
 end
+
+@testset "Mimetic projection with an interface on a grid line" begin
+    # The interface lies on the faces y = 1/2: no cell is cut. The two phase
+    # values of those faces are identified (u^l = u^g) and both cells are uncut.
+    n = 32
+    flat(x, y) = y - 0.5
+    predictor(phase, face) = face.axis == 1 ? (phase == 1 ? -0.5 : 0.5) + 0.1sin(2pi * face.center[2]) :
+        (phase == 1 ? 0.3 : -0.2) * cos(2pi * face.center[1])
+    case = _mimetic_case(n, flat; density = (10.0, 1.0))
+    velocity = _mimetic_velocity(case, predictor)
+    pressure = CellField(case.mesh)
+    stats = project!(velocity, pressure, case.solver, 1.0e-2, case.workspace; tolerance = 1.0e-12)
+    @test stats.converged
+    @test stats.gridline_faces == n
+    @test stats.cut_cells == 0 && stats.lumped_polygons == 0
+    @test abs(stats.energy_identity_defect) <= 1.0e-12
+    @test abs(stats.momentum_change[1]) <= 1.0e-12 * length(case.mesh.faces) *
+        maximum(abs, case.workspace.metric_predictor)
+    # Normal continuity on the interface faces, idempotence.
+    for (index, face) in pairs(case.mesh.faces)
+        face.axis == 2 && abs(face.center[2] - 0.5) < 1.0e-12 || continue
+        @test velocity[1].interior[index] == velocity[2].interior[index]
+    end
+    projected = deepcopy(velocity)
+    project!(velocity, pressure, case.solver, 1.0e-2, case.workspace; tolerance = 1.0e-12)
+    @test maximum(
+        maximum(abs, filter(isfinite, velocity[phase].interior .- projected[phase].interior); init = 0.0)
+            for phase in 1:2
+    ) <= 1.0e-10 * _mimetic_maximum(projected)
+
+    # Limit of the cut-cell construction: a chord approaching the face.
+    flux(case, velocity) = map(eachindex(case.mesh.faces)) do index
+        data = case.workspace.face_data
+        TwoPhaseAMR._projection_phase_sum(
+            data.liquid_aperture[index], velocity[1].interior[index],
+            data.gas_aperture[index], velocity[2].interior[index],
+        )
+    end
+    reference = flux(case, projected)
+    distances = map((1.0e-1, 1.0e-2, 1.0e-3, 1.0e-4)) do theta
+        cut = _mimetic_case(n, (x, y) -> y - 0.5 - theta / n; density = (10.0, 1.0))
+        u = _mimetic_velocity(cut, predictor)
+        project!(u, CellField(cut.mesh), cut.solver, 1.0e-2, cut.workspace; tolerance = 1.0e-12)
+        maximum(abs, flux(cut, u) .- reference)
+    end
+    println("mimetic grid-line limit: max mixture-flux distance for theta = 1e-1..1e-4: ", distances)
+    @test all(diff(collect(distances)) .< 0)
+    @test last(distances) <= 1.0e-2 * first(distances)
+
+    # Rest states with the grid-aligned interface: gravity at density ratio
+    # 1000 and a constant-curvature pressure jump through full time steps.
+    mesh = BlockTreeMesh(block_size = (n, n), periodic = (true, false))
+    interface = InterfaceField(mesh, flat; lipschitz = 1)
+    flow = FlowSimulation(
+        mesh, TwoPhase(
+            interface; density = (1000.0, 1.0), dynamic_viscosity = (0.0, 0.0),
+            gravity = (0.0, -9.81), surface_tension = SurfaceTension(0.3),
+        );
+        velocity_model = TwoVelocityModel(pressure_projection = MimeticProjection()),
+        boundary = FreeSlip(),
+    )
+    for _ in 1:3
+        stats = step!(
+            flow.velocity, flow.pressure, flow.system, 1.0e-3, flow.workspace;
+            tolerance = 1.0e-11, max_cycles = 2000,
+        )
+        @test stats.converged
+    end
+    @test _mimetic_maximum(flow.velocity) <= 1.0e-8
+end

@@ -84,6 +84,31 @@ function capillary_flow(; k = 4, max_level = 2, adaptation = true, diagnostics =
     return flow, 0.5 * stable_timestep(flow)
 end
 
+"""Uniform capillary wave with the mimetic cut-cell projection (non-simple
+cut cells use the lumped fallback)."""
+function mimetic_capillary_flow(; diagnostics = ())
+    levelset = (x, y) -> y - 0.25 - 0.01cos(2pi * x)
+    mesh = BlockTreeMesh(
+        base_mesh = (32, 96), block_size = (8, 8), origin = (0.0, -1.5),
+        extent = (1.0, 3.0), periodic = (true, false),
+    )
+    interface = InterfaceField(mesh, levelset; lipschitz = 1)
+    density = (1.0, 1.0e-3)
+    physics = TwoPhase(
+        interface; density, surface_tension = 1.0,
+        dynamic_viscosity = density .* sqrt(1 / 3000.0),
+    )
+    model = TwoVelocityModel(
+        pressure_projection = MimeticProjection(
+            metric = MFDCutCellMetric(nonsimple_cells = :lumped),
+        ),
+    )
+    flow = FlowSimulation(
+        mesh, physics; velocity_model = model, boundary = FreeSlip(), diagnostics,
+    )
+    return flow, 0.5 * stable_timestep(flow)
+end
+
 function cylinder_flow(max_level)
     run = Cylinder.run_example(; max_level, final_time = 0.0)
     return run.flow, stable_timestep(run.flow; cfl = 0.45)
@@ -149,6 +174,7 @@ end
 """Cases: name, number of fixed-dt steps, and the flow builder."""
 const CASES = (
     ("capillary", 10, () -> capillary_flow(diagnostics = TWO_PHASE_DIAGNOSTICS)),
+    ("capillary_mimetic", 10, () -> mimetic_capillary_flow(diagnostics = TWO_PHASE_DIAGNOSTICS)),
     ("droplet", 6, () -> droplet_flow(2; diagnostics = TWO_PHASE_DIAGNOSTICS)),
     ("stokes3_two", 6, () -> stokes3_flow(3)),
     ("cylinder", 6, () -> cylinder_flow(2)),

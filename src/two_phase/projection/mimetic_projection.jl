@@ -71,6 +71,7 @@ mutable struct MimeticProjectionWorkspace{T, M <: BlockTreeMesh}
     boundary_flux::Vector{T}
     boundary_aperture::Vector{T}
     boundary_low::Vector{Bool}
+    gridline::Vector{Int8}
     preconditioner_coefficient::Vector{T}
     pressure_operator::Any
     multigrid::Any
@@ -101,7 +102,7 @@ function MimeticProjectionWorkspace(solver::MimeticProjectionSolver{T}) where {T
     return MimeticProjectionWorkspace{T, typeof(mesh)}(
         FaceField{1}(mesh, T), FaceField{2}(mesh, T), nothing, nothing,
         CellRef[], _MimeticAssembly(T), nothing, spzeros(T, 0, 0), spzeros(T, 0, 0),
-        spzeros(T, 0, 0), T[], T[], Bool[], T[], nothing, nothing, nothing,
+        spzeros(T, 0, 0), T[], T[], Bool[], Int8[], T[], nothing, nothing, nothing,
         T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], nothing, T[], T[],
     )
 end
@@ -138,6 +139,7 @@ struct MimeticProjectionStats{T}
     stabilised_values::Int
     lumped_values::Int
     lumped_polygons::Int
+    gridline_faces::Int
     preconditioner::Symbol
 end
 
@@ -157,7 +159,8 @@ function Base.show(io::IO, stats::MimeticProjectionStats)
         ", slaved_values=", stats.slaved_values,
         ", stabilised_values=", stats.stabilised_values,
         ", lumped_values=", stats.lumped_values,
-        ", lumped_polygons=", stats.lumped_polygons, ")",
+        ", lumped_polygons=", stats.lumped_polygons,
+        ", gridline_faces=", stats.gridline_faces, ")",
     )
 end
 
@@ -184,6 +187,7 @@ function _mimetic_assemble!(
     revision = interface.phase_aperture_updates[]
     !topology_changed && assembly.revision == revision && return assembly
     flags = _mimetic_face_sides!(assembly.flags, interface, data.liquid_aperture)
+    gridline = _mimetic_gridline_faces!(workspace.gridline, interface)
     boundary_aperture = resize!(workspace.boundary_aperture, length(mesh.boundary_faces))
     boundary_low = resize!(workspace.boundary_low, length(mesh.boundary_faces))
     for (index, face) in pairs(mesh.boundary_faces)
@@ -198,7 +202,7 @@ function _mimetic_assemble!(
     _mimetic_assemble_from_data!(
         workspace, solver.metric, mesh, data, flags, boundary_aperture,
         boundary_low, solver.density; allow_wall_cuts = solver.allow_wall_cuts,
-        coefficient = solver.preconditioner_coefficient,
+        coefficient = solver.preconditioner_coefficient, gridline,
     )
     assembly.revision = revision
     return assembly
@@ -209,7 +213,7 @@ operators from given face geometry (see `_assemble_cut_cell_metric!`)."""
 function _mimetic_assemble_from_data!(
         workspace::MimeticProjectionWorkspace{T}, metric, mesh, data, flags,
         boundary_aperture, boundary_low, density; allow_wall_cuts = false,
-        coefficient = :diagonal_metric,
+        coefficient = :diagonal_metric, gridline = nothing,
     ) where {T}
     if !_mimetic_topology_current(workspace.topology, mesh)
         workspace.topology = _mimetic_topology(mesh)
@@ -218,7 +222,7 @@ function _mimetic_assemble_from_data!(
     topology = workspace.topology
     assembly = _assemble_cut_cell_metric!(
         workspace.assembly, metric, mesh, topology, data, flags,
-        boundary_aperture, boundary_low, density; allow_wall_cuts,
+        boundary_aperture, boundary_low, density; allow_wall_cuts, gridline,
     )
     workspace.factor = isempty(assembly.band) ? nothing : lu(assembly.band_matrix)
     cells = size(topology.sides, 2)
@@ -326,16 +330,52 @@ end
 function _mimetic_gather!(values, assembly, velocity)
     resize!(values, length(assembly.dof_face))
     for dof in eachindex(assembly.dof_face)
-        value = velocity[assembly.dof_phase[dof]].interior[assembly.dof_face[dof]]
+        face = assembly.dof_face[dof]
+        phase = assembly.dof_phase[dof]
+        # An identified grid-line value starts from the 𝓜-orthogonal (mass-
+        # weighted) projection of the two phase values onto u^l = u^g.
+        value = phase == 3 ?
+            assembly.dof_liquid_weight[dof] * velocity[1].interior[face] +
+            (one(eltype(values)) - assembly.dof_liquid_weight[dof]) * velocity[2].interior[face] :
+            velocity[phase].interior[face]
         isfinite(value) || throw(
-            ArgumentError(
-                "non-finite active phase-$(assembly.dof_phase[dof]) velocity on " *
-                    "face $(assembly.dof_face[dof])",
-            ),
+            ArgumentError("non-finite active phase velocity on face $face"),
         )
         values[dof] = value
     end
     return values
+end
+
+"""Write (or with `add`, add) the value of `dof` to its phase velocity; an
+identified grid-line value goes to both phases."""
+@inline function _mimetic_scatter!(velocity, assembly, dof, value, add)
+    face = assembly.dof_face[dof]
+    phase = assembly.dof_phase[dof]
+    for target in (phase == 3 ? (1, 2) : (phase,))
+        values = velocity[target].interior
+        if add
+            isnan(values[face]) || (values[face] += value)
+        else
+            values[face] = value
+        end
+    end
+    return nothing
+end
+
+"""Mark the interior faces between a pure liquid and a pure gas cell (`1`:
+liquid minus cell, `-1`: liquid plus cell). Cell fractions are snapped to
+exactly zero and one below the interface's fraction floor, so the test is
+exact."""
+function _mimetic_gridline_faces!(gridline, interface)
+    mesh = interface.mesh
+    resize!(gridline, length(mesh.faces))
+    for (index, face) in pairs(mesh.faces)
+        minus = _conditional_fraction(interface, face.minus)
+        plus = _conditional_fraction(interface, face.plus)
+        gridline[index] = minus == 1 && iszero(plus) ? Int8(1) :
+            iszero(minus) && plus == 1 ? Int8(-1) : Int8(0)
+    end
+    return gridline
 end
 
 """`result = 𝓜 values` with the assembled metric."""
@@ -510,7 +550,7 @@ function project!(
     )
     projected = workspace.velocity
     for dof in eachindex(projected)
-        velocity[assembly.dof_phase[dof]].interior[assembly.dof_face[dof]] = projected[dof]
+        _mimetic_scatter!(velocity, assembly, dof, projected[dof], false)
     end
     _mark_inactive_phase_velocities!(velocity, interface)
     for cell in 1:cells
@@ -526,6 +566,7 @@ function project!(
         result.transported_momentum, cells - 1, length(assembly.band),
         length(projected), assembly.cut_cells, assembly.slaved_values,
         assembly.stabilised_values, assembly.lumped_values, assembly.lumped_polygons,
+        assembly.gridline_faces,
         :pressure_multigrid,
     )
 end
@@ -645,10 +686,7 @@ function _mimetic_jump_force!(
     end
     acceleration = _mimetic_metric_solve!(workspace.force_solution, workspace, rhs)
     for dof in eachindex(acceleration)
-        phase = velocity[assembly.dof_phase[dof]].interior
-        face = assembly.dof_face[dof]
-        isnan(phase[face]) && continue
-        phase[face] += T(dt) * acceleration[dof]
+        _mimetic_scatter!(velocity, assembly, dof, T(dt) * acceleration[dof], true)
     end
     return velocity
 end

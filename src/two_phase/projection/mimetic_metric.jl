@@ -291,6 +291,8 @@ mutable struct _MimeticAssembly{T}
     dof_phase::Vector{Int8}
     dof_aperture::Vector{T}
     dof_mass::Vector{T}
+    dof_liquid_weight::Vector{T}
+    gridline_faces::Int
     band::Vector{Int}
     band_position::Vector{Int}
     diagonal::Vector{T}
@@ -317,7 +319,7 @@ end
 
 function _MimeticAssembly(::Type{T}) where {T}
     return _MimeticAssembly{T}(
-        typemax(UInt), Int[], Int[], Int[], Int8[], T[], T[], Int[], Int[], T[],
+        typemax(UInt), Int[], Int[], Int[], Int8[], T[], T[], T[], 0, Int[], Int[], T[],
         spzeros(T, 0, 0), nothing, T[], T[], 0, 0, 0, 0, 0, T[], Int[], Int[], T[],
         falses(0), Int8[], _MimeticEdge{T}[], _MimeticEdge{T}[], zeros(T, 8, 8), zeros(T, 8),
     )
@@ -364,15 +366,23 @@ The geometry enters only through `data` (staggered liquid fractions, phase
 apertures and masses of the interior faces), the wet-end `flags` of the
 interior faces and the liquid apertures and wet ends (`true`: low end) of
 the boundary faces.
+
+`gridline[f]` marks an interior face between a pure liquid and a pure gas cell
+(`1`: liquid minus cell, `-1`: liquid plus cell, `0`: neither): the interface
+lies on the face, no cell is cut. Both cells are treated as uncut and the two
+phase values of the face are identified (normal continuity `u^l = u^g`), the
+limit of the cut-cell construction as the chord approaches the face. Its one
+value carries the summed staggered mass and the full aperture.
 """
 function _assemble_cut_cell_metric!(
         assembly::_MimeticAssembly{T}, metric::MFDCutCellMetric, mesh,
         topology, data, flags, boundary_aperture, boundary_low, density;
-        allow_wall_cuts = false,
+        allow_wall_cuts = false, gridline = nothing,
     ) where {T}
     h = topology.spacing
     faces = length(mesh.faces)
     cells = size(topology.sides, 2)
+    on_gridline(face) = !isnothing(gridline) && !iszero(gridline[face])
     # Phase degrees of freedom: every phase value on a face with phase volume.
     resize!(assembly.liquid_dof, faces)
     resize!(assembly.gas_dof, faces)
@@ -380,16 +390,30 @@ function _assemble_cut_cell_metric!(
     empty!(assembly.dof_phase)
     empty!(assembly.dof_aperture)
     empty!(assembly.dof_mass)
+    empty!(assembly.dof_liquid_weight)
+    assembly.gridline_faces = 0
     for face in 1:faces
         fraction = data.liquid_fraction[face]
         volume = mesh.face_dual_volumes[face]
         assembly.liquid_dof[face] = 0
         assembly.gas_dof[face] = 0
+        if on_gridline(face)
+            liquid, gas = data.liquid_mass[face], data.gas_mass[face]
+            push!(assembly.dof_face, face)
+            push!(assembly.dof_phase, Int8(3))
+            push!(assembly.dof_aperture, one(T))
+            push!(assembly.dof_mass, volume * (liquid + gas))
+            push!(assembly.dof_liquid_weight, liquid / (liquid + gas))
+            assembly.liquid_dof[face] = assembly.gas_dof[face] = length(assembly.dof_face)
+            assembly.gridline_faces += 1
+            continue
+        end
         if fraction > zero(T)
             push!(assembly.dof_face, face)
             push!(assembly.dof_phase, Int8(1))
             push!(assembly.dof_aperture, data.liquid_aperture[face])
             push!(assembly.dof_mass, volume * data.liquid_mass[face])
+            push!(assembly.dof_liquid_weight, one(T))
             assembly.liquid_dof[face] = length(assembly.dof_face)
         end
         if fraction < one(T)
@@ -397,6 +421,7 @@ function _assemble_cut_cell_metric!(
             push!(assembly.dof_phase, Int8(2))
             push!(assembly.dof_aperture, data.gas_aperture[face])
             push!(assembly.dof_mass, volume * data.gas_mass[face])
+            push!(assembly.dof_liquid_weight, zero(T))
             assembly.gas_dof[face] = length(assembly.dof_face)
         end
     end
@@ -421,7 +446,11 @@ function _assemble_cut_cell_metric!(
         assembly.pressure_y[cell] = center[2]
         apertures = ntuple(Val(4)) do k
             face = topology.sides[k, cell]
-            face > 0 ? data.liquid_aperture[face] : boundary_aperture[-face]
+            face > 0 || return boundary_aperture[-face]
+            # A grid-line interface face is fully wet from its own cell's side.
+            on_gridline(face) || return data.liquid_aperture[face]
+            minus = topology.face_cells[1, face] == cell
+            return (gridline[face] > 0) == minus ? one(T) : zero(T)
         end
         unresolved = false
         for k in 1:4
