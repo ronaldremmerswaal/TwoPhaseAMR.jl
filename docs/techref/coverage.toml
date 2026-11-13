@@ -1071,11 +1071,14 @@ check = "uniform_laplacian_check"
 label = "eq:viscosity:gradient"
 sources = [
   { file = "src/operators/staggered_diffusion.jl", symbol = "_gradient_stencil" },
+  { file = "src/operators/staggered_diffusion.jl", symbol = "_minimum_norm_gradient" },
+  { file = "src/operators/staggered_diffusion.jl", symbol = "_level_matched_gradient" },
   { file = "src/embedded/operators.jl", symbol = "_cut_cell_gradient_stencil" },
   { file = "src/embedded/operators.jl", symbol = "_cut_cell_transverse_stencils" },
 ]
 tests = [
-  { file = "test/operators/staggered_diffusion.jl", testset = "staggered diffusion stable core on uniform and AMR meshes" }
+  { file = "test/operators/staggered_diffusion.jl", testset = "staggered diffusion stable core on uniform and AMR meshes" },
+  { file = "test/operators/staggered_diffusion.jl", testset = "orphan transverse rows are linear-exact at open walls (#99)" }
 ]
 [[claims]]
 label = "eq:viscosity:stiffness"
@@ -1132,6 +1135,9 @@ tests = [
   { file = "test/operators/staggered_diffusion.jl", testset = "wall conductance follows split dual strips (#87)" },
   { file = "test/operators/staggered_diffusion.jl", testset = "wall-contact flux respects a linear normal profile (#87)" },
   { file = "test/operators/staggered_diffusion.jl", testset = "cut-cell Helmholtz convergence at walls and level transitions (#87)" },
+  { file = "test/operators/staggered_diffusion.jl", testset = "orphan transverse rows are linear-exact at open walls (#99)" },
+  { file = "test/operators/staggered_diffusion.jl", testset = "open sides share the orphan closure (#99)" },
+  { file = "test/operators/staggered_diffusion.jl", testset = "orphan transverse rows converge on a manufactured field (#99)" },
   { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Grid-aligned embedded walls have the cut-wall limit" }
 ]
 check = "moving_wall_check"
@@ -1158,14 +1164,33 @@ tests = [
 ]
 check = "stress_rows_check"
 [[claims]]
-label = "eq:viscosity:shear"
+label = "eq:viscosity:shear-partition"
 sources = [
-  { file = "src/two_phase/diffusion/variable_diffusion_geometry.jl", symbol = "_vertex_derivative" }
+  { file = "src/two_phase/diffusion/variable_diffusion_geometry.jl", symbol = "_shear_nodes!" },
+  { file = "src/two_phase/diffusion/variable_diffusion_geometry.jl", symbol = "_shear_contacts!" }
 ]
 tests = [
-  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Variable stress manufactured bulk convergence" }
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Variable stress shear rows are flux-consistent at level transitions (#112)" }
+]
+[[claims]]
+label = "eq:viscosity:shear"
+sources = [
+  { file = "src/two_phase/diffusion/variable_diffusion_geometry.jl", symbol = "_shear_stencils!" }
+]
+tests = [
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Variable stress manufactured bulk convergence" },
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Variable stress shear rows are flux-consistent at level transitions (#112)" }
 ]
 check = "affine_strain_check"
+[[claims]]
+label = "eq:viscosity:shear-flux"
+sources = [
+  { file = "src/two_phase/diffusion/variable_diffusion_geometry.jl", symbol = "_shear_rows!" }
+]
+tests = [
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Variable stress shear rows are flux-consistent at level transitions (#112)" },
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Variable stress shifted solve on fixed and adapted trees" }
+]
 [[claims]]
 label = "eq:viscosity:weights"
 sources = [

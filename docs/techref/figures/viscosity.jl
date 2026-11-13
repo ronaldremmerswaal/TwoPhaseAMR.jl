@@ -38,6 +38,56 @@ visc_velocity(mesh; shift = 0.0) = FaceVelocity(
 
 cell_number(mesh, ref) = AMR._cell_index(ref, mesh.block_size[1], mesh.block_size[2])
 
+# Regions of the shear rows in the order of `_shear_rows!` on an uncut mesh:
+# every nonempty intersection of an x-velocity and a y-velocity contact region
+# (read from the code's contact partitions), omitted where both derivatives
+# vanish. Physical boxes (x0, y0, x1, y1), possibly a periodic image.
+function shear_row_regions(mesh; boundary = NoSlip())
+    lattice = AMR._finest_lattice_size(mesh)
+    first, second = map((1, 2)) do axis
+        AMR._shear_partition!(
+            AMR.ShearPartition(Float64), mesh, lattice, axis, boundary, Float64,
+        )
+    end
+    unit = mesh.extent ./ (2 .* lattice)
+    function overlap(a_low, a_high, b_low, b_high, axis)
+        for image in (mesh.periodic[axis] ? (-1, 0, 1) : (0,))
+            shift = image * 2lattice[axis]
+            low, high = max(a_low, b_low + shift), min(a_high, b_high + shift)
+            high > low && return (low, high)
+        end
+        return nothing
+    end
+    derivative(partition, index) =
+        partition.stencil_offsets[index + 1] > partition.stencil_offsets[index]
+    regions = NTuple{4, Float64}[]
+    for (i, a) in pairs(first.contacts), (j, b) in pairs(second.contacts)
+        (derivative(first, i) || derivative(second, j)) || continue
+        x = overlap(a.k_low, a.k_high, b.t_low, b.t_high, 1)
+        y = overlap(a.t_low, a.t_high, b.k_low, b.k_high, 2)
+        (isnothing(x) || isnothing(y)) && continue
+        push!(
+            regions, (
+                mesh.origin[1] + x[1] * unit[1], mesh.origin[2] + y[1] * unit[2],
+                mesh.origin[1] + x[2] * unit[1], mesh.origin[2] + y[2] * unit[2],
+            ),
+        )
+    end
+    return regions
+end
+
+# Area of a box inside a cell box, over the periodic images.
+function box_overlap(mesh, box, cell)
+    total = 0.0
+    for sx in (mesh.periodic[1] ? (-1, 0, 1) : (0,)), sy in (mesh.periodic[2] ? (-1, 0, 1) : (0,))
+        dx, dy = sx * mesh.extent[1], sy * mesh.extent[2]
+        width = min(box[3], cell[3] + dx) - max(box[1], cell[1] + dx)
+        height = min(box[4], cell[4] + dy) - max(box[2], cell[2] + dy)
+        width > 0 && height > 0 && (total += width * height)
+    end
+    return total
+end
+
 # --- Independent normal rows and stress weights (Section "stress") ----------------
 
 function stress_rows_check(field)
@@ -60,36 +110,34 @@ function stress_rows_check(field)
         end
     end
     normal_difference = maximum(abs, Matrix(E[1:(2n), :]) .- expected)
-    # Weights: 2|c^o| mu_c and, per corner vertex, |omega^v| exp(mean log mu).
-    logmu = Dict(
-        ref => (c = cond(field, ref); c * log(VISC_PHASES[1]) + (1 - c) * log(VISC_PHASES[2]))
+    # Weights: 2|c^o| mu_c with the harmonic cell mixture and, on an uncut
+    # mesh, per shear row its area times the area-weighted harmonic mean of
+    # the cells it covers.
+    mu = Dict(
+        ref => (c = cond(field, ref); inv(c / VISC_PHASES[1] + (1 - c) / VISC_PHASES[2]))
             for ref in all_cells(mesh)
     )
     weights = Float64[]
     for ref in all_cells(mesh), axis in 1:2
         alpha = open(ref)
-        push!(weights, alpha > 0 ? 2 * alpha * cell_volume(mesh, ref) * exp(logmu[ref]) : 0.0)
+        push!(weights, alpha > 0 ? 2 * alpha * cell_volume(mesh, ref) * mu[ref] : 0.0)
     end
-    lattice = mesh.base_mesh .* 2^mesh.max_level
-    vertices = Dict{NTuple{2, Int}, Vector{Tuple{CellRef, Float64}}}()
-    for ref in all_cells(mesh)
-        x = cellcenter(mesh, ref.block, ref.i, ref.j)
-        h = cell_spacing(mesh, ref)
-        for sx in (-1, 1), sy in (-1, 1)
-            key = ntuple(2) do k
-                value = round(Int, (x[k] + (k == 1 ? sx : sy) * h[k] / 2 - mesh.origin[k]) / mesh.extent[k] * lattice[k])
-                mesh.periodic[k] ? mod(value, lattice[k]) : value
-            end
-            push!(get!(vertices, key, Tuple{CellRef, Float64}[]), (ref, cell_volume(mesh, ref) / 4))
+    shear_rows = 0
+    if isnothing(geometry)
+        for box in shear_row_regions(mesh)
+            parts = [(ref, box_overlap(mesh, box, cell_box_of(mesh, ref))) for ref in all_cells(mesh)]
+            filter!(part -> part[2] > 0, parts)
+            area = sum(last, parts)
+            push!(weights, area^2 / sum(part[2] / mu[part[1]] for part in parts))
+            shear_rows += 1
         end
-    end
-    for key in sort!(collect(keys(vertices)))
-        cells = vertices[key]
-        volume = sum(w * open(ref) for (ref, w) in cells)
-        volume > 0 || continue
-        # Covered cells (no open volume) do not enter the vertex mean.
-        logsum = sum(w * open(ref) * logmu[ref] for (ref, w) in cells if open(ref) > 0)
-        push!(weights, volume * exp(logsum / volume))
+        wall_rows = length(op.stress_weights) - length(weights)
+    else
+        wall_rows = length(
+            AMR._embedded_variable_wall_stresses(
+                geometry; include_cut_wall = true, dirichlet_faces = op.dirichlet_faces,
+            ),
+        ) + length(op.dirichlet_faces)
     end
     count = length(weights)
     # Covered cells have zero normal-row measure; compare the open rows.
@@ -100,8 +148,7 @@ function stress_rows_check(field)
             for i in 1:count if weights[i] > 0
     )
     return (;
-        normal_difference, weight_difference, normal_rows = 2n,
-        shear_rows = count - 2n, wall_rows = length(op.stress_weights) - count,
+        normal_difference, weight_difference, normal_rows = 2n, shear_rows, wall_rows,
     )
 end
 
@@ -112,11 +159,10 @@ function affine_strain_check(field)
     op = variable_operator(field)
     E = op.strain
     n = length(all_cells(mesh))
-    lattice = mesh.base_mesh .* 2^mesh.max_level
     hmax = maximum(maximum(block.spacing) for block in mesh.blocks)
     # Rows: normal rows of cells without a boundary face and farther than
     # 4 h_max from the domain edges (periodic seams: the affine field jumps
-    # there); shear rows of vertices farther than 4 h_max from the edges.
+    # there); shear rows whose region is farther than 4 h_max from the edges.
     boundary_cells = Set(face.cell for face in mesh.boundary_faces)
     edge_distance(point) = minimum(min(point[k] - mesh.origin[k], mesh.origin[k] + mesh.extent[k] - point[k]) for k in 1:2)
     rows = Int[]
@@ -127,22 +173,8 @@ function affine_strain_check(field)
         push!(rows, 2 * (cell_number(mesh, ref) - 1) + axis)
         push!(exact_index, (:normal, axis))
     end
-    vertex_key(x, h, sx, sy) = ntuple(2) do k
-        value = round(Int, (x[k] + (k == 1 ? sx : sy) * h[k] / 2 - mesh.origin[k]) / mesh.extent[k] * lattice[k])
-        mesh.periodic[k] ? mod(value, lattice[k]) : value
-    end
-    keys_sorted = sort!(
-        unique(
-            [
-                vertex_key(cellcenter(mesh, ref.block, ref.i, ref.j), cell_spacing(mesh, ref), sx, sy)
-                    for ref in all_cells(mesh) for sx in (-1, 1) for sy in (-1, 1)
-            ]
-        )
-    )
-    for (offset, key) in enumerate(keys_sorted)
-        point = ntuple(k -> mesh.origin[k] + key[k] * mesh.extent[k] / lattice[k], 2)
-        distance = edge_distance(point)
-        distance > 4hmax || continue
+    for (offset, box) in enumerate(shear_row_regions(mesh))
+        min(edge_distance((box[1], box[2])), edge_distance((box[3], box[4]))) > 4hmax || continue
         push!(rows, 2n + offset)
         push!(exact_index, (:shear, 0))
     end
@@ -342,8 +374,8 @@ const VISC_WINDOW = (3.0, 5.0, 0.0, 1.25)   # x0, x1, y0, y1
 
 #   \fxwcell{x0}{y0}{x1}{y1}{level}   \fxwhanging{x}{y}
 #   \fxwface{axis}{x}{y}{length}{panel role: 0 plain, 1 target}
-#   \fxwrow{kind}{x}{y}{coefficient}  kind 0 normal row (cell centre), 1 shear row (vertex)
-#   \fxwstencil{axis}{x}{y}{coefficient}  shear stencil of the hanging vertex
+#   \fxwrow{kind}{x}{y}{coefficient}  kind 0 normal row (cell centre), 1 shear row (region centre)
+#   \fxwstencil{axis}{x}{y}{coefficient}  shear stencil at the hanging vertex
 #   (coefficients rounded to three significant digits for the labels)
 coefficient_label(value) = replace(@sprintf("%.3g", value), "e" => "\\mathrm{e}")
 function viscosity_data()
@@ -370,22 +402,11 @@ function viscosity_data()
         println(io, "\\fxwface{$(face.axis)}{$(fmt(face.center[1]))}{$(fmt(face.center[2]))}{$(fmt(face.area))}{$(index == target ? 1 : 0)}")
     end
     # Rows containing the target unknown: cell centres of normal rows,
-    # vertices of shear rows (located through their stencils).
-    lattice = mesh.base_mesh .* 2^mesh.max_level
-    keys_sorted = sort!(
-        unique(
-            [
-                let x = cellcenter(mesh, ref.block, ref.i, ref.j), h = cell_spacing(mesh, ref)
-                    (
-                        round(Int, (x[1] + sx * h[1] / 2 - mesh.origin[1]) / mesh.extent[1] * lattice[1]),
-                        round(Int, (x[2] + sy * h[2] / 2 - mesh.origin[2]) / mesh.extent[2] * lattice[2]),
-                    )
-                end for ref in all_cells(mesh) for sx in (-1, 1) for sy in (-1, 1)
-            ]
-        )
-    )
-    vertex_point(row) = let key = keys_sorted[row - 2n]
-        ntuple(k -> mesh.origin[k] + key[k] * mesh.extent[k] / lattice[k], 2)
+    # region centres of shear rows.
+    regions = shear_row_regions(mesh)
+    @assert size(E, 1) == 2n + length(regions)
+    region_centre(row) = let box = regions[row - 2n]
+        ((box[1] + box[3]) / 2, (box[2] + box[4]) / 2)
     end
     rows_of_target = Tuple{Int, Float64}[]
     for row in 1:size(E, 1)
@@ -403,14 +424,20 @@ function viscosity_data()
             println(io, "\\fxwrow{0}{$(fmt(x[1]))}{$(fmt(x[2]))}{$(coefficient_label(value))}")
             info[:normal] += 1
         else
-            p = vertex_point(row)
+            p = region_centre(row)
             println(io, "\\fxwrow{1}{$(fmt(p[1]))}{$(fmt(p[2]))}{$(coefficient_label(value))}")
             info[:shear] += 1
         end
     end
-    # The shear row of the hanging vertex (4, 1/4): its whole stencil.
-    hanging_key = (round(Int, 4.0 / mesh.extent[1] * lattice[1]), round(Int, 0.25 / mesh.extent[2] * lattice[2]))
-    hanging_row = 2n + findfirst(==(hanging_key), keys_sorted)
+    # The shear rows whose regions meet at the hanging vertex (4, 1/4): the
+    # x-velocity contact through the vertex meets the two halves of the
+    # anchored y-velocity group, so both rows have the same stencil.
+    hanging_rows = [
+        2n + index for (index, box) in pairs(regions) if
+            box[1] < 4.0 < box[3] && box[2] <= 0.25 <= box[4]
+    ]
+    @assert length(hanging_rows) == 2 && E[hanging_rows[1], :] == E[hanging_rows[2], :]
+    hanging_row = first(hanging_rows)
     println(io, "\\fxwhanging{4}{0.25}")
     stencil_faces = 0
     for (index, face) in pairs(mesh.faces)

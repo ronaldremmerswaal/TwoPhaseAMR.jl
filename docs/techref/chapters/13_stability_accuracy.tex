@@ -504,7 +504,7 @@ the space--time error.
     VOF transport (\cref{ch:vof-transport}) & exact space--time fluxes of the reconstruction, no method-of-lines form (\cref{sec:vof:balance}) & symmetric difference $1.8$ (translation, cut walls); vortex reversal $1.5$\\
     Staggered convection (\cref{ch:momentum-transport}) & forward Euler sweeps with Lax--Wendroff or limited states~\cref{eq:momentum:split} & Lax--Wendroff translation $1.9$ (uniform); convection on composite meshes $1.3$\\
     Pressure gradient and projection (\cref{ch:discrete-setting,ch:projection}) & CMDGFM jump interpolant first order for affine fields (\cref{sec:projection:cmdgfm}) & gradient on composite meshes $1.4$, stretched $1.0$; Poisson $1.7$; jump interpolant $0.8$\\
-    Viscous operator (\cref{ch:viscosity}) & two-point difference second order; transition rows can be $O(1)$~\cref{eq:viscosity:laplacian}; PLIC wall rows first order (\issue{110}); variable stress at transitions first order (\issue{112}); geometric-mean viscosity at a jump first order (\issue{113}); orphan edges at non-Dirichlet walls not exact for linear fields (\issue{99}) & uniform $1.9$; composite Helmholtz $1.8$ (max, $L^2$); cut walls with transitions $1.8$ (max); aligned embedded walls $1.5$ (max), $1.8$ ($L^1$, $L^2$); inclined walls $0.6$ (max), $0.8$ pinned; variable stress bulk $1.8$, at transitions $0.8$ pinned\\
+    Viscous operator (\cref{ch:viscosity}) & two-point difference second order; transition rows can be $O(1)$~\cref{eq:viscosity:laplacian}, in flux form also for the variable stress~\cref{eq:viscosity:shear-flux}; PLIC wall rows first order (\issue{110}); geometric-mean viscosity at a jump first order (\issue{113}) & uniform $1.9$; composite Helmholtz $1.8$ (max, $L^2$); cut walls with transitions $1.8$ (max); aligned embedded walls $1.5$ (max), $1.8$ ($L^1$, $L^2$); inclined walls $0.6$ (max), $0.8$ pinned; variable stress bulk $1.8$, at transitions $1.8$ (max, $L^2$)\\
     AMR transfer (\cref{ch:amr-criteria-transfer}) & conservative; prolongation first order next to coarser blocks & phase scalar transfer $1.8$\\
     Forces in time (\cref{ch:forces}) & forward Euler~\cref{eq:forces:stages} & --\\
     \bottomrule
@@ -515,27 +515,37 @@ the space--time error.
 applications or single solves on manufactured fields, at fixed geometry.
 The known first-order spots are local: the closures of inclined embedded
 walls (\issue{110}; the test pins the observed $0.6$ and $0.8$ and a
-non-growing error, \cref{eq:viscosity:cut}), the variable-viscosity stress
-at level transitions without solids (\issue{112}: $0.985$ and $1.002$ in
-$L^2$ on fixed composite trees, second order on uniform meshes), the
+non-growing error, \cref{eq:viscosity:cut}), the
 geometric-mean vertex viscosity of the thesis~\thesis{\S7.5.1} at a
 material jump parallel to an interface-aligned shear (\issue{113}: $L^2$
 orders $1.48$, $0.78$, $0.82$, $0.90$, $0.95$ for $n=16$ to $512$ against
-$1.96$ to $1.98$ for equal viscosities; no test), and the two-point fallback
-for orphaned transverse edges at outflow, zero-gradient and inflow walls
-next to a level transition, whose error is of order one at those edges
-(\issue{99}; not measured). Next to triple points and at the
+$1.96$ to $1.98$ for equal viscosities; no test). An orphaned transverse
+edge next to a level transition is linear-exact at every wall type
+(\issue{99}): a \apitype{NoSlip}, \apitype{FreeSlip} or \apitype{Inflow} side
+closes it against the prescribed wall velocity -- exact for wall data constant
+along the wall, first order for data that varies along it -- and an
+\apitype{Outflow} or \apitype{ZeroGradientVelocity} side differences a
+level-matched pair of unknowns instead of the offset pair. Next to triple points and at the
 contact line the reconstruction is first order (\cref{ch:interface}).
 
 \emph{Time.} The step is a sequence of stages (\cref{eq:forces:stages}):
 the transport, the body force at the midpoint, the implicit viscous step,
 the forward-Euler forces and the incremental projection. No order in time is
 claimed for the complete step, and no test asserts one: the temporal series
-at fixed mesh assert only that the error does not grow by more than a
-factor $1.5$ to $2.1$ when the step is halved twice. For the frozen
-two-velocity capillary wave at density ratio one the errors were
-$0.006525$, $0.007361$ and $0.010889$ for the steps $1$, $\half$ and
-$\tfrac14$: the spatial error dominates and grows with the number of steps.
+at a fixed mesh assert the temporal self-convergence, that the difference
+between a run and the finest-step run of the same series, sampled at the
+coarse run's step times, does not increase when the step is halved. The
+error against the exact solution is not that gate. At a fixed mesh it
+converges to the spatial error, and it increases once a temporal error of the
+opposite sign stops cancelling it, which the correct one-velocity capillary
+wave at density ratio one shows beyond a quarter step: $0.01257$, $0.00455$,
+$0.00302$, $0.00418$ and $0.00501$ for the steps $1$ to $\tfrac1{16}$, while
+its self-convergence is non-increasing (\issue{178}). The frozen
+two-velocity wave at density ratio one is also not consistent with the
+one-velocity wave: the CMDGFM inference term of a cut face carries a
+tangential velocity jump of $0.098$ (\issue{171}), so at the step $\tfrac18$
+its error is $0.01334$ against $0.00418$, and the test records that
+comparison as a known failure (\issue{178}).
 In a refinement study the step follows the active bound: $\dt\propto\minwidth$
 when advection-limited, $\dt\propto\minwidth^{3/2}$ when capillary-limited and
 $\dt\propto\minwidth^{1/2}$ when gravity-limited, so that an error of first

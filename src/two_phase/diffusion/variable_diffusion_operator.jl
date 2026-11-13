@@ -1,6 +1,6 @@
 function _staggered_diffusion_operator(
         mesh::BlockTreeMesh, viscosity::CellField, boundary, T;
-        construction_cache = nothing, reuse = nothing, cache_layer = 1,
+        construction_cache = nothing, reuse = nothing,
         geometry = nothing,
         averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     )
@@ -8,14 +8,14 @@ function _staggered_diffusion_operator(
         VariableDiffusionConstructionCache(T) : construction_cache
     return _variable_staggered_diffusion(
         mesh, viscosity, boundary, T;
-        cache, reuse, cache_layer, geometry, averaging,
+        cache, reuse, geometry, averaging,
     )
 end
 
 function _variable_staggered_diffusion(
         mesh, viscosity::CellField, boundary, ::Type{T};
         cache = VariableDiffusionConstructionCache(T), reuse = nothing,
-        cache_layer = 1, geometry = nothing,
+        geometry = nothing,
         averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     ) where {T}
     viscosity.mesh === mesh || throw(ArgumentError("viscosity field must share the operator mesh"))
@@ -66,12 +66,6 @@ function _variable_staggered_diffusion(
     end
     measures = isnothing(reuse) ? T[] : reuse.stress_measures
     empty!(measures)
-    face_search = DiffusionFaceSearch(cache, mesh)
-    patch_layer = _prepare_shear_patch_layer!(cache, mesh, cache_layer)
-    derivative_points = cache.derivative_points
-    derivative_candidates = cache.derivative_candidates
-    derivative_indices = cache.derivative_indices
-    derivative_coefficients = cache.derivative_coefficients
     for ref in refs,axis in 1:2
         row = length(measures) + 1
         open = isnothing(geometry) ? one(T) :
@@ -104,53 +98,10 @@ function _variable_staggered_diffusion(
             )
         end
     end
-    vertices, lattice = _stress_vertices!(cache, mesh, T)
-    wall_vertices = isnothing(geometry) ? nothing :
-        _embedded_variable_wall_stress_vertices(geometry, lattice)
-    empty!(cache.vertex_keys)
-    append!(cache.vertex_keys, keys(vertices))
-    sort!(cache.vertex_keys)
-    for key in cache.vertex_keys
-        volume, cells = vertices[key]
-        point = ntuple(a -> mesh.origin[a] + key[a] * mesh.extent[a] / lattice[a], 2)
-        wall_cells = isnothing(wall_vertices) ? nothing : get(wall_vertices, key, nothing)
-        open_volume = if isnothing(geometry)
-            volume
-        else
-            sum(
-                weight * _get(geometry.open_fraction, ref)
-                    for (ref, weight) in cells
-                    if isnothing(wall_cells) || !(_cell_index(ref, nx, ny) in wall_cells);
-                init = zero(T),
-            )
-        end
-        open_volume > zero(T) || continue
-        push!(measures, open_volume);row = length(measures)
-        for (ref, raw_weight) in cells
-            !isnothing(wall_cells) && _cell_index(ref, nx, ny) in wall_cells &&
-                continue
-            weight = isnothing(geometry) ? raw_weight :
-                raw_weight * _get(geometry.open_fraction, ref)
-            weight > zero(T) || continue
-            push!(interpolation_rows, row)
-            push!(interpolation_columns, _cell_index(ref, nx, ny))
-            push!(interpolation_values, weight / open_volume)
-        end
-        scale = maximum(maximum(mesh.blocks[r.block].spacing) for (r, w) in cells)
-        for component in 1:2
-            indices, coefficients = _cached_vertex_derivative!(
-                mesh, key, point, component, scale, boundary, T,
-                face_search, derivative_points, derivative_candidates,
-                derivative_indices, derivative_coefficients, cache,
-                patch_layer,
-            )
-            for index in eachindex(indices)
-                push!(rows, row)
-                push!(cols, indices[index])
-                push!(vals, coefficients[index])
-            end
-        end
-    end
+    _shear_rows!(
+        measures, rows, cols, vals, interpolation_rows, interpolation_columns,
+        interpolation_values, cache, mesh, boundary, geometry, T,
+    )
     if !isnothing(geometry)
         for (face_index, conductance, cell_index) in
             _embedded_variable_wall_stresses(
@@ -241,7 +192,6 @@ function _variable_staggered_diffusion(
     else
         copyto!(volumes, _geometry_face_dual_volumes(geometry))
     end
-    _release_stress_vertices!(cache)
     return VariableStaggeredDiffusionOperator(
         mesh, stiffness, volumes, boundary, averaging, strain, strain_transpose,
         wall_reaction_strain, dirichlet_faces, interpolation, interpolation_transpose,
@@ -391,13 +341,12 @@ end
 function _staggered_diffusion_operator(
         field::InterfaceField; viscosity::NTuple{2}, boundary = NoSlip(),
         construction_cache = nothing, reuse = nothing,
-        cache_layer = 1,
         averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     )
     mu = dynamic_viscosity(field; viscosity, averaging)
     return _staggered_diffusion_operator(
         field.mesh; viscosity = mu, boundary, construction_cache, reuse,
-        cache_layer, geometry = field.geometry, averaging,
+        geometry = field.geometry, averaging,
     )
 end
 

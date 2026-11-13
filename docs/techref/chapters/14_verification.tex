@@ -336,8 +336,7 @@ the audited commit, the integration and heavy groups in the runs of commit
 sources changed only by recording code and by the refactor of pull request
 124, which reproduces the oracle bitwise; ``--'' marks a test that prints
 nothing. The rows that pin a known first-order defect are those of
-\issue{110} (inclined walls) and \issue{112} (variable stress at level
-transitions).
+\issue{110} (inclined walls).
 
 {\footnotesize\setlength\tabcolsep{3pt}
 \begin{longtable}{@{}>{\raggedright}p{2.35cm}>{\raggedright}p{2.85cm}>{\raggedright}p{1.85cm}>{\raggedright}p{2.45cm}>{\raggedright\arraybackslash}p{2.6cm}@{}}
@@ -364,9 +363,9 @@ transitions).
   Aligned embedded wall (\issue{106}) & maximum, $L^2$, $L^1$ & mm velocity & -- & all $\ge1.5$ (max.), $\ge1.8$ ($L^2$, $L^1$)\\
   Inclined embedded wall (\issue{106}, \issue{110}) & maximum, $L^2$, $L^1$ & mm velocity & -- & all $\ge0.6$ (max.), $\ge0.8$ ($L^2$, $L^1$); finest error $\le1.02\times$ pinned\\
   Variable stress, bulk & $L^2$ of the tendency & mm, $\visc(x)$ & -- & all $\ge1.8$\\
-  Variable stress, shifted solve on fixed and adapted trees & solution $L^2$ & mm, $\visc(x)$ & -- & all $\ge0.8$, decreasing\\
+  Variable stress, shifted solve on fixed and adapted trees (\issue{112}) & solution $L^2$ and maximum & mm, $\visc(x)$ & -- & all $\ge1.8$\\
   Two-phase embedded-wall Helmholtz (\issue{106}) & dual-volume $L^2$ per direction & mm, piecewise stream function & $1.86$--$2.06$ & all $\ge1.9$ (equal viscosities, uniform); else within $\log_2 1.1$ of the open domain\\
-  Stress with uniform viscosity versus scalar diffusion & $L^2$ difference & scalar Laplacian & $2.11$--$2.83$ (uniform); $0.48$--$0.50$ (composite) & all $\ge2.0$ (uniform); composite: below $1.1\times$ the same-domain open difference\\
+  Stress with uniform viscosity versus scalar diffusion & $L^2$ difference & scalar Laplacian & $1.94$--$2.00$ (uniform); $0.95$--$1.60$ (composite) & all $\ge1.9$ (uniform); composite: below $1.1\times$ the same-domain open difference\\
   Lax--Wendroff translation & $L^2$ & exact translation & -- & both $>1.9$\\
   Staggered convection, composite & dual-volume $L^2$ of the tendency & mm velocity & -- & all $>1.3$; $>1.35$ (Lax--Wendroff, limited at transitions)\\
   \multicolumn{5}{@{}l}{\emph{Interface}}\\
@@ -411,8 +410,8 @@ Pointwise transition-row truncation errors need not predict solution-level
 convergence: the composite Helmholtz solution above approaches second order in
 both norms ($\ge1.7$ between the first two base widths on the tested layouts)
 despite transition rows with $O(1)$ error.
-The separate variable-viscosity stress transition remains first order
-(\issue{112}; the shifted-solve test pins $0.8$).
+The variable-viscosity stress at transitions converges at second order as
+well since its shear rows are in flux form (\issue{112}).
 
 \begin{implnote}
 Tests in the order of \cref{tab:verif:orders}:
@@ -690,9 +689,8 @@ Gallery driver \srcsym{examples/make_all_figures.jl}{gallery_options}; tests
 \section{Known gaps}\label{sec:verif:gaps}
 \emph{Open defects.} Of the issues labelled \emph{bug} and open at the audited
 commit, these concern accuracy or the completion of a step: first-order
-velocity next to inclined embedded no-slip walls (\issue{110}) and at level
-transitions with variable viscosity (\issue{112}), both pinned by tests at the
-observed orders; first-order shear across an aligned material viscosity jump
+velocity next to inclined embedded no-slip walls (\issue{110}), pinned by a
+test at the observed orders; first-order shear across an aligned material viscosity jump
 with the geometric-mean vertex viscosity (\issue{113}), not tested; a
 CMDGFM projection with the ILU
 preconditioner that stops unconverged with iterations left (\issue{126});
@@ -714,18 +712,27 @@ still keeps four cells per periodic axis (\cref{sec:solvers:hierarchy});
 \cref{dev:momentum:ctu-hanging}, \issue{71} by the open-strip phase schedule
 of~\cref{sec:momentum:two-velocity}, and \issue{72} no longer reproduces: the
 cut-donor bound keeps the dual Courant number at or below its limit next to a
-solid (\cref{sec:momentum:cfl}). The
-others are open. The open investigation is the fallback for orphaned edges at
-open walls (\issue{99}).
+solid (\cref{sec:momentum:cfl}), and \issue{99} is fixed: an orphaned
+transverse edge next to a level transition takes the prescribed wall velocity
+at a \apitype{NoSlip}, \apitype{FreeSlip} or \apitype{Inflow} side and a
+linear-exact level-matched difference at an \apitype{Outflow} or
+\apitype{ZeroGradientVelocity} side instead of the offset pair, which carried
+the tangential derivative of the offset into the normal gradient
+(\cref{sec:viscosity:single}). The others are open.
 
 \emph{Order in time.} No test asserts an order in time
-(\cref{sec:stab:accuracy}). The temporal series at a fixed mesh, with the
-step halved twice, assert that the error does not increase (one-velocity
-capillary wave) or does not grow by more than a factor $1.5$, $2$ or $2.1$
-(two-velocity capillary and Kelvin--Helmholtz waves). The one-velocity
-capillary wave at density ratio one gave $0.0126$, $0.0046$ and $0.0030$,
-the frozen two-velocity wave $0.00655$, $0.00782$ and $0.01137$ and the
-Kelvin--Helmholtz wave of the two-velocity model.
+(\cref{sec:stab:accuracy}). The temporal series at a fixed mesh assert the
+temporal self-convergence for the one- and two-velocity capillary waves, with
+the step halved three times, and for the two-velocity Kelvin--Helmholtz
+waves, halved twice. The error against the exact solution is printed, not
+asserted: the one-velocity capillary wave at density ratio one gave $0.0126$,
+$0.0046$, $0.0030$, $0.0042$ and $0.0050$, which grows again below a quarter
+step while the self-convergence stays non-increasing (\issue{178}). At
+density ratio one the test also requires the two-velocity capillary wave,
+whose step is then converged, to reproduce the one-velocity wave; it does not
+($0.0133$ against $0.0042$ at the step $\tfrac18$), and that check is a known
+failure of the CMDGFM inference term of a cut face (\issue{171},
+\issue{178}).
 
 \emph{References.} The examples' numbers are not asserted and can lag the
 code (\cref{sec:verif:gallery}). The cylinder regression pins a transient,

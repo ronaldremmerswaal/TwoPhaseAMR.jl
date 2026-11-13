@@ -46,6 +46,7 @@ const TEST_HELPERS = [
     "two_phase/two_velocity/projection/mimetic_lab_helpers.jl",
     "embedded_operator_reference_helpers.jl",
     "integration/circle_geometry.jl", "threading_equivalence_cases.jl",
+    "integration/temporal_self_convergence.jl",
 ]
 # Entrypoints and the separately provisioned Makie suite are not included as tests.
 const TEST_EXCLUSIONS = [
