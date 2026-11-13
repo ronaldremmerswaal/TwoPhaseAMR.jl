@@ -532,11 +532,20 @@ contact line the reconstruction is first order (\cref{ch:interface}).
 the transport, the body force at the midpoint, the implicit viscous step,
 the forward-Euler forces and the incremental projection. No order in time is
 claimed for the complete step, and no test asserts one: the temporal series
-at fixed mesh assert only that the error does not grow by more than a
-factor $1.5$ to $2.1$ when the step is halved twice. For the frozen
-two-velocity capillary wave at density ratio one the errors were
-$0.006525$, $0.007361$ and $0.010889$ for the steps $1$, $\half$ and
-$\tfrac14$: the spatial error dominates and grows with the number of steps.
+at a fixed mesh assert the temporal self-convergence, that the difference
+between a run and the finest-step run of the same series, sampled at the
+coarse run's step times, does not increase when the step is halved. The
+error against the exact solution is not that gate. At a fixed mesh it
+converges to the spatial error, and it increases once a temporal error of the
+opposite sign stops cancelling it, which the correct one-velocity capillary
+wave at density ratio one shows beyond a quarter step: $0.01257$, $0.00455$,
+$0.00302$, $0.00418$ and $0.00501$ for the steps $1$ to $\tfrac1{16}$, while
+its self-convergence is non-increasing (\issue{178}). The frozen
+two-velocity wave at density ratio one is also not consistent with the
+one-velocity wave: the CMDGFM inference term of a cut face carries a
+tangential velocity jump of $0.098$ (\issue{171}), so at the step $\tfrac18$
+its error is $0.01334$ against $0.00418$, and the test records that
+comparison as a known failure (\issue{178}).
 In a refinement study the step follows the active bound: $\dt\propto\minwidth$
 when advection-limited, $\dt\propto\minwidth^{3/2}$ when capillary-limited and
 $\dt\propto\minwidth^{1/2}$ when gravity-limited, so that an error of first

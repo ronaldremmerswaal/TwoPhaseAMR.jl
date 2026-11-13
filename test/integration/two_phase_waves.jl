@@ -1,6 +1,7 @@
 using Test, TwoPhaseAMR
 
 include(joinpath(@__DIR__, "..", "..", "examples", "06_capillary_wave", "prosperetti_amplitude.jl"))
+include(joinpath(@__DIR__, "temporal_self_convergence.jl"))
 
 """Cosine-mode amplitude obtained by integrating the geometric VOF field."""
 function _cosine_wave_amplitude(interface)
@@ -265,22 +266,40 @@ end
             @test endpoint_rate >= minimum_rate
 
             mode == :capillary || continue
-            one_velocity_time_errors = vcat(
-                results[2].error,
-                [
-                    wave_case(
+            # Refine the step on the middle grid, reusing the factor-one run
+            # above. The error against the exact solution converges to the
+            # spatial error of this mesh and may increase while an
+            # opposite-sign temporal error stops cancelling it, even for the
+            # correct one-velocity model, so the gate is the temporal
+            # self-convergence (#178).
+            timestep_factors = (1.0, 0.5, 0.25, 0.125)
+            one_velocity_series = [
+                timestep_factor == 1 ? results[2] : wave_case(
                         :uniform, 16, density_ratio, mode;
                         formulation = CGFM(), timestep_factor,
-                    ).error
-                        for timestep_factor in (0.5, 0.25)
+                    )
+                    for timestep_factor in timestep_factors
+            ]
+            one_velocity_time_errors = getproperty.(
+                one_velocity_series, :error,
+            )
+            one_velocity_self_convergence = _temporal_self_convergence(
+                (times, amplitudes, reference) ->
+                _trapezoidal_l2(times, amplitudes .- reference),
+                [
+                    (series.times, series.amplitudes)
+                        for series in one_velocity_series
                 ],
             )
             println(
                 "capillary temporal refinement DR=$density_ratio ",
-                "model=one_velocity factors=(1.0, 0.5, 0.25) ",
-                "errors=$one_velocity_time_errors",
+                "model=one_velocity factors=$timestep_factors ",
+                "errors=$one_velocity_time_errors ",
+                "self_convergence=$one_velocity_self_convergence",
             )
-            @test all(diff(one_velocity_time_errors) .<= 0)
+            @test all(isfinite, one_velocity_time_errors)
+            @test all(isfinite, one_velocity_self_convergence)
+            @test all(diff(one_velocity_self_convergence) .<= 0)
             two_velocity_results = [
                 wave_case(
                     :uniform, n, density_ratio, mode;
@@ -308,29 +327,50 @@ end
             )
             @test all(diff(two_velocity_errors) .< 0)
             @test endpoint_rate >= minimum_rate
-            temporal_errors = vcat(
-                two_velocity_results[2].error,
-                [
-                    wave_case(
+            two_velocity_series = [
+                timestep_factor == 1 ? two_velocity_results[2] : wave_case(
                         :uniform, 16, density_ratio, mode;
                         formulation = CGFM(),
-                        velocity_model = :two_velocity,
-                        timestep_factor,
-                    ).error
-                        for timestep_factor in (0.5, 0.25)
+                        velocity_model = :two_velocity, timestep_factor,
+                    )
+                    for timestep_factor in timestep_factors
+            ]
+            two_velocity_time_errors = getproperty.(
+                two_velocity_series, :error,
+            )
+            two_velocity_self_convergence = _temporal_self_convergence(
+                (times, amplitudes, reference) ->
+                _trapezoidal_l2(times, amplitudes .- reference),
+                [
+                    (series.times, series.amplitudes)
+                        for series in two_velocity_series
                 ],
             )
             println(
                 "capillary temporal refinement DR=$density_ratio ",
-                "model=$method_name factors=(1.0, 0.5, 0.25) ",
-                "errors=$temporal_errors",
+                "model=$method_name factors=$timestep_factors ",
+                "errors=$two_velocity_time_errors ",
+                "self_convergence=$two_velocity_self_convergence",
             )
-            # At fixed spatial resolution temporal and spatial errors can
-            # cancel: DR=1 frozen gave 0.006525, 0.007361, 0.010889 as
-            # dt was halved twice (maximum/base = 1.67). Guard against
-            # more than a factor-two increase rather than monotonicity.
-            @test all(isfinite, temporal_errors)
-            @test maximum(temporal_errors) <= 2first(temporal_errors)
+            @test all(isfinite, two_velocity_time_errors)
+            @test all(isfinite, two_velocity_self_convergence)
+            @test all(diff(two_velocity_self_convergence) .<= 0)
+            if density_ratio == 1
+                # NUMERICS CONCERN (#178): the two-velocity model differs from
+                # the one-velocity model only by the tangential jump of the
+                # pressure projection, so with a converged step the two waves
+                # must coincide. They do not: the CMDGFM inference term holds a
+                # 0.098 tangential jump on cut faces (#171), which leaks into
+                # the amplitude -- at the step 1/8 the errors are 0.01334 and
+                # 0.00418 (study of #178). Comparing the models at the same
+                # location instead reproduces the one-velocity error within
+                # 1e-5, so this is a known failure of the inference term, not
+                # of the temporal refinement.
+                @test_broken abs(
+                    last(two_velocity_time_errors) -
+                        last(one_velocity_time_errors),
+                ) <= 0.1 * last(one_velocity_time_errors)
+            end
         end
 
         # At density ratio one a gravity-only perturbation has zero frequency.

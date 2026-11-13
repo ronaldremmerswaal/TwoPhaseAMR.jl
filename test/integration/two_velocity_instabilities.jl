@@ -1,5 +1,7 @@
 using Test, TwoPhaseAMR
 
+include(joinpath(@__DIR__, "temporal_self_convergence.jl"))
+
 _kh_parameters(density_ratio, weber) = (;
     density_ratio, weber, bond = 0.0, liquid_above = false,
 )
@@ -69,21 +71,31 @@ function _instability_temporal_refinement(
         parameters, spatial_result;
         pressure_projection = CMDGFMProjection(),
     )
+    # Refine the step on the middle grid, reusing the factor of the spatial
+    # study. Three factors keep the cost of the two runs it adds down; the
+    # gate is the temporal self-convergence, since the error against the exact
+    # solution converges to the spatial error and can increase while an
+    # opposite-sign temporal error stops cancelling it (#178).
     factors = (1.0, 0.5, 0.25)
-    errors = map(factors) do timestep_factor
-        timestep_factor == spatial_result.timestep_factor &&
-            return spatial_result.results[2].error
-        result = interfacial_instability(
-            ; cells_per_wavelength = 16, parameters...,
-            timestep_factor, tolerance = 1.0e-7, max_cycles = 3000,
-            pressure_projection,
-        )
+    runs = map(factors) do timestep_factor
+        result = if timestep_factor == spatial_result.timestep_factor
+            spatial_result.results[2].result
+        else
+            interfacial_instability(
+                ; cells_per_wavelength = 16, parameters...,
+                timestep_factor, tolerance = 1.0e-7, max_cycles = 3000,
+                pressure_projection,
+            )
+        end
         _test_instability_diagnostics(result)
-        normalized_amplitude_error(
+        (;
             result.times, result.amplitudes, result.analytical,
+            error = normalized_amplitude_error(
+                result.times, result.amplitudes, result.analytical,
+            ),
         )
     end
-    return (; factors, errors)
+    return (; factors, runs, errors = getproperty.(runs, :error))
 end
 
 @testset "General two-velocity dispersion relation" begin
@@ -195,16 +207,24 @@ end
         temporal = _instability_temporal_refinement(
             parameters, result,
         )
+        self_convergence = _temporal_self_convergence(
+            normalized_amplitude_error,
+            [(run.times, run.amplitudes) for run in temporal.runs],
+        )
         println(
             "two_velocity_KH temporal parameters=$parameters " *
                 "method=frozen factors=$(temporal.factors) " *
-                "errors=$(temporal.errors)",
+                "errors=$(temporal.errors) " *
+                "self_convergence=$self_convergence",
         )
-        # Fixed-grid spatial error can mask or cancel temporal error.
-        # At DR=1000 the archived frozen errors were (0.464936, 0.505470,
-        # 0.496933).
+        # The series asserts its temporal self-convergence: the difference to
+        # the finest-step run of the same series must not increase. The error
+        # against the exact solution stays printed -- measured on main: DR=1
+        # 0.2313, 0.1644, 0.1280 and DR=1000 0.4361, 0.3493, 0.2909 -- but it
+        # is not a refinement gate (#178).
         @test all(isfinite, temporal.errors)
-        @test maximum(temporal.errors) <= 1.5first(temporal.errors)
+        @test all(isfinite, self_convergence)
+        @test all(diff(self_convergence) .<= 0)
     end
 end
 
