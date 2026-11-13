@@ -77,8 +77,10 @@ Across a connection the directional derivative is a row
 \end{equation}
 Aligned contacts use a two-point difference. Fine--coarse normal contacts use
 an interpolation of the fine siblings when available; transverse contacts
-with cancelling weighted offsets share a centred derivative. Remaining
-contacts use the wall-aware or two-point closures described below. With the
+with cancelling weighted offsets share a centred derivative. An offset contact
+that is left without such a group is closed against the wall where the wall
+value is known and otherwise takes a linear-exact two-point difference on the
+tangential level of one of its ends, as described below. With the
 wall terms included, the integrated stiffness and Laplacian are
 \begin{equation}\label{eq:viscosity:stiffness}
   \viscstiff{k}=\sym{\sum_{g\in\viscconn{k}}\meas{g}\conndist{g}\,
@@ -205,10 +207,24 @@ measure-weighted offset along $t$; and an offset connection left without such
 a group, where a level transition meets a wall normal to $k$, takes the zero
 normal velocity of a \apitype{NoSlip} or \apitype{FreeSlip} wall as a
 Dirichlet partner, interpolating the far unknown to the wall distance of the
-near one (exact for linear profiles that vanish at the wall). At
-\apitype{Inflow}, \apitype{Outflow} and \apitype{ZeroGradientVelocity} walls
-such a connection keeps a two-point difference, which is not exact for
-linear velocities (\issue{99}). The domain walls are~\cref{eq:viscosity:walls}
+near one (exact for linear profiles that vanish at the wall). An
+\apitype{Inflow} side prescribes that velocity too, so it closes the connection
+the same way with the prescribed value; because the wall values of the two
+signed corrections sit at the two faces' own tangential positions, that form is
+exact for inflow data constant along the wall and first order for data that
+varies along it. At \apitype{Outflow} and \apitype{ZeroGradientVelocity} walls
+no value is prescribed, so the connection is differenced on the tangential
+level of one of its ends instead: the
+endpoint that has a neighbour on its own level spanning the contact, and that
+neighbour. Differencing the offset pair itself would carry the tangential
+derivative of the offset into the $t$ derivative, with weight
+$\Delta k/\Delta t$ and hence without vanishing under refinement; the
+level-matched pair is exact for linear velocities (\issue{99}). The one-ring
+face graph supplies the level-matched face; where none lies within two contact
+distances, the weighted minimum-norm derivative of
+\cref{eq:viscosity:gradient} over the two-ring face graph is used, as for the
+unembedded transition. Both keep the coefficients summing to zero and the row
+energy a non-negative square. The domain walls are~\cref{eq:viscosity:walls}
 with each measure multiplied by the open fraction of the wall segment that
 the connection owns (for a tangential connection the half of the cell's wall
 segment on the side of $f$, owned whole by the segment of a split side that
@@ -339,8 +355,10 @@ transverse connections \srcsym{src/embedded/operators.jl}{_geometric_diffusion_c
 with \srcsym{src/embedded/operators.jl}{_open_dual_trace} and
 \srcsym{src/embedded/operators.jl}{_add_split_side_diffusion_connections!},
 derivatives \srcsym{src/embedded/operators.jl}{_cut_cell_gradient_stencil},
-\srcsym{src/embedded/operators.jl}{_cut_cell_transverse_stencils} and
-\srcsym{src/embedded/operators.jl}{_wall_contact_stencil!},
+\srcsym{src/embedded/operators.jl}{_cut_cell_transverse_stencils},
+\srcsym{src/embedded/operators.jl}{_wall_contact_stencil!} and
+\srcsym{src/operators/staggered_diffusion.jl}{_level_matched_gradient} with
+\srcsym{src/operators/staggered_diffusion.jl}{_minimum_norm_gradient},
 the clipped domain-wall measure \srcsym{src/embedded/operators.jl}{_wall_connection_measure}.
 \apifun{stable_timestep}\code{(operator; cfl=0.9)} returns the explicit bound
 $\code{cfl}\,\dens/(\visc\max_f\sum_{f'}\abs{(\lapstag{k})_{f,f'}})$, which
@@ -360,6 +378,11 @@ and \testsym{test/operators/staggered_diffusion.jl}{domain-wall diffusion uses o
 \testsym{test/operators/staggered_diffusion.jl}{wall-contact flux respects a linear normal profile (#87)},
 \testsym{test/operators/staggered_diffusion.jl}{cut-cell Helmholtz convergence at walls and level transitions (#87)}
 (order at least $1.8$ in the maximum norm),
+\testsym{test/operators/staggered_diffusion.jl}{orphan transverse rows are linear-exact at open walls (#99)},
+\testsym{test/operators/staggered_diffusion.jl}{open sides share the orphan closure (#99)},
+\testsym{test/operators/staggered_diffusion.jl}{inflow wall-contact closure is exact for constant wall data (#99)}
+and \testsym{test/operators/staggered_diffusion.jl}{inflow wall-contact closure is first order for varying wall data (#99)}
+and \testsym{test/operators/staggered_diffusion.jl}{orphan transverse rows converge on a manufactured field (#99)},
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{Grid-aligned embedded walls have the cut-wall limit}
 (\issue{79}, also for the operator of \cref{sec:viscosity:stress}).
 \end{implnote}
