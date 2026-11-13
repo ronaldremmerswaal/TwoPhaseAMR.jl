@@ -284,8 +284,10 @@ function _two_velocity_forces_and_pressure!(
     return pressure_operator
 end
 
-"""Apply phase forces through the mimetic gradient map `𝓜⁻¹Dᵀ`.
+"""Apply phase forces for the mimetic projection.
 
+Surface tension goes through the mimetic gradient map `𝓜⁻¹Dᵀ`; gravity is the
+uniform acceleration of both phases (see `_mimetic_uniform_acceleration!`).
 The mimetic projection is absolute, so no old pressure gradient is
 subtracted: an `𝓜⁻¹Dᵀ` gradient in the predictor is removed exactly, and the
 projection returns the full pressure.
@@ -312,12 +314,9 @@ function _two_velocity_forces_and_pressure!(
         _mimetic_jump_force!(velocity, projection, work, jumps, time_step)
     end
     if any(!iszero, model.gravity)
-        jumps = _gravity_jumps!(
-            operator.gradient_operator.pressure_jump, model.interface, operator,
-            workspace.projection.elliptic;
-            density = model.density, gravity = model.gravity,
+        _mimetic_uniform_acceleration!(
+            velocity, model.interface.mesh, model.gravity, time_step,
         )
-        _mimetic_jump_force!(velocity, projection, work, jumps, time_step)
     end
     return operator
 end

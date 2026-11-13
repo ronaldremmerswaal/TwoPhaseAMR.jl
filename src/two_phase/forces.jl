@@ -496,21 +496,6 @@ function gravity!(
         density::NTuple{2}, gravity::NTuple{2}
     )
     destination.mesh === field.mesh === operator.mesh || throw(ArgumentError("gravity arguments must share a mesh"))
-    jumps = _gravity_jumps!(
-        operator.gradient_operator.pressure_jump, field, operator, work;
-        density, gravity,
-    )
-    return _weighted_jump_force!(
-        destination, operator, work, jumps, field.geometry,
-    )
-end
-
-"""Integrated gravity face jumps `ρ_f |f| [g·x]_f` of `gravity!`; `work.input`
-receives the cell potential."""
-function _gravity_jumps!(
-        jumps, field::InterfaceField, operator::EllipticOperator,
-        work::EllipticWorkspace; density::NTuple{2}, gravity::NTuple{2},
-    )
     all(rho -> isfinite(rho)&&rho > 0, density) || throw(ArgumentError("densities must be finite and positive"))
     all(isfinite, gravity) || throw(ArgumentError("gravity must be finite"))
     mesh = field.mesh
@@ -529,6 +514,7 @@ function _gravity_jumps!(
         end
         @inbounds potential[index] = gravity[1] * x + gravity[2] * y
     end
+    jumps = operator.gradient_operator.pressure_jump
     # Reuse the same reconstructed liquid opening used by the phase
     # divergence operator. In a two-velocity step this also primes the
     # post-transport aperture cache before pressure assembly.
@@ -553,5 +539,7 @@ function _gravity_jumps!(
         )
         jumps[i] = rho * face.area * (potential[plus] - potential[minus])
     end
-    return jumps
+    return _weighted_jump_force!(
+        destination, operator, work, jumps, geometry,
+    )
 end

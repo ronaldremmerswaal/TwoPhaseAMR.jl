@@ -65,8 +65,10 @@ MFDCutCellMetric(; small_cell_stabilization::Bool = true, nonsimple_cells::Symbo
 Kinetic-energy-orthogonal two-velocity projection onto vanishing
 aperture-weighted mixture divergence in the non-diagonal cut-cell metric
 `metric` (no normal-jump rows: in a cut cell the mixture divergence imposes the
-normal velocity jump). Forces and the pressure gradient use the same map
-`𝓜⁻¹Dᵀ`. Supported on uniform square-cell meshes without embedded solids,
+normal velocity jump). Surface tension and the pressure gradient use the same
+map `𝓜⁻¹Dᵀ`; gravity is the uniform acceleration of both phases. An interior
+face between a pure liquid and a pure gas cell carries one shared phase value.
+Supported on uniform square-cell meshes without embedded solids,
 for interfaces whose cut cells are simple and do not touch a domain boundary;
 other configurations throw `ArgumentError`. [`CMDGFMProjection`](@ref) remains
 the default.

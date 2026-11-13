@@ -689,3 +689,22 @@ function _mimetic_jump_force!(
     end
     return velocity
 end
+
+"""Add `dt g` to every active interior phase value: gravity as the uniform
+acceleration of both phases. The body force `ρ_π g` is `𝓜` times the constant
+field `g`, which the metric reproduces exactly; a density-weighted jump force
+`𝓜⁻¹(a^π J)` would instead give the light phase value of a mixed face the
+weight of the mixture."""
+function _mimetic_uniform_acceleration!(velocity::TwoPhaseVelocity, mesh, gravity, dt)
+    all(isfinite, gravity) || throw(ArgumentError("gravity must be finite"))
+    any(axis -> mesh.periodic[axis] && !iszero(gravity[axis]), 1:2) && throw(
+        ArgumentError("gravity potential requires nonperiodic boundaries along gravity"),
+    )
+    for phase in 1:2
+        values = velocity[phase].interior
+        for (index, face) in pairs(mesh.faces)
+            isnan(values[index]) || (values[index] += dt * gravity[face.axis])
+        end
+    end
+    return velocity
+end

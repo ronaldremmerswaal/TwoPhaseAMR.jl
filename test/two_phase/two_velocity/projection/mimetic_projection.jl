@@ -207,7 +207,7 @@ end
     end
 end
 
-@testset "Mimetic force map balances constant curvature and gravity" begin
+@testset "Mimetic forces balance constant curvature and gravity" begin
     for formulation in (CSF(), CGFM()), density in ((1.0, 1.0), (1000.0, 1.0))
         mesh = BlockTreeMesh(block_size = (32, 32), periodic = (false, false))
         interface = InterfaceField(mesh, _mimetic_circle(32); lipschitz = 1)
@@ -274,6 +274,28 @@ end
             @test stats.converged
         end
         @test _mimetic_maximum(flow.velocity) <= 1.0e-8
+    end
+    # Gravity on a heavy drop at density ratio 1000 is the uniform acceleration
+    # of both phases: after one step every phase velocity is O(g dt) (the drop
+    # starts to fall). A density-weighted jump force gave the gas value of a
+    # mixed face the weight of the mixture, about 500 g dt.
+    for density in ((1000.0, 1.0), (1.0, 1000.0))
+        mesh = BlockTreeMesh(block_size = (32, 32), periodic = (true, false))
+        interface = InterfaceField(mesh, _mimetic_circle(32); lipschitz = 1)
+        flow = FlowSimulation(
+            mesh, TwoPhase(
+                interface; density, dynamic_viscosity = (0.0, 0.0), gravity = (0.0, -1.0),
+            );
+            velocity_model = TwoVelocityModel(pressure_projection = MimeticProjection()),
+            boundary = FreeSlip(),
+        )
+        dt = 1.0e-3
+        stats = step!(
+            flow.velocity, flow.pressure, flow.system, dt, flow.workspace;
+            tolerance = 1.0e-12, max_cycles = 2000,
+        )
+        @test stats.converged
+        @test 0.5 <= _mimetic_maximum(flow.velocity) / dt <= 2.0
     end
 end
 
