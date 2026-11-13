@@ -14,7 +14,10 @@ incremental: the step first subtracts the gradient of the previous pressure
 from the predictor, and the projection, written in
 \cref{sec:projection:one,sec:projection:two,sec:projection:cmdgfm} for a
 predictor $\velo^{\stage{3}}$ and a pressure $\pres$, then solves for the
-pressure increment (\cref{sec:projection:pressure-update}). This chapter states the continuous
+pressure increment (\cref{sec:projection:pressure-update}). An optional third
+projection, the mimetic cut-cell projection of the intrinsic phase velocities,
+is absolute and limited to uniform meshes without solids
+(\cref{sec:projection:mimetic}). This chapter states the continuous
 constraints, the discrete constraints and pressure maps, the matrices and
 right-hand sides of the two systems with their gauges and the rules that
 select the jump unknowns and rows, the properties that hold exactly
@@ -647,6 +650,154 @@ and operator of the one-velocity pressure solver are shared. Tests:
     \bottomrule
   \end{tabular}
 \end{table}
+
+\section{Mimetic cut-cell projection (option)}\label{sec:projection:mimetic}
+\apitype{MimeticProjection} replaces the CMDGFM in
+\apitype{TwoVelocityModel} on request; the CMDGFM stays the default and its
+results are unchanged. It is candidate~MM of the mimetic-projection audit:
+the kinetic-energy-orthogonal projection of the two phase velocities onto
+vanishing mixture divergence~\cref{eq:projection:mixture-divergence} in a
+non-diagonal kinetic metric~$\mathcal M$, without jump rows. It is defined
+for uniform meshes of square cells $h\times h$ without solid; adaptive
+meshes, solids, non-square cells and cut cells that touch a domain boundary
+throw \code{ArgumentError}.
+
+\emph{Projection.} Let $\mathsf B$ be the cell-outflow matrix
+of~\cref{eq:projection:mixture-divergence} on the vector $u$ of all present
+phase values, $(\mathsf Bu)_c=\sum_{f\in\faceset{c}}\orient{c}{f}\meas{f}\sum_{\phase}\phaseaperture{\phase}{f}\velo^{\phase}_f$,
+and $b$ the boundary outflow of the predictor. For the predictor
+$u^{*}=\velo^{\stage{3}}$ the projection is
+\begin{equation}\label{eq:projection:mimetic}
+  u^{+}=\operatorname*{arg\,min}_{\mathsf Bu+b=g}\ \tfrac12(u-u^{*})^{\transpose}\mathcal M(u-u^{*}),
+  \qquad
+  u^{+}=u^{*}+\dt\,\mathcal M^{-1}\mathsf B^{\transpose}\pres,\quad
+  \dt\,\mathsf B\mathcal M^{-1}\mathsf B^{\transpose}\pres=g-b-\mathsf Bu^{*},
+\end{equation}
+with the target $g=0$, or the inherited mixture flux of a shortened step as
+in \cref{sec:projection:pressure-update}. It is absolute: the step does not
+subtract an old pressure gradient, the projection removes any
+$\mathcal M^{-1}\mathsf B^{\transpose}$ gradient of the predictor exactly, and
+$\pres$ is the full pressure (one anchor cell fixes the constant).
+
+\emph{Metric.} A cut cell $c$ is divided by its chord $\Gamma_c$ into a
+liquid and a gas polygon $c^{\phase}$, built from the four phase apertures
+of its sides~\cref{eq:interface:phase-aperture}; which end of a partially
+wetted face is wet is decided by the adjacent cut cells whose PLIC line
+crosses the face, else by the tangential normal of a cut neighbour. For a
+polygon $P$ with edges $e$ (length $\meas{e}$, midpoint $x_e$, outward normal
+$n_e$), centroid $x_P$ and area $\meas{P}$ the mimetic inner
+product~\cite{brezzi2005b,lipnikov2014} is
+\begin{equation}\label{eq:projection:mimetic-local}
+  \mathcal M_P=\frac{\mathsf R\mathsf R^{\transpose}}{\meas{P}}+\tfrac12\,\mathsf D_P\mathsf Q\mathsf D_P,\qquad
+  \mathsf R=\bigl[\meas{e}(x_e-x_P)^{\transpose}\bigr],\quad
+  \mathsf D_P=\diag{\meas{e}},
+\end{equation}
+with $\mathsf Q$ the orthogonal projector onto the complement of the range
+of $\mathsf D_P[n_e^{\transpose}]$; $\mathcal M_P=\tfrac12h^2I$ on an uncut
+cell. The edge flux densities are $v_e=\orient{c}{f}\velo^{\phase}_f$ on the
+face parts, and the chord flux density is not an unknown: each polygon is
+closed,
+\begin{equation}\label{eq:projection:mimetic-slave}
+  \meas{\Gamma_c}\,v^{\phase}_{\Gamma_c}=-\sum_{f\in\faceset{c}}\orient{c}{f}\,\phaseaperture{\phase}{f}\meas{f}\,\velo^{\phase}_f ,
+\end{equation}
+so that $(\mathsf Bu)_c=-\meas{\Gamma_c}(v^{\liq}_{\Gamma_c}+v^{\gas}_{\Gamma_c})$:
+in a cut cell the mixture divergence is the normal-jump condition, and no
+jump row is needed. $\mathcal M$ assembles $\dens^{\phase}\mathcal M_{c^{\phase}}$
+over cells and phases through~\cref{eq:projection:mimetic-slave}; away from
+the cut cells it is the diagonal staggered phase mass
+$\mathsf W=\diag{\dualvol{f}\facemass{\phase}{f}}$. A phase value on a face
+that its phase does not reach ($\phaseaperture{\phase}{f}=0<\facemass{\phase}{f}$)
+gets the tie $\dualvol{f}\facemass{\phase}{f}(\velo^{\phase}_f-\velo^{\phase}_{d(f)})^2$
+to the neighbouring same-axis face $d(f)$ with the largest aperture of the
+phase, and a value with $0<\phaseaperture{\phase}{f}<\tfrac12$ on a mixed face
+the same tie with the weight $1-2\phaseaperture{\phase}{f}$ (small-cell
+stabilisation, \code{small_cell_stabilization}). Both ties vanish on fields
+that are constant per phase and axis.
+
+\emph{Interface on a grid line.} On an interior face between a pure liquid
+and a pure gas cell no cell is cut. Both cells are treated as uncut and the
+two phase values of the face are identified, $\velo^{\liq}_f=\velo^{\gas}_f$,
+as one unknown with the summed mass $\dualvol{f}\facemass{}{f}$ and the full
+aperture: the limit of the cut-cell construction as the chord approaches the
+face (the mixture flux converges at $O(\theta)$ for a chord at distance
+$\theta h$). The predictor enters through its mass-weighted mean
+$\onevelo_f$~\cref{eq:projection:decomposition}, the $\mathsf W$-orthogonal
+projection onto the identified values, so the step remains an orthogonal
+projection; the removed jump energy $\redmass{f}\dualvol{f}\jump{\velo}_f^2$ is
+counted in the energy identity below.
+
+\emph{Non-simple cells.} The polygons are built from the averaged apertures
+of the package, not from one PLIC line per cell. Where a cut cell's PLIC line
+clips a face near a corner next to a pure neighbour, the average halves the
+clip and the polygon gets a second chord of length $\approx10^{-3}h$ or a
+zero area (measured on circles at $h=1/64$ and wavy interfaces at $h=1/128$,
+and at the zero crossings of a sinusoidal interface). Such a cell throws for
+\code{nonsimple_cells = :error} (default); \code{:lumped} gives its face values
+the lumped mass $\tfrac12\dens^{\phase}h^2$, the fallback of the audit's
+laboratory, which loses the consistency below in that cell (rest leftover
+$0.8\,\dt g$ on the circle) and is reported in \apitype{MimeticProjectionStats}.
+
+\emph{Forces.} Surface tension uses the same map: the integrated face jumps
+$J_f$ of~\cref{ch:forces} give the increment
+$\dt\,\mathcal M^{-1}(\phaseaperture{\phase}{f}J_f)$, which for the jumps of a
+cell potential $\varphi$ is $-\dt\,\mathcal M^{-1}\mathsf B^{\transpose}\varphi$
+and is therefore removed exactly. Gravity is the uniform acceleration
+$\velo^{\phase}_f\mathrel{+}=\dt\,g\cdot\fnormal{f}$ of every present phase value:
+$\dens^{\phase}g$ is $\mathcal M$ times the constant field, which the metric
+reproduces. (A density-weighted jump force $\mathcal M^{-1}(\phaseaperture{\phase}{f}\stagdens_fJ_f)$
+would give the gas value of a mixed face the weight of the mixture: about
+$500\,\dt g$ after one step at densities $(1000,1)$.)
+
+\emph{Properties} (audit, theorem~MM). $\mathcal M$ is symmetric positive
+definite and couples only the values of one phase on the faces of one cell
+and a value with its donor. It is consistent: for a continuous, piecewise
+affine pressure ($A^{\liq}=A^{\gas}$ on any interface, or a straight
+interface with equal tangential derivatives) $\mathcal Mw=-\mathsf B^{\transpose}p^I$
+for $w^{\phase}_f=A^{\phase}\cdot\fnormal{f}/\dens^{\phase}$ and $p^I$ sampled at
+the chord midpoints, on every interface whose cut cells are simple and away
+from walls. Hence a uniform acceleration with equal densities is projected to
+rest, and a flat interface at any density ratio stays hydrostatic. The step
+satisfies the energy identity
+$E(u^{*})=E(u^{+})+E(u^{*}-u^{+})$, $E(u)=u^{\transpose}\mathcal Mu$, and
+conserves the first-moment momentum $e_i^{\transpose}\mathcal Mu$ up to the
+wall force $\dt(\mathsf Be_i)^{\transpose}\pres$. It does not conserve the
+transported momentum $e_i^{\transpose}\mathsf Wu$, because $\mathcal Me_i\ne\mathsf We_i$
+in the cut cells; \code{transported_momentum_change} reports the change.
+
+\emph{Solver and price.} The saddle-point system is solved by conjugate
+gradients on the gauge-reduced Schur complement
+$\mathsf B\mathcal M^{-1}\mathsf B^{\transpose}$, applied matrix-free with a
+sparse LU factorisation (UMFPACK) of the band block of $\mathcal M$ (the
+values coupled by a cut cell or a tie; the rest of $\mathcal M$ is diagonal),
+and preconditioned by one V-cycle of the tree-geometric multigrid of the
+pressure operator $\mathsf B\mathsf W^{-1}\mathsf B^{\transpose}$ of the
+diagonal metric. Away from the interface this operator equals the Schur
+complement; at the interface the Schur complement has 43--67 entries per
+row against 5. On a circle at densities $(1000,1)$ the iteration counts are
+$47$, $55$, $76$ for $h=1/32,1/64,1/128$.
+
+\begin{implnote}
+Option \srcsym{src/two_phase/projection/methods.jl}{MimeticProjection},
+\srcsym{src/two_phase/projection/methods.jl}{MFDCutCellMetric}; polygons
+\srcsym{src/two_phase/projection/mimetic_metric.jl}{_mimetic_phase_polygon!},
+wet ends \srcsym{src/two_phase/projection/mimetic_metric.jl}{_mimetic_face_sides!},
+local product \srcsym{src/two_phase/projection/mimetic_metric.jl}{_mfd_polygon_block!}~\cref{eq:projection:mimetic-local},
+assembly with~\cref{eq:projection:mimetic-slave}, ties and grid-line values
+\srcsym{src/two_phase/projection/mimetic_metric.jl}{_assemble_cut_cell_metric!};
+grid-line faces \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_gridline_faces!},
+predictor and removed jump energy \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_gather!};
+solve \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_solve!}~\cref{eq:projection:mimetic},
+preconditioner \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_preconditioner!};
+forces \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_jump_force!},
+\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_uniform_acceleration!}.
+Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric: symmetry, definiteness, diagonal masses and consistency},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection: idempotence, energy identity and momentum},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection under a uniform acceleration (T3)}
+(the audit laboratory's numbers on exact geometry),
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic forces balance constant curvature and gravity},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection rejects unsupported cut cells},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection with an interface on a grid line}.
+\end{implnote}
 
 \section{Fully discrete projection stage}\label{sec:projection:time}
 The projection is an algebraic problem for the given predictor and $\dt$;

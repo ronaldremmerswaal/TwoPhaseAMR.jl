@@ -48,13 +48,26 @@ A shared initializer is copied to both phase fields. To initialize different
 velocities, pass a `(liquid, gas)` tuple of callables or `FaceVelocity`
 objects. The tuple never selects the velocity model implicitly.
 
+`TwoVelocityModel(pressure_projection=MimeticProjection())` selects the
+optional mimetic cut-cell projection: the kinetic-energy-orthogonal
+projection in a non-diagonal metric built on the liquid and gas polygons of
+the cut cells. It runs on uniform meshes of square cells without solids and
+throws for adaptive meshes, solids, cut cells at a wall and cut cells whose
+aperture polygons are not simple; `MimeticProjection(metric =
+MFDCutCellMetric(nonsimple_cells = :lumped))` replaces the last error by an
+inconsistent lumped fallback that `MimeticProjectionStats.lumped_polygons`
+reports. Each projection solves a conjugate-gradient system with a sparse
+factorization of the cut-cell block, so it is more expensive than the CMDGFM.
+See the technical reference, section
+[Mimetic cut-cell projection](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:projection:mimetic).
+
 ## Option matrix
 
 | Decision | Choices | Default | Applies to |
 | --- | --- | --- | --- |
 | velocity formulation | `OneVelocityModel()`, `TwoVelocityModel(...)` | one velocity | two-phase flow |
 | surface-tension force | `CGFM()`, `CSF()` | CGFM | either two-phase velocity model |
-| pressure projection | `CMDGFMProjection()` | CMDGFM | two velocity only |
+| pressure projection | `CMDGFMProjection()`, `MimeticProjection()` | CMDGFM | two velocity only |
 
 Surface tension is configured by [`SurfaceTension`](@ref), while the
 projection is a field of [`TwoVelocityModel`](@ref). This ownership makes
