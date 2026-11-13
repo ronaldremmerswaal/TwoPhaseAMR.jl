@@ -33,6 +33,9 @@ function MimeticProjectionSolver(
         ArgumentError("MimeticProjection does not support embedded solid geometry"),
     )
     _mimetic_uniform_spacing(interface.mesh)
+    # The polygons, the divergence and the interface transport all use the
+    # apertures of the `:pure_neighbour` rule (see `_phase_face_apertures`).
+    _set_phase_aperture_rule!(interface, :pure_neighbour)
     return MimeticProjectionSolver{T, typeof(interface), typeof(metric)}(
         interface, rho, metric, Bool(_allow_wall_cuts),
     )

@@ -68,6 +68,10 @@ struct InterfaceField{T, M <: BlockTreeMesh, G} <: AbstractMeshField{T}
     phase_gas_aperture::Vector{T}
     phase_apertures_valid::Base.RefValue{Bool}
     phase_aperture_updates::Base.RefValue{UInt}
+    # How a face aperture combines the two adjacent PLIC traces: `:average`
+    # (default) or `:pure_neighbour`, set by a `MimeticProjectionSolver` on
+    # its interface (see `_phase_face_apertures`). `copy` resets it.
+    phase_aperture_rule::Base.RefValue{Symbol}
     # Owned flags of the last conditional-fraction refresh, one entry per block
     # column: `(i, value)` of a cell whose fraction left `[0, open]`, or
     # `(0, 0)` when the column is valid. Preallocated so the fused check in the
@@ -131,7 +135,7 @@ function InterfaceField(
         CellField(fraction.mesh, T), CellField(fraction.mesh, T),
         CellField(fraction.mesh, T), HeightFunctionCache(T),
         CellField(fraction.mesh, T), BlockKey[], Ref(false), Ref(UInt(0)),
-        T[], T[], Ref(false), Ref(UInt(0)),
+        T[], T[], Ref(false), Ref(UInt(0)), Ref(:average),
         Tuple{Int32, T}[],
         floor,
         reconstruction_method, angles,

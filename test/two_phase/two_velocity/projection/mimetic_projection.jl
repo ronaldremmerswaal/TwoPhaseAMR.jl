@@ -318,6 +318,55 @@ end
     end
 end
 
+@testset "Mimetic apertures at corner clips next to pure cells" begin
+    # The mean of the two PLIC traces halves a corner clip of a cut cell next
+    # to a pure cell, which gives the cut cell a second micro-chord or a
+    # zero-area polygon (circle n=64, wavy n=128, zero crossings of a cosine).
+    # The mimetic interface takes the pure cell's aperture there instead: all
+    # cut cells are simple and a uniform acceleration is projected to rest.
+    cases = (
+        (64, _mimetic_circle(64)),
+        (128, (x, y) -> y - 0.5 - 0.37 / 128 - 0.05cos(2pi * x)),
+        (32, (x, y) -> y - 0.5 - 0.01cos(2pi * x)),
+    )
+    for (n, levelset) in cases
+        case = _mimetic_case(n, levelset)
+        @test case.interface.phase_aperture_rule[] === :pure_neighbour
+        velocity = _mimetic_velocity(case, (phase, face) -> face.axis == 2 ? -1.0 : 0.0)
+        stats = project!(
+            velocity, CellField(case.mesh), case.solver, 1.0, case.workspace;
+            tolerance = 1.0e-10,
+        )
+        @test stats.converged
+        @test stats.lumped_polygons == 0
+        @test _mimetic_maximum(velocity) <= 1.0e-12
+        # Only faces next to a pure cell change, to that cell's value; the
+        # default rule is the mean of the traces.
+        rule = copy(case.interface.phase_liquid_aperture)
+        TwoPhaseAMR._set_phase_aperture_rule!(case.interface, :average)
+        mean, _ = TwoPhaseAMR._current_phase_face_apertures!(case.interface)
+        changed = findall(rule .!= mean)
+        @test !isempty(changed)
+        for index in changed
+            face = case.mesh.faces[index]
+            fractions = TwoPhaseAMR._conditional_fraction.(Ref(case.interface), (face.minus, face.plus))
+            @test rule[index] in fractions
+            @test count(c -> c == 0 || c == 1, fractions) == 1
+        end
+    end
+    # The rule follows the projection of the two-phase model on the interface.
+    mesh = BlockTreeMesh(block_size = (16, 16), periodic = (true, false))
+    interface = InterfaceField(mesh, _mimetic_circle(16); lipschitz = 1)
+    for (projection, rule) in ((MimeticProjection(), :pure_neighbour), (CMDGFMProjection(), :average))
+        FlowSimulation(
+            mesh, TwoPhase(interface; density = (1.0, 1.0), dynamic_viscosity = (0.0, 0.0));
+            velocity_model = TwoVelocityModel(pressure_projection = projection),
+            boundary = FreeSlip(),
+        )
+        @test interface.phase_aperture_rule[] === rule
+    end
+end
+
 @testset "Mimetic projection with an interface on a grid line" begin
     # The interface lies on the faces y = 1/2: no cell is cut. The two phase
     # values of those faces are identified (u^l = u^g) and both cells are uncut.

@@ -726,16 +726,26 @@ projection onto the identified values, so the step remains an orthogonal
 projection; the removed jump energy $\redmass{f}\dualvol{f}\jump{\velo}_f^2$ is
 counted in the energy identity below.
 
-\emph{Non-simple cells.} The polygons are built from the averaged apertures
-of the package, not from one PLIC line per cell. Where a cut cell's PLIC line
-clips a face near a corner next to a pure neighbour, the average halves the
-clip and the polygon gets a second chord of length $\approx10^{-3}h$ or a
-zero area (measured on circles at $h=1/64$ and wavy interfaces at $h=1/128$,
-and at the zero crossings of a sinusoidal interface). Such a cell throws for
+\emph{Apertures and non-simple cells.} The polygons are built from the face
+apertures, not from one PLIC line per cell. The mean of the two adjacent PLIC
+traces~\cref{eq:interface:phase-aperture} halves a corner clip of a cut cell
+next to a pure cell, which gives the cut cell a second chord of length
+$\approx10^{-3}h$ or a zero-area polygon (measured on a circle at $h=1/64$, a
+wavy interface at $h=1/128$ and at the zero crossings of a cosine). An
+interface used by the mimetic projection therefore combines the traces by the
+rule \code{:pure_neighbour}: on a face between a pure cell and a cut cell
+whose PLIC trace on the face is strictly partial, the aperture is the pure
+cell's value ($0$ or $1$); elsewhere it is the mean. The rule belongs to the
+interface, so the divergence $\mathsf B$, the polygons, the CFL bound and the
+frozen subfaces of the interface transport of such a flow all see the same
+apertures; the CMDGFM and the one-velocity model keep the mean. On the
+fixtures above this removes every non-simple cell (four snapped faces each,
+trace at most $0.015$) and restores rest to round-off. A cell that is still
+not simple (a film thinner than a cell) throws for
 \code{nonsimple_cells = :error} (default); \code{:lumped} gives its face values
 the lumped mass $\tfrac12\dens^{\phase}h^2$, the fallback of the audit's
-laboratory, which loses the consistency below in that cell (rest leftover
-$0.8\,\dt g$ on the circle) and is reported in \apitype{MimeticProjectionStats}.
+laboratory, which loses the consistency below in that cell and is reported in
+\apitype{MimeticProjectionStats}.
 
 \emph{Forces.} Surface tension uses the same map: the integrated face jumps
 $J_f$ of~\cref{ch:forces} give the increment
