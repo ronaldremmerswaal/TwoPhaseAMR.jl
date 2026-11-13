@@ -723,13 +723,18 @@ the tangential derivative of the offset into the normal gradient
 (\cref{sec:viscosity:single}). The others are open.
 
 \emph{Order in time.} No test asserts an order in time
-(\cref{sec:stab:accuracy}). The temporal series at a fixed mesh, with the
-step halved twice, assert that the error does not increase (one-velocity
-capillary wave) or does not grow by more than a factor $1.5$, $2$ or $2.1$
-(two-velocity capillary and Kelvin--Helmholtz waves). The one-velocity
-capillary wave at density ratio one gave $0.0126$, $0.0046$ and $0.0030$,
-the frozen two-velocity wave $0.00655$, $0.00782$ and $0.01137$ and the
-Kelvin--Helmholtz wave of the two-velocity model.
+(\cref{sec:stab:accuracy}). The temporal series at a fixed mesh assert the
+temporal self-convergence for the one- and two-velocity capillary waves, with
+the step halved three times, and for the two-velocity Kelvin--Helmholtz
+waves, halved twice. The error against the exact solution is printed, not
+asserted: the one-velocity capillary wave at density ratio one gave $0.0126$,
+$0.0046$, $0.0030$, $0.0042$ and $0.0050$, which grows again below a quarter
+step while the self-convergence stays non-increasing (\issue{178}). At
+density ratio one the test also requires the two-velocity capillary wave,
+whose step is then converged, to reproduce the one-velocity wave; it does not
+($0.0133$ against $0.0042$ at the step $\tfrac18$), and that check is a known
+failure of the CMDGFM inference term of a cut face (\issue{171},
+\issue{178}).
 
 \emph{References.} The examples' numbers are not asserted and can lag the
 code (\cref{sec:verif:gallery}). The cylinder regression pins a transient,
