@@ -650,19 +650,26 @@ end
                 isnothing(stencils) && continue
                 haskey(stencils, edge) || continue
                 indices, stencil = stencils[edge]
-                # The closure stays inside the two-ring face graph of the
-                # contact, which is the neighbourhood the minimum-norm
-                # derivative of an unembedded transition is built from, and
-                # its coefficients sum to zero. An offset contact whose wall
-                # value is unknown is differenced on a level-matched pair
-                # instead of on the offset pair itself, so its own two
-                # endpoints need not both appear in the row (#99).
-                @test all(
-                    index -> index in TwoPhaseAMR._nearby_degrees_of_freedom(
-                        connection.minus, connection.plus, adjacency,
-                    ), indices,
-                )
                 @test abs(sum(stencil)) <= 1.0e-10
+                if length(indices) > 2
+                    # The widened minimum-norm derivative of an unembedded
+                    # transition, and the centred derivatives, stay inside the
+                    # two-ring face graph of the contact.
+                    @test all(
+                        index -> index in TwoPhaseAMR._nearby_degrees_of_freedom(
+                            connection.minus, connection.plus, adjacency,
+                        ), indices,
+                    )
+                else
+                    # Two-point rows stay inside the one-ring of one of their
+                    # own endpoints: the wall-contact and the level-matched
+                    # forms both difference adjacent unknowns (#99).
+                    anchor = indices[1]
+                    @test all(
+                        index -> index == anchor || index in adjacency[anchor],
+                        indices,
+                    )
+                end
             end
         end
     end
@@ -926,7 +933,10 @@ end
             StaggeredDiffusionOperator(geometry; viscosity = 1.0, boundary), boundary
     end
 
-    for n in (8, 16), side in (Outflow(), ZeroGradientVelocity()),
+    inflow_value = (x, y, time, axis) -> (1 + 3x) * (1 + 3y)
+    for n in (8, 16), side in (
+                Outflow(), ZeroGradientVelocity(), Inflow(inflow_value),
+            ),
             refined in (:corner, :strip)
         for axis in 1:2
             mesh, geometry, operator, boundary = open_wall_operator(
@@ -936,7 +946,10 @@ end
                 mesh, geometry, operator, axis, boundary,
             )
             normal = 3 - axis
-            skew = 0
+            adjacency = TwoPhaseAMR._connection_adjacency(
+                length(local_to_global), connections,
+            )
+            skew, level_matched = 0, 0
             for connection in connections
                 connection.axis == normal || continue
                 first, second = (
@@ -959,8 +972,21 @@ end
                 @test abs(total) <= 1.0e-10
                 @test abs(x_moment - (normal == 1 ? 1.0 : 0.0)) <= 1.0e-10
                 @test abs(y_moment - (normal == 2 ? 1.0 : 0.0)) <= 1.0e-10
+                # Where a level-matched face exists the contact must use it:
+                # the row is then the two-point difference of that pair, not
+                # the widened minimum-norm fallback.
+                level = TwoPhaseAMR._level_matched_gradient(
+                    mesh, connection.minus, connection.plus, normal,
+                    local_to_global, adjacency, Float64,
+                )
+                if !isnothing(level)
+                    @test indices == level[1]
+                    @test coefficients ≈ level[2] atol = 1.0e-12
+                    level_matched += 1
+                end
             end
             @test skew > 0
+            @test level_matched > 0
         end
     end
 
@@ -993,11 +1019,12 @@ end
     end
 end
 
-@testset "inflow sides close orphan contacts like no-slip sides (#99)" begin
-    # The wall-normal velocity is prescribed data at an inflow side, so its
-    # stiffness must equal the no-slip one: only the wall value, which never
-    # enters the stiffness, differs.
-    function stiffness_pattern(boundary)
+@testset "non-Dirichlet sides share the orphan closure (#99)" begin
+    # The closure of an orphaned transverse contact is a derivative row, so it
+    # must not depend on which non-Dirichlet condition a side carries: an
+    # inflowing velocity is prescribed along the wall, but the row that spans
+    # the contact stays the level-matched difference in all three cases.
+    function transverse_rows(side)
         mesh = BlockTreeMesh(
             base_mesh = (16, 16), block_size = (4, 4), extent = (1.0, 1.0),
             periodic = (false, false), max_level = 1,
@@ -1007,26 +1034,40 @@ end
         geometry = GeometryField(
             mesh, (x, y) -> hypot(x - 0.15, y - 0.6) - 0.28; lipschitz = 1,
         )
+        boundary = VelocityBoundaryConditions(
+            left = side, right = side, bottom = side, top = side,
+        )
         operator = StaggeredDiffusionOperator(geometry; viscosity = 1.0, boundary)
-        return operator.x.stiffness, operator.y.stiffness
+        rows = Dict{Tuple{Int, Int}, Tuple{Vector{Int}, Vector{Float64}}}()
+        for axis in 1:2
+            schedule = TwoPhaseAMR._cut_cell_dual_schedule(
+                geometry, Val(axis), false,
+            )
+            incidences, _, _ = TwoPhaseAMR._component_incidences(
+                mesh, Val(axis), Float64,
+            )
+            _, local_to_global = TwoPhaseAMR._component_local_to_global(mesh, axis)
+            connections = TwoPhaseAMR._geometric_diffusion_connections(
+                geometry, Val(axis), schedule, incidences, local_to_global,
+            )
+            component = axis == 1 ? operator.x : operator.y
+            stencils = TwoPhaseAMR._cut_cell_transverse_stencils(
+                mesh, connections, local_to_global,
+                copy(component.wall_connections), boundary, Val(axis), Float64,
+            )
+            isnothing(stencils) && continue
+            for (edge, stencil) in stencils
+                rows[(axis, edge[1] * 100_000 + edge[2])] = stencil
+            end
+        end
+        return rows
     end
 
-    inflow_velocity = (x, y, time, axis) -> 1 + 0.3x - 0.2y
-    inflow = VelocityBoundaryConditions(
-        left = Inflow(inflow_velocity), right = Inflow(inflow_velocity),
-        bottom = Inflow(inflow_velocity), top = Inflow(inflow_velocity),
-    )
-    inflow_x, inflow_y = stiffness_pattern(inflow)
-    noslip_x, noslip_y = stiffness_pattern(NoSlip())
-    @test inflow_x == noslip_x
-    @test inflow_y == noslip_y
-    # An open side closes no contact against the wall, so it must differ.
-    open = VelocityBoundaryConditions(
-        left = Outflow(), right = Outflow(), bottom = Outflow(), top = Outflow(),
-    )
-    open_x, open_y = stiffness_pattern(open)
-    @test open_x != inflow_x
-    @test open_y != inflow_y
+    inflow_value = (x, y, time, axis) -> 1 + 0.3x - 0.2y
+    open_rows = transverse_rows(Outflow())
+    @test !isempty(open_rows)
+    @test transverse_rows(ZeroGradientVelocity()) == open_rows
+    @test transverse_rows(Inflow(inflow_value)) == open_rows
 end
 
 @testset "orphan transverse rows converge on a manufactured field (#99)" begin

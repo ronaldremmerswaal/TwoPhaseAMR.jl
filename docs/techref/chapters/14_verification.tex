@@ -716,10 +716,10 @@ of~\cref{sec:momentum:two-velocity}, and \issue{72} no longer reproduces: the
 cut-donor bound keeps the dual Courant number at or below its limit next to a
 solid (\cref{sec:momentum:cfl}), and \issue{99} is fixed: an orphaned
 transverse edge next to a level transition takes the prescribed wall velocity
-at a \apitype{NoSlip}, \apitype{FreeSlip} or \apitype{Inflow} side and a
-linear-exact level-matched difference at an \apitype{Outflow} or
-\apitype{ZeroGradientVelocity} side instead of the offset pair, which carried
-the tangential derivative of the offset into the normal gradient
+at a \apitype{NoSlip} or \apitype{FreeSlip} side and a linear-exact
+level-matched difference at an \apitype{Outflow}, \apitype{ZeroGradientVelocity}
+or \apitype{Inflow} side instead of the offset pair, which carried the
+tangential derivative of the offset into the normal gradient
 (\cref{sec:viscosity:single}). The others are open.
 
 \emph{Order in time.} No test asserts an order in time

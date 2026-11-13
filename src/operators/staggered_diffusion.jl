@@ -636,8 +636,9 @@ function _level_matched_gradient(
             # to lie within two pair distances of the other endpoint.
             candidate = abs(delta(point[axis], first_point[axis]))
             candidate <= 2 * pair || continue
-            (iszero(matched) || candidate < score) &&
-                (matched, span, score = neighbour, offset, candidate)
+            if iszero(matched) || candidate < score
+                matched, span, score = neighbour, offset, candidate
+            end
         end
         iszero(matched) && continue
         inverse = inv(span)
