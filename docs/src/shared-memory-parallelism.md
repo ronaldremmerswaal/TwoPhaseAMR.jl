@@ -24,6 +24,10 @@ entity:
 - coefficient refreshes group all contributions to a sparse entry before the
   parallel loop starts;
 - reductions that do not dominate runtime remain serial and deterministic.
+- the AMR tree (the RegionTrees nodes and the key-to-block lookups) may be
+  searched inside a threaded loop, but never modified there: refinement,
+  coarsening and every update of those structures run serially between
+  launches, so a tree search reads a structure that no other iteration writes.
 
 This follows Julia's task-migration guidance and the low-overhead persistent
 task model documented by Polyester:

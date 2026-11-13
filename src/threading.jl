@@ -36,7 +36,9 @@ are the package's only launch primitives.
 
 Every index must own its outputs: results may not depend on which thread or in
 which order indices run, so the serial and threaded paths are bitwise
-identical. Reductions use fixed chunk schedules instead.
+identical. Reductions use fixed chunk schedules instead. The AMR tree and its
+key-to-block lookups may be searched in `f` but never modified there; tree
+edits run serially between launches.
 
 `f` must not throw: Polyester rethrows an exception from the calling thread's
 range as itself but one from a worker's range as a `TaskFailedException`,
