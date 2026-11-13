@@ -356,3 +356,117 @@ end
     @test log2(errors[1] / errors[2]) > 1.4
     @test log2(errors[2] / errors[3]) > 1.4
 end
+
+@testset "face displacement is independent of the mesh origin" begin
+    # A face displacement is a small offset between two cells: the mean of their
+    # widths normal to the face and, at a coarse--fine contact, half their width
+    # difference along it. Taking it as a difference of absolute cell centres
+    # makes it a small difference of large numbers, so a domain translated far
+    # from the origin loses it: at origin (1e12, -1e12) the normal distance of
+    # the eight-cell meshes below reads 6.5e-4 relative error (9.8e-4 at the
+    # coarse--fine contact), and the round-off-sized off-diagonals of the
+    # assembled map, 2.6e-9 at (1e6, 1e6), grow to 2.7e-3, so even the sparsity
+    # pattern of the map moves with the origin. The displacement now comes from
+    # the integer lattice offset of the two cells and from level spacings, both
+    # formed without the origin, so the operator of a translated mesh is bitwise
+    # the operator of the untranslated one. The equality below is therefore
+    # exact, not a tolerance: any difference is cancellation, not a different
+    # summation order.
+    cases = (
+        (
+            name = "uniform periodic",
+            keywords = (
+                block_size = (8, 8), extent = (1.2, 1.2),
+                periodic = (true, true),
+            ),
+        ),
+        (
+            name = "uniform wall-bounded",
+            keywords = (
+                block_size = (8, 8), extent = (1.2, 1.2),
+                periodic = (false, false),
+            ),
+        ),
+        (
+            name = "coarse-fine periodic",
+            keywords = (
+                base_mesh = (8, 8), block_size = (4, 4), max_level = 2,
+                extent = (1.2, 1.2), periodic = (true, true),
+                refine = (key, origin, extent) ->
+                key.level == 0 && key.i == 0 && key.j == 0,
+            ),
+        ),
+        (
+            name = "two-cell periodic",
+            keywords = (
+                base_mesh = (2, 4), block_size = (2, 2), extent = (2.0, 4.0),
+                periodic = (true, false),
+            ),
+        ),
+    )
+    # Storage entries of the inverse face metric, in a form that compares
+    # diagonals and sparse maps alike.
+    function metric_entries(operator)
+        metric = operator.inverse_metric
+        if metric isa TwoPhaseAMR.DiagonalInverseFaceMetric
+            return (metric.diagonal,)
+        end
+        return (metric.matrix.colptr, metric.matrix.rowval, nonzeros(metric.matrix))
+    end
+
+    for case in cases
+        mesh = BlockTreeMesh(; case.keywords...)
+        operator = GradientOperator(mesh)
+        for origin in ((1.0e6, 1.0e6), (1.0e8, -1.0e8), (1.0e12, -1.0e12))
+            translated = BlockTreeMesh(; case.keywords..., origin = origin)
+            translated_operator = GradientOperator(translated)
+            @test isequal(
+                metric_entries(translated_operator), metric_entries(operator)
+            )
+            # The tangential offset is exact too: half the width difference of
+            # the two cells, zero on a conforming face.
+            for face in translated.faces
+                tangent = 3 - face.axis
+                narrow, wide = minmax(
+                    translated.blocks[face.minus.block].spacing[tangent],
+                    translated.blocks[face.plus.block].spacing[tangent],
+                )
+                @test abs(
+                    TwoPhaseAMR._face_displacement(translated, face)[tangent]
+                ) == (wide - narrow) / 2
+            end
+        end
+
+        # The area-weighted jumps of either affine coordinate field still map to
+        # its constant face-normal gradient, which no longer depends on where
+        # the domain sits. The tolerance is the one the patch-metric groups above
+        # use; the measured residual is 3.3e-16, so it only leaves room for a
+        # different summation order over the patch.
+        translated_operator = GradientOperator(
+            BlockTreeMesh(; case.keywords..., origin = (1.0e8, -1.0e8)),
+        )
+        translated = translated_operator.mesh
+        jump = similar(translated_operator.pressure_jump)
+        result = similar(jump)
+        for coordinate_axis in 1:2
+            for (index, face) in pairs(translated.faces)
+                jump[index] = face.area *
+                    TwoPhaseAMR._face_displacement(translated, face)[coordinate_axis]
+            end
+            TwoPhaseAMR._mul_inverse_metric!(
+                result, translated_operator.inverse_metric, jump
+            )
+            for (index, face) in pairs(translated.faces)
+                expected = face.axis == coordinate_axis ? 1.0 : 0.0
+                @test result[index] ≈ expected atol = 2.0e-13 rtol = 2.0e-13
+            end
+        end
+    end
+
+    # Float32 meshes take the same lattice path.
+    float32_entries = map(((0.0f0, 0.0f0), (1.0f6, -1.0f6))) do origin
+        mesh32 = BlockTreeMesh(; cases[3].keywords..., origin = origin)
+        return metric_entries(GradientOperator(mesh32, Float32))
+    end
+    @test isequal(first(float32_entries), last(float32_entries))
+end
