@@ -121,7 +121,7 @@ _projection_summary_fields(::CMDGFMProjectionStats) = (
 )
 _projection_summary_fields(::MimeticProjectionStats) = (
     :preconditioner, :mixture_divergence, :mixture_volume_defect,
-    :energy_identity_defect, :lumped_polygons, :gridline_faces,
+    :energy_identity_defect, :defective_cells, :gridline_faces,
 )
 function _print_projection_summary(
         io::IO, run::ProjectionRunStats, stats::_ProjectionSummaryStats,

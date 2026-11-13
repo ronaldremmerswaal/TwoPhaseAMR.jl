@@ -28,36 +28,33 @@ CMDGFMProjection(;
 abstract type AbstractCutCellMetric end
 
 """
-    MFDCutCellMetric(; small_cell_stabilization=true, nonsimple_cells=:error)
+    MFDCutCellMetric(; small_cell_stabilization=true)
 
-Mimetic-finite-difference kinetic metric on the liquid and gas polygons of the
-cut cells (candidate MM of the mimetic-projection audit): one block
-`R Rᵀ/|P| + (1/2) D Q D` per polygon `P`, the chord flux slaved to closure, the
-diagonal phase masses away from the interface. A phase value on a face that the
-phase does not reach follows a donor. `small_cell_stabilization` adds the
-audit's ad hoc tie `(1 - 2a) m (u - u_donor)²` for apertures `0 < a < 1/2` on
-mixed faces.
+Mimetic-finite-difference kinetic metric of the cut cells (candidate MMd of
+the mimetic-projection audit's note on kinetic metrics). Per cut cell and
+phase the block is `R G⁺ Rᵀ + S` with the Gram tensor
+`G = Σ_k b_k h n_k (x_k - x*)ᵀ` of the wetted sides (wetted lengths `b_k h`
+from the shared face apertures, outward normals `n_k`, wetted midpoints `x_k`)
+and the rows `R = [b_k h (x_k - x*)ᵀ]`. The pressure point `x*` lies on the
+line where `G` is symmetric, next to the interface of the data, and `S` is the
+MFD stabilisation of the wetted sides closed by one slaved edge. Away from the
+interface the metric is the diagonal phase mass. No phase polygon is formed:
+the shared apertures need not bound one. Where they do, `G = |P| I` and the
+block is the classical MFD block of the polygon (candidate MM). A cell whose
+Gram tensor has no consistent block gets least-squares consistent blocks
+(eigenvalues raised to `0.02h²`) and is counted in
+`MimeticProjectionStats.defective_cells`.
 
-A cut cell whose aperture polygon is not simple (more than one chord,
-degenerate, or undetermined wet face end) throws `ArgumentError` for
-`nonsimple_cells = :error`. `:lumped` instead gives its face values the lumped
-mass `ρh²/2`, the fallback of the audit's laboratory; this loses the metric's
-consistency in that cell and is reported in `MimeticProjectionStats`.
+A phase value on a face that the phase does not reach follows a donor.
+`small_cell_stabilization` adds the audit's ad hoc tie
+`(1 - 2a) m (u - u_donor)²` for apertures `0 < a < 1/2` on mixed faces.
 """
 struct MFDCutCellMetric <: AbstractCutCellMetric
     small_cell_stabilization::Bool
-    nonsimple_cells::Symbol
-
-    function MFDCutCellMetric(small_cell_stabilization::Bool, nonsimple_cells::Symbol)
-        nonsimple_cells in (:error, :lumped) || throw(
-            ArgumentError("nonsimple_cells must be :error or :lumped"),
-        )
-        return new(small_cell_stabilization, nonsimple_cells)
-    end
 end
 
-MFDCutCellMetric(; small_cell_stabilization::Bool = true, nonsimple_cells::Symbol = :error) =
-    MFDCutCellMetric(small_cell_stabilization, nonsimple_cells)
+MFDCutCellMetric(; small_cell_stabilization::Bool = true) =
+    MFDCutCellMetric(small_cell_stabilization)
 
 """
     MimeticProjection(; metric=MFDCutCellMetric())
@@ -68,9 +65,9 @@ aperture-weighted mixture divergence in the non-diagonal cut-cell metric
 normal velocity jump). Surface tension and the pressure gradient use the same
 map `𝓜⁻¹Dᵀ`; gravity is the uniform acceleration of both phases. An interior
 face between a pure liquid and a pure gas cell carries one shared phase value.
-Supported on uniform square-cell meshes without embedded solids,
-for interfaces whose cut cells are simple and do not touch a domain boundary;
-other configurations throw `ArgumentError`. [`CMDGFMProjection`](@ref) remains
+Supported on uniform square-cell meshes without embedded solids, for
+interfaces whose cut cells do not touch a domain boundary; other
+configurations throw `ArgumentError`. [`CMDGFMProjection`](@ref) remains
 the default.
 """
 struct MimeticProjection{M <: AbstractCutCellMetric} <: AbstractTwoVelocityProjection

@@ -22,11 +22,6 @@ function TwoPhaseModel(
         ),
     )
     _validate_two_velocity_projection(pressure_projection, interface)
-    # The face-aperture rule belongs to the interface: the mimetic projection
-    # and the transport of its flows share the `:pure_neighbour` apertures.
-    _set_phase_aperture_rule!(
-        interface, pressure_projection isa MimeticProjection ? :pure_neighbour : :average,
-    )
     any(a -> interface.mesh.periodic[a] && !iszero(physics.gravity[a]), 1:2) &&
         throw(ArgumentError("gravity requires nonperiodic boundaries in its direction"))
     tension = physics.surface_tension

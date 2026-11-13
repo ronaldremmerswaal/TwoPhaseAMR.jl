@@ -42,10 +42,9 @@ _mimetic_circle(n; x = 0.5, y = 0.5, radius = 0.25) =
     @test projection isa AbstractTwoVelocityProjection
     @test projection.metric isa MFDCutCellMetric
     @test projection.metric.small_cell_stabilization
-    @test projection.metric.nonsimple_cells === :error
-    @test MFDCutCellMetric(nonsimple_cells = :lumped).nonsimple_cells === :lumped
     @test !MFDCutCellMetric(small_cell_stabilization = false).small_cell_stabilization
-    @test_throws ArgumentError MFDCutCellMetric(nonsimple_cells = :ignore)
+    # The polygon fallback and its option are gone: every cut cell has a block.
+    @test_throws MethodError MFDCutCellMetric(nonsimple_cells = :lumped)
     @test_throws ArgumentError MimeticProjection(metric = :mfd)
     @test TwoVelocityModel(pressure_projection = projection).pressure_projection === projection
     @test TwoVelocityModel().pressure_projection isa CMDGFMProjection
@@ -106,14 +105,15 @@ end
         band = assembly.band_matrix
         @test maximum(abs, band - band') <= 1.0e-14 * maximum(abs, band)
         @test isposdef(Symmetric(Matrix(band)))
-        @test assembly.cut_cells > 0 && assembly.lumped_polygons == 0
+        @test assembly.cut_cells > 0 && assembly.defective_cells == 0
         # Away from the band the metric is the diagonal phase mass of the code.
         off = findall(iszero, assembly.band_position)
         @test !isempty(off)
         @test assembly.diagonal[off] == assembly.dof_mass[off]
-        # Consistency (audit thm. mm(b)): for equal densities the uniform
-        # acceleration w = e_y (∇p = rho e_y) satisfies 𝓜 w = -Dᵀ p with
-        # p = rho y at the chord midpoints of the cut cells, the centres elsewhere.
+        # Consistency (note on kinetic metrics, prop. assembly): for equal
+        # densities the uniform acceleration w = e_y (∇p = rho e_y) satisfies
+        # 𝓜 w = -Dᵀ p with p = rho y at the pressure points of the cut cells (the
+        # chord midpoints of these simple cells), the centres elsewhere.
         density[1] == density[2] || continue
         work = case.workspace
         topology = work.topology
@@ -171,11 +171,8 @@ end
                 (x, y) -> y - 0.5 - 0.06 * (0.25 - abs(mod(x, 1.0) - 0.5)),
             )
         # Every metric keeps a solenoidal single-valued field (audit prop.
-        # metric-free); the lumped fallback covers the triangle's kink cells.
-        case = _mimetic_case(
-            n, levelset; density = (3.0, 1.0),
-            metric = MFDCutCellMetric(nonsimple_cells = :lumped),
-        )
+        # metric-free), also in the triangle's kink cells.
+        case = _mimetic_case(n, levelset; density = (3.0, 1.0))
         velocity = _mimetic_velocity(case, (phase, face) -> face.axis == 1 ? shear(face.center[2]) : 0.0)
         initial = deepcopy(velocity)
         stats = project!(velocity, CellField(case.mesh), case.solver, 1.0, case.workspace; tolerance = 1.0e-13)
@@ -309,72 +306,252 @@ end
     end
 end
 
-@testset "Mimetic projection rejects unsupported cut cells" begin
-    # A film thinner than a cell has two chords per cut cell.
-    film(x, y) = abs(y - 0.5 - 0.37 / 32) - 0.3 / 64
-    case = _mimetic_case(32, film)
-    velocity = _mimetic_velocity(case, (phase, face) -> face.axis == 2 ? -1.0 : 0.0)
-    @test_throws ArgumentError project!(velocity, CellField(case.mesh), case.solver, 1.0, case.workspace)
-    lumped = _mimetic_case(32, film; metric = MFDCutCellMetric(nonsimple_cells = :lumped))
-    velocity = _mimetic_velocity(lumped, (phase, face) -> face.axis == 2 ? -1.0 : 0.0)
-    stats = project!(velocity, CellField(lumped.mesh), lumped.solver, 1.0, lumped.workspace; tolerance = 1.0e-12)
-    @test stats.converged
-    @test stats.lumped_polygons > 0
-    # A drop on a wall has cut cells at the domain boundary.
-    for metric in (MFDCutCellMetric(), MFDCutCellMetric(nonsimple_cells = :lumped))
-        wall = _mimetic_case(32, _mimetic_circle(32; y = 0.1); metric)
-        velocity = _mimetic_velocity(wall, (phase, face) -> 0.0)
-        @test_throws ArgumentError project!(velocity, CellField(wall.mesh), wall.solver, 1.0, wall.workspace)
+# The phase polygon of the former construction (candidate MM) from the liquid
+# apertures of the four sides of a unit cell (centre at the origin, sides
+# bottom, right, top, left) and the liquid wet ends (`starts[k]`: at the
+# counter-clockwise start of side `k`). Consecutive phase parts whose ends
+# differ are joined by a chord. Returns the edges `(x1, y1, x2, y2, side)` (side
+# 0: chord) and the number of chords.
+const _MM_CORNERS = ((-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5))
+function _mm_polygon(apertures, starts, phase)
+    segments = NTuple{5, Any}[]
+    for k in 1:4
+        b = phase == 1 ? apertures[k] : 1 - apertures[k]
+        b == 0 && continue
+        start = phase == 1 ? starts[k] : !starts[k]
+        (ax, ay), (bx, by) = _MM_CORNERS[k], _MM_CORNERS[mod1(k + 1, 4)]
+        push!(
+            segments, b == 1 ? (ax, ay, bx, by, k) :
+                start ? (ax, ay, ax + b * (bx - ax), ay + b * (by - ay), k) :
+                (bx - b * (bx - ax), by - b * (by - ay), bx, by, k),
+        )
     end
+    edges = NTuple{5, Any}[]
+    chords = 0
+    for q in eachindex(segments)
+        current, next = segments[q], segments[mod1(q + 1, length(segments))]
+        push!(edges, current)
+        if hypot(current[3] - next[1], current[4] - next[2]) > 1.0e-12
+            push!(edges, (current[3], current[4], next[1], next[2], 0))
+            chords += 1
+        end
+    end
+    return edges, chords
 end
 
-@testset "Mimetic apertures at corner clips next to pure cells" begin
-    # The mean of the two PLIC traces halves a corner clip of a cut cell next
-    # to a pure cell, which gives the cut cell a second micro-chord or a
-    # zero-area polygon (circle n=64, wavy n=128, zero crossings of a cosine).
-    # The mimetic interface takes the pure cell's aperture there instead: all
-    # cut cells are simple and a uniform acceleration is projected to rest.
+_mm_area(edges) = sum(e -> (e[1] * e[4] - e[3] * e[2]) / 2, edges)
+
+# The MM block of a simple polygon with its chord flux slaved, on the wetted
+# sides in increasing side order, and the chord midpoint (former package code,
+# techref eqs. mimetic-local and mimetic-slave in their polygon form).
+function _mm_block(edges)
+    area = _mm_area(edges)
+    cx = sum(e -> (e[1] + e[3]) * (e[1] * e[4] - e[3] * e[2]) / 6, edges) / area
+    cy = sum(e -> (e[2] + e[4]) * (e[1] * e[4] - e[3] * e[2]) / 6, edges) / area
+    lengths = [hypot(e[3] - e[1], e[4] - e[2]) for e in edges]
+    flux = hcat([e[4] - e[2] for e in edges], [e[1] - e[3] for e in edges])
+    moments = hcat(
+        lengths .* [(e[1] + e[3]) / 2 - cx for e in edges],
+        lengths .* [(e[2] + e[4]) / 2 - cy for e in edges],
+    )
+    projector = I - flux * inv(flux' * flux) * flux'
+    metric = moments * moments' / area + Diagonal(lengths) * projector * Diagonal(lengths) / 2
+    chord = findfirst(e -> e[5] == 0, edges)
+    sides = [q for q in eachindex(edges) if edges[q][5] > 0]
+    slave = zeros(length(edges), length(sides))
+    for (i, q) in pairs(sides)
+        slave[q, i] = 1.0
+        slave[chord, i] = -lengths[q] / lengths[chord]
+    end
+    midpoint = ((edges[chord][1] + edges[chord][3]) / 2, (edges[chord][2] + edges[chord][4]) / 2)
+    return slave' * metric * slave, area, midpoint
+end
+
+# MMd blocks of one unit cell from the package: pressure point and, per phase,
+# the block, the Gram tensor G = Σ n_k R_kᵀ and the consistency flag.
+function _mmd_cell(apertures, starts)
+    TP = TwoPhaseAMR
+    xs, ys, ex, ey = TP._mimetic_pressure_point(apertures, starts)
+    phases = map(1:2) do phase
+        block, sides, lengths, moments = zeros(4, 4), zeros(Int, 4), zeros(4), zeros(4, 2)
+        m, consistent = TP._mimetic_gram_block!(
+            block, sides, lengths, moments, apertures, starts, phase, xs, ys, ex, ey,
+        )
+        normals = [TP._mimetic_normal(Float64, sides[q])[i] for q in 1:m, i in 1:2]
+        (; block = block[1:m, 1:m], gram = normals' * moments[1:m, :], normals, moments = moments[1:m, :], consistent)
+    end
+    return (xs, ys), phases
+end
+
+@testset "Mimetic Gram blocks: the MM block where the polygon exists, degenerate data" begin
+    # Simple cut cells (note on kinetic metrics, prop. gram(d)): the pressure
+    # point is the chord midpoint, G = |P| I and the block is that of MM.
+    for (apertures, starts) in (
+            ((0.3, 0.4, 0.0, 0.0), (false, true, false, false)),  # corner clip
+            ((1.0, 0.6, 0.0, 0.3), (false, true, false, false)),  # trapezoid
+            ((1.0, 1.0, 0.5, 0.0), (false, false, true, false)),  # chord to a corner
+            ((0.02, 1.0, 1.0, 0.97), (false, false, false, true)),  # gas sliver
+        )
+        point, phases = _mmd_cell(apertures, starts)
+        for phase in 1:2
+            edges, chords = _mm_polygon(apertures, starts, phase)
+            @test chords == 1
+            block, area, midpoint = _mm_block(edges)
+            local result = phases[phase]
+            @test result.consistent
+            @test all(isapprox.(point, midpoint; atol = 1.0e-14))
+            @test result.gram ≈ area * I atol = 1.0e-14
+            @test result.block ≈ block atol = 1.0e-13
+            @test result.block * result.normals ≈ result.moments atol = 1.0e-14
+        end
+        # Prop. gram(b): the Gram tensors of the two phases add up to the cell.
+        @test phases[1].gram + phases[2].gram ≈ I atol = 1.0e-14
+    end
+    # Zero-area phase: the liquid wets one per cent of the bottom only. Its
+    # pressure point is the wetted midpoint, G = 0 and the liquid block
+    # vanishes (its value takes inertia from the cell across and the ties);
+    # the gas block is consistent with G = I.
+    point, phases = _mmd_cell((0.01, 0.0, 0.0, 0.0), (true, false, false, false))
+    @test all(isapprox.(point, (-0.495, -0.5); atol = 1.0e-15))
+    @test phases[1].consistent && phases[2].consistent
+    @test maximum(abs, phases[1].gram) <= 1.0e-15
+    @test maximum(abs, phases[1].block) <= 1.0e-15
+    @test phases[2].gram ≈ I atol = 1.0e-15
+    # No admissible pressure point (prop. gram(e)): the liquid wets the bottom
+    # of the right side and the top of the left side with equal apertures,
+    # η = 0 and τ ≠ 0 (two chords). Both Gram tensors are asymmetric; the
+    # blocks are the least-squares fallback, symmetric positive definite.
+    point, phases = _mmd_cell((0.0, 0.3, 0.0, 0.3), (false, true, false, true))
+    @test _mm_polygon((0.0, 0.3, 0.0, 0.3), (false, true, false, true), 1)[2] == 2
+    for result in phases
+        @test !result.consistent
+        @test abs(result.gram[1, 2] - result.gram[2, 1]) > 0.1
+        @test result.block ≈ result.block' atol = 1.0e-15
+        @test isposdef(Symmetric(result.block))
+    end
+    # Assembled, such a cell is counted as defective. Synthetic face data on a
+    # gas-filled mesh: only the left and right faces of one cell are wetted.
+    n = 8
+    case = _mimetic_case(n, (x, y) -> 1.0)
+    mesh = case.mesh
+    TP = TwoPhaseAMR
+    topology = TP._mimetic_topology(mesh)
+    cell = TP._cell_index(CellRef(1, 4, 4), n, n)
+    right, left = topology.sides[2, cell], topology.sides[4, cell]
+    faces = length(mesh.faces)
+    fraction = zeros(faces)
+    aperture = zeros(faces)
+    flags = zeros(Int8, faces)
+    for (face, low) in ((right, true), (left, false))
+        fraction[face] = 0.1
+        aperture[face] = 0.3
+        flags[face] = low ? TP._MIMETIC_LIQUID_LOW : TP._MIMETIC_LIQUID_HIGH
+    end
+    data = (;
+        liquid_fraction = fraction, liquid_aperture = aperture, gas_aperture = 1 .- aperture,
+        liquid_mass = fraction, gas_mass = 1 .- fraction,
+    )
+    boundaries = length(mesh.boundary_faces)
+    assembly = TP._mimetic_assemble_from_data!(
+        case.workspace, MFDCutCellMetric(), mesh, data, flags, zeros(boundaries),
+        falses(boundaries), (1.0, 1.0),
+    )
+    @test assembly.cut_cells == 3 && assembly.defective_cells == 1
+    @test assembly.lumped_values == 0
+    @test isposdef(Symmetric(Matrix(assembly.band_matrix)))
+end
+
+@testset "Mimetic projection rejects cut cells at walls" begin
+    # A drop on a wall has cut cells at the domain boundary.
+    wall = _mimetic_case(32, _mimetic_circle(32; y = 0.1))
+    velocity = _mimetic_velocity(wall, (phase, face) -> 0.0)
+    @test_throws ArgumentError project!(velocity, CellField(wall.mesh), wall.solver, 1.0, wall.workspace)
+end
+
+# Liquid apertures and wet ends of the four sides of `cell` in the assembly.
+function _mimetic_cell_data(case, cell)
+    TP = TwoPhaseAMR
+    work = case.workspace
+    topology = work.topology
+    apertures = ntuple(4) do k
+        face = topology.sides[k, cell]
+        face > 0 ? work.face_data.liquid_aperture[face] : work.boundary_aperture[-face]
+    end
+    starts = ntuple(4) do k
+        face = topology.sides[k, cell]
+        0 < apertures[k] < 1 && face > 0 || return false
+        low = work.assembly.flags[face] == TP._MIMETIC_LIQUID_LOW
+        return TP._MIMETIC_STARTS_LOW[k] ? low : !low
+    end
+    return apertures, starts
+end
+
+@testset "Mimetic metric on averaged apertures that close no region" begin
+    # The face apertures are the mean of the two adjacent PLIC traces. Near a
+    # grid line (θ h above it) and at corner clips next to a pure cell they
+    # give cut cells whose phase parts would need two chords or bound no area:
+    # no polygon exists, the Gram tensor does.
     cases = (
+        (32, (x, y) -> y - 0.5 - 0.01 / 32 - 0.005cos(2pi * x)),
+        (32, (x, y) -> y - 0.5 - 0.03 / 32 - 0.005cos(2pi * x)),
+        (32, (x, y) -> y - 0.5 - 0.97 / 32 - 0.005cos(2pi * x)),
         (64, _mimetic_circle(64)),
         (128, (x, y) -> y - 0.5 - 0.37 / 128 - 0.05cos(2pi * x)),
         (32, (x, y) -> y - 0.5 - 0.01cos(2pi * x)),
     )
-    for (n, levelset) in cases
-        case = _mimetic_case(n, levelset)
-        @test case.interface.phase_aperture_rule[] === :pure_neighbour
+    nonsimple = 0
+    for (n, levelset) in cases, density in ((1.0, 1.0), (1000.0, 1.0))
+        case = _mimetic_case(n, levelset; density)
         velocity = _mimetic_velocity(case, (phase, face) -> face.axis == 2 ? -1.0 : 0.0)
+        # Round-off bounds the attainable divergence defect at 1000:1
+        # (2.8e-9 on the n = 128 wave).
         stats = project!(
             velocity, CellField(case.mesh), case.solver, 1.0, case.workspace;
-            tolerance = 1.0e-10,
+            tolerance = density[1] == density[2] ? 1.0e-11 : 1.0e-8,
         )
         @test stats.converged
-        @test stats.lumped_polygons == 0
-        @test _mimetic_maximum(velocity) <= 1.0e-12
-        # Only faces next to a pure cell change, to that cell's value; the
-        # default rule is the mean of the traces.
-        rule = copy(case.interface.phase_liquid_aperture)
-        TwoPhaseAMR._set_phase_aperture_rule!(case.interface, :average)
-        mean, _ = TwoPhaseAMR._current_phase_face_apertures!(case.interface)
-        changed = findall(rule .!= mean)
-        @test !isempty(changed)
-        for index in changed
-            face = case.mesh.faces[index]
-            fractions = TwoPhaseAMR._conditional_fraction.(Ref(case.interface), (face.minus, face.plus))
-            @test rule[index] in fractions
-            @test count(c -> c == 0 || c == 1, fractions) == 1
+        @test stats.defective_cells == 0 && stats.lumped_values == 0
+        @test stats.gridline_faces == 0
+        work = case.workspace
+        assembly = work.assembly
+        band = assembly.band_matrix
+        @test maximum(abs, band - band') <= 1.0e-14 * maximum(abs, band)
+        @test isposdef(Symmetric(Matrix(band)))
+        # Rest under a uniform force with equal densities (prop. meaning(a)).
+        density[1] == density[2] && @test _mimetic_maximum(velocity) <= 1.0e-11
+        # Consistency per phase and axis (prop. assembly): 𝓜 χ^π_k = R^π_k for
+        # the field χ^π_k that is one on the values of phase π on the faces of
+        # axis k and zero elsewhere, R^π_k = ρ^π a |f| (x*₊ - x*₋)_k on every
+        # value of phase π (periodic differences).
+        topology = work.topology
+        point = (assembly.pressure_x, assembly.pressure_y)
+        dofs = eachindex(assembly.dof_face)
+        axis(r) = case.mesh.faces[assembly.dof_face[r]].axis
+        for phase in 1:2, k in 1:2
+            field = [assembly.dof_phase[r] == phase && axis(r) == k ? 1.0 : 0.0 for r in dofs]
+            image = TwoPhaseAMR._mimetic_metric_product!(zeros(0), work, field)
+            target = map(dofs) do r
+                assembly.dof_phase[r] == phase || return 0.0
+                face = assembly.dof_face[r]
+                difference = point[k][topology.face_cells[2, face]] - point[k][topology.face_cells[1, face]]
+                case.mesh.periodic[k] && (difference -= round(difference))
+                density[phase] * case.mesh.faces[face].area * assembly.dof_aperture[r] * difference
+            end
+            @test maximum(abs, image .- target) <= 1.0e-12 * maximum(abs, image)
+        end
+        # Count the cut cells whose apertures form no simple polygon.
+        density[1] == density[2] || continue
+        for cell in axes(topology.sides, 2)
+            apertures, starts = _mimetic_cell_data(case, cell)
+            all(==(apertures[1]), apertures) && apertures[1] in (0.0, 1.0) && continue
+            nonsimple += any(1:2) do phase
+                edges, chords = _mm_polygon(apertures, starts, phase)
+                !isempty(edges) && (chords != 1 || abs(_mm_area(edges)) < 1.0e-12)
+            end
         end
     end
-    # The rule follows the projection of the two-phase model on the interface.
-    mesh = BlockTreeMesh(block_size = (16, 16), periodic = (true, false))
-    interface = InterfaceField(mesh, _mimetic_circle(16); lipschitz = 1)
-    for (projection, rule) in ((MimeticProjection(), :pure_neighbour), (CMDGFMProjection(), :average))
-        FlowSimulation(
-            mesh, TwoPhase(interface; density = (1.0, 1.0), dynamic_viscosity = (0.0, 0.0));
-            velocity_model = TwoVelocityModel(pressure_projection = projection),
-            boundary = FreeSlip(),
-        )
-        @test interface.phase_aperture_rule[] === rule
-    end
+    println("mimetic metric: cut cells without a simple aperture polygon in the averaged-aperture cases: ", nonsimple)
+    @test nonsimple > 0
 end
 
 @testset "Mimetic projection with an interface on a grid line" begin
@@ -391,7 +568,7 @@ end
     stats = project!(velocity, pressure, case.solver, 1.0e-2, case.workspace; tolerance = 1.0e-12)
     @test stats.converged
     @test stats.gridline_faces == n
-    @test stats.cut_cells == 0 && stats.lumped_polygons == 0
+    @test stats.cut_cells == 0 && stats.defective_cells == 0
     @test abs(stats.energy_identity_defect) <= 1.0e-12
     @test abs(stats.momentum_change[1]) <= 1.0e-12 * length(case.mesh.faces) *
         maximum(abs, case.workspace.metric_predictor)

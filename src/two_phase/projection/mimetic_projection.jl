@@ -33,9 +33,6 @@ function MimeticProjectionSolver(
         ArgumentError("MimeticProjection does not support embedded solid geometry"),
     )
     _mimetic_uniform_spacing(interface.mesh)
-    # The polygons, the divergence and the interface transport all use the
-    # apertures of the `:pure_neighbour` rule (see `_phase_face_apertures`).
-    _set_phase_aperture_rule!(interface, :pure_neighbour)
     return MimeticProjectionSolver{T, typeof(interface), typeof(metric)}(
         interface, rho, metric, Bool(_allow_wall_cuts),
     )
@@ -119,6 +116,9 @@ momentum `e_iᵀ𝓜u` and `momentum_wall_force` the wall term `dt (D e_i)ᵀ p`
 must equal; `transported_momentum_change` is the change of the transported
 momentum `e_iᵀWu` with the diagonal phase masses `W`, which this projection
 does not conserve, and `transported_momentum` its value before projection.
+`defective_cells` counts the cut cells whose Gram tensor has no consistent
+block (least-squares fallback, see [`MFDCutCellMetric`](@ref)); `lumped_values`
+the phase values that no block and no tie gives inertia (lumped mass).
 """
 struct MimeticProjectionStats{T}
     converged::Bool
@@ -140,7 +140,7 @@ struct MimeticProjectionStats{T}
     slaved_values::Int
     stabilised_values::Int
     lumped_values::Int
-    lumped_polygons::Int
+    defective_cells::Int
     gridline_faces::Int
     preconditioner::Symbol
 end
@@ -161,7 +161,7 @@ function Base.show(io::IO, stats::MimeticProjectionStats)
         ", slaved_values=", stats.slaved_values,
         ", stabilised_values=", stats.stabilised_values,
         ", lumped_values=", stats.lumped_values,
-        ", lumped_polygons=", stats.lumped_polygons,
+        ", defective_cells=", stats.defective_cells,
         ", gridline_faces=", stats.gridline_faces, ")",
     )
 end
@@ -564,7 +564,7 @@ function project!(
         result.momentum_wall_force, result.transported_momentum_change,
         result.transported_momentum, cells - 1, length(assembly.band),
         length(projected), assembly.cut_cells, assembly.slaved_values,
-        assembly.stabilised_values, assembly.lumped_values, assembly.lumped_polygons,
+        assembly.stabilised_values, assembly.lumped_values, assembly.defective_cells,
         assembly.gridline_faces,
         :pressure_multigrid,
     )

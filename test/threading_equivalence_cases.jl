@@ -84,8 +84,7 @@ function capillary_flow(; k = 4, max_level = 2, adaptation = true, diagnostics =
     return flow, 0.5 * stable_timestep(flow)
 end
 
-"""Uniform capillary wave with the mimetic cut-cell projection (non-simple
-cut cells use the lumped fallback)."""
+"""Uniform capillary wave with the mimetic cut-cell projection."""
 function mimetic_capillary_flow(; diagnostics = ())
     levelset = (x, y) -> y - 0.25 - 0.01cos(2pi * x)
     mesh = BlockTreeMesh(
@@ -98,11 +97,7 @@ function mimetic_capillary_flow(; diagnostics = ())
         interface; density, surface_tension = 1.0,
         dynamic_viscosity = density .* sqrt(1 / 3000.0),
     )
-    model = TwoVelocityModel(
-        pressure_projection = MimeticProjection(
-            metric = MFDCutCellMetric(nonsimple_cells = :lumped),
-        ),
-    )
+    model = TwoVelocityModel(pressure_projection = MimeticProjection())
     flow = FlowSimulation(
         mesh, physics; velocity_model = model, boundary = FreeSlip(), diagnostics,
     )

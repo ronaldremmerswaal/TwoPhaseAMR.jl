@@ -451,13 +451,7 @@ bounds treat such a face as carrying no resolvable flux.
     return liquid, gas
 end
 
-"""Physical phase apertures on one owned interior face.
-
-The liquid aperture is the mean of the two adjacent PLIC traces. With the
-interface's `:pure_neighbour` rule (`MimeticProjection`), a face between a
-pure cell and a cut cell whose PLIC line crosses it strictly inside takes the
-pure cell's value instead: such a crossing is a corner clip of a line that
-leaves the cell nearby, and halving it gives the cut cell a sliver polygon."""
+"""Physical phase apertures on one owned interior face."""
 @inline function _phase_face_apertures(
         field::InterfaceField{T}, geometry, index,
     ) where {T}
@@ -476,39 +470,11 @@ leaves the cell nearby, and halving it gives the cut cell a sliver polygon."""
     end
     liquid_possible || return zero(T), open
     gas_possible || return open, zero(T)
-    minus = _face_aperture(field, geometry, face, face.minus)
-    plus = _face_aperture(field, geometry, face, face.plus)
-    if field.phase_aperture_rule[] === :pure_neighbour
-        pure = _pure_neighbour_aperture(field, face, minus, plus)
-        isnothing(pure) || return _snap_phase_apertures(T(pure), open)
-    end
-    liquid = (minus + plus) / 2
+    liquid = (
+        _face_aperture(field, geometry, face, face.minus) +
+            _face_aperture(field, geometry, face, face.plus)
+    ) / 2
     return _snap_phase_apertures(T(liquid), open)
-end
-
-"""The pure neighbour's liquid aperture (`0` or `1`) if exactly one cell of
-`face` is pure and the other cell's PLIC trace on the face is strictly
-partial, else `nothing`."""
-@inline function _pure_neighbour_aperture(field, face, minus, plus)
-    minus_fraction = _conditional_fraction(field, face.minus)
-    plus_fraction = _conditional_fraction(field, face.plus)
-    minus_pure = iszero(minus_fraction) || isone(minus_fraction)
-    plus_pure = iszero(plus_fraction) || isone(plus_fraction)
-    minus_pure == plus_pure && return nothing
-    pure, trace = minus_pure ? (minus_fraction, plus) : (plus_fraction, minus)
-    return zero(trace) < trace < one(trace) ? pure : nothing
-end
-
-"""Select how face apertures combine the two adjacent traces (`:average` or
-`:pure_neighbour`); a change invalidates the cached apertures."""
-function _set_phase_aperture_rule!(field::InterfaceField, rule::Symbol)
-    rule in (:average, :pure_neighbour) || throw(
-        ArgumentError("phase aperture rule must be :average or :pure_neighbour"),
-    )
-    field.phase_aperture_rule[] === rule && return field
-    field.phase_aperture_rule[] = rule
-    field.phase_apertures_valid[] = false
-    return field
 end
 
 @inline _phase_face_apertures(field::InterfaceField, index) =
