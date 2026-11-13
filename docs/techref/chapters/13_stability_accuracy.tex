@@ -504,7 +504,7 @@ the space--time error.
     VOF transport (\cref{ch:vof-transport}) & exact space--time fluxes of the reconstruction, no method-of-lines form (\cref{sec:vof:balance}) & symmetric difference $1.8$ (translation, cut walls); vortex reversal $1.5$\\
     Staggered convection (\cref{ch:momentum-transport}) & forward Euler sweeps with Lax--Wendroff or limited states~\cref{eq:momentum:split} & Lax--Wendroff translation $1.9$ (uniform); convection on composite meshes $1.3$\\
     Pressure gradient and projection (\cref{ch:discrete-setting,ch:projection}) & CMDGFM jump interpolant first order for affine fields (\cref{sec:projection:cmdgfm}) & gradient on composite meshes $1.4$, stretched $1.0$; Poisson $1.7$; jump interpolant $0.8$\\
-    Viscous operator (\cref{ch:viscosity}) & two-point difference second order; transition rows can be $O(1)$~\cref{eq:viscosity:laplacian}, in flux form also for the variable stress~\cref{eq:viscosity:shear-flux}; PLIC wall rows first order (\issue{110}); geometric-mean viscosity at a jump first order (\issue{113}); orphan edges at non-Dirichlet walls not exact for linear fields (\issue{99}) & uniform $1.9$; composite Helmholtz $1.8$ (max, $L^2$); cut walls with transitions $1.8$ (max); aligned embedded walls $1.5$ (max), $1.8$ ($L^1$, $L^2$); inclined walls $0.6$ (max), $0.8$ pinned; variable stress bulk $1.8$, at transitions $1.8$ (max, $L^2$)\\
+    Viscous operator (\cref{ch:viscosity}) & two-point difference second order; transition rows can be $O(1)$~\cref{eq:viscosity:laplacian}, in flux form also for the variable stress~\cref{eq:viscosity:shear-flux}; PLIC wall rows first order (\issue{110}); geometric-mean viscosity at a jump first order (\issue{113}) & uniform $1.9$; composite Helmholtz $1.8$ (max, $L^2$); cut walls with transitions $1.8$ (max); aligned embedded walls $1.5$ (max), $1.8$ ($L^1$, $L^2$); inclined walls $0.6$ (max), $0.8$ pinned; variable stress bulk $1.8$, at transitions $1.8$ (max, $L^2$)\\
     AMR transfer (\cref{ch:amr-criteria-transfer}) & conservative; prolongation first order next to coarser blocks & phase scalar transfer $1.8$\\
     Forces in time (\cref{ch:forces}) & forward Euler~\cref{eq:forces:stages} & --\\
     \bottomrule
@@ -519,10 +519,13 @@ non-growing error, \cref{eq:viscosity:cut}), the
 geometric-mean vertex viscosity of the thesis~\thesis{\S7.5.1} at a
 material jump parallel to an interface-aligned shear (\issue{113}: $L^2$
 orders $1.48$, $0.78$, $0.82$, $0.90$, $0.95$ for $n=16$ to $512$ against
-$1.96$ to $1.98$ for equal viscosities; no test), and the two-point fallback
-for orphaned transverse edges at outflow, zero-gradient and inflow walls
-next to a level transition, whose error is of order one at those edges
-(\issue{99}; not measured). Next to triple points and at the
+$1.96$ to $1.98$ for equal viscosities; no test). An orphaned transverse
+edge next to a level transition is linear-exact at every wall type
+(\issue{99}): a \apitype{NoSlip}, \apitype{FreeSlip} or \apitype{Inflow} side
+closes it against the prescribed wall velocity -- exact for wall data constant
+along the wall, first order for data that varies along it -- and an
+\apitype{Outflow} or \apitype{ZeroGradientVelocity} side differences a
+level-matched pair of unknowns instead of the offset pair. Next to triple points and at the
 contact line the reconstruction is first order (\cref{ch:interface}).
 
 \emph{Time.} The step is a sequence of stages (\cref{eq:forces:stages}):
