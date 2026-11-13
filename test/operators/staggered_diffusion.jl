@@ -649,10 +649,20 @@ end
                 @test !isnothing(stencils) && haskey(stencils, edge)
                 isnothing(stencils) && continue
                 haskey(stencils, edge) || continue
-                indices, _ = stencils[edge]
-                anchor = indices[1]
-                @test connection.minus in indices && connection.plus in indices
-                @test all(index -> index == anchor || index in adjacency[anchor], indices)
+                indices, stencil = stencils[edge]
+                # The closure stays inside the two-ring face graph of the
+                # contact, which is the neighbourhood the minimum-norm
+                # derivative of an unembedded transition is built from, and
+                # its coefficients sum to zero. An offset contact whose wall
+                # value is unknown is differenced on a level-matched pair
+                # instead of on the offset pair itself, so its own two
+                # endpoints need not both appear in the row (#99).
+                @test all(
+                    index -> index in TwoPhaseAMR._nearby_degrees_of_freedom(
+                        connection.minus, connection.plus, adjacency,
+                    ), indices,
+                )
+                @test abs(sum(stencil)) <= 1.0e-10
             end
         end
     end
@@ -863,6 +873,251 @@ end
         for axis in 1:2, level in 1:2
             @test log2(errors[level][axis] / errors[level + 1][axis]) >= 1.8
         end
+    end
+end
+
+@testset "orphan transverse rows are linear-exact at open walls (#99)" begin
+    # A transverse contact across a level transition that ends at a domain
+    # wall has no mirrored partner, and an Outflow() or ZeroGradientVelocity()
+    # side prescribes no wall value to close it against. The former two-point
+    # difference carried the tangential derivative of the contact offset into
+    # the normal gradient, which is order one at those edges.
+    function cut_transverse(mesh, geometry, operator, axis, boundary)
+        schedule = TwoPhaseAMR._cut_cell_dual_schedule(geometry, Val(axis), false)
+        incidences, _, _ = TwoPhaseAMR._component_incidences(
+            mesh, Val(axis), Float64,
+        )
+        _, local_to_global = TwoPhaseAMR._component_local_to_global(mesh, axis)
+        connections = TwoPhaseAMR._geometric_diffusion_connections(
+            geometry, Val(axis), schedule, incidences, local_to_global,
+        )
+        component = axis == 1 ? operator.x : operator.y
+        stencils = TwoPhaseAMR._cut_cell_transverse_stencils(
+            mesh, connections, local_to_global, copy(component.wall_connections),
+            boundary, Val(axis), Float64,
+        )
+        return connections, stencils, local_to_global
+    end
+
+    # The transverse contacts of a component are offset across a level
+    # transition along the other direction, so an `:strip` variant refines
+    # across the component axis while `:corner` refines both.
+    function open_wall_operator(n, refined, axis, side)
+        mesh = BlockTreeMesh(
+            base_mesh = (n, n), block_size = (4, 4), extent = (1.0, 1.0),
+            periodic = (false, false), max_level = 1,
+            refine = (key, origin, extent) -> key.level == 0 && (
+                refined === :corner ?
+                    origin[1] < 0.5 && origin[2] < 0.5 :
+                    origin[3 - axis] < 0.5
+            ),
+        )
+        # The solid touches the left wall, so cut contacts, level transitions
+        # and a non-Dirichlet wall meet.
+        geometry = GeometryField(
+            mesh, (x, y) -> hypot(x - 0.1, y - 0.55) - 0.24; lipschitz = 1,
+        )
+        boundary = VelocityBoundaryConditions(
+            left = side, right = side, bottom = side, top = side,
+        )
+        return mesh, geometry,
+            StaggeredDiffusionOperator(geometry; viscosity = 1.0, boundary), boundary
+    end
+
+    for n in (8, 16), side in (Outflow(), ZeroGradientVelocity()),
+            refined in (:corner, :strip)
+        for axis in 1:2
+            mesh, geometry, operator, boundary = open_wall_operator(
+                n, refined, axis, side,
+            )
+            connections, stencils, local_to_global = cut_transverse(
+                mesh, geometry, operator, axis, boundary,
+            )
+            normal = 3 - axis
+            skew, wall_adjacent = 0, 0
+            for connection in connections
+                connection.axis == normal || continue
+                first, second = (
+                    mesh.faces[local_to_global[index]].center
+                        for index in (connection.minus, connection.plus)
+                )
+                TwoPhaseAMR._component_face_distance(mesh, first, second, axis) >
+                    256eps() * mesh.extent[axis] || continue
+                skew += 1
+                indices, coefficients = stencils[
+                    (connection.minus, connection.plus),
+                ]
+                # The contact that ends at the wall is the orphaned one: one
+                # endpoint lies in the wall-adjacent row of the finest level.
+                if min(first[normal], second[normal]) < 1.5 / (8 * n)
+                    wall_adjacent += 1
+                end
+                total, x_moment, y_moment = 0.0, 0.0, 0.0
+                for (index, dof) in pairs(indices)
+                    point = mesh.faces[local_to_global[dof]].center
+                    total += coefficients[index]
+                    x_moment += coefficients[index] * point[1]
+                    y_moment += coefficients[index] * point[2]
+                end
+                @test abs(total) <= 1.0e-10
+                @test abs(x_moment - (normal == 1 ? 1.0 : 0.0)) <= 1.0e-10
+                @test abs(y_moment - (normal == 2 ? 1.0 : 0.0)) <= 1.0e-10
+            end
+            @test skew > 0
+            @test wall_adjacent > 0
+        end
+    end
+
+    # Every row keeps a non-negative energy and a zero coefficient sum: the
+    # flux core alone, with all wall penalties removed, is symmetric positive
+    # semidefinite and conserves a constant.
+    rng = MersenneTwister(99)
+    for side in (Outflow(), ZeroGradientVelocity()), refined in (:corner, :strip)
+        mesh, geometry, operator, boundary = open_wall_operator(8, refined, 1, side)
+        for component in (operator.x, operator.y)
+            stiffness = component.stiffness
+            scale = max(1.0, maximum(abs, nonzeros(stiffness)))
+            @test stiffness == transpose(stiffness)
+            core = Matrix(stiffness)
+            for connection in component.wall_connections
+                TwoPhaseAMR._include_wall_connection(boundary, connection) ||
+                    continue
+                index = connection.degree_of_freedom
+                core[index, index] -= connection.conductance
+            end
+            n_rows = size(core, 1)
+            tolerance = 128eps(Float64) * n_rows * scale
+            @test maximum(abs, core * ones(n_rows)) <= tolerance
+            values = rand(rng, n_rows) .- 0.5
+            @test dot(values, core * values) >= -tolerance * dot(values, values)
+            if side isa Outflow
+                @test eigvals(Symmetric(core), 1:1)[1] >= -tolerance
+            end
+        end
+    end
+end
+
+@testset "inflow sides close orphan contacts like no-slip sides (#99)" begin
+    # The wall-normal velocity is prescribed data at an inflow side, so its
+    # stiffness must equal the no-slip one: only the wall value, which never
+    # enters the stiffness, differs.
+    function stiffness_pattern(boundary)
+        mesh = BlockTreeMesh(
+            base_mesh = (16, 16), block_size = (4, 4), extent = (1.0, 1.0),
+            periodic = (false, false), max_level = 1,
+            refine = (key, origin, extent) ->
+            key.level == 0 && origin[1] < 0.5 && origin[2] < 0.5,
+        )
+        geometry = GeometryField(
+            mesh, (x, y) -> hypot(x - 0.15, y - 0.6) - 0.28; lipschitz = 1,
+        )
+        operator = StaggeredDiffusionOperator(geometry; viscosity = 1.0, boundary)
+        return operator.x.stiffness, operator.y.stiffness
+    end
+
+    inflow_velocity = (x, y, time, axis) -> 1 + 0.3x - 0.2y
+    inflow = VelocityBoundaryConditions(
+        left = Inflow(inflow_velocity), right = Inflow(inflow_velocity),
+        bottom = Inflow(inflow_velocity), top = Inflow(inflow_velocity),
+    )
+    inflow_x, inflow_y = stiffness_pattern(inflow)
+    noslip_x, noslip_y = stiffness_pattern(NoSlip())
+    @test inflow_x == noslip_x
+    @test inflow_y == noslip_y
+    # An open side closes no contact against the wall, so it must differ.
+    open = VelocityBoundaryConditions(
+        left = Outflow(), right = Outflow(), bottom = Outflow(), top = Outflow(),
+    )
+    open_x, open_y = stiffness_pattern(open)
+    @test open_x != inflow_x
+    @test open_y != inflow_y
+end
+
+@testset "orphan transverse rows converge on a manufactured field (#99)" begin
+    # A transverse contact whose two dual faces sit on different tangential
+    # levels must not be differenced directly: the row then reproduces
+    # (offset/separation) times the tangential derivative instead of the
+    # normal one, and that factor does not vanish under refinement. The
+    # manufactured field (1 + 3x)(1 + 3y) is affine in the wall-normal
+    # direction at every wall, so the wall terms and the wall-normal
+    # differences of an all-open fixture are exact and the transverse rows are
+    # the only error source left.
+    exact(x, y) = (1 + 3x) * (1 + 3y)
+    derivative(x, y, axis) = axis == 1 ? 3 * (1 + 3y) : 3 * (1 + 3x)
+
+    function row_errors(n)
+        mesh = BlockTreeMesh(
+            base_mesh = (n, n), block_size = (4, 4), extent = (1.0, 1.0),
+            periodic = (false, false), max_level = 1,
+            refine = (key, origin, extent) -> key.level == 0 && origin[1] < 0.5,
+        )
+        geometry = GeometryField(mesh, (x, y) -> 1.0; lipschitz = 1)
+        side = Outflow()
+        boundary = VelocityBoundaryConditions(
+            left = side, right = side, bottom = side, top = side,
+        )
+        operator = StaggeredDiffusionOperator(geometry; viscosity = 1.0, boundary)
+        errors = Float64[]
+        for axis in 1:2
+            schedule = TwoPhaseAMR._cut_cell_dual_schedule(
+                geometry, Val(axis), false,
+            )
+            incidences, _, _ = TwoPhaseAMR._component_incidences(
+                mesh, Val(axis), Float64,
+            )
+            _, local_to_global = TwoPhaseAMR._component_local_to_global(mesh, axis)
+            connections = TwoPhaseAMR._geometric_diffusion_connections(
+                geometry, Val(axis), schedule, incidences, local_to_global,
+            )
+            component = axis == 1 ? operator.x : operator.y
+            stencils = TwoPhaseAMR._cut_cell_transverse_stencils(
+                mesh, connections, local_to_global,
+                copy(component.wall_connections), boundary, Val(axis), Float64,
+            )
+            normal = 3 - axis
+            for connection in connections
+                connection.axis == normal || continue
+                first, second = (
+                    mesh.faces[local_to_global[index]].center
+                        for index in (connection.minus, connection.plus)
+                )
+                TwoPhaseAMR._component_face_distance(
+                    mesh, first, second, axis,
+                ) > 256eps() * mesh.extent[axis] || continue
+                indices, coefficients = stencils[
+                    (connection.minus, connection.plus),
+                ]
+                value = 0.0
+                for (index, dof) in pairs(indices)
+                    point = mesh.faces[local_to_global[dof]].center
+                    value += coefficients[index] * exact(point...)
+                end
+                centroid = (
+                    (first[1] + second[1]) / 2, (first[2] + second[2]) / 2,
+                )
+                push!(errors, value - derivative(centroid..., normal))
+            end
+        end
+        return errors
+    end
+
+    maximum_errors = Float64[]
+    rms_errors = Float64[]
+    for n in (16, 32, 64)
+        errors = row_errors(n)
+        @test !isempty(errors)
+        push!(maximum_errors, maximum(abs, errors))
+        push!(rms_errors, sqrt(sum(abs2, errors) / length(errors)))
+    end
+    for (name, values) in (("maximum", maximum_errors), ("rms", rms_errors))
+        orders = log2.(values[1:2] ./ values[2:3])
+        println("issue99 transverse row $name errors=$values eoc=$orders")
+        @test all(diff(values) .< 0)
+        # Directly differencing the offset pair left the largest row error at
+        # 18.1, 18.6, 18.8 on these meshes (order zero) and the rms order at
+        # 0.5; a linear-exact row is first order in both.
+        @test orders[1] >= 0.9
+        @test orders[2] >= 0.9
     end
 end
 

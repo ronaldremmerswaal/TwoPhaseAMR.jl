@@ -1486,12 +1486,20 @@ function _cut_cell_transverse_stencils(
         wall.boundary_axis == Axis && !wall.tangential || continue
         side_boundary = boundary isa VelocityBoundaryConditions ?
             _side_boundary(boundary, Axis, wall.boundary_side) : boundary
-        side_boundary isa Union{NoSlip, FreeSlip} || continue
+        # A no-slip, free-slip or inflow side prescribes the wall-normal
+        # velocity itself; an outflow or zero-gradient side does not.
+        side_boundary isa Union{NoSlip, FreeSlip, Inflow} || continue
         push!(wall_rows, (wall.degree_of_freedom, wall.boundary_side))
     end
-    # Unpaired contacts must not scatter flux into a widened two-ring.
-    # Use a Dirichlet partner at stationary walls and an adjacent-pair flux
-    # for remaining interior, periodic or non-Dirichlet contacts.
+    # An unpaired contact is closed against the wall when the wall value is
+    # known, interpolating the far unknown to the wall distance of the near
+    # one. Where no value is prescribed the offset pair cannot be differenced
+    # directly: that difference carries the tangential derivative of the
+    # offset. It is differenced on a level-matched pair of unknowns instead,
+    # which is exact for affine velocities, and on the weighted minimum-norm
+    # derivative of the unembedded transition where no level-matched face is
+    # available.
+    adjacency = nothing
     for edge in skew_edges
         haskey(stencils, edge) && continue
         first = mesh.faces[local_to_global[edge[1]]].center
@@ -1502,9 +1510,19 @@ function _cut_cell_transverse_stencils(
             wall_connections, Val(Axis), T,
         )
         if isnothing(stencil)
-            inverse_distance = inv(distance)
-            stencil = (
-                Int[edge[1], edge[2]], T[-inverse_distance, inverse_distance],
+            isnothing(adjacency) && (
+                adjacency = _connection_adjacency(
+                    length(local_to_global), connections,
+                )
+            )
+            stencil = _level_matched_gradient(
+                mesh, edge[1], edge[2], normal, local_to_global, adjacency, T,
+            )
+            isnothing(stencil) && (
+                stencil = _minimum_norm_gradient(
+                    mesh, edge[1], edge[2], normal, distance, local_to_global,
+                    adjacency,
+                )
             )
         end
         stencils[edge] = stencil
@@ -1645,9 +1663,12 @@ Normal contacts take the open area of the cell mid-plane, so a closed flanking
 primal face cannot halve them. Transverse contact measures use overlaps of the
 bisected open traces, including across AMR interfaces, and a clipped open trace
 is bisected at the cell centre. Centred contacts share a linear-exact gradient;
-wall-adjacent orphans use a Dirichlet partner when available, while remaining
-orphans use flux-local two-point stencils. Domain-wall measures belong only
-to the dual strips that touch the wall.
+an orphaned contact takes the wall-normal velocity of a no-slip, free-slip or
+inflow wall as a Dirichlet partner and otherwise differences a level-matched
+pair of unknowns, which is exact for affine velocities; where no level-matched
+face is available it keeps the linear-exact minimum-norm derivative of the
+unembedded transition. Domain-wall measures belong only to the dual strips
+that touch the wall.
 Advection flux-star redistribution between sibling faces is not a diffusive
 interface.
 """

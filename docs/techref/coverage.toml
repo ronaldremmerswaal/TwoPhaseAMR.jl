@@ -1071,11 +1071,14 @@ check = "uniform_laplacian_check"
 label = "eq:viscosity:gradient"
 sources = [
   { file = "src/operators/staggered_diffusion.jl", symbol = "_gradient_stencil" },
+  { file = "src/operators/staggered_diffusion.jl", symbol = "_minimum_norm_gradient" },
+  { file = "src/operators/staggered_diffusion.jl", symbol = "_level_matched_gradient" },
   { file = "src/embedded/operators.jl", symbol = "_cut_cell_gradient_stencil" },
   { file = "src/embedded/operators.jl", symbol = "_cut_cell_transverse_stencils" },
 ]
 tests = [
-  { file = "test/operators/staggered_diffusion.jl", testset = "staggered diffusion stable core on uniform and AMR meshes" }
+  { file = "test/operators/staggered_diffusion.jl", testset = "staggered diffusion stable core on uniform and AMR meshes" },
+  { file = "test/operators/staggered_diffusion.jl", testset = "orphan transverse rows are linear-exact at open walls (#99)" }
 ]
 [[claims]]
 label = "eq:viscosity:stiffness"
@@ -1132,6 +1135,9 @@ tests = [
   { file = "test/operators/staggered_diffusion.jl", testset = "wall conductance follows split dual strips (#87)" },
   { file = "test/operators/staggered_diffusion.jl", testset = "wall-contact flux respects a linear normal profile (#87)" },
   { file = "test/operators/staggered_diffusion.jl", testset = "cut-cell Helmholtz convergence at walls and level transitions (#87)" },
+  { file = "test/operators/staggered_diffusion.jl", testset = "orphan transverse rows are linear-exact at open walls (#99)" },
+  { file = "test/operators/staggered_diffusion.jl", testset = "inflow sides close orphan contacts like no-slip sides (#99)" },
+  { file = "test/operators/staggered_diffusion.jl", testset = "orphan transverse rows converge on a manufactured field (#99)" },
   { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Grid-aligned embedded walls have the cut-wall limit" }
 ]
 check = "moving_wall_check"

@@ -503,20 +503,31 @@ function _expand_graph_neighbourhood!(selected, frontier, adjacency, depth, excl
     return selected
 end
 
-function _nearby_degrees_of_freedom(connection, adjacency)
-    selected = Set((connection.minus, connection.plus))
-    frontier = [connection.minus, connection.plus]
+function _nearby_degrees_of_freedom(minus, plus, adjacency)
+    selected = Set((minus, plus))
+    frontier = [minus, plus]
     _expand_graph_neighbourhood!(selected, frontier, adjacency, 2)
     return sort!(collect(selected))
 end
 
-function _gradient_stencil(
-        mesh, connection::DualDiffusionConnection{T},
-        local_to_global, adjacency
+"""
+    _minimum_norm_gradient(mesh, minus, plus, axis, distance, local_to_global,
+                           adjacency)
+
+Derivative row along `axis` across the dual faces `minus` and `plus`, whose
+centres are `distance` apart along that axis. An aligned pair keeps the
+two-point difference. A pair offset along the other axis contains a spurious
+tangential derivative in that difference, so the row is the weighted
+minimum-norm linear-exact derivative over the immediate two-ring face graph.
+Squaring this wider row in the viscous energy retains symmetry and non-negative
+dissipation.
+"""
+function _minimum_norm_gradient(
+        mesh, minus, plus, axis, distance::T, local_to_global, adjacency,
     ) where {T}
-    minus_point = mesh.faces[local_to_global[connection.minus]].center
-    plus_point = mesh.faces[local_to_global[connection.plus]].center
-    tangent_axis = 3 - connection.axis
+    minus_point = mesh.faces[local_to_global[minus]].center
+    plus_point = mesh.faces[local_to_global[plus]].center
+    tangent_axis = 3 - axis
     tangent_offset = abs(
         _wrapped_delta(
             plus_point[tangent_axis] - minus_point[tangent_axis],
@@ -524,21 +535,14 @@ function _gradient_stencil(
         )
     )
     if tangent_offset <= 256eps(T) * mesh.extent[tangent_axis]
-        return (
-            [connection.minus, connection.plus],
-            T[-inv(connection.distance), inv(connection.distance)],
-        )
+        return (Int[minus, plus], T[-inv(distance), inv(distance)])
     end
 
-    # A two-point difference across a split AMR interface contains a spurious
-    # tangential derivative. Use the immediate two-ring face graph to form the
-    # minimum-norm linear-exact normal derivative. Squaring this wider row in
-    # the viscous energy retains symmetry and non-negative dissipation.
-    indices = _nearby_degrees_of_freedom(connection, adjacency)
+    indices = _nearby_degrees_of_freedom(minus, plus, adjacency)
     number_of_points = length(indices)
     constraints = Matrix{T}(undef, 3, number_of_points)
     weights = Vector{T}(undef, number_of_points)
-    length_scale = max(connection.distance, tangent_offset)
+    length_scale = max(distance, tangent_offset)
     for (column, local_index) in pairs(indices)
         point = mesh.faces[local_to_global[local_index]].center
         dx = T(
@@ -563,11 +567,83 @@ function _gradient_stencil(
     isposdef(Symmetric(moment)) ||
         throw(ArgumentError("degenerate widened AMR diffusion stencil"))
     target = T[
-        zero(T), connection.axis == 1 ? one(T) : zero(T),
-        connection.axis == 2 ? one(T) : zero(T),
+        zero(T), axis == 1 ? one(T) : zero(T),
+        axis == 2 ? one(T) : zero(T),
     ]
     coefficients = weighted_transpose * (moment \ target)
     return indices, coefficients
+end
+
+function _gradient_stencil(
+        mesh, connection::DualDiffusionConnection{T},
+        local_to_global, adjacency
+    ) where {T}
+    return _minimum_norm_gradient(
+        mesh, connection.minus, connection.plus, connection.axis,
+        connection.distance, local_to_global, adjacency,
+    )
+end
+
+"""
+    _level_matched_gradient(mesh, minus, plus, axis, local_to_global, adjacency)
+
+Two-point derivative row along `axis` for a pair whose two dual faces sit on
+different levels of the other axis. Differencing the two faces themselves
+carries the tangential derivative of that offset into the row, so the row is
+built on the level of one endpoint instead: it differences that endpoint
+against its nearest neighbour on its own tangential level, which spans the
+pair's midpoint along `axis` as far as the neighbourhood allows. The result is
+exact for affine velocities. `nothing` when neither endpoint has such a
+neighbour close enough to span the pair.
+"""
+function _level_matched_gradient(
+        mesh, minus, plus, axis, local_to_global, adjacency, ::Type{T},
+    ) where {T}
+    tangent = 3 - axis
+    delta(coordinate, origin) = T(
+        _wrapped_delta(
+            coordinate - origin, mesh.extent[axis], mesh.periodic[axis],
+        )
+    )
+    minus_point = mesh.faces[local_to_global[minus]].center
+    plus_point = mesh.faces[local_to_global[plus]].center
+    pair = abs(
+        T(
+            _wrapped_delta(
+                plus_point[axis] - minus_point[axis],
+                mesh.extent[axis], mesh.periodic[axis],
+            )
+        )
+    )
+    for (first, second) in ((minus, plus), (plus, minus))
+        first_point = mesh.faces[local_to_global[first]].center
+        second_point = mesh.faces[local_to_global[second]].center
+        matched, span, score = 0, zero(T), zero(T)
+        for neighbour in adjacency[second]
+            (neighbour == first || neighbour == second) && continue
+            point = mesh.faces[local_to_global[neighbour]].center
+            abs(
+                T(
+                    _wrapped_delta(
+                        point[tangent] - second_point[tangent],
+                        mesh.extent[tangent], mesh.periodic[tangent],
+                    )
+                )
+            ) <= 256eps(T) * mesh.extent[tangent] || continue
+            offset = delta(point[axis], second_point[axis])
+            abs(offset) > 256eps(T) * mesh.extent[axis] || continue
+            # The difference must span the pair, so the level-matched face has
+            # to lie within two pair distances of the other endpoint.
+            candidate = abs(delta(point[axis], first_point[axis]))
+            candidate <= 2 * pair || continue
+            (iszero(matched) || candidate < score) &&
+                (matched, span, score = neighbour, offset, candidate)
+        end
+        iszero(matched) && continue
+        inverse = inv(span)
+        return Int[matched, second], T[inverse, -inverse]
+    end
+    return nothing
 end
 
 function _diffusion_stiffness(
