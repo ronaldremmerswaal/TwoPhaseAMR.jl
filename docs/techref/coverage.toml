@@ -1615,7 +1615,9 @@ tests = [
   { file = "test/mesh/adaptivity.jl", testset = "indicator spatial regions" },
   { file = "test/mesh/adaptivity.jl", testset = "Fixed bands refine the interface and release distant blocks (#117)" },
   { file = "test/mesh/adaptivity.jl", testset = "Static interface and geometry bands reach a fixed point (#117)" },
-  { file = "test/mesh/adaptivity.jl", testset = "Stationary droplet transfer does not regrid indefinitely (#117)" }
+  { file = "test/mesh/adaptivity.jl", testset = "Stationary droplet transfer does not regrid indefinitely (#117)" },
+  { file = "test/mesh/adaptivity.jl", testset = "Interface band skips covered cells of a wetted wall (#119)" },
+  { file = "test/mesh/adaptivity.jl", testset = "Interface band keeps refining a wetted contact line (#119)" }
 ]
 check = "amr_indicator_check"
 [[claims]]
