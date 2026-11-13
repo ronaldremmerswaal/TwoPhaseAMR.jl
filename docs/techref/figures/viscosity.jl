@@ -128,7 +128,7 @@ function stress_rows_check(field)
             parts = [(ref, box_overlap(mesh, box, cell_box_of(mesh, ref))) for ref in all_cells(mesh)]
             filter!(part -> part[2] > 0, parts)
             area = sum(last, parts)
-            push!(weights, area / sum(part[2] / mu[part[1]] for part in parts))
+            push!(weights, area^2 / sum(part[2] / mu[part[1]] for part in parts))
             shear_rows += 1
         end
         wall_rows = length(op.stress_weights) - length(weights)
