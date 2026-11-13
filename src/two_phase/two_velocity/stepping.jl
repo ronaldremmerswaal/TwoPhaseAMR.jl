@@ -204,12 +204,7 @@ end
 """Save the old aperture-weighted mixture cell flux before interface transport."""
 function _capture_two_velocity_inherited_flux!(solver, workspace, state)
     work = state.projection_workspace
-    cache = work isa CMDGFMProjectionWorkspace ?
-        work.pressure_cache : work.cache.pressure
-    data = _projection_face_data(
-        state.projection_solver, work; storage = cache.face_data,
-    )
-    cache.face_data = data
+    data = _two_velocity_projection_face_data!(state.projection_solver, work)
     projection = workspace.projection
     flux = projection.elliptic.input
     _cmdgfm_cell_flux!(
@@ -221,6 +216,19 @@ function _capture_two_velocity_inherited_flux!(solver, workspace, state)
         projection.inherited_divergence, flux,
         solver.pressure_solver.operator.references,
     )
+end
+
+function _two_velocity_projection_face_data!(projection::CMDGFMProjectionSolver, work)
+    cache = work.pressure_cache
+    data = _projection_face_data(projection, work; storage = cache.face_data)
+    cache.face_data = data
+    return data
+end
+
+function _two_velocity_projection_face_data!(projection::MimeticProjectionSolver, work)
+    data = _projection_face_data(projection, work; storage = work.face_data)
+    work.face_data = data
+    return data
 end
 
 function _phase_force_pressure_operator!(projection, work::CMDGFMProjectionWorkspace)
@@ -251,6 +259,67 @@ function _phase_force_substep!(
         model::TwoPhaseModel, operator::EllipticOperator,
     )
     return _apply_phase_forces!(velocity, workspace, dt, model, operator)
+end
+
+"""Apply phase forces and subtract the old CMDGFM pressure gradient."""
+function _two_velocity_forces_and_pressure!(
+        velocity, pressure, solver, workspace, state, model::TwoPhaseModel{T},
+        time_step,
+    ) where {T}
+    phase = workspace.two_phase
+    phase_forces = model.sigma > zero(T) || any(!iszero, model.gravity)
+    pressure_operator = _two_velocity_pressure_operator!(
+        solver, workspace, state, model,
+    )
+    if phase_forces
+        _phase_force_substep!(
+            velocity, workspace, time_step, model, pressure_operator,
+        )
+    end
+    _projection_weighted_gradient!(
+        phase.acceleration, pressure, pressure_operator,
+        workspace.projection.elliptic, model.interface.geometry,
+    )
+    _add_common_phase_acceleration!(velocity, phase.acceleration, -time_step)
+    return pressure_operator
+end
+
+"""Apply phase forces through the mimetic gradient map `𝓜⁻¹Dᵀ`.
+
+The mimetic projection is absolute, so no old pressure gradient is
+subtracted: an `𝓜⁻¹Dᵀ` gradient in the predictor is removed exactly, and the
+projection returns the full pressure.
+"""
+function _two_velocity_forces_and_pressure!(
+        velocity, pressure, solver, workspace,
+        state::TwoVelocityFlowWorkspace{<:Any, <:Any, <:Any, <:Any, <:MimeticProjectionSolver},
+        model::TwoPhaseModel{T}, time_step,
+    ) where {T}
+    isnothing(solver.geometry) || throw(
+        ArgumentError("MimeticProjection does not support embedded solid geometry"),
+    )
+    reconstruct!(model.interface)
+    # Only the cell references and jump storage of this operator are used.
+    operator = solver.pressure_solver.operator
+    projection = state.projection_solver
+    work = state.projection_workspace
+    if model.sigma > zero(T)
+        jumps = _surface_tension_jumps!(
+            operator.gradient_operator.pressure_jump, model.interface;
+            sigma = model.sigma, formulation = model.formulation,
+            unresolved_curvature_faces = workspace.unresolved_curvature_faces,
+        )
+        _mimetic_jump_force!(velocity, projection, work, jumps, time_step)
+    end
+    if any(!iszero, model.gravity)
+        jumps = _gravity_jumps!(
+            operator.gradient_operator.pressure_jump, model.interface, operator,
+            workspace.projection.elliptic;
+            density = model.density, gravity = model.gravity,
+        )
+        _mimetic_jump_force!(velocity, projection, work, jumps, time_step)
+    end
+    return operator
 end
 
 
@@ -331,20 +400,9 @@ function step!(
     _enforce_phase_velocity_boundary!(
         velocity, solver, current_time + time_step, phase.inactive_failures,
     )
-    phase_forces = model.sigma > zero(T) || any(!iszero, model.gravity)
-    pressure_operator = _two_velocity_pressure_operator!(
-        solver, workspace, state, model,
+    pressure_operator = _two_velocity_forces_and_pressure!(
+        velocity, pressure, solver, workspace, state, model, time_step,
     )
-    if phase_forces
-        _phase_force_substep!(
-            velocity, workspace, time_step, model, pressure_operator,
-        )
-    end
-    _projection_weighted_gradient!(
-        phase.acceleration, pressure, pressure_operator,
-        workspace.projection.elliptic, model.interface.geometry,
-    )
-    _add_common_phase_acceleration!(velocity, phase.acceleration, -time_step)
     inherited_cell_flux = if isnothing(inherited_flux)
         nothing
     else

@@ -1,0 +1,654 @@
+# Kinetic-energy-orthogonal two-velocity projection in the mimetic cut-cell
+# metric (`MimeticProjection`). Uniform square-cell meshes without embedded
+# solids only. See docs/techref/chapters/10_projection.tex, "Mimetic cut-cell
+# projection".
+
+import SparseArrays: UMFPACK
+
+"""
+    MimeticProjectionSolver(interface; density=(1, 1), metric=MFDCutCellMetric())
+
+Configuration of the mimetic cut-cell projection on `interface`. Throws
+`ArgumentError` for embedded solids, non-uniform (adaptive) meshes, non-square
+cells and element types other than `Float64`.
+"""
+struct MimeticProjectionSolver{T, I, M <: AbstractCutCellMetric}
+    interface::I
+    density::NTuple{2, T}
+    metric::M
+    allow_wall_cuts::Bool
+    preconditioner_coefficient::Symbol
+end
+
+function MimeticProjectionSolver(
+        interface::InterfaceField{T}; density = (one(T), one(T)),
+        metric::AbstractCutCellMetric = MFDCutCellMetric(),
+        _allow_wall_cuts = false, _preconditioner_coefficient = :diagonal_metric,
+    ) where {T}
+    T === Float64 || throw(ArgumentError("MimeticProjection requires Float64"))
+    rho = (T(density[1]), T(density[2]))
+    all(value -> isfinite(value) && value > zero(T), rho) || throw(
+        ArgumentError("phase densities must be finite and positive"),
+    )
+    isnothing(interface.geometry) || throw(
+        ArgumentError("MimeticProjection does not support embedded solid geometry"),
+    )
+    _mimetic_uniform_spacing(interface.mesh)
+    _preconditioner_coefficient in (:diagonal_metric, :metric_diagonal, :mixture_density) ||
+        throw(ArgumentError("unknown mimetic preconditioner coefficient"))
+    return MimeticProjectionSolver{T, typeof(interface), typeof(metric)}(
+        interface, rho, metric, Bool(_allow_wall_cuts), _preconditioner_coefficient,
+    )
+end
+
+"""Gauge-reduced Schur complement `D 𝓜⁻¹ Dᵀ` of the mimetic saddle-point system.
+
+Applied matrix-free: the band block of `𝓜` is solved with its sparse
+factorization, the diagonal part of `𝓜` enters through an assembled
+cell matrix. Cell 1 is the pressure anchor.
+"""
+struct _MimeticSchurOperator{T, W}
+    workspace::W
+    size::Int
+end
+
+Base.size(op::_MimeticSchurOperator) = (op.size, op.size)
+Base.size(op::_MimeticSchurOperator, dimension::Integer) = op.size
+Base.eltype(::_MimeticSchurOperator{T}) where {T} = T
+
+"""Reusable fields and the most recently assembled mimetic system."""
+mutable struct MimeticProjectionWorkspace{T, M <: BlockTreeMesh}
+    liquid_fraction_x::FaceField{1, T, M}
+    liquid_fraction_y::FaceField{2, T, M}
+    face_data::Union{Nothing, _ProjectionFaceData{T}}
+    topology::Union{Nothing, _MimeticTopology{T}}
+    references::Vector{CellRef}
+    assembly::_MimeticAssembly{T}
+    factor::Union{Nothing, UMFPACK.UmfpackLU{Float64, Int}}
+    divergence_band::SparseMatrixCSC{T, Int}
+    divergence_band_transpose::SparseMatrixCSC{T, Int}
+    diagonal_laplacian::SparseMatrixCSC{T, Int}
+    boundary_flux::Vector{T}
+    boundary_aperture::Vector{T}
+    boundary_low::Vector{Bool}
+    preconditioner_coefficient::Vector{T}
+    pressure_operator::Any
+    multigrid::Any
+    preconditioner::Any
+    predictor::Vector{T}
+    velocity::Vector{T}
+    metric_predictor::Vector{T}
+    metric_velocity::Vector{T}
+    multiplier::Vector{T}
+    cell_residual::Vector{T}
+    cell_scratch::Vector{T}
+    band_scratch::Vector{T}
+    band_solution::Vector{T}
+    reduced_rhs::Vector{T}
+    reduced_solution::Vector{T}
+    krylov::Union{Nothing, Krylov.CgWorkspace{T, T, Vector{T}}}
+    force_rhs::Vector{T}
+    force_solution::Vector{T}
+end
+
+"""
+    MimeticProjectionWorkspace(solver::MimeticProjectionSolver)
+
+Allocate reusable storage for [`project!`](@ref) with a mimetic projection.
+"""
+function MimeticProjectionWorkspace(solver::MimeticProjectionSolver{T}) where {T}
+    mesh = solver.interface.mesh
+    return MimeticProjectionWorkspace{T, typeof(mesh)}(
+        FaceField{1}(mesh, T), FaceField{2}(mesh, T), nothing, nothing,
+        CellRef[], _MimeticAssembly(T), nothing, spzeros(T, 0, 0), spzeros(T, 0, 0),
+        spzeros(T, 0, 0), T[], T[], Bool[], T[], nothing, nothing, nothing,
+        T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], nothing, T[], T[],
+    )
+end
+
+"""Diagnostics of one mimetic cut-cell projection.
+
+`mixture_volume_defect` is `dt * max(abs(div(u_mix)))` of the projected state;
+`target_defect` the same relative to an inherited mixture-flux target.
+`energy_identity_defect` is `(E(u*) - E(u⁺) - E(u* - u⁺)) / E(u*)` in the norm
+of the metric `𝓜`. `momentum_change` is the change of the first-moment
+momentum `e_iᵀ𝓜u` and `momentum_wall_force` the wall term `dt (D e_i)ᵀ p` it
+must equal; `transported_momentum_change` is the change of the transported
+momentum `e_iᵀWu` with the diagonal phase masses `W`, which this projection
+does not conserve, and `transported_momentum` its value before projection.
+"""
+struct MimeticProjectionStats{T}
+    converged::Bool
+    iterations::Int
+    initial_residual::T
+    final_residual::T
+    mixture_divergence::T
+    mixture_volume_defect::T
+    target_defect::T
+    energy_identity_defect::T
+    momentum_change::NTuple{2, T}
+    momentum_wall_force::NTuple{2, T}
+    transported_momentum_change::NTuple{2, T}
+    transported_momentum::NTuple{2, T}
+    pressure_unknowns::Int
+    band_unknowns::Int
+    phase_values::Int
+    cut_cells::Int
+    slaved_values::Int
+    stabilised_values::Int
+    lumped_values::Int
+    lumped_polygons::Int
+    preconditioner::Symbol
+end
+
+_dimensionless_residual(stats::MimeticProjectionStats) = stats.mixture_volume_defect
+
+function Base.show(io::IO, stats::MimeticProjectionStats)
+    return print(
+        io, "MimeticProjectionStats(converged=", stats.converged,
+        ", iterations=", stats.iterations,
+        ", mixture_volume_defect=", stats.mixture_volume_defect,
+        ", energy_identity_defect=", stats.energy_identity_defect,
+        ", momentum_change=", stats.momentum_change,
+        ", transported_momentum_change=", stats.transported_momentum_change,
+        ", unknowns=(`p`=", stats.pressure_unknowns,
+        ", band=", stats.band_unknowns, ")",
+        ", cut_cells=", stats.cut_cells,
+        ", slaved_values=", stats.slaved_values,
+        ", stabilised_values=", stats.stabilised_values,
+        ", lumped_values=", stats.lumped_values,
+        ", lumped_polygons=", stats.lumped_polygons, ")",
+    )
+end
+
+"""Assemble the metric and the reduced operators for the current interface.
+
+The assembly is reused while the interface fractions (hence apertures) and
+the mesh topology are unchanged.
+"""
+function _mimetic_assemble!(
+        solver::MimeticProjectionSolver{T}, workspace::MimeticProjectionWorkspace{T},
+    ) where {T}
+    interface = solver.interface
+    mesh = interface.mesh
+    topology_changed = !_mimetic_topology_current(workspace.topology, mesh)
+    if topology_changed
+        workspace.topology = _mimetic_topology(mesh)
+        workspace.references = _cell_references(mesh)
+        _resize_face_field!(workspace.liquid_fraction_x, mesh)
+        _resize_face_field!(workspace.liquid_fraction_y, mesh)
+    end
+    data = _projection_face_data(solver, workspace; storage = workspace.face_data)
+    workspace.face_data = data
+    assembly = workspace.assembly
+    revision = interface.phase_aperture_updates[]
+    !topology_changed && assembly.revision == revision && return assembly
+    flags = _mimetic_face_sides!(assembly.flags, interface, data.liquid_aperture)
+    boundary_aperture = resize!(workspace.boundary_aperture, length(mesh.boundary_faces))
+    boundary_low = resize!(workspace.boundary_low, length(mesh.boundary_faces))
+    for (index, face) in pairs(mesh.boundary_faces)
+        boundary_aperture[index] = _phase_boundary_face_apertures(interface, nothing, index)[1]
+        fraction = _conditional_fraction(interface, face.cell)
+        boundary_low[index] = zero(T) < fraction < one(T) && first(
+            _mimetic_trace_vote(
+                interface, face.cell, face.axis, face.side > 0 ? 0.5 : -0.5,
+            ),
+        ) > 0
+    end
+    _mimetic_assemble_from_data!(
+        workspace, solver.metric, mesh, data, flags, boundary_aperture,
+        boundary_low, solver.density; allow_wall_cuts = solver.allow_wall_cuts,
+        coefficient = solver.preconditioner_coefficient,
+    )
+    assembly.revision = revision
+    return assembly
+end
+
+"""Assemble `𝓜`, factorize its band block and build the reduced divergence
+operators from given face geometry (see `_assemble_cut_cell_metric!`)."""
+function _mimetic_assemble_from_data!(
+        workspace::MimeticProjectionWorkspace{T}, metric, mesh, data, flags,
+        boundary_aperture, boundary_low, density; allow_wall_cuts = false,
+        coefficient = :diagonal_metric,
+    ) where {T}
+    if !_mimetic_topology_current(workspace.topology, mesh)
+        workspace.topology = _mimetic_topology(mesh)
+        workspace.references = _cell_references(mesh)
+    end
+    topology = workspace.topology
+    assembly = _assemble_cut_cell_metric!(
+        workspace.assembly, metric, mesh, topology, data, flags,
+        boundary_aperture, boundary_low, density; allow_wall_cuts,
+    )
+    workspace.factor = isempty(assembly.band) ? nothing : lu(assembly.band_matrix)
+    cells = size(topology.sides, 2)
+    # Mixture divergence columns: +|f| a on the minus cell, -|f| a on the plus cell.
+    rows = Int[]
+    columns = Int[]
+    values = T[]
+    lrows = Int[]
+    lcolumns = Int[]
+    lvalues = T[]
+    for dof in eachindex(assembly.dof_face)
+        aperture = assembly.dof_aperture[dof]
+        iszero(aperture) && continue
+        face = assembly.dof_face[dof]
+        weight = mesh.faces[face].area * aperture
+        minus = topology.face_cells[1, face]
+        plus = topology.face_cells[2, face]
+        position = assembly.band_position[dof]
+        if position > 0
+            push!(rows, minus, plus)
+            push!(columns, position, position)
+            push!(values, weight, -weight)
+        else
+            stiffness = weight^2 / assembly.diagonal[dof]
+            push!(lrows, minus, plus, minus, plus)
+            push!(lcolumns, minus, plus, plus, minus)
+            push!(lvalues, stiffness, stiffness, -stiffness, -stiffness)
+        end
+    end
+    workspace.divergence_band = sparse(rows, columns, values, cells, length(assembly.band))
+    workspace.divergence_band_transpose = sparse(workspace.divergence_band')
+    workspace.diagonal_laplacian = sparse(lrows, lcolumns, lvalues, cells, cells)
+    resize!(workspace.boundary_flux, cells)
+    fill!(workspace.boundary_flux, zero(T))
+    count = length(assembly.band)
+    resize!(workspace.band_scratch, count)
+    resize!(workspace.band_solution, count)
+    resize!(workspace.cell_residual, cells)
+    resize!(workspace.cell_scratch, cells)
+    resize!(workspace.multiplier, cells)
+    # Face coefficient of the preconditioning pressure operator, in units of
+    # 1/rho: Σ_π (a|f|)² / 𝓜_rr with 𝓜_rr the diagonal phase mass of the
+    # code (:diagonal_metric, i.e. D W⁻¹ Dᵀ), the diagonal of 𝓜
+    # (:metric_diagonal), or the inverse mixture density (:mixture_density).
+    beta = resize!(workspace.preconditioner_coefficient, length(mesh.faces))
+    fill!(beta, zero(T))
+    for dof in eachindex(assembly.dof_face)
+        face = assembly.dof_face[dof]
+        area = mesh.faces[face].area
+        if coefficient === :mixture_density
+            beta[face] += assembly.dof_mass[dof] / area^2
+            continue
+        end
+        aperture = assembly.dof_aperture[dof]
+        iszero(aperture) && continue
+        diagonal = coefficient === :diagonal_metric ? assembly.dof_mass[dof] :
+            assembly.band_position[dof] > 0 ?
+            assembly.band_matrix[assembly.band_position[dof], assembly.band_position[dof]] :
+            assembly.diagonal[dof]
+        beta[face] += aperture^2 * area^2 / diagonal
+    end
+    coefficient === :mixture_density && (beta .= inv.(beta))
+    return assembly
+end
+
+function _mimetic_boundary_flux!(flux, solver, workspace, velocity)
+    interface = solver.interface
+    topology = workspace.topology
+    fill!(flux, zero(eltype(flux)))
+    nx, ny = interface.mesh.block_size
+    for (index, face) in pairs(interface.mesh.boundary_faces)
+        liquid, gas = _phase_boundary_face_apertures(interface, nothing, index)
+        cell = _cell_index(face.cell, nx, ny)
+        flux[cell] += face.side * face.area * _projection_phase_sum(
+            liquid, velocity[1].boundary[index], gas, velocity[2].boundary[index],
+        )
+    end
+    return flux
+end
+
+# y = D 𝓜⁻¹ Dᵀ x on the cells; `x` has zero at the anchor.
+function _mimetic_schur_full!(y, workspace, x)
+    mul!(y, workspace.diagonal_laplacian, x)
+    if !isnothing(workspace.factor)
+        band = workspace.band_scratch
+        mul!(band, workspace.divergence_band_transpose, x)
+        ldiv!(workspace.band_solution, workspace.factor, band)
+        mul!(y, workspace.divergence_band, workspace.band_solution, true, true)
+    end
+    return y
+end
+
+function mul!(destination, op::_MimeticSchurOperator{T}, source) where {T}
+    work = op.workspace
+    full = work.cell_scratch
+    full[1] = zero(T)
+    copyto!(full, 2, source, 1, op.size)
+    result = work.cell_residual
+    _mimetic_schur_full!(result, work, full)
+    copyto!(destination, 1, result, 2, op.size)
+    return destination
+end
+
+"""Phase values of `velocity` on the degrees of freedom of the assembly."""
+function _mimetic_gather!(values, assembly, velocity)
+    resize!(values, length(assembly.dof_face))
+    for dof in eachindex(assembly.dof_face)
+        value = velocity[assembly.dof_phase[dof]].interior[assembly.dof_face[dof]]
+        isfinite(value) || throw(
+            ArgumentError(
+                "non-finite active phase-$(assembly.dof_phase[dof]) velocity on " *
+                    "face $(assembly.dof_face[dof])",
+            ),
+        )
+        values[dof] = value
+    end
+    return values
+end
+
+"""`result = 𝓜 values` with the assembled metric."""
+function _mimetic_metric_product!(result, workspace, values)
+    assembly = workspace.assembly
+    resize!(result, length(values))
+    for dof in eachindex(values)
+        result[dof] = assembly.diagonal[dof] * values[dof]
+    end
+    band = assembly.band
+    isempty(band) && return result
+    scratch = workspace.band_scratch
+    solution = workspace.band_solution
+    for (position, dof) in pairs(band)
+        scratch[position] = values[dof]
+    end
+    mul!(solution, assembly.band_matrix, scratch)
+    for (position, dof) in pairs(band)
+        result[dof] = solution[position]
+    end
+    return result
+end
+
+"""`result = 𝓜⁻¹ rhs` with the assembled metric (the force map)."""
+function _mimetic_metric_solve!(result, workspace, rhs)
+    assembly = workspace.assembly
+    resize!(result, length(rhs))
+    for dof in eachindex(rhs)
+        diagonal = assembly.diagonal[dof]
+        result[dof] = iszero(diagonal) ? zero(eltype(result)) : rhs[dof] / diagonal
+    end
+    band = assembly.band
+    isempty(band) && return result
+    scratch = workspace.band_scratch
+    solution = workspace.band_solution
+    for (position, dof) in pairs(band)
+        scratch[position] = rhs[dof]
+    end
+    ldiv!(solution, workspace.factor, scratch)
+    for (position, dof) in pairs(band)
+        result[dof] = solution[position]
+    end
+    return result
+end
+
+"""Velocities `z⁺ = z* + 𝓜⁻¹ Dᵀ λ` and the cell outflow of the result."""
+function _mimetic_recover!(workspace, multiplier)
+    assembly = workspace.assembly
+    topology = workspace.topology
+    velocity = workspace.velocity
+    copyto!(velocity, workspace.predictor)
+    band = assembly.band
+    if !isempty(band)
+        mul!(workspace.band_scratch, workspace.divergence_band_transpose, multiplier)
+        ldiv!(workspace.band_solution, workspace.factor, workspace.band_scratch)
+        for (position, dof) in pairs(band)
+            velocity[dof] += workspace.band_solution[position]
+        end
+    end
+    for dof in eachindex(velocity)
+        assembly.band_position[dof] > 0 && continue
+        aperture = assembly.dof_aperture[dof]
+        iszero(aperture) && continue
+        face = assembly.dof_face[dof]
+        weight = topology.spacing * aperture
+        minus = topology.face_cells[1, face]
+        plus = topology.face_cells[2, face]
+        velocity[dof] += weight * (multiplier[minus] - multiplier[plus]) /
+            assembly.diagonal[dof]
+    end
+    return velocity
+end
+
+"""Cell outflow `D z + b` of the phase values `values`."""
+function _mimetic_outflow!(outflow, workspace, values)
+    assembly = workspace.assembly
+    topology = workspace.topology
+    copyto!(outflow, workspace.boundary_flux)
+    for dof in eachindex(values)
+        aperture = assembly.dof_aperture[dof]
+        iszero(aperture) && continue
+        face = assembly.dof_face[dof]
+        flux = topology.spacing * aperture * values[dof]
+        outflow[topology.face_cells[1, face]] += flux
+        outflow[topology.face_cells[2, face]] -= flux
+    end
+    return outflow
+end
+
+"""Gauge-reduced V-cycle of the pressure operator with the face coefficient
+`workspace.preconditioner_coefficient` (by default `D W⁻¹ Dᵀ`, the pressure
+operator of the diagonal phase-mass metric)."""
+function _mimetic_preconditioner!(solver, workspace)
+    interface = solver.interface
+    cells = size(workspace.topology.sides, 2)
+    operator = workspace.pressure_operator
+    fresh = !(operator isa EllipticOperator) || operator.mesh !== interface.mesh ||
+        length(operator.volumes) != cells
+    if fresh
+        operator = PoissonOperator(interface; density = solver.density)
+        workspace.pressure_operator = operator
+    end
+    _replace_face_coefficient(operator, workspace.preconditioner_coefficient)
+    multigrid = workspace.multigrid
+    if !fresh && multigrid isa TreeGeometricMultigridPreconditioner
+        _refresh_geometric_multigrid!(multigrid, operator)
+    else
+        multigrid = TreeGeometricMultigridPreconditioner(operator)
+        workspace.multigrid = multigrid
+    end
+    previous = workspace.preconditioner
+    workspace.preconditioner = _cmdgfm_reduced_pressure(
+        multigrid, operator, collect(2:cells), ones(Int, cells - 1), nothing;
+        reuse = previous isa CMDGFMReducedPressurePreconditioner ? previous : nothing,
+    )
+    return workspace.preconditioner
+end
+
+"""
+    project!(velocity, pressure, solver::MimeticProjectionSolver, dt, workspace;
+             tolerance, max_iterations)
+
+Project the liquid and gas face velocities onto vanishing aperture-weighted
+mixture divergence, orthogonally in the mimetic cut-cell kinetic metric `𝓜`
+(`MimeticProjection`). The projection is absolute: `velocity` is the full
+predictor, and `pressure` is overwritten with the projection pressure, whose
+value in the first cell is kept. Forces must therefore not subtract a
+pressure gradient from the predictor; any `𝓜⁻¹Dᵀ` gradient in the predictor
+is removed exactly.
+
+The saddle-point system for the band face values and the pressure is solved
+with the conjugate-gradient method on its pressure Schur complement, which is
+applied matrix-free with a sparse factorization of the band block of `𝓜`;
+one geometric-multigrid V-cycle of the pressure operator `D W⁻¹ Dᵀ` of the
+diagonal phase-mass metric preconditions it. `_inherited_cell_flux` and
+`_reference_dt` have the meaning of the CMDGFM projection.
+"""
+function project!(
+        velocity::TwoPhaseVelocity, pressure::CellField{T},
+        solver::MimeticProjectionSolver{T}, dt,
+        workspace::MimeticProjectionWorkspace{T};
+        tolerance = sqrt(eps(T)), max_iterations = 500,
+        _inherited_cell_flux = nothing, _reference_dt = dt,
+    ) where {T}
+    interface = solver.interface
+    _validate_two_phase_velocity(velocity, interface.mesh, T)
+    pressure.mesh === interface.mesh || throw(
+        ArgumentError("mimetic projection arguments must share a mesh"),
+    )
+    dt > zero(dt) || throw(ArgumentError("dt must be strictly positive"))
+    tolerance > zero(tolerance) || throw(ArgumentError("tolerance must be strictly positive"))
+    max_iterations > 0 || throw(ArgumentError("max_iterations must be strictly positive"))
+    isfinite(_reference_dt) && _reference_dt >= dt || throw(
+        ArgumentError("_reference_dt must be finite and at least dt"),
+    )
+    _mark_inactive_phase_velocities!(velocity, interface)
+    assembly = _mimetic_assemble!(solver, workspace)
+    _mimetic_boundary_flux!(workspace.boundary_flux, solver, workspace, velocity)
+    _mimetic_gather!(workspace.predictor, assembly, velocity)
+    preconditioner = _mimetic_preconditioner!(solver, workspace)
+    # Warm start from the previous pressure; the first cell is the anchor.
+    cells = length(workspace.references)
+    multiplier = workspace.multiplier
+    anchor_pressure = _get(pressure, workspace.references[1])
+    for cell in 1:cells
+        multiplier[cell] = T(dt) * (_get(pressure, workspace.references[cell]) - anchor_pressure)
+    end
+    weight = isnothing(_inherited_cell_flux) ? zero(T) : one(T) - T(dt) / T(_reference_dt)
+    result = _mimetic_solve!(
+        workspace, T(dt), preconditioner, _inherited_cell_flux, weight;
+        tolerance = T(tolerance), max_iterations,
+    )
+    projected = workspace.velocity
+    for dof in eachindex(projected)
+        velocity[assembly.dof_phase[dof]].interior[assembly.dof_face[dof]] = projected[dof]
+    end
+    _mark_inactive_phase_velocities!(velocity, interface)
+    for cell in 1:cells
+        _set!(pressure, anchor_pressure + multiplier[cell] / T(dt), workspace.references[cell])
+    end
+    fill_halo!(pressure)
+    return MimeticProjectionStats(
+        result.target_defect <= T(tolerance), result.iterations,
+        result.initial_residual, result.final_residual, result.mixture_divergence,
+        T(dt) * result.mixture_divergence, result.target_defect,
+        result.energy_identity_defect, result.momentum_change,
+        result.momentum_wall_force, result.transported_momentum_change,
+        result.transported_momentum, cells - 1, length(assembly.band),
+        length(projected), assembly.cut_cells, assembly.slaved_values,
+        assembly.stabilised_values, assembly.lumped_values, assembly.lumped_polygons,
+        :pressure_multigrid,
+    )
+end
+
+"""Solve the projection for the gathered predictor `workspace.predictor`.
+
+`workspace.multiplier` holds the initial guess of `λ = dt p` (zero in the
+anchor cell) and returns the solution; `workspace.velocity` returns the
+projected phase values. The target outflow is `-weight` times the inherited
+(negative integrated) cell flux.
+"""
+function _mimetic_solve!(
+        workspace::MimeticProjectionWorkspace{T}, dt, preconditioner, inherited,
+        weight; tolerance, max_iterations,
+    ) where {T}
+    assembly = workspace.assembly
+    topology = workspace.topology
+    cells = size(topology.sides, 2)
+    predictor = workspace.predictor
+    resize!(workspace.velocity, length(predictor))
+    target(cell) = iszero(weight) ? zero(T) : -weight * inherited[cell]
+    volume = topology.spacing^2
+    defect_of(outflow) = dt * maximum(c -> abs(outflow[c] - target(c)), 1:cells) / volume
+    multiplier = workspace.multiplier
+    multiplier[1] = zero(T)
+    initial_residual = norm(_mimetic_outflow!(workspace.cell_scratch, workspace, predictor))
+    _mimetic_recover!(workspace, multiplier)
+    outflow = _mimetic_outflow!(workspace.cell_residual, workspace, workspace.velocity)
+    reduced = cells - 1
+    resize!(workspace.reduced_rhs, reduced)
+    resize!(workspace.reduced_solution, reduced)
+    if isnothing(workspace.krylov) || length(workspace.krylov.x) != reduced
+        workspace.krylov = Krylov.CgWorkspace(reduced, reduced, Vector{T})
+    end
+    schur = _MimeticSchurOperator{T, typeof(workspace)}(workspace, reduced)
+    iterations = 0
+    defect = defect_of(outflow)
+    while defect > tolerance && iterations < max_iterations && reduced > 0
+        # S δλ = target - outflow on the non-anchor cells.
+        for cell in 2:cells
+            workspace.reduced_rhs[cell - 1] = target(cell) - outflow[cell]
+        end
+        rhs_norm = norm(workspace.reduced_rhs)
+        (isfinite(rhs_norm) && rhs_norm > zero(T)) || break
+        requested = min(tolerance, tolerance / max(defect, eps(T)))
+        Krylov.cg!(
+            workspace.krylov, schur, workspace.reduced_rhs;
+            M = preconditioner, ldiv = true, atol = zero(T), rtol = requested,
+            itmax = max_iterations - iterations,
+        )
+        correction = Krylov.solution(workspace.krylov)
+        attempt = Krylov.iteration_count(workspace.krylov)
+        iterations += attempt
+        (all(isfinite, correction) && attempt > 0) || break
+        for cell in 2:cells
+            multiplier[cell] += correction[cell - 1]
+        end
+        _mimetic_recover!(workspace, multiplier)
+        outflow = _mimetic_outflow!(workspace.cell_residual, workspace, workspace.velocity)
+        previous = defect
+        defect = defect_of(outflow)
+        defect < previous || break
+    end
+    final_residual = norm(outflow)
+    mixture_divergence = maximum(abs, outflow) / volume
+
+    # Diagnostics in the metric 𝓜 and the transported momentum.
+    projected = workspace.velocity
+    mp = _mimetic_metric_product!(workspace.metric_predictor, workspace, predictor)
+    mv = _mimetic_metric_product!(workspace.metric_velocity, workspace, projected)
+    energy_before = dot(predictor, mp)
+    energy_after = dot(projected, mv)
+    energy_correction = energy_before - 2dot(projected, mp) + energy_after
+    identity = energy_before > zero(T) ?
+        (energy_before - energy_after - energy_correction) / energy_before : zero(T)
+    momentum = zeros(T, 2)
+    wall = zeros(T, 2)
+    transported = zeros(T, 2)
+    transported_before = zeros(T, 2)
+    for dof in eachindex(predictor)
+        face = assembly.dof_face[dof]
+        axis = topology.sides[2, topology.face_cells[1, face]] == face ? 1 : 2
+        momentum[axis] += mv[dof] - mp[dof]
+        mass = assembly.dof_mass[dof]
+        transported[axis] += mass * (projected[dof] - predictor[dof])
+        transported_before[axis] += mass * predictor[dof]
+        wall[axis] += topology.spacing * assembly.dof_aperture[dof] * (
+            multiplier[topology.face_cells[1, face]] -
+                multiplier[topology.face_cells[2, face]]
+        )
+    end
+    return (;
+        iterations, initial_residual, final_residual, mixture_divergence,
+        target_defect = defect, energy_identity_defect = identity,
+        momentum_change = (momentum[1], momentum[2]),
+        momentum_wall_force = (wall[1], wall[2]),
+        transported_momentum_change = (transported[1], transported[2]),
+        transported_momentum = (transported_before[1], transported_before[2]),
+    )
+end
+
+"""Add `dt 𝓜⁻¹ (a^π J)` to each phase: a face jump force through the mimetic
+gradient map. `J` holds integrated face jumps (`|f|` times the jump of a cell
+potential for a gradient force), exactly as for the CMDGFM force map."""
+function _mimetic_jump_force!(
+        velocity::TwoPhaseVelocity, solver::MimeticProjectionSolver{T},
+        workspace::MimeticProjectionWorkspace{T}, jumps, dt,
+    ) where {T}
+    assembly = _mimetic_assemble!(solver, workspace)
+    count = length(assembly.band)
+    resize!(workspace.band_scratch, count)
+    resize!(workspace.band_solution, count)
+    rhs = workspace.force_rhs
+    resize!(rhs, length(assembly.dof_face))
+    for dof in eachindex(rhs)
+        rhs[dof] = assembly.dof_aperture[dof] * jumps[assembly.dof_face[dof]]
+    end
+    acceleration = _mimetic_metric_solve!(workspace.force_solution, workspace, rhs)
+    for dof in eachindex(acceleration)
+        phase = velocity[assembly.dof_phase[dof]].interior
+        face = assembly.dof_face[dof]
+        isnan(phase[face]) && continue
+        phase[face] += T(dt) * acceleration[dof]
+    end
+    return velocity
+end

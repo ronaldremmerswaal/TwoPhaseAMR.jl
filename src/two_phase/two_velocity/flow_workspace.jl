@@ -29,19 +29,30 @@ function _two_velocity_flow_workspace(
     mixture_velocity = FaceVelocity(field.mesh, T)
     diffused_mixture = FaceVelocity(field.mesh, T)
     momentum = MomentumAdvectionWorkspace(field, old_velocity)
-    projection = model.pressure_projection
-    solver = CMDGFMProjectionSolver(
-        field; density = model.density,
-        preconditioner = projection.preconditioner,
-        preconditioner_options = projection.preconditioner_options,
+    solver = _two_velocity_projection_solver(
+        model.pressure_projection, field, model.density,
     )
-    projection_workspace = CMDGFMProjectionWorkspace(solver)
+    projection_workspace = _two_velocity_projection_workspace(solver)
     return TwoVelocityFlowWorkspace(
         advection, momentum, old_velocity, convected,
         mixture_velocity, diffused_mixture, solver,
         projection_workspace,
     )
 end
+
+_two_velocity_projection_solver(projection::CMDGFMProjection, field, density) =
+    CMDGFMProjectionSolver(
+    field; density,
+    preconditioner = projection.preconditioner,
+    preconditioner_options = projection.preconditioner_options,
+)
+_two_velocity_projection_solver(projection::MimeticProjection, field, density) =
+    MimeticProjectionSolver(field; density, metric = projection.metric)
+
+_two_velocity_projection_workspace(solver::CMDGFMProjectionSolver) =
+    CMDGFMProjectionWorkspace(solver)
+_two_velocity_projection_workspace(solver::MimeticProjectionSolver) =
+    MimeticProjectionWorkspace(solver)
 
 function _two_velocity_flow_workspace!(
         workspace::TwoPhaseFlowWorkspace{T, M, D, S, C, A, N, V}, model,
@@ -58,6 +69,12 @@ function _reconfigure_two_velocity_flow_workspace(state, model, advection)
     # Preserve Krylov and geometric templates across AMR. Topology-dependent
     # caches are validated against block keys at the next assembly.
     state isa TwoVelocityFlowWorkspace || return nothing
+    if state.projection_solver isa MimeticProjectionSolver
+        # A regrid that leaves the mesh non-uniform is unsupported; otherwise
+        # the mimetic workspace is rebuilt lazily for the new topology.
+        _mimetic_uniform_spacing(model.interface.mesh)
+        return nothing
+    end
     state.projection_solver isa CMDGFMProjectionSolver || return nothing
     mesh = model.interface.mesh
     for velocity in (
@@ -125,6 +142,19 @@ function _project_two_velocity!(
         )
     end
     return project!(velocity, pressure, projection, dt, state.projection_workspace; kwargs...)
+end
+
+function _project_two_velocity!(
+        velocity, pressure, solver, workspace,
+        state::TwoVelocityFlowWorkspace{<:Any, <:Any, <:Any, <:Any, <:MimeticProjectionSolver},
+        dt; pressure_prepared = false, kwargs...
+    )
+    # The mimetic solve preconditions with its own pressure operator of the
+    # diagonal phase-mass metric; the flow's mixture-density operator is unused.
+    return project!(
+        velocity, pressure, state.projection_solver, dt, state.projection_workspace;
+        kwargs...
+    )
 end
 
 

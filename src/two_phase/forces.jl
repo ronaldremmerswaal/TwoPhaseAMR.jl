@@ -306,10 +306,24 @@ function surface_tension!(
         unresolved_curvature_faces::Union{Nothing, Base.RefValue{Int}} = nothing,
     )
     destination.mesh === field.mesh === operator.mesh || throw(ArgumentError("surface tension arguments must share a mesh"))
+    jumps = _surface_tension_jumps!(
+        operator.gradient_operator.pressure_jump, field;
+        sigma, formulation, curvature, unresolved_curvature_faces,
+    )
+    return _weighted_jump_force!(
+        destination, operator, work, jumps, field.geometry,
+    )
+end
+
+"""Integrated surface-tension face jumps `σ κ_f [H]_f |f|` of `surface_tension!`."""
+function _surface_tension_jumps!(
+        jumps, field::InterfaceField;
+        sigma, formulation = CGFM(), curvature = nothing,
+        unresolved_curvature_faces::Union{Nothing, Base.RefValue{Int}} = nothing,
+    )
     _validate_surface_tension_formulation(formulation)
     isfinite(sigma) && sigma >= 0 || throw(ArgumentError("sigma must be finite and nonnegative"))
     isnothing(curvature) || isfinite(curvature) || throw(ArgumentError("constant curvature must be finite"))
-    jumps = operator.gradient_operator.pressure_jump
     unresolved = 0
     for (i, face) in pairs(field.mesh.faces)
         if !isnothing(field.geometry) &&
@@ -334,9 +348,7 @@ function surface_tension!(
         jumps[i] = sigma * kappa * jump * face.area
     end
     isnothing(unresolved_curvature_faces) || (unresolved_curvature_faces[] = unresolved)
-    return _weighted_jump_force!(
-        destination, operator, work, jumps, field.geometry,
-    )
+    return jumps
 end
 
 @inline function _clip_line_interval(lo, hi, slope, offset; keep_less)
@@ -484,6 +496,21 @@ function gravity!(
         density::NTuple{2}, gravity::NTuple{2}
     )
     destination.mesh === field.mesh === operator.mesh || throw(ArgumentError("gravity arguments must share a mesh"))
+    jumps = _gravity_jumps!(
+        operator.gradient_operator.pressure_jump, field, operator, work;
+        density, gravity,
+    )
+    return _weighted_jump_force!(
+        destination, operator, work, jumps, field.geometry,
+    )
+end
+
+"""Integrated gravity face jumps `ρ_f |f| [g·x]_f` of `gravity!`; `work.input`
+receives the cell potential."""
+function _gravity_jumps!(
+        jumps, field::InterfaceField, operator::EllipticOperator,
+        work::EllipticWorkspace; density::NTuple{2}, gravity::NTuple{2},
+    )
     all(rho -> isfinite(rho)&&rho > 0, density) || throw(ArgumentError("densities must be finite and positive"))
     all(isfinite, gravity) || throw(ArgumentError("gravity must be finite"))
     mesh = field.mesh
@@ -502,7 +529,6 @@ function gravity!(
         end
         @inbounds potential[index] = gravity[1] * x + gravity[2] * y
     end
-    jumps = operator.gradient_operator.pressure_jump
     # Reuse the same reconstructed liquid opening used by the phase
     # divergence operator. In a two-velocity step this also primes the
     # post-transport aperture cache before pressure assembly.
@@ -527,7 +553,5 @@ function gravity!(
         )
         jumps[i] = rho * face.area * (potential[plus] - potential[minus])
     end
-    return _weighted_jump_force!(
-        destination, operator, work, jumps, geometry,
-    )
+    return jumps
 end

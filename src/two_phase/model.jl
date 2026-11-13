@@ -18,9 +18,10 @@ function TwoPhaseModel(
     interface = physics.interface
     pressure_projection isa AbstractTwoVelocityProjection || throw(
         ArgumentError(
-            "pressure_projection must be a CMDGFMProjection()",
+            "pressure_projection must be CMDGFMProjection() or MimeticProjection()",
         ),
     )
+    _validate_two_velocity_projection(pressure_projection, interface)
     any(a -> interface.mesh.periodic[a] && !iszero(physics.gravity[a]), 1:2) &&
         throw(ArgumentError("gravity requires nonperiodic boundaries in its direction"))
     tension = physics.surface_tension
@@ -72,12 +73,30 @@ function _two_velocity_workspace_type(
     Y = PhaseFaceScalar{2, T, M, PhaseFaceAdvectionScratch{T}, WY, F}
     N = TwoVelocityMomentumAdvectionWorkspace{T, M, X, Y, typeof(model.interface.geometry)}
     V = FaceVelocity{T, M}
-    projection = model.pressure_projection
-    S = CMDGFMProjectionSolver{
+    S, W = _two_velocity_projection_types(model.pressure_projection, T, M, F)
+    return TwoVelocityFlowWorkspace{A, N, Tuple{V, V}, V, S, W}
+end
+
+_two_velocity_projection_types(projection::CMDGFMProjection, T, M, F) = (
+    CMDGFMProjectionSolver{
         T, F, typeof(projection.preconditioner),
         typeof(projection.preconditioner_options),
-    }
-    return TwoVelocityFlowWorkspace{A, N, Tuple{V, V}, V, S, CMDGFMProjectionWorkspace{T, M}}
+    },
+    CMDGFMProjectionWorkspace{T, M},
+)
+_two_velocity_projection_types(projection::MimeticProjection, T, M, F) = (
+    MimeticProjectionSolver{T, F, typeof(projection.metric)},
+    MimeticProjectionWorkspace{T, M},
+)
+
+_validate_two_velocity_projection(::AbstractTwoVelocityProjection, interface) = nothing
+function _validate_two_velocity_projection(::MimeticProjection, interface)
+    eltype(interface) === Float64 || throw(ArgumentError("MimeticProjection requires Float64"))
+    isnothing(interface.geometry) || throw(
+        ArgumentError("MimeticProjection does not support embedded solid geometry"),
+    )
+    _mimetic_uniform_spacing(interface.mesh)
+    return nothing
 end
 
 
