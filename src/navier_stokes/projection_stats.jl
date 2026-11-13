@@ -18,7 +18,8 @@ an iteration or reduced its residual; a two-velocity warm start can reduce the
 residual without an iteration. `last_iterations`, `last_initial_residual`, and
 `last_final_residual` describe the most recent solve that worked; they stay
 zero when none did. Residuals use the native norm of the projection solver
-(`initial_residual` of `LinearSolverStats` or `CMDGFMProjectionStats`).
+(`initial_residual` of `LinearSolverStats`, `CMDGFMProjectionStats` or
+`MimeticProjectionStats`).
 """
 mutable struct ProjectionRunStats{T}
     solves::Int

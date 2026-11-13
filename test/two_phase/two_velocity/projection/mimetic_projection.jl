@@ -87,6 +87,16 @@ _mimetic_circle(n; x = 0.5, y = 0.5, radius = 0.25) =
         velocity_model = model, boundary = FreeSlip(),
     )
     @test flow.system.two_phase.pressure_projection === projection
+    # `simulate!` accounts the mimetic solves and reports them in the summary.
+    dt = 1.0e-3  # the flow starts at rest without surface tension: no CFL limit
+    result = simulate!(flow, 2dt; dt)
+    @test result.projection.solves == result.steps == 2
+    @test result.projection.converged
+    report = IOBuffer()
+    @test isnothing(print_simulation_summary(report, flow, result))
+    summary = String(take!(report))
+    @test occursin("iterations this run: $(result.projection.iterations)", summary)
+    @test occursin("energy identity defect", summary)
 end
 
 @testset "Mimetic metric: symmetry, definiteness, diagonal masses and consistency" begin
