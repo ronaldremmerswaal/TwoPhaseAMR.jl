@@ -95,11 +95,15 @@ preliminary label $\widehat{\indlabel{i}{\blk}}$ is
     \lcoarsen, & \text{otherwise},
   \end{cases}\\
   \blk\ \text{near}\iff
-  \min_{c\in\blockring{\blk}}\condfrac{\liq}{c}<1-\ffloor\ \text{and}\
-  \max_{c\in\blockring{\blk}}\condfrac{\liq}{c}>\ffloor,
+  \min_{\substack{c\in\blockring{\blk}\\\openfrac{c}>0}}\condfrac{\liq}{c}<1-\ffloor\ \text{and}\
+  \max_{\substack{c\in\blockring{\blk}\\\openfrac{c}>0}}\condfrac{\liq}{c}>\ffloor,
   \end{gathered}
 \end{equation}
-with the fraction floor $\ffloor$ of the interface. The owned values are
+with the fraction floor $\ffloor$ of the interface. The extrema skip the
+covered cells of the ring ($\openfrac{c}=0$): such a cell holds no fluid, so
+its conditional fraction is zero by construction rather than gas
+(\cref{eq:interface:fractions}) and a wall it touches is wetted by one phase
+alone, not an interface (\issue{119}). The owned values are
 snapped, so a block that contains a mixed cell, or a liquid and a gas cell,
 is near; so is a block whose ring holds such values, which detects an
 interface on the faces between pure cells of neighbouring blocks.
@@ -116,8 +120,9 @@ $1\le\lev\le\levtarget$ whose labels, after the spatial-region filter, are
 all $\lcoarsen$.
 Let $P$ be their parent. The guard expands $P$ by
 $\ringwidth\,\meshwidth{\lev-1}{k}$ on each side in direction $k$ and takes
-the extrema of the conditional fractions of all owned leaf cells that overlap
-the resulting rectangle in positive area, including periodic images.
+the extrema, over the same open cells, of the conditional fractions of all
+owned leaf cells that overlap the resulting rectangle in positive area,
+including periodic images.
 At a physical wall the rectangle is clipped to the domain. If these extrema
 satisfy the same strict test as the near condition in~\cref{eq:amr:band},
 all four siblings are instead labelled $\lkeep$; otherwise their filtered
@@ -126,11 +131,6 @@ children's cells. Since extrema are taken before averaging to the hypothetical
 parent, it can conservatively keep a family even if that parent would not
 actually be near. The spatial-region filter is applied again after the guard,
 so siblings outside the region still request $\lcoarsen$.
-
-A covered cell has $\condfrac{\liq}{c}=0$
-(\cref{eq:interface:fractions}), so a block in which liquid touches the solid
-can be near without any liquid--gas interface: a wetted solid boundary may
-still be refined to $\levtarget$ (\issue{119}).
 
 \begin{deviation}{Interface refinement}\label{dev:amr:band}
 The thesis' $\volfrac$-AMR (criterion~1) refines a block that contains both
@@ -158,8 +158,10 @@ fractions are refreshed by
 Tests: \testsym{test/indicator/geometry.jl}{Geometry-presence refinement indicator},
 \testsym{test/mesh/adaptivity.jl}{indicator spatial regions},
 \testsym{test/mesh/adaptivity.jl}{Fixed bands refine the interface and release distant blocks (#117)},
-\testsym{test/mesh/adaptivity.jl}{Static interface and geometry bands reach a fixed point (#117)}, and
-\testsym{test/mesh/adaptivity.jl}{Stationary droplet transfer does not regrid indefinitely (#117)}.
+\testsym{test/mesh/adaptivity.jl}{Static interface and geometry bands reach a fixed point (#117)},
+\testsym{test/mesh/adaptivity.jl}{Stationary droplet transfer does not regrid indefinitely (#117)},
+\testsym{test/mesh/adaptivity.jl}{Interface band skips covered cells of a wetted wall (#119)}, and
+\testsym{test/mesh/adaptivity.jl}{Interface band keeps refining a wetted contact line (#119)}.
 \end{implnote}
 
 \subsection{Curvature}\label{sec:amr:curvature}
@@ -849,9 +851,10 @@ next step.
 replica of the band and parent guard, and replicas of the error-based criteria,
 agree on \chkAmrLabelsCompared{} block labels. On a pool over a sloped solid,
 the interface band labels \chkAmrWettedBlocks{} of \chkAmrArtifactBlocks{}
-blocks for refinement without a liquid--gas mixed cell (\issue{119}), whereas
-the curvature indicator labels \chkAmrCurvatureBlocks{} such blocks
-(\issue{118}). In the static-drop fixture with a one-cell buffer, the mesh
+blocks for refinement without a liquid--gas mixed cell: the wetted wall alone
+is not near (\issue{119}). The curvature indicator labels
+\chkAmrCurvatureBlocks{} such blocks (\issue{118}). In the static-drop fixture
+with a one-cell buffer, the mesh
 changes \chkAmrCycleChanges{} times after the initial refinements over
 \chkAmrCycleSteps{} attempts and has period \chkAmrCyclePeriod{} (a fixed
 point), addressing \issue{117}.
