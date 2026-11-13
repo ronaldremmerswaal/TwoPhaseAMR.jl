@@ -972,17 +972,21 @@ end
                 @test abs(total) <= 1.0e-10
                 @test abs(x_moment - (normal == 1 ? 1.0 : 0.0)) <= 1.0e-10
                 @test abs(y_moment - (normal == 2 ? 1.0 : 0.0)) <= 1.0e-10
-                # Where a level-matched face exists the contact must use it:
-                # the row is then the two-point difference of that pair, not
-                # the widened minimum-norm fallback.
-                level = TwoPhaseAMR._level_matched_gradient(
-                    mesh, connection.minus, connection.plus, normal,
-                    local_to_global, adjacency, Float64,
-                )
-                if !isnothing(level)
-                    @test indices == level[1]
-                    @test coefficients ≈ level[2] atol = 1.0e-12
-                    level_matched += 1
+                # A centred group takes precedence; every remaining two-point
+                # row must be the level-matched difference of that pair and not
+                # the widened minimum-norm fallback, which never fits in two
+                # points for an offset contact.
+                if length(indices) == 2
+                    level = TwoPhaseAMR._level_matched_gradient(
+                        mesh, connection.minus, connection.plus, normal,
+                        local_to_global, adjacency, Float64,
+                    )
+                    @test !isnothing(level)
+                    if !isnothing(level)
+                        @test indices == level[1]
+                        @test coefficients ≈ level[2] atol = 1.0e-12
+                        level_matched += 1
+                    end
                 end
             end
             @test skew > 0
