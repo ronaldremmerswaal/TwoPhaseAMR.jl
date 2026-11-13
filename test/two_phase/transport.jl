@@ -1337,6 +1337,65 @@ end
     end
 end
 
+@testset "Phase apertures take the pure neighbour's value at a clip" begin
+    mesh = BlockTreeMesh(
+        block_size = (8, 8), origin = (0.0, 0.0), extent = (1.0, 1.0),
+        periodic = (false, false),
+    )
+    # A circle cuts cells into corner clips and a sloped wall keeps the open
+    # aperture of the faces below one.
+    geometry = GeometryField(
+        mesh, (x, y) -> y - 0.04 - 0.1x; lipschitz = 1,
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> hypot(x - 0.5, y - 0.55) - 0.3;
+        geometry, lipschitz = 1,
+    )
+    reconstruct!(interface)
+    rule_faces = changing = pure_minus = pure_plus = 0
+    both_cut_faces = 0
+    for index in eachindex(mesh.faces)
+        face = mesh.faces[index]
+        open = geometry.aperture[index]
+        liquid, gas = TP._phase_face_apertures(interface, index)
+        # The rule only re-splits the open aperture.
+        @test liquid >= 0 && gas >= 0 && liquid + gas == open
+        (TP._get(geometry.open_fraction, face.minus) > 0 &&
+            TP._get(geometry.open_fraction, face.plus) > 0) || continue
+        minus_trace = TP._face_aperture(interface, face, face.minus)
+        plus_trace = TP._face_aperture(interface, face, face.plus)
+        mean = TP._snap_phase_apertures((minus_trace + plus_trace) / 2, open)
+        minus_fraction = TP._conditional_fraction(interface, face.minus)
+        plus_fraction = TP._conditional_fraction(interface, face.plus)
+        minus_pure = iszero(minus_fraction) || isone(minus_fraction)
+        plus_pure = iszero(plus_fraction) || isone(plus_fraction)
+        0 < minus_fraction < 1 && 0 < plus_fraction < 1 &&
+            (both_cut_faces += 1)
+        if minus_pure != plus_pure
+            pure, trace = minus_pure ? (minus_fraction, plus_trace) :
+                (plus_fraction, minus_trace)
+            if 0 < trace < 1
+                # A corner clip next to a pure cell takes the pure value, and
+                # only wins over the mean when the mean is not the same value.
+                rule_faces += 1
+                pure_minus += minus_pure ? 1 : 0
+                pure_plus += minus_pure ? 0 : 1
+                @test (liquid, gas) == TP._snap_phase_apertures(pure, open)
+                changing += mean != (liquid, gas)
+                continue
+            end
+        end
+        # A face cut by both cells keeps the average of the two traces.
+        @test (liquid, gas) == mean
+    end
+    # The rule fires, halves the clip it repairs, and is symmetric in the two
+    # sides of the face.
+    @test rule_faces > 0
+    @test changing > 0
+    @test pure_minus > 0 && pure_plus > 0
+    @test both_cut_faces > 0
+end
+
 # T-generic planar-cut fixtures, so the randomized regression also covers
 # Float32 meshes.
 function wy_cut_regression_mesh(T; hanging)
