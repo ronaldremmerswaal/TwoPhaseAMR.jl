@@ -933,10 +933,10 @@ end
             StaggeredDiffusionOperator(geometry; viscosity = 1.0, boundary), boundary
     end
 
-    inflow_value = (x, y, time, axis) -> (1 + 3x) * (1 + 3y)
-    for n in (8, 16), side in (
-                Outflow(), ZeroGradientVelocity(), Inflow(inflow_value),
-            ),
+    # Only the two sides that prescribe no wall value reach this closure; an
+    # inflow side closes the contact against the wall and is covered by the two
+    # testsets below.
+    for n in (8, 16), side in (Outflow(), ZeroGradientVelocity()),
             refined in (:corner, :strip)
         for axis in 1:2
             mesh, geometry, operator, boundary = open_wall_operator(
