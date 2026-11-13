@@ -473,13 +473,18 @@ shear rows on an unknown $f$ of component $k$ is a sum of contact fluxes,
 because the rows inside a contact region add up to
 $\meas{\shearregion{g}}=\meas{g}\conndist{g}$, which cancels the factor
 $1/\conndist{g}$ of the derivative: the length is $\ell_{g,f}=\meas{g}$ for a
-paired or wall contact, and an anchored group, whose regions add up to
-$M_a\bar d_a$, gives the anchor $\ell=M_a$ and each partner its own
-$\meas{g'}$. Each staggered volume therefore receives on its two tangential
-sides the region-averaged shear stress $\bar\tau_g$ times lengths that add
-up to its width. For a constant viscosity and an affine velocity every
-$\bar\tau_g$ is the exact stress, so the shear forces cancel on every volume
-whose contacts are free of wall values, at level transitions included; for
+paired or wall contact. The contacts $g'$ of an anchored group share one
+derivative, so for them $\bar\tau_g$ is the stress averaged over the whole
+group, $\bar\tau_{a}=\sum_{g'}\meas{\shearregion{g'}}\bar\tau_{g'}/(M_a\bar d_a)$:
+the anchor receives $M_a\bar\tau_a$ and each partner $b'$ receives
+$\meas{g'}\bar\tau_a$, not the average over its own region. The group regions
+lie within $O(h)$ of the anchor, so $\bar\tau_a$ is a first-order consistent
+stress at every partner's contact as well. Each staggered volume therefore
+receives on its two tangential sides region- or group-averaged shear stresses
+times lengths that add up to its width. For a constant viscosity and an
+affine velocity every average is the exact stress, so the shear forces cancel
+on every volume whose contacts are free of wall values, at level transitions
+included; for
 smooth fields the fluxes are first-order accurate at transitions and second
 order elsewhere, which gives a second-order solution (checks below). The
 identity needs the measure of the rows of a contact region to be

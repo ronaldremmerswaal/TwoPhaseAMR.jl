@@ -67,9 +67,11 @@ end
 """Shear partition of one velocity component: nodes, contacts, the
 tangential-derivative stencil of every contact (`stencil_faces` and
 `stencil_values` in `stencil_offsets[c]:(stencil_offsets[c + 1] - 1)`) and the
-contacts on the lower (`below`) and upper (`above`) side of every node."""
+contacts on the lower (`below`) and upper (`above`) side of every node.
+`sort_keys` holds the packed (lower edge, extent start) key of every node."""
 struct ShearPartition{T}
     nodes::Vector{ShearNode}
+    sort_keys::Vector{Int}
     order::Vector{Int}
     contacts::Vector{ShearContact}
     stencil_offsets::Vector{Int}
@@ -82,7 +84,7 @@ struct ShearPartition{T}
 end
 
 ShearPartition(::Type{T}) where {T} = ShearPartition{T}(
-    ShearNode[], Int[], ShearContact[], Int[], Int[], T[],
+    ShearNode[], Int[], Int[], ShearContact[], Int[], Int[], T[],
     Int[], Int[], Int[], Int[],
 )
 
@@ -439,11 +441,14 @@ function _shear_contacts!(partition, mesh, lattice, axis)
         node = @inbounds nodes[index]
         mod(node.extent_low, k_period) + node.extent_high - node.extent_low
     end
-    resize!(order, length(nodes))
-    for index in eachindex(order)
-        @inbounds order[index] = index
+    # One packed integer per node: the sort compares plain integers.
+    sort_keys = resize!(partition.sort_keys, length(nodes))
+    for index in eachindex(nodes)
+        @inbounds sort_keys[index] =
+            low_key(index) * k_period + extent_low_key(index)
     end
-    sort!(order; by = index -> (low_key(index), extent_low_key(index)))
+    resize!(order, length(nodes))
+    sortperm!(order, sort_keys)
     empty!(contacts)
     count = length(order)
     for (index, node) in pairs(nodes)
@@ -827,8 +832,9 @@ function _shear_rows!(
                             x_periodic ? mod(corner[1], lattice[1]) : corner[1],
                             y_periodic ? mod(corner[2], lattice[2]) : corner[2],
                         )
-                        _shear_wall_quarter(
-                            get(wall_vertices, key, ()), cell, corner,
+                        entries = get(wall_vertices, key, nothing)
+                        !isnothing(entries) && _shear_wall_quarter(
+                            entries, cell, corner,
                             first_contact, second_contact, mesh, lattice,
                         ) && continue
                     end

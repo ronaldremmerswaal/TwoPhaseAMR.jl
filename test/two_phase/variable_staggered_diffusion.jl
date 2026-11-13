@@ -877,6 +877,26 @@ end
     end
 end
 
+@testset "Variable stress rows are independent of the mesh origin" begin
+    # The shear partition lives on the integer lattice, so a translated mesh
+    # (walls in x, a periodic seam in y, two level transitions) gives the
+    # same strain rows and stiffness bit for bit.
+    function stress_operator(origin)
+        mesh = BlockTreeMesh(;
+            block_size = (4, 4), origin, extent = (0.7, 3.3),
+            periodic = (false, true), max_level = 2,
+            refine = (key, o, e) -> key.level == 0 ||
+                (key.level == 1 && key.i == 0 && key.j == 0),
+        )
+        return StaggeredDiffusionOperator(mesh; viscosity = CellField(mesh; init = 1.3))
+    end
+    reference = stress_operator((0.0, 0.0))
+    translated = stress_operator((1.0e12, -1.0e12))
+    @test translated.strain == reference.strain
+    @test translated.stress_measures == reference.stress_measures
+    @test translated.stiffness == reference.stiffness
+end
+
 @testset "Variable coupled stress diffusion" begin
     for kind in 1:3
         mesh = BlockTreeMesh(
