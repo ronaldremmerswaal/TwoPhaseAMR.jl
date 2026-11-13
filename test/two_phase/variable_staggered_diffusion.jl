@@ -47,7 +47,7 @@ using Test, TwoPhaseAMR, LinearAlgebra, SparseArrays, Krylov
     end
 end
 
-@testset "Local shear patches survive remote AMR changes" begin
+@testset "Reused stress construction matches a fresh operator across AMR" begin
     mesh = BlockTreeMesh(
         block_size = (8, 8), max_level = 3,
         refine = (key, origin, extent) -> key.level < 2,
@@ -58,11 +58,6 @@ end
     original = TwoPhaseAMR._staggered_diffusion_operator(
         mesh; viscosity, construction_cache = cache,
     )
-    @test keytype(cache.derivative_templates) ===
-        TwoPhaseAMR.ShearTemplateKey{Float64}
-    initial_misses = cache.patch_misses
-    @test initial_misses > 0
-    @test cache.patch_hits == 0
 
     adaptation = AMRWorkspace(mesh, viscosity)
     labels = [
@@ -73,20 +68,9 @@ end
     @test stats.changed
     initialize!(viscosity, viscosity_function)
 
-    old_hits = cache.patch_hits
-    old_misses = cache.patch_misses
-    old_invalidations = cache.patch_invalidations
     cached = TwoPhaseAMR._staggered_diffusion_operator(
         mesh; viscosity, construction_cache = cache, reuse = original,
     )
-    hits = cache.patch_hits - old_hits
-    misses = cache.patch_misses - old_misses
-    @test hits > 0
-    @test misses > 0
-    @test hits + misses > initial_misses
-    @test cache.patch_invalidations > old_invalidations
-    @test cache.patch_remap_failures == 0
-
     fresh = StaggeredDiffusionOperator(mesh; viscosity)
     @test cached.strain == fresh.strain
     @test cached.stress_interpolation == fresh.stress_interpolation
@@ -94,16 +78,11 @@ end
     @test cached.stress_weights == fresh.stress_weights
     @test cached.stiffness == fresh.stiffness
 
-    # A second construction on the identical tree must reuse every active
-    # vertex/component patch, including empty free-slip wall patches.
-    same_hits = cache.patch_hits
-    same_misses = cache.patch_misses
     repeated = TwoPhaseAMR._staggered_diffusion_operator(
         mesh; viscosity, construction_cache = cache, reuse = cached,
     )
-    @test cache.patch_hits > same_hits
-    @test cache.patch_misses == same_misses
     @test repeated.strain == fresh.strain
+    @test repeated.stiffness == fresh.stiffness
 end
 
 @testset "CG requires symmetric variable-diffusion V-cycle sweeps" begin
@@ -737,9 +716,10 @@ function _variable_stress_shifted_error(n, kind)
     matrix = spdiagm(0 => operator.volumes) +
         shift * operator.stiffness
     solution = matrix \ rhs
-    return sqrt(
-        sum(operator.volumes .* (solution .- exact.interior) .^ 2) /
-            sum(operator.volumes)
+    error = solution .- exact.interior
+    return (
+        sqrt(sum(operator.volumes .* error .^ 2) / sum(operator.volumes)),
+        maximum(abs, error),
     )
 end
 
@@ -802,17 +782,98 @@ end
 end
 
 @testset "Variable stress shifted solve on fixed and adapted trees" begin
-    # The conforming bulk discretization is second order (tested below). A
-    # fixed nonconforming transition occupies O(h) area and gives first-order
-    # global velocity convergence for this weak stress discretization.
+    # The shear rows give every staggered control volume the flux of its own
+    # contact lengths, also at the level transitions (#112), so the composite
+    # solve converges at second order in L2 and in the maximum norm.
     for kind in (:fixed, :adaptive)
         errors = [
             _variable_stress_shifted_error(n, kind)
-                for n in (6, 12, 24)
+                for n in (8, 16, 32)
         ]
-        rates = log2.(errors[1:(end - 1)] ./ errors[2:end])
-        @test all(diff(errors) .< 0)
-        @test all(rates .>= 0.8)
+        for norm_index in 1:2
+            norm_errors = getindex.(errors, norm_index)
+            rates = log2.(norm_errors[1:(end - 1)] ./ norm_errors[2:end])
+            @test all(rates .>= 1.8)
+        end
+    end
+end
+
+function _transition_meshes()
+    meshes = BlockTreeMesh[]
+    for periodic in ((false, false), (true, false), (true, true))
+        push!(
+            meshes, BlockTreeMesh(;
+                block_size = (6, 6), max_level = 2, periodic,
+                refine = (key, origin, extent) -> key.level == 0 ||
+                    (key.level == 1 && key.i == 0 && key.j == 0),
+            ),
+        )
+        push!(
+            meshes, BlockTreeMesh(;
+                base_mesh = (16, 16), block_size = (4, 4), max_level = 2,
+                periodic, refine = (key, origin, extent) ->
+                (key.level == 0 && 0.25 <= origin[1] < 0.75 && 0.25 <= origin[2] < 0.75) ||
+                    (key.level == 1 && 0.375 <= origin[1] < 0.625 && 0.375 <= origin[2] < 0.5),
+            ),
+        )
+    end
+    return meshes
+end
+
+@testset "Variable stress shear rows are flux-consistent at level transitions (#112)" begin
+    for mesh in _transition_meshes(), boundary in (NoSlip(), FreeSlip())
+        unit = StaggeredDiffusionOperator(
+            mesh; viscosity = CellField(mesh; init = 1.0), boundary,
+        )
+        cells = ncells(mesh)
+        shear_rows = (2cells + 1):length(unit.stress_measures)
+        # The shear rows partition the periodic domain.
+        all(mesh.periodic) &&
+            @test sum(unit.stress_measures[shear_rows]) ≈ prod(mesh.extent) rtol = 1.0e-14
+        # Away from walls and periodic seams, an affine velocity has exact
+        # shear rates, and its uniform stress is in equilibrium on every
+        # staggered control volume, including those at the transitions.
+        spacing = maximum(maximum(block.spacing) for block in mesh.blocks)
+        inner = [
+            all(
+                axis -> 2spacing < face.center[axis] - mesh.origin[axis] <
+                    mesh.extent[axis] - 2spacing, 1:2,
+            ) for face in mesh.faces
+        ]
+        inner_rows = [
+            row for row in shear_rows if
+                all(inner[column] for column in findall(!iszero, unit.strain[row, :]))
+        ]
+        @test length(inner_rows) > 50
+        for (a, b, c, d) in (
+                (0.0, 1.0, 0.0, 0.0), (0.0, 0.0, 1.0, 0.0),
+                (1.0, 0.0, 0.0, -1.0), (0.3, -0.7, 1.1, 0.4),
+            )
+            velocity = [
+                face.axis == 1 ? a * face.center[1] + b * face.center[2] :
+                    c * face.center[1] + d * face.center[2]
+                    for face in mesh.faces
+            ]
+            @test unit.strain[inner_rows, :] * velocity ≈
+                fill(b + c, length(inner_rows)) atol = 1.0e-12
+            force = unit.stiffness * velocity
+            @test maximum(abs, force[inner] ./ unit.volumes[inner]) <= 1.0e-9
+        end
+
+        viscosity = CellField(mesh, (x, y) -> 1 + 0.3sinpi(2x) * cospi(2y))
+        operator = StaggeredDiffusionOperator(mesh; viscosity, boundary)
+        stiffness = operator.stiffness
+        @test stiffness == transpose(stiffness)
+        @test eigmin(Symmetric(Matrix(stiffness))) >= -1.0e-12 * opnorm(Matrix(stiffness))
+        # Momentum: a constant component has no strain when it is not
+        # prescribed by walls (periodic along it and periodic or free slip
+        # across it), so the constant is in the kernel.
+        for component in 1:2
+            mesh.periodic[component] || continue
+            mesh.periodic[3 - component] || boundary isa FreeSlip || continue
+            constant = [face.axis == component ? 1.0 : 0.0 for face in mesh.faces]
+            @test maximum(abs, stiffness * constant) <= 1.0e-12 * opnorm(Matrix(stiffness), 1)
+        end
     end
 end
 

@@ -553,8 +553,7 @@ end
 
 The recursive walk prunes disjoint quadtree branches.  Local stencil and
 transfer schedule builders use this instead of testing the box against every
-active block.  The marked overload deduplicates results from periodic images
-without sorting them.
+active block.
 """
 function _collect_leaf_blocks_in_window!(
         blocks, node, block_indices, low, high,
@@ -600,41 +599,6 @@ function _collect_leaf_blocks_in_window!(
     for j in rows, i in columns
         root = roots.roots[j * roots.layout[1] + i + 1]
         _collect_leaf_blocks_in_window!(blocks, root, block_indices, low, high)
-    end
-    return blocks
-end
-
-function _collect_leaf_blocks_in_window!(
-        blocks, marks, epoch, node, block_indices, low, high,
-    )
-    _tree_box_intersects(low, high, node) || return blocks
-    if RegionTrees.isleaf(node)
-        block = get(block_indices, node.data.key, 0)
-        iszero(block) && error("active tree leaf is missing from block index")
-        if marks[block] != epoch
-            marks[block] = epoch
-            push!(blocks, block)
-        end
-        return blocks
-    end
-    for child in RegionTrees.children(node)
-        _collect_leaf_blocks_in_window!(
-            blocks, marks, epoch, child, block_indices, low, high,
-        )
-    end
-    return blocks
-end
-
-function _collect_leaf_blocks_in_window!(
-        blocks, marks, epoch, roots::RootGrid, block_indices, low, high,
-    )
-    columns = _root_window_indices(roots, low, high, 1)
-    rows = _root_window_indices(roots, low, high, 2)
-    for j in rows, i in columns
-        root = roots.roots[j * roots.layout[1] + i + 1]
-        _collect_leaf_blocks_in_window!(
-            blocks, marks, epoch, root, block_indices, low, high,
-        )
     end
     return blocks
 end

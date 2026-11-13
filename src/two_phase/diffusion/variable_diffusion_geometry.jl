@@ -32,61 +32,58 @@ mutable struct VariableStaggeredDiffusionOperator{T, M, B}
     stiffness_refresh_offsets::Vector{Int}
 end
 
-const _MAXIMUM_SHEAR_TEMPLATE_POINTS = 16
-
-struct ShearTemplatePoint{T}
-    boundary::Bool
-    dx::T
-    dy::T
-end
-
-struct ShearTemplateKey{T}
-    component::UInt8
-    boundary_kind::UInt8
-    count::UInt8
-    points::NTuple{_MAXIMUM_SHEAR_TEMPLATE_POINTS, ShearTemplatePoint{T}}
-end
-
-"""Stable geometric identifier for an owned staggered face."""
-struct DiffusionFaceKey
-    axis::UInt8
+"""One sample of velocity component `k` in the shear partition: an owned face
+(`face > 0`) or a wall face normal to `k`, whose velocity is zero
+(`face == 0`). Coordinates are on the doubled finest lattice, so every face
+centre is an integer point: `normal` along `k`, the face span
+`low:high` along the tangent `t`, and the extent `extent_low:extent_high` of
+its staggered control volume along `k`. `minus` and `plus` are the adjacent
+cell indices (`plus == 0` at a wall)."""
+struct ShearNode
+    face::Int
     normal::Int
-    tangent_low::Int
-    tangent_high::Int
+    low::Int
+    high::Int
+    extent_low::Int
+    extent_high::Int
+    minus::Int
+    plus::Int
 end
 
-struct ShearPatchKey
-    vertex::NTuple{2, Int}
-    component::UInt8
-    boundary_kind::UInt8
+"""A tangential contact of component `k` between the nodes `lower` and
+`upper`, adjacent along `t` (`0` is a domain wall). Its shear region is the
+rectangle `k_low:k_high` times `t_low:t_high` between the two node centres,
+on the doubled lattice in the frame of `lower` (of `upper` at a lower wall);
+`k_high - k_low` is the contact measure."""
+struct ShearContact
+    lower::Int
+    upper::Int
+    k_low::Int
+    k_high::Int
+    t_low::Int
+    t_high::Int
 end
 
-struct CachedShearPatch{T}
-    faces::Vector{DiffusionFaceKey}
-    coefficients::Vector{T}
+"""Shear partition of one velocity component: nodes, contacts, the
+tangential-derivative stencil of every contact (`stencil_faces` and
+`stencil_values` in `stencil_offsets[c]:(stencil_offsets[c + 1] - 1)`) and the
+contacts on the lower (`below`) and upper (`above`) side of every node."""
+struct ShearPartition{T}
+    nodes::Vector{ShearNode}
+    order::Vector{Int}
+    contacts::Vector{ShearContact}
+    stencil_offsets::Vector{Int}
+    stencil_faces::Vector{Int}
+    stencil_values::Vector{T}
+    below_offsets::Vector{Int}
+    below::Vector{Int}
+    above_offsets::Vector{Int}
+    above::Vector{Int}
 end
 
-const DiffusionPatchGeometry{T} = Tuple{
-    NTuple{2, Int}, NTuple{2, Int}, Int,
-    NTuple{2, T}, NTuple{2, T}, NTuple{2, Bool},
-}
-
-"""One persistent local-patch cache for a fixed tree-hierarchy depth."""
-mutable struct LocalShearPatchCache{T}
-    geometry::Union{Nothing, DiffusionPatchGeometry{T}}
-    active_blocks::Set{BlockKey}
-    current_blocks::Set{BlockKey}
-    changed_blocks::Vector{BlockKey}
-    patches::Dict{ShearPatchKey, CachedShearPatch{T}}
-    invalidated_patches::Vector{ShearPatchKey}
-    face_indices::Dict{DiffusionFaceKey, Int}
-    face_keys::Vector{DiffusionFaceKey}
-end
-
-LocalShearPatchCache(::Type{T}) where {T} = LocalShearPatchCache{T}(
-    nothing, Set{BlockKey}(), Set{BlockKey}(), BlockKey[],
-    Dict{ShearPatchKey, CachedShearPatch{T}}(), ShearPatchKey[],
-    Dict{DiffusionFaceKey, Int}(), DiffusionFaceKey[],
+ShearPartition(::Type{T}) where {T} = ShearPartition{T}(
+    ShearNode[], Int[], ShearContact[], Int[], Int[], T[],
+    Int[], Int[], Int[], Int[],
 )
 
 """Grow-only scratch and local topology storage for stress construction."""
@@ -102,31 +99,13 @@ mutable struct VariableDiffusionConstructionCache{T}
     interpolation_rows::Vector{Int}
     interpolation_columns::Vector{Int}
     interpolation_values::Vector{T}
-    vertices::Dict{
-        NTuple{2, Int}, Tuple{T, Vector{Tuple{CellRef, T}}},
-    }
-    vertex_reference_pool::Vector{Vector{Tuple{CellRef, T}}}
-    vertex_keys::Vector{NTuple{2, Int}}
-    block_interior_faces::Vector{Vector{Int}}
-    block_boundary_faces::Vector{Vector{Int}}
-    block_indices::Dict{BlockKey, Int}
-    derivative_blocks::Vector{Int}
-    derivative_block_marks::Vector{Int}
-    derivative_interior_marks::Vector{Int}
-    derivative_boundary_marks::Vector{Int}
-    derivative_search_epoch::Int
-    derivative_points::Vector{Tuple{Int, T, T}}
-    derivative_candidates::Vector{Int}
-    derivative_indices::Vector{Int}
-    derivative_coefficients::Vector{T}
-    derivative_templates::Dict{ShearTemplateKey{T}, Vector{T}}
-    derivative_template_hits::Int
-    derivative_template_misses::Int
-    patch_layers::Vector{LocalShearPatchCache{T}}
-    patch_hits::Int
-    patch_misses::Int
-    patch_invalidations::Int
-    patch_remap_failures::Int
+    shear_partitions::NTuple{2, ShearPartition{T}}
+    cell_contact_offsets::Vector{Int}
+    cell_contacts::Vector{Int}
+    contact_marks::Vector{Int}
+    contact_candidates::Vector{Int}
+    row_cells::Vector{Int}
+    row_weights::Vector{T}
     stiffness_heads::Vector{Int}
     stiffness_column_counts::Vector{Int}
     stiffness_contribution_counts::Vector{Int}
@@ -137,13 +116,8 @@ function VariableDiffusionConstructionCache(::Type{T}) where {T}
     return VariableDiffusionConstructionCache(
         CellRef[], Int[], Int[], T[], Int[], Int[], T[], Int[],
         Int[], Int[], T[],
-        Dict{NTuple{2, Int}, Tuple{T, Vector{Tuple{CellRef, T}}}}(),
-        Vector{Tuple{CellRef, T}}[], NTuple{2, Int}[],
-        Vector{Int}[], Vector{Int}[], Dict{BlockKey, Int}(),
-        Int[], Int[], Int[], Int[], 0,
-        Tuple{Int, T, T}[], Int[], Int[], T[],
-        Dict{ShearTemplateKey{T}, Vector{T}}(), 0, 0,
-        LocalShearPatchCache{T}[], 0, 0, 0, 0,
+        (ShearPartition(T), ShearPartition(T)),
+        Int[], Int[], Int[], Int[], Int[], T[],
         Int[], Int[], Int[], Int[],
     )
 end
@@ -360,504 +334,534 @@ function dynamic_viscosity(
     return result
 end
 
-function _stress_vertices!(cache, mesh, ::Type{T}) where {T}
-    # Cell-corner quadrature weights partition the domain volume exactly.
-    lattice = _finest_lattice_size(mesh)
-    vertices = cache.vertices
-    for (_, references) in values(vertices)
-        empty!(references)
-        push!(cache.vertex_reference_pool, references)
+# Signed lattice offset `delta` reduced to the nearest periodic image.
+@inline _shear_wrap(delta, period, periodic) =
+    periodic ? mod(delta + period ÷ 2, period) - period ÷ 2 : delta
+
+# Length of the intersection of the intervals `a` and `b` (and `c`), summed
+# over the periodic images of `b` and `c`. Frames differ by at most a period.
+@inline function _shear_overlap(a_low, a_high, b_low, b_high, period, periodic)
+    total = 0
+    for image in -1:1
+        (periodic || iszero(image)) || continue
+        shift = image * period
+        total += max(0, min(a_high, b_high + shift) - max(a_low, b_low + shift))
     end
-    empty!(vertices)
-    for ref in cache.cell_references
-        block = mesh.blocks[ref.block]
-        low, scale = _cell_lattice_bounds(mesh, mesh.blocks, ref, lattice)
-        for sx in (0, 1), sy in (0, 1)
-            key_x = low[1] + sx * scale[1]
-            key_y = low[2] + sy * scale[2]
-            key = (
-                mesh.periodic[1] ? mod(key_x, lattice[1]) : key_x,
-                mesh.periodic[2] ? mod(key_y, lattice[2]) : key_y,
-            )
-            volume, refs = get!(vertices, key) do
-                references = isempty(cache.vertex_reference_pool) ?
-                    Tuple{CellRef, T}[] : pop!(cache.vertex_reference_pool)
-                (zero(T), references)
-            end
-            weight = T(block.volume / 4)
-            push!(refs, (ref, weight))
-            vertices[key] = (volume + weight, refs)
-        end
-    end
-    return vertices, lattice
+    return total
 end
 
-function _release_stress_vertices!(cache)
-    for (_, references) in values(cache.vertices)
-        empty!(references)
-        push!(cache.vertex_reference_pool, references)
-    end
-    empty!(cache.vertices)
-    empty!(cache.vertex_keys)
-    return cache
-end
-
-struct DiffusionFaceSearch
-    interior_by_block::Vector{Vector{Int}}
-    boundary_by_block::Vector{Vector{Int}}
-    block_indices::Dict{BlockKey, Int}
-end
-
-@inline _shear_boundary_kind(::FreeSlip) = UInt8(1)
-@inline _shear_boundary_kind(::NoSlip) = UInt8(2)
-
-function _shear_patch_layer!(
-        cache::VariableDiffusionConstructionCache{T}, layer_index::Int,
-    ) where {T}
-    layer_index >= 1 || throw(ArgumentError("patch-cache layer must be positive"))
-    while length(cache.patch_layers) < layer_index
-        push!(cache.patch_layers, LocalShearPatchCache(T))
-    end
-    return cache.patch_layers[layer_index]
-end
-
-@inline function _diffusion_face_key(mesh::BlockTreeMesh, face)
-    normal, lo, hi = _face_lattice_geometry(mesh, face)
-    return DiffusionFaceKey(UInt8(face.axis), normal, lo, hi)
-end
-
-@inline function _coordinate_near_interval(
-        coordinate, low, high, margin, periodic, period,
+@inline function _shear_overlap(
+        a_low, a_high, b_low, b_high, c_low, c_high, period, periodic,
     )
-    if periodic
-        return any(
-            low - margin <= coordinate + shift <= high + margin
-                for shift in (-period, 0, period)
+    total = 0
+    for b_image in -1:1, c_image in -1:1
+        (periodic || (iszero(b_image) && iszero(c_image))) || continue
+        b_shift = b_image * period
+        c_shift = c_image * period
+        total += max(
+            0,
+            min(a_high, b_high + b_shift, c_high + c_shift) -
+                max(a_low, b_low + b_shift, c_low + c_shift),
         )
     end
-    return low - margin <= coordinate <= high + margin
+    return total
 end
 
-function _patch_near_changed_block(
-        vertex::NTuple{2, Int}, key::BlockKey, mesh::BlockTreeMesh,
-    )
-    lattice = _finest_lattice_size(mesh)
-    block_scale = _block_scale(mesh, key.level)
-    low = (
-        key.i * mesh.block_size[1] * block_scale,
-        key.j * mesh.block_size[2] * block_scale,
-    )
-    high = (
-        low[1] + mesh.block_size[1] * block_scale,
-        low[2] + mesh.block_size[2] * block_scale,
-    )
-
-    # A shear search has radius three local cell widths. Across a balanced
-    # 2:1 interface the neighbouring cell can be twice as wide as a changed
-    # block cell, hence the conservative six-cell invalidation halo.
-    cell_spacing = _spacing_at_level(mesh, key.level)
-    physical_margin = 6maximum(cell_spacing)
-    finest_spacing = (
-        mesh.extent[1] / lattice[1], mesh.extent[2] / lattice[2],
-    )
-    margin = (
-        ceil(Int, physical_margin / finest_spacing[1]),
-        ceil(Int, physical_margin / finest_spacing[2]),
-    )
-    return _coordinate_near_interval(
-        vertex[1], low[1], high[1], margin[1],
-        mesh.periodic[1], lattice[1],
-    ) && _coordinate_near_interval(
-        vertex[2], low[2], high[2], margin[2],
-        mesh.periodic[2], lattice[2],
-    )
+"""Fill the shear nodes of component `axis`: every owned face of that axis and
+every wall face normal to it, on the doubled finest lattice."""
+function _shear_nodes!(nodes, mesh, lattice, axis)
+    empty!(nodes)
+    nx, ny = mesh.block_size
+    blocks = mesh.blocks
+    for (index, face) in pairs(mesh.faces)
+        face.axis == axis || continue
+        normal, low, high = _face_lattice_geometry(mesh, face, lattice)
+        _, minus_scale = _cell_lattice_bounds(mesh, blocks, face.minus, lattice)
+        _, plus_scale = _cell_lattice_bounds(mesh, blocks, face.plus, lattice)
+        push!(
+            nodes, ShearNode(
+                index, 2normal, 2low, 2high,
+                2normal - minus_scale[axis], 2normal + plus_scale[axis],
+                _cell_index(face.minus, nx, ny), _cell_index(face.plus, nx, ny),
+            ),
+        )
+    end
+    for face in mesh.boundary_faces
+        face.axis == axis || continue
+        normal, low, high = _face_lattice_geometry(mesh, face, lattice)
+        _, scale = _cell_lattice_bounds(mesh, blocks, face.cell, lattice)
+        extent_low, extent_high = face.side < 0 ?
+            (2normal, 2normal + scale[axis]) : (2normal - scale[axis], 2normal)
+        push!(
+            nodes, ShearNode(
+                0, 2normal, 2low, 2high, extent_low, extent_high,
+                _cell_index(face.cell, nx, ny), 0,
+            ),
+        )
+    end
+    return nodes
 end
 
-function _prepare_shear_patch_layer!(
-        cache::VariableDiffusionConstructionCache{T}, mesh::BlockTreeMesh,
-        layer_index::Int,
-    ) where {T}
-    layer = _shear_patch_layer!(cache, layer_index)
-    geometry = (
-        mesh.base_mesh, mesh.block_size, mesh.max_level,
-        T.(mesh.origin), T.(mesh.extent),
-        mesh.periodic,
-    )
-    if !isequal(layer.geometry, geometry)
-        cache.patch_invalidations += length(layer.patches)
-        empty!(layer.patches)
-        empty!(layer.active_blocks)
-        layer.geometry = geometry
+# First position `p` in `order[first:last]` with `key(order[p]) >= value`, for
+# `order` sorted by `key`; `last + 1` if there is none.
+@inline function _first_shear_position(key, order, first, last, value)
+    while first <= last
+        middle = (first + last) >>> 1
+        if key(@inbounds order[middle]) < value
+            first = middle + 1
+        else
+            last = middle - 1
+        end
     end
+    return first
+end
 
-    empty!(layer.current_blocks)
-    for block in mesh.blocks
-        push!(layer.current_blocks, block.key)
-    end
-    empty!(layer.changed_blocks)
-    for key in layer.current_blocks
-        key in layer.active_blocks || push!(layer.changed_blocks, key)
-    end
-    for key in layer.active_blocks
-        key in layer.current_blocks || push!(layer.changed_blocks, key)
-    end
+"""Find the tangential contacts of component `axis`.
 
-    if !isempty(layer.changed_blocks) && !isempty(layer.patches)
-        empty!(layer.invalidated_patches)
-        for patch_key in keys(layer.patches)
-            any(
-                key -> _patch_near_changed_block(
-                    patch_key.vertex, key, mesh,
+The staggered control volumes of the nodes tile the domain, so the part of
+the upper edge of node `a` inside the domain is covered exactly by the lower
+edges of the nodes `b` that start there; each overlap is a contact `(a, b)`
+whose region spans the overlap along `k` and the centres of `a` and `b`
+along `t`. A node on a wall normal to `t` has a wall contact up to the wall.
+The contact regions of one component partition the domain."""
+function _shear_contacts!(partition, mesh, lattice, axis)
+    nodes = partition.nodes
+    order = partition.order
+    contacts = partition.contacts
+    tangent = 3 - axis
+    k_period = 2lattice[axis]
+    t_period = 2lattice[tangent]
+    k_periodic = mesh.periodic[axis]
+    t_periodic = mesh.periodic[tangent]
+    low_key = index -> mod((@inbounds nodes[index]).low, t_period)
+    extent_low_key = index -> mod((@inbounds nodes[index]).extent_low, k_period)
+    extent_high_key = index -> begin
+        node = @inbounds nodes[index]
+        mod(node.extent_low, k_period) + node.extent_high - node.extent_low
+    end
+    resize!(order, length(nodes))
+    for index in eachindex(order)
+        @inbounds order[index] = index
+    end
+    sort!(order; by = index -> (low_key(index), extent_low_key(index)))
+    empty!(contacts)
+    count = length(order)
+    for (index, node) in pairs(nodes)
+        centre = (node.low + node.high) ÷ 2
+        if !t_periodic && iszero(node.low)
+            push!(
+                contacts, ShearContact(
+                    0, index, node.extent_low, node.extent_high, 0, centre,
                 ),
-                layer.changed_blocks,
-            ) && push!(layer.invalidated_patches, patch_key)
-        end
-        for patch_key in layer.invalidated_patches
-            delete!(layer.patches, patch_key)
-        end
-        cache.patch_invalidations += length(layer.invalidated_patches)
-    end
-    empty!(layer.active_blocks)
-    union!(layer.active_blocks, layer.current_blocks)
-
-    empty!(layer.face_indices)
-    resize!(layer.face_keys, length(mesh.faces))
-    for (index, face) in pairs(mesh.faces)
-        key = _diffusion_face_key(mesh, face)
-        haskey(layer.face_indices, key) && error(
-            "duplicate stable staggered-face key in diffusion patch cache",
-        )
-        layer.face_keys[index] = key
-        layer.face_indices[key] = index
-    end
-    return layer
-end
-
-function _shear_template_key(
-        points::Vector{Tuple{Int, T, T}}, component, boundary, scale,
-    ) where {T}
-    count = length(points)
-    count <= _MAXIMUM_SHEAR_TEMPLATE_POINTS || throw(
-        ArgumentError("too many points in a shear reconstruction template"),
-    )
-    padding = ShearTemplatePoint(false, zero(T), zero(T))
-    descriptors = ntuple(Val(_MAXIMUM_SHEAR_TEMPLATE_POINTS)) do index
-        if index <= count
-            point = @inbounds points[index]
-            ShearTemplatePoint(
-                iszero(point[1]), point[2] / scale, point[3] / scale,
             )
-        else
-            padding
         end
-    end
-    return ShearTemplateKey(
-        UInt8(component), _shear_boundary_kind(boundary), UInt8(count),
-        descriptors,
-    )
-end
-
-function _resize_face_buckets!(buckets, number_of_blocks)
-    old_length = length(buckets)
-    resize!(buckets, number_of_blocks)
-    for block in 1:number_of_blocks
-        if block > old_length
-            buckets[block] = Int[]
-        else
-            empty!(buckets[block])
-        end
-    end
-    return buckets
-end
-
-function DiffusionFaceSearch(cache, mesh)
-    number_of_blocks = nblocks(mesh)
-    interior = _resize_face_buckets!(
-        cache.block_interior_faces, number_of_blocks,
-    )
-    boundary = _resize_face_buckets!(
-        cache.block_boundary_faces, number_of_blocks,
-    )
-    empty!(cache.block_indices)
-    for (index, block) in pairs(mesh.blocks)
-        cache.block_indices[block.key] = index
-    end
-    for (index, face) in pairs(mesh.faces)
-        push!(interior[face.minus.block], index)
-        face.plus.block == face.minus.block ||
-            push!(interior[face.plus.block], index)
-    end
-    for (index, face) in pairs(mesh.boundary_faces)
-        push!(boundary[face.cell.block], index)
-    end
-    resize!(cache.derivative_block_marks, number_of_blocks)
-    resize!(cache.derivative_interior_marks, length(mesh.faces))
-    resize!(cache.derivative_boundary_marks, length(mesh.boundary_faces))
-    fill!(cache.derivative_block_marks, 0)
-    fill!(cache.derivative_interior_marks, 0)
-    fill!(cache.derivative_boundary_marks, 0)
-    cache.derivative_search_epoch = 0
-    return DiffusionFaceSearch(
-        interior, boundary, cache.block_indices,
-    )
-end
-
-function _nearby_tree_blocks!(
-        blocks, marks, epoch, search, mesh, point, radius,
-    )
-    empty!(blocks)
-    xshifts = mesh.periodic[1] ?
-        (-mesh.extent[1], zero(eltype(mesh.extent)), mesh.extent[1]) :
-        (zero(eltype(mesh.extent)),)
-    yshifts = mesh.periodic[2] ?
-        (-mesh.extent[2], zero(eltype(mesh.extent)), mesh.extent[2]) :
-        (zero(eltype(mesh.extent)),)
-    for yshift in yshifts, xshift in xshifts
-        low = (
-            point[1] - radius + xshift,
-            point[2] - radius + yshift,
-        )
-        high = (
-            point[1] + radius + xshift,
-            point[2] + radius + yshift,
-        )
-        _collect_leaf_blocks_in_window!(
-            blocks, marks, epoch, mesh.root, search.block_indices, low, high,
-        )
-    end
-    return blocks
-end
-
-@inline function _within_diffusion_radius(dx, dy, radius_squared)
-    return muladd(dx, dx, dy * dy) <= radius_squared
-end
-
-function _nearby_diffusion_faces!(
-        points::Vector{Tuple{Int, T, T}}, candidates,
-        search::DiffusionFaceSearch, mesh, point, component, scale,
-        cache::VariableDiffusionConstructionCache,
-    ) where {T}
-    empty!(points)
-    empty!(candidates)
-    radius = 3scale
-    radius_squared = radius * radius
-    cache.derivative_search_epoch += 1
-    epoch = cache.derivative_search_epoch
-    _nearby_tree_blocks!(
-        cache.derivative_blocks, cache.derivative_block_marks, epoch,
-        search, mesh, point, radius,
-    )
-
-    for block in cache.derivative_blocks
-        for index in search.interior_by_block[block]
-            cache.derivative_interior_marks[index] == epoch && continue
-            cache.derivative_interior_marks[index] = epoch
-            face = mesh.faces[index]
-            face.axis == component || continue
-            push!(candidates, index)
-        end
-    end
-    for index in candidates
-        face = mesh.faces[index]
-        dx = T(
-            _wrapped_delta(
-                face.center[1] - point[1], mesh.extent[1], mesh.periodic[1]
+        if !t_periodic && node.high == t_period
+            push!(
+                contacts, ShearContact(
+                    index, 0, node.extent_low, node.extent_high, centre, node.high,
+                ),
             )
-        )
-        dy = T(
-            _wrapped_delta(
-                face.center[2] - point[2], mesh.extent[2], mesh.periodic[2]
+            continue
+        end
+        edge = mod(node.high, t_period)
+        first = _first_shear_position(low_key, order, 1, count, edge)
+        last = _first_shear_position(low_key, order, first, count, edge + 1) - 1
+        for image in -1:1
+            (k_periodic || iszero(image)) || continue
+            shift = image * k_period
+            position = _first_shear_position(
+                extent_high_key, order, first, last,
+                node.extent_low - shift + 1,
             )
-        )
-        _within_diffusion_radius(dx, dy, radius_squared) &&
-            push!(points, (index, dx, dy))
-    end
-
-    empty!(candidates)
-    for block in cache.derivative_blocks
-        for index in search.boundary_by_block[block]
-            cache.derivative_boundary_marks[index] == epoch && continue
-            cache.derivative_boundary_marks[index] = epoch
-            face = mesh.boundary_faces[index]
-            face.axis == component || continue
-            push!(candidates, index)
-        end
-    end
-    for index in candidates
-        face = mesh.boundary_faces[index]
-        dx = T(face.center[1] - point[1])
-        dy = T(face.center[2] - point[2])
-        _within_diffusion_radius(dx, dy, radius_squared) &&
-            push!(points, (0, dx, dy))
-    end
-    return points
-end
-
-@inline function _vertex_on_wall(mesh, vertex, axis, side)
-    boundary = side < 0 ? 0 : _finest_lattice_size(mesh)[axis]
-    return !mesh.periodic[axis] && vertex[axis] == boundary
-end
-
-function _vertex_derivative(
-        mesh, vertex, point, component, scale, boundary, ::Type{T}, search,
-        points, candidates, ids, stencil, cache
-    ) where {T}
-    axis = 3 - component
-    tolerance = 128eps(T) * maximum(mesh.extent)
-    _nearby_diffusion_faces!(
-        points, candidates, search, mesh, point, component, scale, cache,
-    )
-    empty!(ids)
-    empty!(stencil)
-    # Standard MAC shear derivative on regular lines (including wall closure).
-    wall_low = _vertex_on_wall(mesh, vertex, axis, -1)
-    wall_high = _vertex_on_wall(mesh, vertex, axis, 1)
-    if (wall_low || wall_high) && boundary isa FreeSlip
-        return ids, stencil
-    end
-    low_index = 0
-    high_index = 0
-    low_coordinate = zero(T)
-    high_coordinate = zero(T)
-    has_low = wall_low
-    has_high = wall_high
-    for (index, dx, dy) in points
-        normal_coordinate = component == 1 ? dx : dy
-        abs(normal_coordinate) <= tolerance || continue
-        coordinate = component == 1 ? dy : dx
-        if coordinate < -tolerance &&
-                (!has_low || coordinate > low_coordinate)
-            low_index = index
-            low_coordinate = coordinate
-            has_low = true
-        elseif coordinate > tolerance &&
-                (!has_high || coordinate < high_coordinate)
-            high_index = index
-            high_coordinate = coordinate
-            has_high = true
-        end
-    end
-    if wall_low
-        low_index = 0
-        low_coordinate = zero(T)
-    elseif wall_high
-        high_index = 0
-        high_coordinate = zero(T)
-    end
-    if has_low && has_high
-        distance = high_coordinate - low_coordinate
-        low_index > 0 &&
-            (push!(ids, low_index); push!(stencil, -inv(distance)))
-        high_index > 0 &&
-            (push!(ids, high_index); push!(stencil, inv(distance)))
-        return ids, stencil
-    end
-    # At hanging vertices a collocated pair can be absent. A weighted quadratic
-    # fit reproduces affine strain while using the same owned face unknowns.
-    sort!(points; by = p -> (p[2]^2 + p[3]^2, p[2], p[3], iszero(p[1])))
-    length(points) > 16 && resize!(points, 16)
-    template_key = _shear_template_key(
-        points, component, boundary, scale,
-    )
-    template = get(cache.derivative_templates, template_key, nothing)
-    if !isnothing(template)
-        cache.derivative_template_hits += 1
-        for (i, p) in pairs(points)
-            p[1] > 0 || continue
-            push!(ids, p[1])
-            push!(stencil, template[i] / scale)
-        end
-        return ids, stencil
-    end
-    for degree in (2, 1)
-        columns = degree == 2 ? 6 : 3
-        length(points) >= columns || continue
-        matrix = Matrix{T}(undef, length(points), columns)
-        weights = Vector{T}(undef, length(points))
-        for (i, p) in pairs(points)
-            x, y = p[2] / scale, p[3] / scale
-            weights[i] = inv(1 + x * x + y * y)
-            row = degree == 2 ? (one(T), x, y, x * x, x * y, y * y) : (one(T), x, y)
-            for j in 1:columns
-                matrix[i, j] = weights[i] * row[j]
+            while position <= last
+                other_index = @inbounds order[position]
+                other_low = extent_low_key(other_index) + shift
+                other_low < node.extent_high || break
+                other = @inbounds nodes[other_index]
+                other_high = extent_high_key(other_index) + shift
+                other_centre = (other.low + other.high) ÷ 2
+                push!(
+                    contacts, ShearContact(
+                        index, other_index,
+                        max(node.extent_low, other_low),
+                        min(node.extent_high, other_high),
+                        centre, node.high + other_centre - other.low,
+                    ),
+                )
+                position += 1
             end
         end
-        singular = svdvals(matrix)
-        minimum(singular) > 1.0e-10maximum(singular) || continue
-        target = zeros(T, columns);target[axis + 1] = inv(scale)
-        # Minimal-norm solution of the polynomial reproduction constraints.
-        coefficients = transpose(matrix) \ target
-        template = Vector{T}(undef, length(points))
-        for (i, p) in pairs(points)
-            value = weights[i] * coefficients[i]
-            template[i] = value * scale
-            p[1] > 0 || continue
-            push!(ids, p[1]);push!(stencil, value)
-        end
-        cache.derivative_templates[template_key] = template
-        cache.derivative_template_misses += 1
-        return ids, stencil
     end
-    throw(ArgumentError("insufficient faces for staggered shear reconstruction"))
+    return contacts
 end
 
-function _restore_shear_patch!(
-        ids, coefficients, patch::CachedShearPatch,
-        layer::LocalShearPatchCache,
-    )
-    empty!(ids)
-    empty!(coefficients)
-    for index in eachindex(patch.faces)
-        face_index = get(layer.face_indices, patch.faces[index], 0)
-        if iszero(face_index)
-            empty!(ids)
-            empty!(coefficients)
-            return false
+# CSR lists of the contacts on one side of every node: `lower == node`
+# (`upper_side = false`) or `upper == node`.
+function _shear_sides!(offsets, list, contacts, number_of_nodes, upper_side)
+    resize!(offsets, number_of_nodes + 1)
+    fill!(offsets, 0)
+    for contact in contacts
+        node = upper_side ? contact.upper : contact.lower
+        iszero(node) || (@inbounds offsets[node] += 1)
+    end
+    total = 1
+    for node in 1:number_of_nodes
+        count = @inbounds offsets[node]
+        @inbounds offsets[node] = total
+        total += count
+    end
+    offsets[end] = total
+    resize!(list, total - 1)
+    for (index, contact) in pairs(contacts)
+        node = upper_side ? contact.upper : contact.lower
+        iszero(node) && continue
+        @inbounds list[offsets[node]] = index
+        @inbounds offsets[node] += 1
+    end
+    for node in number_of_nodes:-1:2
+        @inbounds offsets[node] = offsets[node - 1]
+    end
+    offsets[1] = 1
+    return offsets
+end
+
+@inline function _push_shear_coefficient!(faces, values, face, value)
+    iszero(face) && return nothing
+    push!(faces, face)
+    push!(values, value)
+    return nothing
+end
+
+# Control-volume width along `k`; a wall node owns half a cell, so it counts as
+# its mirrored full width when the finer node of a contact is chosen.
+@inline _shear_width(node::ShearNode) =
+    (iszero(node.plus) ? 2 : 1) * (node.extent_high - node.extent_low)
+
+"""Tangential derivative of component `axis` on every contact.
+
+A wall contact is the one-sided difference to the zero no-slip velocity (none
+for free slip). Two nodes of equal control-volume width, or a contact whose
+narrower node has no other contact on that side, are collinear and use the
+two-point difference. Otherwise the narrower node `a` is the anchor of all
+contacts on that side: its partners `b` with measures `m_b` are centred,
+`sum_b m_b (x_b - x_a)_k = 0`, and share the linear-exact derivative
+`±(sum_b m_b u_b / sum_b m_b - u_a) / d`, `d = sum_b m_b |x_b - x_a|_t / sum_b m_b`."""
+function _shear_stencils!(partition, mesh, lattice, axis, boundary, ::Type{T}) where {T}
+    nodes = partition.nodes
+    contacts = partition.contacts
+    offsets = partition.stencil_offsets
+    faces = partition.stencil_faces
+    values = partition.stencil_values
+    tangent = 3 - axis
+    k_period = 2lattice[axis]
+    k_periodic = mesh.periodic[axis]
+    spacing = T(mesh.extent[tangent] / lattice[tangent]) / 2
+    empty!(faces)
+    empty!(values)
+    resize!(offsets, length(contacts) + 1)
+    for (index, contact) in pairs(contacts)
+        @inbounds offsets[index] = length(faces) + 1
+        if iszero(contact.lower) || iszero(contact.upper)
+            boundary isa NoSlip || continue
+            lower_wall = iszero(contact.lower)
+            node = nodes[lower_wall ? contact.upper : contact.lower]
+            distance = (contact.t_high - contact.t_low) * spacing
+            _push_shear_coefficient!(
+                faces, values, node.face,
+                lower_wall ? inv(distance) : -inv(distance),
+            )
+            continue
         end
-        push!(ids, face_index)
-        push!(coefficients, patch.coefficients[index])
+        lower = nodes[contact.lower]
+        upper = nodes[contact.upper]
+        lower_width = _shear_width(lower)
+        upper_width = _shear_width(upper)
+        anchor_lower = lower_width < upper_width
+        anchor_index = anchor_lower ? contact.lower : contact.upper
+        anchor = nodes[anchor_index]
+        anchor_width = min(lower_width, upper_width)
+        side_offsets, side = anchor_lower ?
+            (partition.above_offsets, partition.above) :
+            (partition.below_offsets, partition.below)
+        group = side_offsets[anchor_index]:(side_offsets[anchor_index + 1] - 1)
+        if lower_width == upper_width || length(group) == 1
+            _shear_wrap(upper.normal - lower.normal, k_period, k_periodic) == 0 ||
+                throw(ArgumentError("unpaired skew shear contact"))
+            distance = (contact.t_high - contact.t_low) * spacing
+            _push_shear_coefficient!(faces, values, lower.face, -inv(distance))
+            _push_shear_coefficient!(faces, values, upper.face, inv(distance))
+            continue
+        end
+        measure = 0
+        moment = 0
+        separation = 0
+        for position in group
+            member = contacts[side[position]]
+            other_index = anchor_lower ? member.upper : member.lower
+            iszero(other_index) && throw(ArgumentError("wall in a shear contact group"))
+            other = nodes[other_index]
+            _shear_width(other) > anchor_width ||
+                throw(ArgumentError("ambiguous shear contact anchor"))
+            contact_measure = member.k_high - member.k_low
+            measure += contact_measure
+            moment += contact_measure *
+                _shear_wrap(other.normal - anchor.normal, k_period, k_periodic)
+            separation += contact_measure * (member.t_high - member.t_low)
+        end
+        iszero(moment) || throw(ArgumentError("off-centre shear contact group"))
+        distance = T(separation) * spacing / T(measure)
+        orientation = anchor_lower ? one(T) : -one(T)
+        _push_shear_coefficient!(faces, values, anchor.face, -orientation / distance)
+        for position in group
+            member = contacts[side[position]]
+            other = nodes[anchor_lower ? member.upper : member.lower]
+            _push_shear_coefficient!(
+                faces, values, other.face,
+                orientation * T(member.k_high - member.k_low) /
+                    (T(measure) * distance),
+            )
+        end
+    end
+    offsets[end] = length(faces) + 1
+    return partition
+end
+
+function _shear_partition!(partition, mesh, lattice, axis, boundary, ::Type{T}) where {T}
+    _shear_nodes!(partition.nodes, mesh, lattice, axis)
+    _shear_contacts!(partition, mesh, lattice, axis)
+    number_of_nodes = length(partition.nodes)
+    _shear_sides!(
+        partition.below_offsets, partition.below, partition.contacts,
+        number_of_nodes, true,
+    )
+    _shear_sides!(
+        partition.above_offsets, partition.above, partition.contacts,
+        number_of_nodes, false,
+    )
+    _shear_stencils!(partition, mesh, lattice, axis, boundary, T)
+    return partition
+end
+
+@inline function _shear_contact_cells(nodes, contact)
+    lower = iszero(contact.lower) ? (0, 0) :
+        (nodes[contact.lower].minus, nodes[contact.lower].plus)
+    upper = iszero(contact.upper) ? (0, 0) :
+        (nodes[contact.upper].minus, nodes[contact.upper].plus)
+    return (lower..., upper...)
+end
+
+@inline function _new_shear_cell(cells, position)
+    cell = cells[position]
+    iszero(cell) && return false
+    for previous in 1:(position - 1)
+        cells[previous] == cell && return false
     end
     return true
 end
 
-function _store_shear_patch(
-        ids, coefficients, layer::LocalShearPatchCache{T},
-    ) where {T}
-    faces = Vector{DiffusionFaceKey}(undef, length(ids))
-    values = Vector{T}(undef, length(coefficients))
-    for index in eachindex(ids)
-        @inbounds faces[index] = layer.face_keys[ids[index]]
-        @inbounds values[index] = coefficients[index]
+# Whether the open interval `low:high` contains `line` or a periodic image.
+@inline function _shear_crosses(low, high, line, period, periodic)
+    for image in -1:1
+        (periodic || iszero(image)) || continue
+        low < line + image * period < high && return true
     end
-    return CachedShearPatch(faces, values)
+    return false
 end
 
-function _cached_vertex_derivative!(
-        mesh, vertex_key, point, component, scale, boundary, ::Type{T}, search,
-        points, candidates, ids, coefficients,
-        cache::VariableDiffusionConstructionCache{T},
-        layer::LocalShearPatchCache{T},
-    ) where {T}
-    patch_key = ShearPatchKey(
-        vertex_key, UInt8(component), _shear_boundary_kind(boundary),
+# A quarter of `cell` at a solid-side `corner` of its Cartesian wall belongs to
+# the wall rows where the row's contact of the wall-tangential component
+# crosses the corner's line along the wall normal: the x-velocity contact for a
+# wall normal to y, the y-velocity contact for a wall normal to x.
+@inline function _shear_wall_quarter(
+        entries, cell, corner, first_contact, second_contact, mesh, lattice,
     )
-    patch = get(layer.patches, patch_key, nothing)
-    if !isnothing(patch)
-        if _restore_shear_patch!(ids, coefficients, patch, layer)
-            cache.patch_hits += 1
-            return ids, coefficients
-        end
-        cache.patch_remap_failures += 1
-        delete!(layer.patches, patch_key)
+    for (wall_cell, axis) in entries
+        wall_cell == cell || continue
+        contact = axis == 2 ? first_contact : second_contact
+        _shear_crosses(
+            contact.t_low, contact.t_high, 2corner[axis], 2lattice[axis],
+            mesh.periodic[axis],
+        ) && return true
     end
+    return false
+end
 
-    cache.patch_misses += 1
-    _vertex_derivative(
-        mesh, vertex_key, point, component, scale, boundary, T, search,
-        points, candidates, ids, coefficients, cache,
-    )
-    layer.patches[patch_key] = _store_shear_patch(
-        ids, coefficients, layer,
-    )
-    return ids, coefficients
+"""
+    _shear_rows!(measures, rows, columns, values, interpolation_rows,
+                 interpolation_columns, interpolation_values, cache, mesh,
+                 boundary, geometry, ::Type{T})
+
+Append the shear rows of the strain map. Each velocity component `k` has its
+own partition of the domain into contact regions between tangentially
+adjacent samples (`_shear_contacts!`), with a tangential derivative per
+contact (`_shear_stencils!`). A shear row is a nonempty intersection `R1 ∩ R2`
+of an `x`-velocity region and a `y`-velocity region: its strain is the sum of
+the two derivatives and its measure the open area of the intersection. The
+area of the `k` rows covering a contact is the contact measure times the
+centre distance, so the transpose of the strain map gives every staggered
+control volume the shear flux of its own contact length, also at level
+transitions, and the energy remains a sum of squares. On a uniform mesh the
+two regions coincide with the vertex dual cell.
+
+The measure is split over the cell quarters (cell, corner) it covers; where
+the contact of the wall-tangential velocity crosses a Cartesian embedded wall
+of the cell at that corner, the wall rows carry that shear and the quarter is
+omitted (`_shear_wall_quarter`). The open fraction scales the rest, and the
+row viscosity mixes the cells with these open weights.
+"""
+function _shear_rows!(
+        measures, rows, columns, values, interpolation_rows,
+        interpolation_columns, interpolation_values, cache, mesh, boundary,
+        geometry, ::Type{T},
+    ) where {T}
+    lattice = _finest_lattice_size(mesh)
+    first_partition, second_partition = cache.shear_partitions
+    _shear_partition!(first_partition, mesh, lattice, 1, boundary, T)
+    _shear_partition!(second_partition, mesh, lattice, 2, boundary, T)
+    wall_vertices = isnothing(geometry) ? nothing :
+        _embedded_variable_wall_stress_vertices(geometry, lattice)
+    references = cache.cell_references
+    number_of_cells = length(references)
+
+    second_nodes = second_partition.nodes
+    second_contacts = second_partition.contacts
+    registry_offsets = resize!(cache.cell_contact_offsets, number_of_cells + 1)
+    fill!(registry_offsets, 0)
+    for contact in second_contacts
+        cells = _shear_contact_cells(second_nodes, contact)
+        for position in 1:4
+            _new_shear_cell(cells, position) &&
+                (registry_offsets[cells[position]] += 1)
+        end
+    end
+    total = 1
+    for cell in 1:number_of_cells
+        count = registry_offsets[cell]
+        registry_offsets[cell] = total
+        total += count
+    end
+    registry_offsets[end] = total
+    registry = resize!(cache.cell_contacts, total - 1)
+    for (index, contact) in pairs(second_contacts)
+        cells = _shear_contact_cells(second_nodes, contact)
+        for position in 1:4
+            _new_shear_cell(cells, position) || continue
+            registry[registry_offsets[cells[position]]] = index
+            registry_offsets[cells[position]] += 1
+        end
+    end
+    for cell in number_of_cells:-1:2
+        registry_offsets[cell] = registry_offsets[cell - 1]
+    end
+    registry_offsets[1] = 1
+
+    marks = resize!(cache.contact_marks, length(second_contacts))
+    fill!(marks, 0)
+    candidates = cache.contact_candidates
+    row_cells = cache.row_cells
+    row_weights = cache.row_weights
+    x_period, y_period = 2lattice[1], 2lattice[2]
+    x_periodic, y_periodic = mesh.periodic
+    area_scale = T(mesh.extent[1] / lattice[1]) * T(mesh.extent[2] / lattice[2]) / 4
+    first_nodes = first_partition.nodes
+    first_offsets = first_partition.stencil_offsets
+    second_offsets = second_partition.stencil_offsets
+    for (first_index, first_contact) in pairs(first_partition.contacts)
+        first_stencil = first_offsets[first_index]:(first_offsets[first_index + 1] - 1)
+        cells = _shear_contact_cells(first_nodes, first_contact)
+        empty!(candidates)
+        for position in 1:4
+            _new_shear_cell(cells, position) || continue
+            cell = cells[position]
+            for entry in registry_offsets[cell]:(registry_offsets[cell + 1] - 1)
+                second_index = registry[entry]
+                marks[second_index] == first_index && continue
+                marks[second_index] = first_index
+                push!(candidates, second_index)
+            end
+        end
+        sort!(candidates)
+        for second_index in candidates
+            second_stencil = second_offsets[second_index]:(second_offsets[second_index + 1] - 1)
+            isempty(first_stencil) && isempty(second_stencil) && continue
+            # First regions are (k, t) = (x, y), second regions (y, x).
+            second_contact = second_contacts[second_index]
+            _shear_overlap(
+                first_contact.k_low, first_contact.k_high,
+                second_contact.t_low, second_contact.t_high, x_period, x_periodic,
+            ) > 0 || continue
+            _shear_overlap(
+                first_contact.t_low, first_contact.t_high,
+                second_contact.k_low, second_contact.k_high, y_period, y_periodic,
+            ) > 0 || continue
+            empty!(row_cells)
+            empty!(row_weights)
+            for position in 1:4
+                _new_shear_cell(cells, position) || continue
+                cell = cells[position]
+                ref = references[cell]
+                low, scale = _cell_lattice_bounds(mesh, mesh.blocks, ref, lattice)
+                open = isnothing(geometry) ? one(T) :
+                    T(_get(geometry.open_fraction, ref))
+                for quarter_x in 0:1, quarter_y in 0:1
+                    x_low = 2low[1] + quarter_x * scale[1]
+                    y_low = 2low[2] + quarter_y * scale[2]
+                    width = _shear_overlap(
+                        first_contact.k_low, first_contact.k_high,
+                        second_contact.t_low, second_contact.t_high,
+                        x_low, x_low + scale[1], x_period, x_periodic,
+                    )
+                    width > 0 || continue
+                    height = _shear_overlap(
+                        first_contact.t_low, first_contact.t_high,
+                        second_contact.k_low, second_contact.k_high,
+                        y_low, y_low + scale[2], y_period, y_periodic,
+                    )
+                    height > 0 || continue
+                    if !isnothing(wall_vertices)
+                        corner = (
+                            low[1] + quarter_x * scale[1],
+                            low[2] + quarter_y * scale[2],
+                        )
+                        key = (
+                            x_periodic ? mod(corner[1], lattice[1]) : corner[1],
+                            y_periodic ? mod(corner[2], lattice[2]) : corner[2],
+                        )
+                        _shear_wall_quarter(
+                            get(wall_vertices, key, ()), cell, corner,
+                            first_contact, second_contact, mesh, lattice,
+                        ) && continue
+                    end
+                    weight = T(width * height) * area_scale * open
+                    weight > zero(T) || continue
+                    if !isempty(row_cells) && last(row_cells) == cell
+                        row_weights[end] += weight
+                    else
+                        push!(row_cells, cell)
+                        push!(row_weights, weight)
+                    end
+                end
+            end
+            open_volume = sum(row_weights; init = zero(T))
+            open_volume > zero(T) || continue
+            push!(measures, open_volume)
+            row = length(measures)
+            for (cell, weight) in zip(row_cells, row_weights)
+                push!(interpolation_rows, row)
+                push!(interpolation_columns, cell)
+                push!(interpolation_values, weight / open_volume)
+            end
+            for (partition, stencil) in (
+                    (first_partition, first_stencil),
+                    (second_partition, second_stencil),
+                )
+                for entry in stencil
+                    push!(rows, row)
+                    push!(columns, partition.stencil_faces[entry])
+                    push!(values, partition.stencil_values[entry])
+                end
+            end
+        end
+    end
+    return measures
 end

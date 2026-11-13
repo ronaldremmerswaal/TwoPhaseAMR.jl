@@ -1,6 +1,6 @@
 % Figure: rows of the strain matrix E near a level transition and a no-slip
 % wall (Chapter 9). Cells, faces, the rows of E that contain one fine
-% segment and the complete shear row of a hanging vertex are read from the
+% segment and the shear row at a hanging vertex are read from the
 % code's VariableStaggeredDiffusionOperator: generated/viscosity.tex
 % (viscosity.jl, viscosity_data). Labels hand-written.
 \begin{figure}
@@ -63,7 +63,7 @@
         \node[tr value,anchor=south] at (#2,#3+0.03) {$#4$};}%
       \input{figures/generated/viscosity.tex}
     \end{tikzpicture}
-    \caption{Shear row of the hanging vertex}
+    \caption{Shear rows at the hanging vertex}
     \label{fig:viscosity:stencil:shear}
   \end{subfigure}
   \caption{The strain-rate rows~\cref{eq:viscosity:rows} next to a level
@@ -71,14 +71,17 @@
     operator on the walled composite fixture (coarse cells of width $\half$
     on the left). (a)~The \chkViscFigNormal\ normal rows (green squares, at
     the centres of the coarse cell $c$ and the fine cell $c'$) and the
-    \chkViscFigShear\ shear rows (purple diamonds, at the vertices) whose
-    entry for the fine segment $f$ (thick red) is not zero, with that entry:
+    \chkViscFigShear\ shear rows (purple diamonds, at the centres of their
+    regions~\cref{eq:viscosity:shear-partition}) whose entry for the fine
+    segment $f$ (thick red) is not zero, with that entry:
     $\pm\aperture{f}\meas{f}/\meas{\opencell{c}}$ in the normal rows, the
     two-point difference to the wall and across the hanging vertex in the
-    shear rows. (b)~The complete shear row of the hanging vertex (open circle):
-    \chkViscFigStencil\ unknowns, $\velo_1$ (red) by the two-point difference
-    along the fine segments, $\velo_2$ (blue) by the least-squares stencil
-    of~\cref{eq:viscosity:shear}, since the coarse cell has no $\velo_2$
-    unknown on the line through the vertex.}
+    shear rows. (b)~The two shear rows that meet at the hanging vertex (open
+    circle) have the same \chkViscFigStencil\ unknowns: $\velo_1$ (red) by the
+    two-point difference along the fine segments, $\velo_2$ (blue) by the
+    anchored derivative of~\cref{eq:viscosity:shear} of the fine segment
+    through the vertex, between the coarse unknown above and the zero wall
+    value below, since the coarse cell has no $\velo_2$ unknown on the line
+    through the vertex.}
   \label{fig:viscosity:stencil}
 \end{figure}

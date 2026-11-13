@@ -330,8 +330,6 @@ end
     pressure_geometry_cache =
         pressure_solver.operator.gradient_operator.construction_cache
     pressure_cache_hits = pressure_geometry_cache.hits
-    diffusion_template_hits =
-        phase_workspace.diffusion_cache.derivative_template_hits
     pressure_bottom = pressure_solver.preconditioner.operators[end]
     diffusion_bottom = diffusion_solver.preconditioner.operators[end]
 
@@ -360,8 +358,6 @@ end
     @test flow.system.pressure_solver.operator.gradient_operator.construction_cache ===
         pressure_geometry_cache
     @test pressure_geometry_cache.hits > pressure_cache_hits
-    @test flow.workspace.two_phase.diffusion_cache.derivative_template_hits >=
-        diffusion_template_hits
     @test refreshed_pressure_preconditioner.operators[end] ===
         pressure_bottom
     @test refreshed_diffusion_preconditioner.operators[end] ===

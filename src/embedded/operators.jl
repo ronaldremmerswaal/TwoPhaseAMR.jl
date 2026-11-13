@@ -815,17 +815,20 @@ function _embedded_variable_wall_constraints(geometry::GeometryField{T}) where {
     return findall(constrained)
 end
 
-# A cell's vertex quadrature at a Cartesian wall must not also approximate
+# A cell's shear quadrature at a Cartesian wall must not also approximate
 # shear across the solid: that part is represented by the wall conductance.
-# Retain any other cells' contributions at a corner where wall segments meet.
-# Use lattice corners and periodic identification to avoid coordinate roundoff.
+# Record, per solid-side corner, the cell and the wall-normal axis; the shear
+# rows omit the cell's quarter at that corner where their contact crosses the
+# corner's line normal to that axis. Retain any other cells' contributions at
+# a corner where wall segments meet. Use lattice corners and periodic
+# identification to avoid coordinate roundoff.
 function _embedded_variable_wall_stress_vertices(
         geometry::GeometryField{T}, lattice,
     ) where {T}
     mesh = geometry.mesh
     nx, ny = mesh.block_size
     aligned = _embedded_aligned_wall_segments(geometry)
-    wall_vertices = Dict{NTuple{2, Int}, Vector{Int}}()
+    wall_vertices = Dict{NTuple{2, Int}, Vector{Tuple{Int, Int}}}()
     for block in eachindex(mesh.blocks), j in 1:ny, i in 1:nx
         ref = CellRef(block, i, j)
         cell_index = _cell_index(ref, nx, ny)
@@ -850,10 +853,10 @@ function _embedded_variable_wall_stress_vertices(
                     value = low[dimension] + (high ? scale[dimension] : 0)
                     mesh.periodic[dimension] ? mod(value, lattice[dimension]) : value
                 end
-                cell_indices = get!(wall_vertices, corner) do
-                    Int[]
+                entries = get!(wall_vertices, corner) do
+                    Tuple{Int, Int}[]
                 end
-                cell_index in cell_indices || push!(cell_indices, cell_index)
+                (cell_index, axis) in entries || push!(entries, (cell_index, axis))
             end
         end
     end

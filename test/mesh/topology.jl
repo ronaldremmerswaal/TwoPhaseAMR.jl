@@ -390,18 +390,6 @@ end
     @test GradientOperator(mesh) isa GradientOperator
 end
 
-@testset "wall vertices use lattice indices" begin
-    mesh = BlockTreeMesh(
-        block_size = (4, 4), origin = (1.0e12, -1.0e12),
-        extent = (0.7, 3.3), periodic = (false, true), max_level = 20,
-    )
-    lattice = TwoPhaseAMR._finest_lattice_size(mesh)
-    @test TwoPhaseAMR._vertex_on_wall(mesh, (0, 1), 1, -1)
-    @test !TwoPhaseAMR._vertex_on_wall(mesh, (1, 1), 1, -1)
-    @test TwoPhaseAMR._vertex_on_wall(mesh, (lattice[1], 1), 1, 1)
-    @test !TwoPhaseAMR._vertex_on_wall(mesh, (1, 0), 2, -1)
-end
-
 @testset "face and halo topology is independent of geometry" begin
     refine = (key, o, e) ->
     (key.level == 0 && key.i == 1 && key.j == 0) ||
@@ -409,12 +397,13 @@ end
     function topology_signature(mesh)
         interface = InterfaceField(mesh; T = Float64)
         height_cache = TwoPhaseAMR._height_cache!(interface)
-        cache = TwoPhaseAMR.VariableDiffusionConstructionCache(Float64)
-        TwoPhaseAMR._cached_cell_references!(cache.cell_references, mesh)
-        vertices, _ = TwoPhaseAMR._stress_vertices!(cache, mesh, Float64)
-        vertex_refs = [
-            (key, first.(vertices[key][2])) for key in sort!(collect(keys(vertices)))
-        ]
+        lattice = TwoPhaseAMR._finest_lattice_size(mesh)
+        shear_topology = map((1, 2)) do axis
+            partition = TwoPhaseAMR.ShearPartition(Float64)
+            TwoPhaseAMR._shear_nodes!(partition.nodes, mesh, lattice, axis)
+            TwoPhaseAMR._shear_contacts!(partition, mesh, lattice, axis)
+            (partition.nodes, partition.contacts)
+        end
         coarse = TwoPhaseAMR._capped_tree_mesh(mesh, 1)
         cell_transfer = TwoPhaseAMR._tree_cell_prolongation(mesh, coarse, Float64)
         face_transfer = TwoPhaseAMR._tree_face_prolongation(mesh, coarse, Float64)
@@ -434,8 +423,7 @@ end
                 (TwoPhaseAMR._vertex_key(mesh, face, 1), TwoPhaseAMR._vertex_key(mesh, face, 2))
                     for face in mesh.faces
             ],
-            [TwoPhaseAMR._diffusion_face_key(mesh, face) for face in mesh.faces],
-            vertex_refs,
+            shear_topology,
             cell_transfer, face_transfer,
             dual_topology,
             [

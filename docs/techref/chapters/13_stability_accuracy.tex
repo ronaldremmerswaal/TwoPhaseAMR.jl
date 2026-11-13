@@ -504,7 +504,7 @@ the space--time error.
     VOF transport (\cref{ch:vof-transport}) & exact space--time fluxes of the reconstruction, no method-of-lines form (\cref{sec:vof:balance}) & symmetric difference $1.8$ (translation, cut walls); vortex reversal $1.5$\\
     Staggered convection (\cref{ch:momentum-transport}) & forward Euler sweeps with Lax--Wendroff or limited states~\cref{eq:momentum:split} & Lax--Wendroff translation $1.9$ (uniform); convection on composite meshes $1.3$\\
     Pressure gradient and projection (\cref{ch:discrete-setting,ch:projection}) & CMDGFM jump interpolant first order for affine fields (\cref{sec:projection:cmdgfm}) & gradient on composite meshes $1.4$, stretched $1.0$; Poisson $1.7$; jump interpolant $0.8$\\
-    Viscous operator (\cref{ch:viscosity}) & two-point difference second order; transition rows can be $O(1)$~\cref{eq:viscosity:laplacian}; PLIC wall rows first order (\issue{110}); variable stress at transitions first order (\issue{112}); geometric-mean viscosity at a jump first order (\issue{113}); orphan edges at non-Dirichlet walls not exact for linear fields (\issue{99}) & uniform $1.9$; composite Helmholtz $1.8$ (max, $L^2$); cut walls with transitions $1.8$ (max); aligned embedded walls $1.5$ (max), $1.8$ ($L^1$, $L^2$); inclined walls $0.6$ (max), $0.8$ pinned; variable stress bulk $1.8$, at transitions $0.8$ pinned\\
+    Viscous operator (\cref{ch:viscosity}) & two-point difference second order; transition rows can be $O(1)$~\cref{eq:viscosity:laplacian}, in flux form also for the variable stress~\cref{eq:viscosity:shear-flux}; PLIC wall rows first order (\issue{110}); geometric-mean viscosity at a jump first order (\issue{113}); orphan edges at non-Dirichlet walls not exact for linear fields (\issue{99}) & uniform $1.9$; composite Helmholtz $1.8$ (max, $L^2$); cut walls with transitions $1.8$ (max); aligned embedded walls $1.5$ (max), $1.8$ ($L^1$, $L^2$); inclined walls $0.6$ (max), $0.8$ pinned; variable stress bulk $1.8$, at transitions $1.8$ (max, $L^2$)\\
     AMR transfer (\cref{ch:amr-criteria-transfer}) & conservative; prolongation first order next to coarser blocks & phase scalar transfer $1.8$\\
     Forces in time (\cref{ch:forces}) & forward Euler~\cref{eq:forces:stages} & --\\
     \bottomrule
@@ -515,9 +515,7 @@ the space--time error.
 applications or single solves on manufactured fields, at fixed geometry.
 The known first-order spots are local: the closures of inclined embedded
 walls (\issue{110}; the test pins the observed $0.6$ and $0.8$ and a
-non-growing error, \cref{eq:viscosity:cut}), the variable-viscosity stress
-at level transitions without solids (\issue{112}: $0.985$ and $1.002$ in
-$L^2$ on fixed composite trees, second order on uniform meshes), the
+non-growing error, \cref{eq:viscosity:cut}), the
 geometric-mean vertex viscosity of the thesis~\thesis{\S7.5.1} at a
 material jump parallel to an interface-aligned shear (\issue{113}: $L^2$
 orders $1.48$, $0.78$, $0.82$, $0.90$, $0.95$ for $n=16$ to $512$ against
