@@ -654,7 +654,8 @@ and operator of the one-velocity pressure solver are shared. Tests:
 \section{Mimetic cut-cell projection (option)}\label{sec:projection:mimetic}
 \apitype{MimeticProjection} replaces the CMDGFM in
 \apitype{TwoVelocityModel} on request; the CMDGFM stays the default and its
-results are unchanged. It is candidate~MM of the mimetic-projection audit:
+results are unchanged. It is candidate~MMd of the mimetic-projection audit's
+note \emph{Kinetic metrics for shared apertures that close no region}:
 the kinetic-energy-orthogonal projection of the two phase velocities onto
 vanishing mixture divergence~\cref{eq:projection:mixture-divergence} in a
 non-diagonal kinetic metric~$\mathcal M$, without jump rows. It is defined
@@ -679,40 +680,152 @@ subtract an old pressure gradient, the projection removes any
 $\mathcal M^{-1}\mathsf B^{\transpose}$ gradient of the predictor exactly, and
 $\pres$ is the full pressure (one anchor cell fixes the constant).
 
-\emph{Metric.} A cut cell $c$ is divided by its chord $\Gamma_c$ into a
-liquid and a gas polygon $c^{\phase}$, built from the four phase apertures
-of its sides~\cref{eq:interface:phase-aperture}; which end of a partially
-wetted face is wet is decided by the adjacent cut cells whose PLIC line
-crosses the face, else by the tangential normal of a cut neighbour. For a
-polygon $P$ with edges $e$ (length $\meas{e}$, midpoint $x_e$, outward normal
-$n_e$), centroid $x_P$ and area $\meas{P}$ the mimetic inner
-product~\cite{brezzi2005b,lipnikov2014} is
-\begin{equation}\label{eq:projection:mimetic-local}
-  \mathcal M_P=\frac{\mathsf R\mathsf R^{\transpose}}{\meas{P}}+\tfrac12\,\mathsf D_P\mathsf Q\mathsf D_P,\qquad
-  \mathsf R=\bigl[\meas{e}(x_e-x_P)^{\transpose}\bigr],\quad
-  \mathsf D_P=\diag{\meas{e}},
+\emph{Data of a cut cell.} A cut cell $c$ is a cell whose four liquid
+apertures are not all $0$ or all $1$. Its data are, for each phase $\phase$
+and each side $k$ (outward unit normal $n_k$), the wetted fraction
+$b^{\phase}_k=\phaseaperture{\phase}{f}$ of the face $f$ of that side and the
+midpoint $x^{\phase}_k$ of its wetted part. The apertures are those of the
+divergence $\mathsf B$ and of the transport, the mean of the two adjacent PLIC
+traces~\cref{eq:interface:phase-aperture}; which end of a partially wetted face
+is wet is decided once per face, by the adjacent cut cells whose PLIC line
+crosses the face (the sign of the sum of their tangential normal components),
+else by the tangential normal of a cut neighbour, else the low end. Both cells
+of a face therefore see the same wetted length and midpoint. These data need
+not bound a region: where the interface runs within a few per cent of $h$ of
+a grid line, or clips a corner next to a pure cell, the averaged apertures give
+cells whose phase parts would need two chords or enclose no area, and the
+parts of the two phases of a side need not meet the parts of the adjacent
+sides. No polygon is formed. For a pressure point $x^{*}_c$ the rows, the
+Gram tensor of the cell and phase, and two vectors of the liquid are
+\begin{equation}\label{eq:projection:mimetic-gram}
+  \mathsf R^{\phase}_c=\bigl[\,b^{\phase}_kh\,(x^{\phase}_k-x^{*}_c)^{\transpose}\bigr],\quad
+  \mathsf G^{\phase}_c=\mathsf N^{\transpose}\mathsf R^{\phase}_c=\sum_kb^{\phase}_kh\,n_k(x^{\phase}_k-x^{*}_c)^{\transpose}\in\mathbb R^{2\times2},\quad
+  \eta_c=\sum_kb^{\liq}_kh\,n_k,\quad
+  \tau_c=\sum_kb^{\liq}_kh\,n_k\times x^{\liq}_k,
 \end{equation}
-with $\mathsf Q$ the orthogonal projector onto the complement of the range
-of $\mathsf D_P[n_e^{\transpose}]$; $\mathcal M_P=\tfrac12h^2I$ on an uncut
-cell. The edge flux densities are $v_e=\orient{c}{f}\velo^{\phase}_f$ on the
-face parts, and the chord flux density is not an unknown: each polygon is
-closed,
+with $\mathsf N=[n_k^{\transpose}]$ over the sides the phase wets. The note
+shows (its proposition on local consistent blocks): a symmetric positive
+semi-definite block $m$ on the wetted values with $m\mathsf N=\mathsf R^{\phase}_c$
+exists if and only if $\mathsf G^{\phase}_c$ is symmetric positive semi-definite
+and $\ker\mathsf G^{\phase}_c\subset\ker\mathsf R^{\phase}_c$, and then
+$\mathsf R\mathsf G^{+}\mathsf R^{\transpose}$ plus any symmetric positive
+semi-definite $\mathsf S$ with $\mathsf S\mathsf N=0$ is one; the two phases tile
+the sides, so $\mathsf G^{\liq}_c+\mathsf G^{\gas}_c=h^2I$; both tensors are
+symmetric exactly on the line $\eta_c\times x^{*}_c=\tau_c$, which is parallel
+to $\eta_c$, and moving $x^{*}_c$ along it by $s\,\hat\eta_c$ changes
+$\mathsf G^{\liq}_c$ by $-s\abs{\eta_c}\hat\eta_c\hat\eta_c^{\transpose}$; and if the
+wetted sides and one chord $\Gamma_c$ bound a polygon $P$, that line is the
+normal of the chord through its midpoint, where $\mathsf G^{\phase}_c=\meas{P}I$.
+
+\emph{Pressure point.} The one remaining degree of freedom places the pressure
+point at the interface of the data. Its data point is
+\begin{equation}\label{eq:projection:mimetic-point}
+  x^{0}_c=\bar x_c+\frac{\tau_c-\eta_c\times\bar x_c}{\abs{\eta_c}^2}\,\eta_c^{\perp},\qquad
+  \eta_c^{\perp}=(-\eta_{c,y},\eta_{c,x}),
+\end{equation}
+the point of the line closest to $\bar x_c$, the mean of the phase boundaries
+on the partially wetted sides (if every side is wetted by one phase only: the
+mean of the midpoints of the sides of the minority phase). For a simple cut
+$\bar x_c$ lies on the chord and $x^{0}_c$ is its midpoint. A block exists
+only where both Gram tensors are positive semi-definite. On the line, with
+$\hat\eta=\eta_c/\abs{\eta_c}$ and $e=\hat\eta^{\perp}$, the entries
+$g_{22}=e^{\transpose}\mathsf G^{\liq}_ce$ and $g_{12}=\hat\eta^{\transpose}\mathsf G^{\liq}_ce$
+do not depend on the position, and
+$g_{11}(s)=\hat\eta^{\transpose}\mathsf G^{\liq}_c\hat\eta$ at $x^{0}_c+s\hat\eta$
+decreases as $g_{11}(0)-s\abs{\eta_c}$; the derivation check of the note shows
+that $0\preceq\mathsf G^{\liq}_c\preceq h^2I$ (hence also for the gas) holds
+somewhere on the line if and only if
+\begin{equation}\label{eq:projection:mimetic-interval}
+  0\le g_{22}\le h^2,\quad g_{12}^2\le g_{22}(h^2-g_{22}),\qquad\text{namely for}\quad
+  g_{11}(s)\in\Bigl[\frac{g_{12}^2}{g_{22}},\,h^2-\frac{g_{12}^2}{h^2-g_{22}}\Bigr].
+\end{equation}
+The pressure point is $x^{0}_c$ if it lies in that interval (to $10^{-9}h$),
+else the nearest point of the interval shrunk by $1\,\%$ of its width at both
+ends, where both tensors are positive definite. For
+$\abs{\eta_c}\le10^{-9}h$ the tensors do not depend on $x^{*}_c$ and are
+symmetric only if $\tau_c=0$; a block then also needs
+$\ker\mathsf G^{\phase}_c\subset\ker\mathsf R^{\phase}_c$, which
+fixes the component of $x^{*}_c$ along an eigenvector $v$ of
+$\mathsf G^{\liq}_c$ with eigenvalue $0$ (or $h^2$, the kernel of
+$\mathsf G^{\gas}_c$) to the length-weighted mean of $v\cdot x^{\phase}_k$ over the
+sides of that phase (a film along a grid line: its mid-height instead of its
+top); the other component is that of $\bar x_c$. A point more than $1.5h$
+from the cell centre is replaced by $\bar x_c$.
+
+\emph{Metric.} The block of cell $c$ and phase $\phase$ is
+\begin{equation}\label{eq:projection:mimetic-local}
+  \mathcal M^{\phase}_c=\mathsf R^{\phase}_c\bigl(\mathsf G^{\phase}_c\bigr)^{+}\mathsf R^{\phase\transpose}_c
+  +\tfrac12\,\mathsf T^{\transpose}\mathsf D\mathsf Q\mathsf D\mathsf T,
+\end{equation}
+where the stabilisation is that of the mimetic inner
+product~\cite{brezzi2005b,lipnikov2014} for the wetted sides closed by one more
+edge $\Gamma_c$ of length $\abs{\eta_c}$ and outward normal $\mp\eta_c/\abs{\eta_c}$
+(liquid, gas): $\mathsf D=\diag{\meas{e}}$ over these edges, $\mathsf Q$ the
+orthogonal projector onto the complement of the range of $\mathsf D[n_e^{\transpose}]$,
+and $\mathsf T$ the map from the values of the wetted sides to the edges,
+whose flux density on $\Gamma_c$ is not an unknown: each phase is closed,
 \begin{equation}\label{eq:projection:mimetic-slave}
   \meas{\Gamma_c}\,v^{\phase}_{\Gamma_c}=-\sum_{f\in\faceset{c}}\orient{c}{f}\,\phaseaperture{\phase}{f}\meas{f}\,\velo^{\phase}_f ,
 \end{equation}
-so that $(\mathsf Bu)_c=-\meas{\Gamma_c}(v^{\liq}_{\Gamma_c}+v^{\gas}_{\Gamma_c})$:
+with the edge flux densities $v_k=\orient{c}{f}\velo^{\phase}_f$ on the wetted
+sides, so that $(\mathsf Bu)_c=-\meas{\Gamma_c}(v^{\liq}_{\Gamma_c}+v^{\gas}_{\Gamma_c})$:
 in a cut cell the mixture divergence is the normal-jump condition, and no
-jump row is needed. $\mathcal M$ assembles $\dens^{\phase}\mathcal M_{c^{\phase}}$
-over cells and phases through~\cref{eq:projection:mimetic-slave}; away from
-the cut cells it is the diagonal staggered phase mass
-$\mathsf W=\diag{\dualvol{f}\facemass{\phase}{f}}$. A phase value on a face
-that its phase does not reach ($\phaseaperture{\phase}{f}=0<\facemass{\phase}{f}$)
-gets the tie $\dualvol{f}\facemass{\phase}{f}(\velo^{\phase}_f-\velo^{\phase}_{d(f)})^2$
-to the neighbouring same-axis face $d(f)$ with the largest aperture of the
-phase, and a value with $0<\phaseaperture{\phase}{f}<\tfrac12$ on a mixed face
-the same tie with the weight $1-2\phaseaperture{\phase}{f}$ (small-cell
-stabilisation, \code{small_cell_stabilization}). Both ties vanish on fields
-that are constant per phase and axis.
+jump row is needed. Where the polygon exists, $\mathsf R(\meas{P}I)^{-1}\mathsf R^{\transpose}$
+with the rows at the chord midpoint is the slaved form of
+$\mathsf R_P\mathsf R_P^{\transpose}/\meas{P}$ with the rows at the centroid, and
+$\Gamma_c$ is the chord: \cref{eq:projection:mimetic-local} is then the MFD
+product $\mathsf R_P\mathsf R_P^{\transpose}/\meas{P}+\tfrac12\mathsf D_P\mathsf Q\mathsf D_P$
+of the polygon with its chord flux slaved (candidate~MM of the audit), and
+$\mathcal M^{\phase}_c=\tfrac12h^2I$ on an uncut cell. $\mathcal M$ assembles
+$\dens^{\phase}\mathcal M^{\phase}_c$ over cells and phases
+through~\cref{eq:projection:mimetic-slave}; away from the cut cells it is the
+diagonal staggered phase mass $\mathsf W=\diag{\dualvol{f}\facemass{\phase}{f}}$.
+Its sparsity does not depend on the data: a value couples to the values of
+its phase on the sides of its two cells.
+
+\emph{Degenerate data.} The block~\cref{eq:projection:mimetic-local} is positive
+definite exactly when $\mathsf G^{\phase}_c\succ0$ (its kernel is
+$\mathsf N\ker\mathsf G^{\phase}_c$); the assembled $\mathcal M$ is positive
+semi-definite in general and positive definite when every value gets inertia
+from some block, tie or lumped term below. A phase that wets only part of one
+side of a cut cell has its pressure point at the wetted midpoint,
+$\mathsf G^{\phase}_c=0$ and $\mathsf R^{\phase}_c=0$, and its block vanishes:
+the value takes its inertia from the cell across the face; if that block
+vanishes too, it gets its lumped staggered mass $\dualvol{f}\facemass{\phase}{f}$,
+which is counted in \code{lumped_values} and is not consistent at that value.
+The interface on a grid line, the other case of a vanishing Gram tensor, is
+treated below. A singular $\mathsf G^{\phase}_c$ enters through its
+pseudo-inverse (eigenvalues up to $10^{-10}h^2$ are dropped), which is
+consistent when $\ker\mathsf G\subset\ker\mathsf R$, checked as
+$\max\abs{\mathcal M^{\phase}_c\mathsf N-\mathsf R^{\phase}_c}\le10^{-8}h^2$. A
+cell without an admissible pressure point (the interval
+of~\cref{eq:projection:mimetic-interval} is empty, e.g.\ two corner pieces with
+$a=(\tfrac12,0,\tfrac3{10},\tfrac1{10})$; $\eta_c=0\ne\tau_c$, two chords with
+equal apertures on opposite sides; $\ker\mathsf G\not\subset\ker\mathsf R$ on the
+whole line; or a point more than $1.5h$ away) gets the blocks
+\cref{eq:projection:mimetic-local} with the eigenvalues of the symmetric part
+of $\mathsf G^{\phase}_c$ at $x^{*}_c$ raised to $0.02h^2$, consistent in the
+least-squares sense only; such a cell is counted in \code{defective_cells} of
+\apitype{MimeticProjectionStats} and in the run summary. No such cell occurs
+on the static fixtures of the tests or in the smooth laboratory samples of
+the audit (the derivation check finds one in about 3000 cut cells of noisy
+volume fractions). In the uniform-mesh integration runs one or two cells are
+defective in a few steps of the Rayleigh--Taylor runs at densities $(1000,1)$
+(2 of 864 steps at $h=\lambda/32$) and of Kelvin--Helmholtz at $(1000,1)$,
+$h=\lambda/8$: pure cells next to an interface that lies on a grid line to
+$10^{-3}h$, which the averaged traces of their neighbours give gas parts of
+$10^{-3}h$ at the ends of two sides, so that the line lies far outside the
+cell or $\mathsf G^{\gas}_c$ vanishes normal to it while $\mathsf R^{\gas}_c$
+does not. Moving the data point into the interval removed the defective cells
+of Rayleigh--Taylor at densities $(3,1)$ and changed its errors by less than
+$0.3\,\%$. A phase value on a face that its phase does not reach
+($\phaseaperture{\phase}{f}=0<\facemass{\phase}{f}$) gets the tie
+$\dualvol{f}\facemass{\phase}{f}(\velo^{\phase}_f-\velo^{\phase}_{d(f)})^2$ to the
+neighbouring same-axis face $d(f)$ with the largest aperture of the phase, and
+a value with $0<\phaseaperture{\phase}{f}<\tfrac12$ on a mixed face the same tie
+with the weight $1-2\phaseaperture{\phase}{f}$ (small-cell stabilisation,
+\code{small_cell_stabilization}). Both ties vanish on fields that are constant
+per phase and axis.
 
 \emph{Interface on a grid line.} On an interior face between a pure liquid
 and a pure gas cell no cell is cut. Both cells are treated as uncut and the
@@ -724,28 +837,15 @@ $\theta h$). The predictor enters through its mass-weighted mean
 $\onevelo_f$~\cref{eq:projection:decomposition}, the $\mathsf W$-orthogonal
 projection onto the identified values, so the step remains an orthogonal
 projection; the removed jump energy $\redmass{f}\dualvol{f}\jump{\velo}_f^2$ is
-counted in the energy identity below.
-
-\emph{Apertures and non-simple cells.} The polygons are built from the face
-apertures, not from one PLIC line per cell. The mean of the two adjacent PLIC
-traces~\cref{eq:interface:phase-aperture} halves a corner clip of a cut cell
-next to a pure cell, which gives the cut cell a second chord of length
-$\approx10^{-3}h$ or a zero-area polygon (measured on a circle at $h=1/64$, a
-wavy interface at $h=1/128$ and at the zero crossings of a cosine). An
-interface used by the mimetic projection therefore combines the traces by the
-rule \code{:pure_neighbour}: on a face between a pure cell and a cut cell
-whose PLIC trace on the face is strictly partial, the aperture is the pure
-cell's value ($0$ or $1$); elsewhere it is the mean. The rule belongs to the
-interface, so the divergence $\mathsf B$, the polygons, the CFL bound and the
-frozen subfaces of the interface transport of such a flow all see the same
-apertures; the CMDGFM and the one-velocity model keep the mean. On the
-fixtures above this removes every non-simple cell (four snapped faces each,
-trace at most $0.015$) and restores rest to round-off. A cell that is still
-not simple (a film thinner than a cell) throws for
-\code{nonsimple_cells = :error} (default); \code{:lumped} gives its face values
-the lumped mass $\tfrac12\dens^{\phase}h^2$, the fallback of the audit's
-laboratory, which loses the consistency below in that cell and is reported in
-\apitype{MimeticProjectionStats}.
+counted in the energy identity below. The Gram blocks would be consistent
+without the identification (rest and hydrostatics to round-off), but the
+averaged aperture $\tfrac12$ of such a face makes both cells cut cells whose
+pressure points lie on the face, and the projected state is not the limit of
+a chord at $\theta h$: on the flat interface $y=\tfrac12$ with $h=1/32$ and
+densities $(10,1)$ the mixture flux of the cut interface at $\theta=10^{-4}$
+differs from it by $1.6\times10^{-3}$, against $1.3\times10^{-4}$ with the
+identification, and a normal jump of $4.3\times10^{-3}$ remains on the face.
+The identification is therefore kept.
 
 \emph{Forces.} Surface tension uses the same map: the integrated face jumps
 $J_f$ of~\cref{ch:forces} give the increment
@@ -758,16 +858,26 @@ reproduces. (A density-weighted jump force $\mathcal M^{-1}(\phaseaperture{\phas
 would give the gas value of a mixed face the weight of the mixture: about
 $500\,\dt g$ after one step at densities $(1000,1)$.)
 
-\emph{Properties} (audit, theorem~MM). $\mathcal M$ is symmetric positive
-definite and couples only the values of one phase on the faces of one cell
-and a value with its donor. It is consistent: for a continuous, piecewise
-affine pressure ($A^{\liq}=A^{\gas}$ on any interface, or a straight
-interface with equal tangential derivatives) $\mathcal Mw=-\mathsf B^{\transpose}p^I$
-for $w^{\phase}_f=A^{\phase}\cdot\fnormal{f}/\dens^{\phase}$ and $p^I$ sampled at
-the chord midpoints, on every interface whose cut cells are simple and away
-from walls. Hence a uniform acceleration with equal densities is projected to
-rest, and a flat interface at any density ratio stays hydrostatic. The step
-satisfies the energy identity
+\emph{Properties} (the note's propositions on the meaning of consistency
+and on the assembly). $\mathcal M$ is symmetric positive definite (under the
+condition of the degenerate-data paragraph) and couples only the
+values of one phase on the faces of one cell and a value with its donor.
+Without defective cells or lumped values, and away from walls (a face with
+one cell does not cancel), it is consistent for any shared apertures:
+for the fields $\chi^{\phase}_k$ that are one on the values of phase $\phase$
+on the faces of axis $k$ and zero elsewhere,
+$(\mathcal M\chi^{\phase}_k)_{(f,\phase)}=\dens^{\phase}\phaseaperture{\phase}{f}\meas{f}\,(x^{*}_{\cplus{f}}-x^{*}_{\cminus{f}})_k$
+and zero on the other phase, because the two cells of a face see the same
+wetted length and midpoint with opposite orientation. Hence a uniform
+acceleration with equal densities is projected to rest for any apertures,
+and at a density contrast a pressure field is reproduced where the pressure
+points of the cut cells lie on the interface (a flat interface stays
+hydrostatic). Measured on averaged apertures that close no region (a cosine
+of amplitude $0.005$ whose mean lies $0.01h$, $0.03h$ and $0.97h$ above a grid
+line at $h=1/32$, a circle at $h=1/64$, waves at $h=1/32$ and $1/128$; 14 cut
+cells without a simple aperture polygon): rest to $10^{-14}$, no defective
+cell, and the identity above to $10^{-12}$ at densities $(1,1)$ and
+$(1000,1)$. The step satisfies the energy identity
 $E(u^{*})=E(u^{+})+E(u^{*}-u^{+})$, $E(u)=u^{\transpose}\mathcal Mu$, and
 conserves the first-moment momentum $e_i^{\transpose}\mathcal Mu$ up to the
 wall force $\dt(\mathsf Be_i)^{\transpose}\pres$. It does not conserve the
@@ -783,15 +893,19 @@ and preconditioned by one V-cycle of the tree-geometric multigrid of the
 pressure operator $\mathsf B\mathsf W^{-1}\mathsf B^{\transpose}$ of the
 diagonal metric. Away from the interface this operator equals the Schur
 complement; at the interface the Schur complement has 43--67 entries per
-row against 5. On a circle at densities $(1000,1)$ the iteration counts are
-$47$, $55$, $76$ for $h=1/32,1/64,1/128$.
+row against 5. On a circle at densities $(1000,1)$, for a smooth predictor
+that differs between the phases and the tolerance $10^{-10}$, the iteration
+counts are $59$, $66$, $67$ for $h=1/32,1/64,1/128$.
 
 \begin{implnote}
 Option \srcsym{src/two_phase/projection/methods.jl}{MimeticProjection},
-\srcsym{src/two_phase/projection/methods.jl}{MFDCutCellMetric}; polygons
-\srcsym{src/two_phase/projection/mimetic_metric.jl}{_mimetic_phase_polygon!},
+\srcsym{src/two_phase/projection/methods.jl}{MFDCutCellMetric};
 wet ends \srcsym{src/two_phase/projection/mimetic_metric.jl}{_mimetic_face_sides!},
-local product \srcsym{src/two_phase/projection/mimetic_metric.jl}{_mfd_polygon_block!}~\cref{eq:projection:mimetic-local},
+pressure point \srcsym{src/two_phase/projection/mimetic_metric.jl}{_mimetic_pressure_point}~\cref{eq:projection:mimetic-point},
+\srcsym{src/two_phase/projection/mimetic_metric.jl}{_mimetic_admissible_point}~\cref{eq:projection:mimetic-interval},
+\srcsym{src/two_phase/projection/mimetic_metric.jl}{_mimetic_kernel_point},
+Gram tensor and local block \srcsym{src/two_phase/projection/mimetic_metric.jl}{_mimetic_gram_block!}~\cref{eq:projection:mimetic-gram,eq:projection:mimetic-local},
+\srcsym{src/two_phase/projection/mimetic_metric.jl}{_mimetic_fill_gram_block!},
 assembly with~\cref{eq:projection:mimetic-slave}, ties and grid-line values
 \srcsym{src/two_phase/projection/mimetic_metric.jl}{_assemble_cut_cell_metric!};
 grid-line faces \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_gridline_faces!},
@@ -801,11 +915,13 @@ preconditioner \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_
 forces \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_jump_force!},
 \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_uniform_acceleration!}.
 Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric: symmetry, definiteness, diagonal masses and consistency},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic Gram blocks: the MM block where the polygon exists, degenerate data},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric on averaged apertures that close no region},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection: idempotence, energy identity and momentum},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection under a uniform acceleration (T3)}
 (the audit laboratory's numbers on exact geometry),
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic forces balance constant curvature and gravity},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection rejects unsupported cut cells},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection rejects cut cells at walls},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection with an interface on a grid line}.
 \end{implnote}
 

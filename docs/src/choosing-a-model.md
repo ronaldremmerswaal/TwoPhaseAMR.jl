@@ -50,14 +50,15 @@ objects. The tuple never selects the velocity model implicitly.
 
 `TwoVelocityModel(pressure_projection=MimeticProjection())` selects the
 optional mimetic cut-cell projection: the kinetic-energy-orthogonal
-projection in a non-diagonal metric built on the liquid and gas polygons of
-the cut cells. It runs on uniform meshes of square cells without solids and
-throws for adaptive meshes, solids, cut cells at a wall and cut cells whose
-aperture polygons are not simple; `MimeticProjection(metric =
-MFDCutCellMetric(nonsimple_cells = :lumped))` replaces the last error by an
-inconsistent lumped fallback that `MimeticProjectionStats.lumped_polygons`
-reports. Each projection solves a conjugate-gradient system with a sparse
-factorization of the cut-cell block, so it is more expensive than the CMDGFM.
+projection in a non-diagonal metric built, per cut cell and phase, on the
+Gram tensor of the wetted face parts (the shared face apertures and their
+midpoints; no phase polygon is needed). It runs on uniform meshes of square
+cells without solids and throws for adaptive meshes, solids and cut cells at
+a wall. A cut cell whose Gram tensor admits no consistent block gets a
+least-squares fallback and is counted in
+`MimeticProjectionStats.defective_cells`, which the run summary prints. Each
+projection solves a conjugate-gradient system with a sparse factorization of
+the cut-cell block, so it is more expensive than the CMDGFM.
 See the technical reference, section
 [Mimetic cut-cell projection](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:projection:mimetic).
 
