@@ -252,11 +252,12 @@ function _height_cache!(field)
         all(cache.keys[b] == mesh.blocks[b].key for b in eachindex(cache.keys)) && return cache
     nx, ny = mesh.block_size
     number_of_blocks = nblocks(mesh)
-    resize!(cache.keys, number_of_blocks)
+    # The keys mark a complete cache: set them only after both passes, so an
+    # exception cannot leave a half-built cache that looks current.
+    empty!(cache.keys)
     previous_blocks = length(cache.values)
     resize!(cache.values, number_of_blocks)
     for b in 1:number_of_blocks
-        cache.keys[b] = mesh.blocks[b].key
         if b > previous_blocks || size(cache.values[b]) != (nx + 8, ny + 8)
             cache.values[b] = Matrix{T}(undef, nx + 8, ny + 8)
         end
@@ -314,6 +315,7 @@ function _height_cache!(field)
             end
         end
     end
+    append!(cache.keys, block.key for block in mesh.blocks)
     return cache
 end
 function _fill_height_values!(field)

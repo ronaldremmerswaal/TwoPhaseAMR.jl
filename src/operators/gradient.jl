@@ -270,7 +270,12 @@ function _assemble_inverse_metric(
     # Order the endpoints by vertex key with two stable counting sorts (the
     # second lattice coordinate, then the first). Endpoint order is face
     # order, so this preserves the previous per-patch contribution order.
-    # The keys are stored one-based, as counting-sort targets.
+    # The keys are stored one-based, as counting-sort targets, and on the
+    # lattice of the finest active level: every vertex of an active cell lies
+    # on it, so dividing by `2^shift` is exact and order-preserving, and the
+    # sort ranges do not grow with the unused refinement ceiling.
+    shift = mesh.max_level - maximum(block -> block.key.level, mesh.blocks)
+    mask = (1 << shift) - 1
     metric_faces = Vector{MetricFace{T}}(undef, number_of_faces)
     first_keys = resize!(cache.first_keys, 2number_of_faces)
     second_keys = resize!(cache.second_keys, 2number_of_faces)
@@ -282,11 +287,13 @@ function _assemble_inverse_metric(
         )
         for endpoint in 1:2
             key = _vertex_key(mesh, face, endpoint)
-            @inbounds first_keys[2index - 2 + endpoint] = key[1] + 1
-            @inbounds second_keys[2index - 2 + endpoint] = key[2] + 1
+            iszero(key[1] & mask) && iszero(key[2] & mask) ||
+                error("vertex key off the finest active lattice")
+            @inbounds first_keys[2index - 2 + endpoint] = (key[1] >> shift) + 1
+            @inbounds second_keys[2index - 2 + endpoint] = (key[2] >> shift) + 1
         end
     end
-    lattice = _finest_lattice_size(mesh)
+    lattice = _finest_lattice_size(mesh) .>> shift
     _, by_second = _grouped_output_schedule(second_keys, lattice[2] + 1)
     _, by_first = _grouped_output_schedule(first_keys[by_second], lattice[1] + 1)
     order = by_second[by_first]
@@ -303,7 +310,8 @@ function _assemble_inverse_metric(
             push!(faces, @inbounds metric_faces[face_index])
             position += 1
         end
-        if _physical_vertex(mesh, (first_key - 1, second_key - 1)) || length(faces) <= 2
+        vertex = ((first_key - 1) << shift, (second_key - 1) << shift)
+        if _physical_vertex(mesh, vertex) || length(faces) <= 2
             _append_boundary_patch_metric!(rows, columns, coefficients, faces)
             continue
         end

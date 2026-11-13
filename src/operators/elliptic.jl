@@ -234,16 +234,23 @@ function _integrated_stiffness(
         (column_pointers, rows, products, has_term), column_counts, product,
         incidence, faces, scratch, cell_width,
     )
-    # Symmetrise: dropped (zero) sums become stored zeros of the pattern.
+    # Symmetrise: dropped (zero) sums become stored zeros of the pattern. A
+    # missing mirror slot is recorded per column and thrown after the launch.
     stiffness_values = Vector{T}(undef, length(rows))
+    missing_mirror = zeros(Bool, number_of_cells)
     _parallel_for(number_of_cells) do column
         for slot in column_pointers[column]:(column_pointers[column + 1] - 1)
             row = rows[slot]
             mirror = _csc_stored_pointer_or_zero(rows, column_pointers, column, row)
+            if iszero(mirror)
+                missing_mirror[column] = true
+                continue
+            end
             value = has_term[slot] ? (products[slot] + products[mirror]) / 2 : zero(T)
             stiffness_values[slot] = iszero(value) ? zero(T) : value
         end
     end
+    any(missing_mirror) && error("sparse topology is missing a required entry")
     return SparseMatrixCSC(
         number_of_cells, number_of_cells, column_pointers, rows, stiffness_values,
     )
