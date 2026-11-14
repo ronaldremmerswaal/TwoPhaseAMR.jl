@@ -121,7 +121,7 @@ _projection_summary_fields(::CMDGFMProjectionStats) = (
 )
 _projection_summary_fields(::MimeticProjectionStats) = (
     :preconditioner, :mixture_divergence, :mixture_volume_defect,
-    :energy_identity_defect, :defective_cells, :gridline_faces,
+    :energy_identity_defect, :gridline_faces,
 )
 function _print_projection_summary(
         io::IO, run::ProjectionRunStats, stats::_ProjectionSummaryStats,
@@ -152,6 +152,16 @@ function _print_projection_summary(
         _summary_property(
             io, replace(string(name), '_' => ' '), getfield(stats, name);
             indent = "    ",
+        )
+    end
+    if stats isa MimeticProjectionStats
+        _summary_property(
+            io, "defective cells this run (total, max per solve)",
+            (run.defective_cells, run.max_defective_cells); indent = "    ",
+        )
+        _summary_property(
+            io, "lumped values this run (total, max per solve)",
+            (run.lumped_values, run.max_lumped_values); indent = "    ",
         )
     end
     return nothing

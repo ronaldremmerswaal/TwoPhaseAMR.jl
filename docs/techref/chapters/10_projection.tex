@@ -739,9 +739,18 @@ somewhere on the line if and only if
   0\le g_{22}\le h^2,\quad g_{12}^2\le g_{22}(h^2-g_{22}),\qquad\text{namely for}\quad
   g_{11}(s)\in\Bigl[\frac{g_{12}^2}{g_{22}},\,h^2-\frac{g_{12}^2}{h^2-g_{22}}\Bigr].
 \end{equation}
-The pressure point is $x^{0}_c$ if it lies in that interval (to $10^{-9}h$),
-else the nearest point of the interval shrunk by $1\,\%$ of its width at both
-ends, where both tensors are positive definite. For
+The pressure point is $x^{0}_c$ clamped into that interval shrunk at both ends
+by $\min(w/100,\,0.01h)$, $w$ its length along the line; there both tensors
+are positive definite. The point, hence the metric, depends continuously on
+the data (without the margin the data point inside the interval but next to
+its end gives a nearly singular $\mathsf G^{\liq}_c$, and the block entries
+jumped from $2.3$ to $3\times10^3$ across the end in a review example), and
+the cap keeps the point within $0.01h$ of $x^{0}_c$ when that is admissible.
+Only a point without admissible interval is subject to the $1.5h$ rule
+below. Where the polygon is simple the point stays at the chord midpoint
+unless the phase area is below the margin times the chord length
+($\meas{P}<0.01h\abs{\eta_c}$, corner pieces with legs below about $0.03h$).
+For
 $\abs{\eta_c}\le10^{-9}h$ the tensors do not depend on $x^{*}_c$ and are
 symmetric only if $\tau_c=0$; a block then also needs
 $\ker\mathsf G^{\phase}_c\subset\ker\mathsf R^{\phase}_c$, which
@@ -749,8 +758,8 @@ fixes the component of $x^{*}_c$ along an eigenvector $v$ of
 $\mathsf G^{\liq}_c$ with eigenvalue $0$ (or $h^2$, the kernel of
 $\mathsf G^{\gas}_c$) to the length-weighted mean of $v\cdot x^{\phase}_k$ over the
 sides of that phase (a film along a grid line: its mid-height instead of its
-top); the other component is that of $\bar x_c$. A point more than $1.5h$
-from the cell centre is replaced by $\bar x_c$.
+top); the other component is that of $\bar x_c$. A point without admissible
+interval more than $1.5h$ from the cell centre is replaced by $\bar x_c$.
 
 \emph{Metric.} The block of cell $c$ and phase $\phase$ is
 \begin{equation}\label{eq:projection:mimetic-local}
@@ -788,11 +797,13 @@ definite exactly when $\mathsf G^{\phase}_c\succ0$ (its kernel is
 $\mathsf N\ker\mathsf G^{\phase}_c$); the assembled $\mathcal M$ is positive
 semi-definite in general and positive definite when every value gets inertia
 from some block, tie or lumped term below. A phase that wets only part of one
-side of a cut cell has its pressure point at the wetted midpoint,
-$\mathsf G^{\phase}_c=0$ and $\mathsf R^{\phase}_c=0$, and its block vanishes:
-the value takes its inertia from the cell across the face; if that block
-vanishes too, it gets its lumped staggered mass $\dualvol{f}\facemass{\phase}{f}$,
-which is counted in \code{lumped_values} and is not consistent at that value.
+side of a cut cell has $\mathsf G^{\phase}_c=0$ at the wetted midpoint, an end of
+its interval; with the margin its pressure point lies $0.01h$ inside the cell,
+$\mathsf G^{\phase}_c=0.01\,b\,h^2\,nn^{\transpose}$, and its block is
+$0.01\,b\,h^2$ for the wetted fraction $b$. A value whose blocks give it no
+more than $10^{-12}\dens^{\phase}h^2$ gets its lumped staggered mass
+$\dualvol{f}\facemass{\phase}{f}$ instead, which is counted in
+\code{lumped_values} and is not consistent at that value.
 The interface on a grid line, the other case of a vanishing Gram tensor, is
 treated below. A singular $\mathsf G^{\phase}_c$ enters through its
 pseudo-inverse (eigenvalues up to $10^{-10}h^2$ are dropped), which is
@@ -809,16 +820,16 @@ least-squares sense only; such a cell is counted in \code{defective_cells} of
 \apitype{MimeticProjectionStats} and in the run summary. No such cell occurs
 on the static fixtures of the tests or in the smooth laboratory samples of
 the audit (the derivation check finds one in about 3000 cut cells of noisy
-volume fractions). In the uniform-mesh integration runs one or two cells are
-defective in a few steps of the Rayleigh--Taylor runs at densities $(1000,1)$
-(2 of 864 steps at $h=\lambda/32$) and of Kelvin--Helmholtz at $(1000,1)$,
-$h=\lambda/8$: pure cells next to an interface that lies on a grid line to
-$10^{-3}h$, which the averaged traces of their neighbours give gas parts of
-$10^{-3}h$ at the ends of two sides, so that the line lies far outside the
-cell or $\mathsf G^{\gas}_c$ vanishes normal to it while $\mathsf R^{\gas}_c$
-does not. Moving the data point into the interval removed the defective cells
-of Rayleigh--Taylor at densities $(3,1)$ and changed its errors by less than
-$0.3\,\%$. A phase value on a face that its phase does not reach
+volume fractions). In the uniform-mesh integration runs at most two cells are
+defective in a few steps, at densities $(1000,1)$ and coarse meshes
+(Rayleigh--Taylor at $h=\lambda/16$, Kelvin--Helmholtz at $h=\lambda/8$): pure
+cells next to an interface that lies on a grid line to $10^{-3}h$, which the
+averaged traces of their neighbours give gas parts of $10^{-3}h$ at the ends
+of two sides, so that the line lies far outside the cell or
+$\mathsf G^{\gas}_c$ vanishes normal to it while $\mathsf R^{\gas}_c$ does not.
+Clamping the data point into the interval removed the defective cells of
+Rayleigh--Taylor at densities $(3,1)$ and changed its errors by less than
+$3\,\%$. A phase value on a face that its phase does not reach
 ($\phaseaperture{\phase}{f}=0<\facemass{\phase}{f}$) gets the tie
 $\dualvol{f}\facemass{\phase}{f}(\velo^{\phase}_f-\velo^{\phase}_{d(f)})^2$ to the
 neighbouring same-axis face $d(f)$ with the largest aperture of the phase, and
@@ -832,8 +843,10 @@ and a pure gas cell no cell is cut. Both cells are treated as uncut and the
 two phase values of the face are identified, $\velo^{\liq}_f=\velo^{\gas}_f$,
 as one unknown with the summed mass $\dualvol{f}\facemass{}{f}$ and the full
 aperture: the limit of the cut-cell construction as the chord approaches the
-face (the mixture flux converges at $O(\theta)$ for a chord at distance
-$\theta h$). The predictor enters through its mass-weighted mean
+face (for a chord at distance $\theta h$, $h=1/32$, the mixture flux differs
+from it by $0.13$, $0.013$, $1.2\times10^{-3}$, $2.2\times10^{-4}$ for
+$\theta=10^{-1},\dots,10^{-4}$; below $\theta\approx10^{-2}$ the $0.01h$ margin of
+the pressure point slows the convergence). The predictor enters through its mass-weighted mean
 $\onevelo_f$~\cref{eq:projection:decomposition}, the $\mathsf W$-orthogonal
 projection onto the identified values, so the step remains an orthogonal
 projection; the removed jump energy $\redmass{f}\dualvol{f}\jump{\velo}_f^2$ is
@@ -843,8 +856,8 @@ averaged aperture $\tfrac12$ of such a face makes both cells cut cells whose
 pressure points lie on the face, and the projected state is not the limit of
 a chord at $\theta h$: on the flat interface $y=\tfrac12$ with $h=1/32$ and
 densities $(10,1)$ the mixture flux of the cut interface at $\theta=10^{-4}$
-differs from it by $1.6\times10^{-3}$, against $1.3\times10^{-4}$ with the
-identification, and a normal jump of $4.3\times10^{-3}$ remains on the face.
+differs from it by $1.8\times10^{-3}$, against $2.2\times10^{-4}$ with the
+identification, and a normal jump of $8.7\times10^{-3}$ remains on the face.
 The identification is therefore kept.
 
 \emph{Forces.} Surface tension uses the same map: the integrated face jumps

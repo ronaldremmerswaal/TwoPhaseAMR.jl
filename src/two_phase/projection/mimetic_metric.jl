@@ -119,8 +119,8 @@ function _mimetic_face_ring(topology, face, axis)
     )
 end
 
-# Tangential component of the PLIC normal of `cell` on a face with local normal
-# coordinate `normal_coordinate`, and whether the PLIC line cuts the face
+# Tangential component of the unit PLIC normal of `cell` on a face with local
+# normal coordinate `normal_coordinate`, and whether the PLIC line cuts the face
 # strictly inside. A positive component puts the liquid at the low end.
 function _mimetic_trace_vote(interface, reference, axis, normal_coordinate)
     nx = _get(interface.normal_x, reference)
@@ -132,7 +132,7 @@ function _mimetic_trace_vote(interface, reference, axis, normal_coordinate)
         -T(0.5), T(0.5), tangent, normal * normal_coordinate - intercept;
         keep_less = true,
     )
-    return tangent, zero(T) < hi - lo < one(T)
+    return tangent / hypot(nx, ny), zero(T) < hi - lo < one(T)
 end
 
 """Classify the wetted end of every partially wetted interior face.
@@ -265,26 +265,32 @@ function _mimetic_pressure_point(apertures::NTuple{4, T}, starts) where {T}
     e2 = ex^2 + ey^2
     if e2 > T(1.0e-18)
         defect = (m12 - m21) - (ex * yr - ey * xr)
-        xs, ys = _mimetic_admissible_point(
+        xs, ys, admissible = _mimetic_admissible_point(
             m11, m12, m21, m22, ex, ey, xr - defect * ey / e2, yr + defect * ex / e2,
         )
     else
         xs, ys = _mimetic_kernel_point(apertures, starts, m11, (m12 + m21) / 2, m22, xr, yr)
+        admissible = false
     end
-    hypot(xs, ys) > T(1.5) && ((xs, ys) = (xr, yr))
+    !admissible && hypot(xs, ys) > T(1.5) && ((xs, ys) = (xr, yr))
     return xs, ys, ex, ey
 end
 
 """Move the point `(xs, ys)` of the symmetry line along `η` into the interval
-where `0 ⪯ G^l ⪯ I` (eq. mimetic-interval), unless it lies there already.
+where `0 ⪯ G^l ⪯ I` (eq. mimetic-interval); return the point and whether the
+interval is non-empty.
 
 In the frame `η̂ = η/|η|`, `e = η̂^⊥` the entries `g₂₂ = eᵀG^l e` and
 `g₁₂ = η̂ᵀG^l e` do not change along the line and `g₁₁(s) = g₁₁(0) - s|η|` at
 `x* + s η̂`; an admissible point exists if and only if `0 ≤ g₂₂ ≤ 1` and
 `g₁₂² ≤ g₂₂(1 - g₂₂)`, and then `g₁₁ ∈ [g₁₂²/g₂₂, 1 - g₁₂²/(1 - g₂₂)]`. The
-point moves to the nearest point of that interval shrunk by 1 % of its width
-at both ends, where both tensors are positive definite. Without an admissible
-point it stays (the cell is defective)."""
+point is clamped into that interval shrunk at both ends by
+`min(w/100, _MIMETIC_POINT_MARGIN)` of its length `w` along the line, where both
+tensors are positive definite: the point, hence the metric, depends
+continuously on the data, and a phase of vanishing area gets a block of order
+its wetted length times the margin instead of a block that vanishes or blows
+up at the end of the interval. Without an admissible point it stays (the cell
+is defective)."""
 function _mimetic_admissible_point(m11, m12, m21, m22, ex, ey, xs, ys)
     T = typeof(xs)
     tolerance = T(1.0e-12)
@@ -296,18 +302,21 @@ function _mimetic_admissible_point(m11, m12, m21, m22, ex, ey, xs, ys)
     q11 = hx * (g11 * hx + g12 * hy) + hy * (g12 * hx + g22 * hy)
     q12 = hx * (g11 * px + g12 * py) + hy * (g12 * px + g22 * py)
     q22 = px * (g11 * px + g12 * py) + py * (g12 * px + g22 * py)
-    -tolerance <= q22 <= one(T) + tolerance || return xs, ys
+    -tolerance <= q22 <= one(T) + tolerance || return xs, ys, false
     q22 = clamp(q22, zero(T), one(T))
     lo = q22 > T(1.0e-14) ? q12^2 / q22 : (abs(q12) < tolerance ? zero(T) : T(Inf))
     hi = one(T) - q22 > T(1.0e-14) ? one(T) - q12^2 / (one(T) - q22) :
         (abs(q12) < tolerance ? one(T) : -T(Inf))
-    lo > hi + tolerance && return xs, ys
+    lo > hi + tolerance && return xs, ys, false
     smin, smax = (q11 - hi) / c, (q11 - lo) / c
-    smin - T(1.0e-9) <= zero(T) <= smax + T(1.0e-9) && return xs, ys
-    width = smax - smin
-    s = clamp(zero(T), smin + width / 100, smax - width / 100)
-    return xs + s * hx, ys + s * hy
+    margin = min(max(smax - smin, zero(T)) / 100, T(_MIMETIC_POINT_MARGIN))
+    s = clamp(zero(T), smin + margin, max(smin + margin, smax - margin))
+    return xs + s * hx, ys + s * hy, true
 end
+
+"""Largest distance (units of `h`) by which `_mimetic_admissible_point` keeps
+the pressure point inside the ends of its admissible interval."""
+const _MIMETIC_POINT_MARGIN = 0.01
 
 """Pressure point of a cut cell with `η = 0`: the Gram tensors `G^l` (symmetric
 part `[g11 g12; g12 g22]`) and `G^g = I - G^l` do not depend on `x*`, and a
@@ -379,7 +388,7 @@ function _mimetic_gram_block!(
     end
     m == 0 && return 0, true
     lambda1, lambda2, c, s = _mimetic_symmetric_eigen(g11, (g12 + g21) / 2, g22)
-    consistent = abs(g12 - g21) < T(1.0e-9) && lambda1 > -T(1.0e-10)
+    consistent = abs(g12 - g21) <= T(1.0e-10) && lambda1 > -T(1.0e-10)
     if consistent
         _mimetic_fill_gram_block!(block, m, sides, lengths, moments, lambda1, lambda2, c, s, false, phase, ex, ey)
         for q in 1:m
@@ -706,9 +715,10 @@ function _assemble_cut_cell_metric!(
         mass = assembly.dof_mass[dof]
         dof_at(g) = g == 0 ? 0 : (phase == 1 ? assembly.liquid_dof[g] : assembly.gas_dof[g])
         axis = mesh.faces[face].axis
-        ring = _mimetic_face_ring(topology, face, axis)
         if aperture > zero(T)
-            if !(block_diagonal[dof] > zero(T))
+            # A block that gives the value no inertia beyond round-off (a phase
+            # of vanishing area) does not count: lump the staggered mass.
+            if !(block_diagonal[dof] > T(1.0e-12) * density[phase == 2 ? 2 : 1] * h^2)
                 _mimetic_add!(assembly, dof, dof, mass)
                 lumped_values += 1
             end
@@ -721,12 +731,14 @@ function _assemble_cut_cell_metric!(
                 d = dof_at(g); reaches(d) &&
                     assembly.dof_aperture[d] > aperture + T(1.0e-12)
             )
+            ring = _mimetic_face_ring(topology, face, axis)
             donor = _mimetic_donor(topology, mesh, ring, dof_at, larger, assembly.dof_aperture)
             donor == 0 && continue
             _mimetic_add_tie!(assembly, dof, donor, (one(T) - 2aperture) * mass)
             stabilised += 1
             continue
         end
+        ring = _mimetic_face_ring(topology, face, axis)
         donor = _mimetic_donor(topology, mesh, ring, dof_at, g -> reaches(dof_at(g)), assembly.dof_aperture)
         if donor == 0
             _mimetic_add!(assembly, dof, dof, mass)

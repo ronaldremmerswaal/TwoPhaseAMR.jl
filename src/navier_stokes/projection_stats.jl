@@ -19,7 +19,11 @@ residual without an iteration. `last_iterations`, `last_initial_residual`, and
 `last_final_residual` describe the most recent solve that worked; they stay
 zero when none did. Residuals use the native norm of the projection solver
 (`initial_residual` of `LinearSolverStats`, `CMDGFMProjectionStats` or
-`MimeticProjectionStats`).
+`MimeticProjectionStats`). For a [`MimeticProjection`](@ref)
+`defective_cells` and `lumped_values` sum the per-solve counts of
+`MimeticProjectionStats` over the run and `max_defective_cells`,
+`max_lumped_values` are their largest per-solve values; they stay zero for
+the other projections.
 """
 mutable struct ProjectionRunStats{T}
     solves::Int
@@ -30,10 +34,18 @@ mutable struct ProjectionRunStats{T}
     last_iterations::Int
     last_initial_residual::T
     last_final_residual::T
+    defective_cells::Int
+    max_defective_cells::Int
+    lumped_values::Int
+    max_lumped_values::Int
 end
 
 ProjectionRunStats(::Type{T}) where {T} =
-    ProjectionRunStats(0, 0, 0, 0, true, 0, zero(T), zero(T))
+    ProjectionRunStats(0, 0, 0, 0, true, 0, zero(T), zero(T), 0, 0, 0, 0)
+
+"""Defective cut cells and lumped phase values of one projection solve (zero
+for projections without a cut-cell metric)."""
+_cut_cell_counts(stats) = (0, 0)
 
 """Record one pressure-projection solve in `run`."""
 function _accumulate_projection!(run::ProjectionRunStats{T}, stats) where {T}
@@ -44,6 +56,11 @@ function _accumulate_projection!(run::ProjectionRunStats{T}, stats) where {T}
     run.iterations += count
     run.max_iterations = max(run.max_iterations, count)
     run.converged &= converged(stats)
+    defective, lumped = _cut_cell_counts(stats)
+    run.defective_cells += defective
+    run.max_defective_cells = max(run.max_defective_cells, defective)
+    run.lumped_values += lumped
+    run.max_lumped_values = max(run.max_lumped_values, lumped)
     if iszero(count) && !(final < initial)
         run.without_iterations += 1
         return run

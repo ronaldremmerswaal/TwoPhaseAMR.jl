@@ -96,6 +96,29 @@ _mimetic_circle(n; x = 0.5, y = 0.5, radius = 0.25) =
     summary = String(take!(report))
     @test occursin("iterations this run: $(result.projection.iterations)", summary)
     @test occursin("energy identity defect", summary)
+    # The run accumulates the defective cells and lumped values of every solve
+    # (total and largest per solve) and the summary prints both.
+    @test (result.projection.defective_cells, result.projection.max_defective_cells) == (0, 0)
+    @test (result.projection.lumped_values, result.projection.max_lumped_values) == (0, 0)
+    @test occursin("defective cells this run (total, max per solve): (0, 0)", summary)
+    @test occursin("lumped values this run (total, max per solve): (0, 0)", summary)
+    case = _mimetic_case(16, _mimetic_circle(16))
+    stats = project!(
+        _mimetic_velocity(case, (phase, face) -> 0.0), CellField(case.mesh),
+        case.solver, 1.0, case.workspace,
+    )
+    counted(defective, lumped) = MimeticProjectionStats(
+        (
+            name === :defective_cells ? defective : name === :lumped_values ? lumped :
+                getfield(stats, name) for name in fieldnames(MimeticProjectionStats)
+        )...,
+    )
+    run = ProjectionRunStats(Float64)
+    for (defective, lumped) in ((3, 0), (1, 2), (0, 1))
+        TwoPhaseAMR._accumulate_projection!(run, counted(defective, lumped))
+    end
+    @test (run.defective_cells, run.max_defective_cells) == (4, 3)
+    @test (run.lumped_values, run.max_lumped_values) == (3, 2)
 end
 
 @testset "Mimetic metric: symmetry, definiteness, diagonal masses and consistency" begin
@@ -424,17 +447,28 @@ end
         # Prop. gram(b): the Gram tensors of the two phases add up to the cell.
         @test phases[1].gram + phases[2].gram ≈ I atol = 1.0e-14
     end
-    # Zero-area phase: the liquid wets one per cent of the bottom only. Its
-    # pressure point is the wetted midpoint, G = 0 and the liquid block
-    # vanishes (block SPD needs G ≻ 0: ker m = N ker G); the value takes its
-    # inertia from the cell across the face, else from the lumped term below.
-    # The gas block is consistent with G = I.
+    # Zero-area phase: the liquid wets one per cent of the bottom only. At the
+    # data point (the wetted midpoint) G^l = 0 lies at the end of the
+    # admissible interval, where the block would vanish (block SPD needs
+    # G ≻ 0: ker m = N ker G). The pressure point keeps the margin 0.01h from
+    # that end: G^l = b·0.01 e_y e_yᵀ and the liquid block is the wetted length
+    # times the margin, consistent. The gas block is consistent too.
     point, phases = _mmd_cell((0.01, 0.0, 0.0, 0.0), (true, false, false, false))
-    @test all(isapprox.(point, (-0.495, -0.5); atol = 1.0e-15))
+    @test all(isapprox.(point, (-0.495, -0.49); atol = 1.0e-15))
     @test phases[1].consistent && phases[2].consistent
-    @test maximum(abs, phases[1].gram) <= 1.0e-15
-    @test maximum(abs, phases[1].block) <= 1.0e-15
-    @test phases[2].gram ≈ I atol = 1.0e-15
+    @test phases[1].gram ≈ [0.0 0.0; 0.0 1.0e-4] atol = 1.0e-15
+    @test phases[1].block ≈ [1.0e-4;;] atol = 1.0e-15
+    @test phases[2].gram ≈ I - phases[1].gram atol = 1.0e-15
+    # The metric is continuous where the data point crosses an end of the
+    # admissible interval (review data: without the margin at both sides of
+    # the end the largest block entry jumped from 2.3 to 3.0e3).
+    path = map(range(0.374, 0.3752; length = 241)) do a2
+        point, phases = _mmd_cell((0.0406, a2, 0.2513, 0.3723), (false, true, false, true))
+        @test all(result -> result.consistent, phases)
+        maximum(abs, phases[1].block)
+    end
+    @test maximum(path) < 10
+    @test maximum(abs, diff(path)) < 1.0e-3
     # A liquid sliver near a grid line (a Rayleigh–Taylor state at h = λ/16):
     # at the data point G^l has the eigenvalue -3e-5 (the point lies 1e-4 h
     # beyond the top face). Along the symmetry line an admissible interval
@@ -488,12 +522,13 @@ end
         @test isposdef(Symmetric(result.block))
     end
     # Assembled on synthetic face data of a gas-filled mesh. (i) Only the left
-    # and right faces of one cell are wetted: that cell is defective, its two
-    # neighbours hold zero-area liquid with zero blocks, and the liquid values
-    # take their inertia from the defective cell. (ii) Only a sliver of one
-    # horizontal face is wetted: both of its cells give the liquid value a
-    # zero block, so it gets the lumped mass, counted in `lumped_values`. The
-    # assembled metric stays positive definite in both.
+    # and right faces of one cell are wetted: that cell is defective and its
+    # two neighbours hold zero-area liquid. (ii) One horizontal face is wetted
+    # over 99 % or 1 %: both of its cells give the liquid value a block of the
+    # wetted length times the margin of the pressure point. (iii) A wetted
+    # length of 1e-12 h: those blocks are below 1e-12 ρh², the value gets its
+    # lumped mass instead, counted in `lumped_values`. The assembled metric is
+    # positive definite in all of them.
     n = 8
     case = _mimetic_case(n, (x, y) -> 1.0)
     mesh = case.mesh
@@ -504,7 +539,10 @@ end
     boundaries = length(mesh.boundary_faces)
     for (wetted, expected) in (
             (((topology.sides[2, cell], true, 0.3), (topology.sides[4, cell], false, 0.3)), (3, 1, 0)),
-            (((topology.sides[3, cell], true, 0.01),), (2, 0, 1)),
+            (((topology.sides[3, cell], true, 0.99),), (2, 0, 0)),
+            (((topology.sides[1, cell], false, 0.99),), (2, 0, 0)),
+            (((topology.sides[3, cell], true, 0.01),), (2, 0, 0)),
+            (((topology.sides[3, cell], true, 1.0e-12),), (2, 0, 1)),
         )
         fraction = zeros(faces)
         aperture = zeros(faces)

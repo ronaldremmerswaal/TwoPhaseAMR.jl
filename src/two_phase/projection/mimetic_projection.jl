@@ -146,6 +146,7 @@ struct MimeticProjectionStats{T}
 end
 
 _dimensionless_residual(stats::MimeticProjectionStats) = stats.mixture_volume_defect
+_cut_cell_counts(stats::MimeticProjectionStats) = (stats.defective_cells, stats.lumped_values)
 
 function Base.show(io::IO, stats::MimeticProjectionStats)
     return print(
@@ -229,12 +230,14 @@ function _mimetic_assemble_from_data!(
     workspace.factor = isempty(assembly.band) ? nothing : lu(assembly.band_matrix)
     cells = size(topology.sides, 2)
     # Mixture divergence columns: +|f| a on the minus cell, -|f| a on the plus cell.
-    rows = Int[]
-    columns = Int[]
-    values = T[]
-    lrows = Int[]
-    lcolumns = Int[]
-    lvalues = T[]
+    band_count = 2length(assembly.band)
+    diagonal_count = 4(length(assembly.dof_face) - length(assembly.band))
+    rows = sizehint!(Int[], band_count)
+    columns = sizehint!(Int[], band_count)
+    values = sizehint!(T[], band_count)
+    lrows = sizehint!(Int[], diagonal_count)
+    lcolumns = sizehint!(Int[], diagonal_count)
+    lvalues = sizehint!(T[], diagonal_count)
     for dof in eachindex(assembly.dof_face)
         aperture = assembly.dof_aperture[dof]
         iszero(aperture) && continue
