@@ -832,8 +832,9 @@ of its height-function columns (`:hfpoint`, [`_mimetic_height_point`](@ref);
 where it has none, as `:plicpoint`) or the point of its PLIC line on the column
 of the dominant normal axis through the cell centre (`:plicpoint`), and every
 other cell takes the `C(1 - C)`-weighted mean of the `Ψ` of its cut face
-neighbours, `ψ_c = mean(Ψ) + Δρ g⋅x*_c`. With `σ = 0` the potentials are
-purely hydrostatic."""
+neighbours, `ψ_c = mean(Ψ) + Δρ g⋅x*_c`. With `σ = 0` there is no curvature
+to refer: the cut cells keep `x_ref = x*_c` in every mode (the Gram-moment
+samples) and only the extension to the other cells is hydrostatic."""
 function _mimetic_cell_potential!(
         workspace::MimeticProjectionWorkspace{T}, interface, kappa, sigma, gravity, density;
         prescribed = false,
@@ -848,7 +849,7 @@ function _mimetic_cell_potential!(
         return psi
     end
     mode in (:pure, :hfpoint, :plicpoint) || throw(ArgumentError("unknown hydrostatic potential mode $mode"))
-    values = mode === :hfpoint ? _fill_height_values!(interface) : nothing
+    values = mode === :hfpoint && !iszero(sigma) ? _fill_height_values!(interface) : nothing
     assembly = workspace.assembly
     topology = workspace.topology
     references = workspace.references
@@ -867,7 +868,7 @@ function _mimetic_cell_potential!(
         if own
             weight[cell] = fraction * (one(T) - fraction)
             x, y = assembly.pressure_x[cell], assembly.pressure_y[cell]
-            if mode !== :pure
+            if mode !== :pure && !iszero(sigma)
                 center = cellcenter(mesh, reference.block, reference.i, reference.j)
                 point = mode === :hfpoint ?
                     _mimetic_height_point(values[reference.block], reference.i + 4, reference.j + 4) : nothing
