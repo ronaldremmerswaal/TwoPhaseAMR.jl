@@ -49,7 +49,7 @@ jobs:
           fi
           printf '\\def\\apibase{https://ronaldremmerswaal.github.io/TwoPhaseAMR.jl/%s}\n' "$version" > docs/techref/apibase.tex
       - name: Compile PDF
-        uses: xu-cheng/latex-action@e2f99d4b3685b0da93f97e1b86ad8fab81105098 # v3
+        uses: xu-cheng/latex-action@6549dc21effb2730855a1281407ecfcececc6c1b # v4.1.0
         with:
           texlive_version: '2024'
           working_directory: docs/techref
