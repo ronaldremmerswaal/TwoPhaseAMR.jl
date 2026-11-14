@@ -196,6 +196,7 @@ include("two_phase/projection/common.jl")
 include("two_phase/projection/cmdgfm_cache.jl")
 include("two_phase/projection/cmdgfm_projection.jl")
 include("two_phase/projection/mimetic_metric.jl")
+include("two_phase/projection/mimetic_curvature.jl")
 include("two_phase/projection/mimetic_projection.jl")
 # two_phase
 include("two_phase/forces.jl")

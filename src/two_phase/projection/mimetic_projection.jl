@@ -5,6 +5,21 @@
 
 import SparseArrays: UMFPACK
 
+"""Internal switches of the capillary force, read when a
+[`MimeticProjectionSolver`](@ref) is constructed, for the comparison of the
+variants only (not part of the API). `_MIMETIC_CHF_CURVATURE`: the cut cells
+take the conservative height-function curvature where its window is valid
+([`_mimetic_chf_curvature!`](@ref)) instead of the interface's height-function
+curvature. `_MIMETIC_DUAL_APERTURE`: the liquid difference term `J^l - J^g` of
+the force takes the geometric aperture `ã = F^l/(Δt |f| u^l)` of the step's
+VOF transport instead of the face aperture `a^l`
+([`_mimetic_dual_aperture`](@ref))."""
+const _MIMETIC_CHF_CURVATURE = Ref(false)
+
+"""Internal switch of the dual-aperture capillary force; see
+[`_MIMETIC_CHF_CURVATURE`](@ref)."""
+const _MIMETIC_DUAL_APERTURE = Ref(false)
+
 """
     MimeticProjectionSolver(interface; density=(1, 1))
 
@@ -16,6 +31,8 @@ struct MimeticProjectionSolver{T, I}
     interface::I
     density::NTuple{2, T}
     allow_wall_cuts::Bool
+    chf_curvature::Bool
+    dual_aperture::Bool
 end
 
 function MimeticProjectionSolver(
@@ -32,7 +49,8 @@ function MimeticProjectionSolver(
     )
     _mimetic_uniform_spacing(interface.mesh)
     return MimeticProjectionSolver{T, typeof(interface)}(
-        interface, rho, Bool(_allow_wall_cuts),
+        interface, rho, Bool(_allow_wall_cuts), _MIMETIC_CHF_CURVATURE[],
+        _MIMETIC_DUAL_APERTURE[],
     )
 end
 
@@ -87,6 +105,7 @@ mutable struct MimeticProjectionWorkspace{T, M <: BlockTreeMesh}
     force_solution::Vector{T}
     cell_curvature::Vector{T}
     curvature_weight::Vector{T}
+    curvature::_MimeticCurvature{T}
     viscous_values::Vector{T}
     viscous_face_mass::Vector{T}
 end
@@ -102,7 +121,8 @@ function MimeticProjectionWorkspace(solver::MimeticProjectionSolver{T}) where {T
         FaceField{1}(mesh, T), FaceField{2}(mesh, T), nothing, nothing,
         CellRef[], _MimeticAssembly(T), nothing, spzeros(T, 0, 0), spzeros(T, 0, 0),
         spzeros(T, 0, 0), T[], T[], Bool[], Int8[], T[], nothing, nothing, nothing,
-        T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], nothing, T[], T[], T[], T[], T[], T[],
+        T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], nothing, T[], T[], T[], T[],
+        _MimeticCurvature(T), T[], T[],
     )
 end
 
@@ -683,16 +703,18 @@ end
 """Cell curvature `κ_c` of the per-phase capillary potentials, in
 `workspace.cell_curvature` (`NaN` where none is available).
 
-A cut cell keeps its own (height-function) curvature. Every other cell, and a
-cut cell without a finite curvature, takes the `C(1 - C)`-weighted mean of the
-curvatures of its cut face neighbours; the curvatures of the cut cells are not
-averaged among themselves. A pure cell can carry phase values of both phases
-(the apertures of a face come from the adjacent PLIC traces) and then needs a
-curvature: every cell whose potential enters a phase value with an aperture is
-a face neighbour of a cut cell. A prescribed constant `curvature` fills every
-cell."""
+A cut cell keeps its own (height-function) curvature; with `chf` the cut cells
+whose three-column window is valid take the conservative height-function
+curvature instead ([`_mimetic_chf_curvature!`](@ref)). Every other cell, and
+a cut cell without a finite curvature, takes the `C(1 - C)`-weighted mean of
+the curvatures of its cut face neighbours; the curvatures of the cut cells
+are not averaged among themselves. A pure cell can carry phase values of both
+phases (the apertures of a face come from the adjacent PLIC traces) and then
+needs a curvature: every cell whose potential enters a phase value with an
+aperture is a face neighbour of a cut cell. A prescribed constant `curvature`
+fills every cell."""
 function _mimetic_cell_curvature!(
-        workspace::MimeticProjectionWorkspace{T}, interface, curvature,
+        workspace::MimeticProjectionWorkspace{T}, interface, curvature, chf::Bool = false,
     ) where {T}
     references = workspace.references
     cells = length(references)
@@ -712,6 +734,14 @@ function _mimetic_cell_curvature!(
         else
             kappa[cell] = T(NaN)
             weight[cell] = zero(T)
+        end
+    end
+    if chf
+        _mimetic_chf_curvature!(kappa, workspace, interface)
+        for cell in 1:cells
+            fraction = _conditional_fraction(interface, references[cell])
+            zero(T) < fraction < one(T) && isfinite(kappa[cell]) &&
+                (weight[cell] = fraction * (one(T) - fraction))
         end
     end
     topology = workspace.topology
@@ -734,6 +764,18 @@ function _mimetic_cell_curvature!(
     return kappa
 end
 
+"""Geometric liquid aperture `ã = F^l/(Δt |f| u^l)` of `face` in the step's
+VOF transport (`transport.liquid_flux`, the liquid volume through the face in
+its sweep, and `transport.liquid_velocity`, the liquid value that drove it),
+clamped to `[0, 1]`; the face aperture `aperture` (its limit) where the liquid
+value is absent or moves less than `10⁻¹⁰|f|` in the step."""
+@inline function _mimetic_dual_aperture(transport, face, area, dt, aperture::T) where {T}
+    u = transport.liquid_velocity.interior[face]
+    flux = transport.liquid_flux[face]
+    isfinite(u) && isfinite(flux) && abs(u) * dt > T(1.0e-10) * area || return aperture
+    return clamp(flux / (dt * area * u), zero(T), one(T))
+end
+
 """Add the per-phase surface-tension increment `dt 𝓜⁻¹(a^π J^π)` to each phase.
 
 Each phase has its own capillary potential, `φ^g = σκI` and
@@ -750,11 +792,16 @@ pure liquid and a pure gas cell) gets the common jump `σ κ_f [I]_f |f|` with
 the face curvature of [`surface_tension!`](@ref). A face whose force needs a
 curvature that is not available gets no force; such faces are counted in
 `unresolved_curvature_faces`. `curvature` prescribes a constant curvature
-(tests of the balance)."""
+(tests of the balance). With `solver.dual_aperture` and a `transport` (the
+step's liquid fluxes and liquid values) the liquid value gets
+`a^l J^g + ã (J^l - J^g)`: the liquid difference term `-σ|f|Δ_f κ` takes the
+geometric aperture `ã` of the VOF transport ([`_mimetic_dual_aperture`](@ref));
+otherwise `transport` is not read. `solver.chf_curvature` selects the
+curvature of [`_mimetic_cell_curvature!`](@ref)."""
 function _mimetic_capillary_force!(
         velocity::TwoPhaseVelocity, solver::MimeticProjectionSolver{T},
         workspace::MimeticProjectionWorkspace{T}, dt;
-        sigma, formulation = CGFM(), curvature = nothing,
+        sigma, formulation = CGFM(), curvature = nothing, transport = nothing,
         unresolved_curvature_faces::Union{Nothing, Base.RefValue{Int}} = nothing,
     ) where {T}
     _validate_surface_tension_formulation(formulation)
@@ -767,7 +814,8 @@ function _mimetic_capillary_force!(
     count = length(assembly.band)
     resize!(workspace.band_scratch, count)
     resize!(workspace.band_solution, count)
-    kappa = _mimetic_cell_curvature!(workspace, interface, curvature)
+    kappa = _mimetic_cell_curvature!(workspace, interface, curvature, solver.chf_curvature)
+    dual = solver.dual_aperture && !isnothing(transport)
     rhs = workspace.force_rhs
     resize!(rhs, length(assembly.dof_face))
     fill!(rhs, zero(T))
@@ -806,7 +854,13 @@ function _mimetic_capillary_force!(
             continue
         end
         gas_aperture > zero(T) && (rhs[gas] = gas_aperture * gas_jump)
-        liquid_aperture > zero(T) && (rhs[liquid] = liquid_aperture * liquid_jump)
+        liquid_aperture > zero(T) || continue
+        if dual && isfinite(gas_jump)
+            carrier = _mimetic_dual_aperture(transport, face, entry.area, T(dt), liquid_aperture)
+            rhs[liquid] = liquid_aperture * gas_jump + carrier * (liquid_jump - gas_jump)
+        else
+            rhs[liquid] = liquid_aperture * liquid_jump
+        end
     end
     isnothing(unresolved_curvature_faces) || (unresolved_curvature_faces[] = unresolved)
     acceleration = _mimetic_metric_solve!(workspace.force_solution, workspace, rhs)

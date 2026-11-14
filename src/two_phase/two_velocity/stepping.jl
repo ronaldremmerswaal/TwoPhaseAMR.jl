@@ -321,7 +321,8 @@ end
 """Apply phase forces for the mimetic projection.
 
 Surface tension is the per-phase capillary force through the mimetic gradient
-map `𝓜⁻¹Dᵀ` (see `_mimetic_capillary_force!`); gravity is the uniform
+map `𝓜⁻¹Dᵀ` (see `_mimetic_capillary_force!`; the step's transport fluxes are
+passed for the internal dual-aperture variant); gravity is the uniform
 acceleration of both phases (see `_mimetic_uniform_acceleration!`). The
 mimetic projection is absolute, so no old pressure gradient is subtracted: an
 `𝓜⁻¹Dᵀ` gradient in the predictor is removed exactly, and the projection
@@ -341,6 +342,10 @@ function _two_velocity_forces_and_pressure!(
             velocity, state.projection_solver, state.projection_workspace, time_step;
             sigma = model.sigma, formulation = model.formulation,
             unresolved_curvature_faces = workspace.unresolved_curvature_faces,
+            transport = (;
+                liquid_flux = state.advection.liquid_flux,
+                liquid_velocity = state.old_velocity[1],
+            ),
         )
     end
     if any(!iszero, model.gravity)
