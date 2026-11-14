@@ -215,6 +215,7 @@ include("two_phase/diffusion/variable_diffusion_solver.jl")
 include("two_phase/model.jl")
 # two_phase/two_velocity
 include("two_phase/two_velocity/flow_workspace.jl")
+include("two_phase/projection/mimetic_transport.jl")
 # simulation
 include("simulation/state.jl")
 # simulation/diagnostics

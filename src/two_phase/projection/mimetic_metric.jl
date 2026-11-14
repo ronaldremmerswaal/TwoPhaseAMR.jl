@@ -563,7 +563,7 @@ value carries the summed staggered mass and the full aperture.
 function _assemble_cut_cell_metric!(
         assembly::_MimeticAssembly{T}, mesh,
         topology, data, flags, boundary_aperture, boundary_low, density;
-        allow_wall_cuts = false, gridline = nothing,
+        allow_wall_cuts = false, gridline = nothing, cell_fraction = nothing,
     ) where {T}
     h = topology.spacing
     faces = length(mesh.faces)
@@ -623,6 +623,24 @@ function _assemble_cut_cell_metric!(
     resize!(assembly.pressure_y, cells)
     nx, ny = mesh.block_size
     cut_cells = defective_cells = 0
+    cell_apertures(cell) = ntuple(Val(4)) do k
+        face = topology.sides[k, cell]
+        face > 0 || return boundary_aperture[-face]
+        # A grid-line interface face is fully wet from its own cell's side.
+        on_gridline(face) || return data.liquid_aperture[face]
+        minus = topology.face_cells[1, face] == cell
+        return (gridline[face] > 0) == minus ? one(T) : zero(T)
+    end
+    cell_starts(cell, apertures) = ntuple(Val(4)) do k
+        zero(T) < apertures[k] < one(T) || return false
+        face = topology.sides[k, cell]
+        low = face > 0 ? flags[face] == _MIMETIC_LIQUID_LOW : boundary_low[-face]
+        return _MIMETIC_STARTS_LOW[k] ? low : !low
+    end
+    is_uncut(apertures) = all(==(apertures[1]), apertures) &&
+        (iszero(apertures[1]) || isone(apertures[1]))
+    shift = isnothing(cell_fraction) ? nothing :
+        _mimetic_mass_match_shifts(cells, cell_fraction, cell_apertures, cell_starts, is_uncut)
     for cell in 1:cells
         block_index = div(cell - 1, nx * ny) + 1
         local_index = rem(cell - 1, nx * ny)
@@ -630,20 +648,12 @@ function _assemble_cut_cell_metric!(
         center = cellcenter(mesh, block_index, i, j)
         assembly.pressure_x[cell] = center[1]
         assembly.pressure_y[cell] = center[2]
-        apertures = ntuple(Val(4)) do k
-            face = topology.sides[k, cell]
-            face > 0 || return boundary_aperture[-face]
-            # A grid-line interface face is fully wet from its own cell's side.
-            on_gridline(face) || return data.liquid_aperture[face]
-            minus = topology.face_cells[1, face] == cell
-            return (gridline[face] > 0) == minus ? one(T) : zero(T)
-        end
+        apertures = cell_apertures(cell)
         dof_of(k, phase) = (
             face = topology.sides[k, cell]; face <= 0 ? 0 :
                 (phase == 1 ? assembly.liquid_dof[face] : assembly.gas_dof[face])
         )
-        uncut = all(==(apertures[1]), apertures) &&
-            (iszero(apertures[1]) || isone(apertures[1]))
+        uncut = is_uncut(apertures)
         if uncut
             # Uncut cell: (1/2) rho h^2 on every face value, the diagonal metric.
             phase = isone(apertures[1]) ? 1 : 2
@@ -662,13 +672,14 @@ function _assemble_cut_cell_metric!(
                 ),
             )
         end
-        starts = ntuple(Val(4)) do k
-            zero(T) < apertures[k] < one(T) || return false
-            face = topology.sides[k, cell]
-            low = face > 0 ? flags[face] == _MIMETIC_LIQUID_LOW : boundary_low[-face]
-            return _MIMETIC_STARTS_LOW[k] ? low : !low
-        end
+        starts = cell_starts(cell, apertures)
         xs, ys, ex, ey = _mimetic_pressure_point(apertures, starts)
+        if !isnothing(shift) && !iszero(shift[cell])
+            # STUDY: slide along the symmetry line (mass-matched Gram tensors).
+            c = hypot(ex, ey)
+            xs += shift[cell] * ex / c
+            ys += shift[cell] * ey / c
+        end
         assembly.pressure_x[cell] = center[1] + h * xs
         assembly.pressure_y[cell] = center[2] + h * ys
         cut_cells += 1
@@ -812,4 +823,75 @@ function _mimetic_donor(topology, mesh, ring, dof_at, admissible, apertures)
         end
     end
     return best
+end
+
+# STUDY (branch study/mm-momentum-transport): mass-matched pressure points.
+const _MIMETIC_MASS_MATCH = Ref(false)
+const _MIMETIC_MASS_MATCH_LAST = Ref{Any}(nothing)
+
+"""Liquid Gram tensor `G^l = M - η x*ᵀ` (symmetric part) at `(xs, ys)`."""
+function _mimetic_liquid_gram(apertures::NTuple{4, T}, starts, xs, ys) where {T}
+    ex = ey = m11 = m12 = m21 = m22 = zero(T)
+    for k in 1:4
+        a = apertures[k]
+        nx, ny = _mimetic_normal(T, k)
+        _, (lx, ly), _ = _mimetic_side_parts(T, k, a, starts[k])
+        ex += a * nx
+        ey += a * ny
+        m11 += a * nx * lx
+        m12 += a * nx * ly
+        m21 += a * ny * lx
+        m22 += a * ny * ly
+    end
+    return m11 - ex * xs, ((m12 - ex * ys) + (m21 - ey * xs)) / 2, m22 - ey * ys
+end
+
+"""Slides `s_c` (units of `h`) of the pressure points along their symmetry
+lines with least `Σ s_c²` such that `Σ_c G^l_c = Σ_c C_c I`: the liquid (and
+hence the gas) Gram tensors of all cells sum to the VOF volumes. Moving `x*`
+by `s η̂` changes `G^l` by `-s |η| η̂η̂ᵀ`."""
+function _mimetic_mass_match_shifts(cells, cell_fraction, cell_apertures, cell_starts, is_uncut)
+    T = eltype(cell_fraction)
+    shift = zeros(T, cells)
+    D = zeros(T, 3)
+    A = zeros(T, 3, 3)
+    root2 = sqrt(T(2))
+    directions = zeros(T, 3, cells)
+    for cell in 1:cells
+        apertures = cell_apertures(cell)
+        C = cell_fraction[cell]
+        if is_uncut(apertures)
+            g = isone(apertures[1]) ? one(T) : zero(T)
+            D[1] += g - C
+            D[3] += g - C
+            continue
+        end
+        starts = cell_starts(cell, apertures)
+        xs, ys, ex, ey = _mimetic_pressure_point(apertures, starts)
+        g11, g12, g22 = _mimetic_liquid_gram(apertures, starts, xs, ys)
+        D[1] += g11 - C
+        D[2] += g12
+        D[3] += g22 - C
+        c = hypot(ex, ey)
+        c > T(1.0e-9) || continue
+        hx, hy = ex / c, ey / c
+        p = (hx^2, root2 * hx * hy, hy^2)
+        for r in 1:3, q in 1:3
+            A[q, r] += c^2 * p[q] * p[r]
+        end
+        directions[:, cell] .= c .* p
+    end
+    d = [D[1], root2 * D[2], D[3]]
+    F = eigen(Symmetric(A))
+    cut = T(1.0e-12) * max(maximum(abs, F.values), floatmin(T))
+    lambda = F.vectors * [abs(v) > cut ? w / v : zero(T) for (v, w) in zip(F.values, F.vectors' * d)]
+    for cell in 1:cells
+        shift[cell] = dot(view(directions, :, cell), lambda)
+    end
+    _MIMETIC_MASS_MATCH_LAST[] = (
+        mismatch = (D[1], D[2], D[3]),
+        residual = d - A * lambda,
+        max_shift = maximum(abs, shift; init = zero(T)),
+    )
+    return shift
 end

@@ -50,6 +50,7 @@ function _transport_substep!(
             velocity, eltype(velocity[1]), solver, workspace, dt, model,
         )
     end
+    snapshot = _mimetic_transport_before!(state, velocity)
     _advect_transport_substep!(
         model.interface, state.old_velocity, dt, state.advection;
         scalars = model.scalars,
@@ -59,6 +60,7 @@ function _transport_substep!(
         scheme = solver.options.advection.scheme,
         amr_interface_scheme = solver.options.advection.amr_interface_scheme,
     )
+    _mimetic_transport_after!(snapshot, state, model)
     phase.forward = !phase.forward
     return state.convected
 end

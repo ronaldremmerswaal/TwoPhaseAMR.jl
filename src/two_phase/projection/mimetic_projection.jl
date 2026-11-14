@@ -204,10 +204,13 @@ function _mimetic_assemble!(
             ),
         ) > 0
     end
+    cell_fraction = _MIMETIC_MASS_MATCH[] ?
+        [_conditional_fraction(interface, reference) for reference in workspace.references] :
+        nothing
     _mimetic_assemble_from_data!(
         workspace, mesh, data, flags, boundary_aperture,
         boundary_low, solver.density; allow_wall_cuts = solver.allow_wall_cuts,
-        gridline,
+        gridline, cell_fraction,
     )
     assembly.revision = revision
     return assembly
@@ -218,7 +221,7 @@ operators from given face geometry (see `_assemble_cut_cell_metric!`)."""
 function _mimetic_assemble_from_data!(
         workspace::MimeticProjectionWorkspace{T}, mesh, data, flags,
         boundary_aperture, boundary_low, density; allow_wall_cuts = false,
-        gridline = nothing,
+        gridline = nothing, cell_fraction = nothing,
     ) where {T}
     if !_mimetic_topology_current(workspace.topology, mesh)
         workspace.topology = _mimetic_topology(mesh)
@@ -227,7 +230,7 @@ function _mimetic_assemble_from_data!(
     topology = workspace.topology
     assembly = _assemble_cut_cell_metric!(
         workspace.assembly, mesh, topology, data, flags,
-        boundary_aperture, boundary_low, density; allow_wall_cuts, gridline,
+        boundary_aperture, boundary_low, density; allow_wall_cuts, gridline, cell_fraction,
     )
     workspace.factor = isempty(assembly.band) ? nothing : lu(assembly.band_matrix)
     cells = size(topology.sides, 2)
