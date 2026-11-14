@@ -539,6 +539,8 @@ const _MIMETIC_RESPONSE_CAP = Ref(0.0)
 weight jumps where the minor phase changes, at `α = 1/2`); `:both`: the tie
 weight is the larger of the two phases' deficits, continuous in `α`."""
 const _MIMETIC_RESPONSE_CAP_MODE = Ref(:minor)
+"""`R₀` of the `:light` cap mode (no tie for density ratios ≤ `R₀`)."""
+const _MIMETIC_CAP_RATIO = Ref(10.0)
 
 function _MimeticAssembly(::Type{T}) where {T}
     return _MimeticAssembly{T}(
@@ -813,6 +815,12 @@ function _assemble_cut_cell_metric!(
             deficit(dof) = assembly.dof_aperture[dof] * total / cap - assembly.dof_mass[dof]
             weight = if _MIMETIC_RESPONSE_CAP_MODE[] === :both
                 max(deficit(liquid), deficit(gas))
+            elseif _MIMETIC_RESPONSE_CAP_MODE[] === :light
+                # Light phase only, faded in with the density ratio:
+                # θ = max(0, 1 - R₀ ρ_light/ρ_heavy) is zero for ratios ≤ R₀.
+                light = density[2] <= density[1] ? gas : liquid
+                ratio = min(density[1], density[2]) / max(density[1], density[2])
+                max(zero(T), one(T) - T(_MIMETIC_CAP_RATIO[]) * ratio) * deficit(light)
             else
                 deficit(data.liquid_fraction[face] >= T(0.5) ? gas : liquid)
             end
