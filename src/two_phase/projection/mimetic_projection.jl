@@ -731,8 +731,44 @@ function _mimetic_cell_curvature!(
         end
         weights > zero(T) && (kappa[cell] = total / weights)
     end
+    debris = T(_MIMETIC_DEBRIS_CURVATURE[])
+    debris > zero(T) || return kappa
+    # Study switch: debris cut cells (min(C, 1 - C) < ε or no valid own
+    # curvature) and every cell whose curvature came only from debris get κ = 0.
+    zeroed = falses(cells)
+    for cell in 1:cells
+        fraction = _conditional_fraction(interface, references[cell])
+        zero(T) < fraction < one(T) || continue
+        value = _get(interface.curvature, references[cell])
+        (min(fraction, one(T) - fraction) < debris || !isfinite(value)) && (zeroed[cell] = true)
+    end
+    for cell in 1:cells
+        zeroed[cell] && (kappa[cell] = zero(T); weight[cell] = zero(T))
+    end
+    for cell in 1:cells
+        fraction = _conditional_fraction(interface, references[cell])
+        (zeroed[cell] || zero(T) < fraction < one(T)) && continue
+        total = weights = zero(T)
+        near_debris = false
+        for k in 1:4
+            face = topology.sides[k, cell]
+            face > 0 || continue
+            minus = topology.face_cells[1, face]
+            neighbour = minus == cell ? topology.face_cells[2, face] : minus
+            near_debris |= zeroed[neighbour]
+            w = weight[neighbour]
+            w > zero(T) && (total += w * kappa[neighbour]; weights += w)
+        end
+        kappa[cell] = weights > zero(T) ? total / weights : near_debris ? zero(T) : kappa[cell]
+    end
     return kappa
 end
+
+"""Study switch (study/impact-velocities; `0` = off, the default): with
+`ε = _MIMETIC_DEBRIS_CURVATURE[] > 0`, cut cells with `min(C, 1 - C) < ε` or
+without a finite own curvature carry no capillary potential (`κ = 0`), and
+uncut cells take the weighted mean over the remaining cut neighbours only."""
+const _MIMETIC_DEBRIS_CURVATURE = Ref(0.0)
 
 """Study switch (study/impact-velocities): `:perphase` (default) is the
 per-phase force below; `:jump` gives every phase value the package face
