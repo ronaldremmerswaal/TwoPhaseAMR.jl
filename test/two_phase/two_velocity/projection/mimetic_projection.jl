@@ -530,92 +530,159 @@ function _mimetic_metric_energy(velocity, state)
     return dot(values, TP._mimetic_metric_product!(zeros(0), work, values)) / 2
 end
 
-@testset "Mimetic viscous increment through the metric" begin
+# Mimetic two-velocity flow on a drop (periodic in x, free-slip walls in y)
+# with the state of the viscous stage.
+function _mimetic_viscous_flow(n, density; viscosity = 1.0e-2, levelset = _mimetic_circle(n))
+    mesh = BlockTreeMesh(block_size = (n, n), periodic = (true, false))
+    interface = InterfaceField(mesh, levelset; lipschitz = 1)
+    flow = FlowSimulation(
+        mesh, TwoPhase(interface; density, dynamic_viscosity = (viscosity, viscosity));
+        velocity_model = TwoVelocityModel(pressure_projection = MimeticProjection()),
+        boundary = FreeSlip(),
+    )
+    model = flow.system.two_phase
+    state = TwoPhaseAMR._two_velocity_flow_workspace!(flow.workspace.two_phase, model)
+    return (; mesh, interface, flow, model, state)
+end
+
+# The package's common increment u + Pδ of the Crank--Nicolson mixture solve.
+function _mimetic_common_viscous_step(case, dt)
+    TP = TwoPhaseAMR
+    ws = case.flow.workspace.two_phase
+    state = case.state
+    diffusion = TP._update_dynamic_viscosity!(ws.diffusion, case.interface, case.model.dynamic_viscosity)
+    TP._mass_weighted_one_velocity!(state.mixture_velocity, ws.density, state.convected, case.model)
+    TP.implicit_midpoint_diffusion!(
+        state.diffused_mixture, state.mixture_velocity, diffusion, dt, ws.diffusion_solver;
+        density = ws.density, tolerance = 1.0e-13, max_cycles = 500,
+    )
+    common = (FaceVelocity(case.mesh), FaceVelocity(case.mesh))
+    TP._apply_two_velocity_diffusion_update!(
+        common, state.convected, state.diffused_mixture, state.mixture_velocity,
+    )
+    return common, diffusion.stiffness
+end
+
+# Gathered phase values and their staggered-mass mixture ū = Ru per face.
+function _mimetic_values_and_mixture(velocity, state)
+    TP = TwoPhaseAMR
+    assembly = TP._mimetic_assemble!(state.projection_solver, state.projection_workspace)
+    values = zeros(0)
+    TP._mimetic_gather!(values, assembly, velocity)
+    faces = length(assembly.liquid_dof)
+    momentum, mass = zeros(faces), zeros(faces)
+    for dof in eachindex(values)
+        face = assembly.dof_face[dof]
+        momentum[face] += assembly.dof_mass[dof] * values[dof]
+        mass[face] += assembly.dof_mass[dof]
+    end
+    return values, momentum ./ mass
+end
+
+@testset "Mimetic viscous step in the metric" begin
     # The common increment u + Pδ of the mixture solve contracts the mixture in
     # W, the projection is orthogonal in 𝓜; where a slip has mixture momenta
     # of opposite signs in the two norms the common increment feeds it (note
-    # static_drop_stability, lem. visc). With the mimetic projection the step
-    # is the impulse u + 𝓜⁻¹WPδ: its first-order energy change in 𝓜 is the
-    # dissipation of the mixture solve.
+    # static_drop_stability, lem. visc). With the mimetic projection the phase
+    # values take the implicit midpoint (𝓜 + dt/2 A)u⁺ = (𝓜 - dt/2 A)u,
+    # A = RᵀKR: non-increasing in 𝓜 for every time step.
     TP = TwoPhaseAMR
-    n = 32
-    for density in ((1.0, 1.0), (3.0, 1.0), (1.0, 3.0)), dt in (1.0e-3, 1.0e-2)
-        mesh = BlockTreeMesh(block_size = (n, n), periodic = (false, false))
-        interface = InterfaceField(mesh, _mimetic_circle(n); lipschitz = 1)
-        flow = FlowSimulation(
-            mesh, TwoPhase(interface; density, dynamic_viscosity = (1.0e-2, 1.0e-2));
-            velocity_model = TwoVelocityModel(pressure_projection = MimeticProjection()),
-            boundary = FreeSlip(),
-        )
-        model = flow.system.two_phase
-        state = TP._two_velocity_flow_workspace!(flow.workspace.two_phase, model)
+    n, viscosity = 32, 1.0e-2
+    grows = 0
+    for density in ((1.0, 1.0), (3.0, 1.0), (1.0, 3.0)), number in (1.0e-3, 0.1, 1.0, 10.0, 100.0)
+        case = _mimetic_viscous_flow(n, density; viscosity)
+        state = case.state
+        dt = number * min(density...) / (viscosity * n^2)  # dt ν_max / h² = number
         _mimetic_opposite_momenta!(state.convected, state, 0.1)
         before = _mimetic_metric_energy(state.convected, state)
-        TP._diffusion_substep!(flow.velocity, flow.system, flow.workspace, dt, 0.0, model; tolerance = 1.0e-12)
-        common = (FaceVelocity(mesh), FaceVelocity(mesh))
-        TP._apply_two_velocity_diffusion_update!(
-            common, state.convected, state.diffused_mixture, state.mixture_velocity,
+        TP._diffusion_substep!(
+            case.flow.velocity, case.flow.system, case.flow.workspace, dt, 0.0, case.model;
+            tolerance = 1.0e-12,
         )
-        # The energy in the metric does not increase (measured: at most
-        # -1.8e-5 relative over 108 states, densities 1:1, 3:1, 1:3, dt up to
-        # 0.1); the common increment raises it for these states.
-        @test _mimetic_metric_energy(flow.velocity, state) <= before
-        @test _mimetic_metric_energy(common, state) > before
-        # 𝓜(u⁺ - u) = W P δ, and away from the band (uncut cells, 𝓜 = W)
-        # exactly the common increment.
+        after = _mimetic_metric_energy(case.flow.velocity, state)
+        @test after <= before
+        @test case.flow.workspace.two_phase.diffusion_solver.stats.converged
+        common, stiffness = _mimetic_common_viscous_step(case, dt)
+        grows += _mimetic_metric_energy(common, state) > before
+        # The scheme's energy identity, ½(u⁺ - u)ᵀ𝓜(u⁺ + u) = -dt/4 (ū⁺ + ū)ᵀK(ū⁺ + ū),
+        # and the momentum of the metric: e_xᵀ𝓜u changes by -dt/2 (K e_x)ᵀ(ū⁺ + ū),
+        # zero for a stress that annihilates uniform fields (periodic x).
+        old, old_mixture = _mimetic_values_and_mixture(state.convected, state)
+        new, new_mixture = _mimetic_values_and_mixture(case.flow.velocity, state)
         work = state.projection_workspace
+        metric_sum = TP._mimetic_metric_product!(zeros(0), work, new .+ old)
+        dissipation = -dt / 4 * dot(new_mixture .+ old_mixture, stiffness * (new_mixture .+ old_mixture))
+        @test abs(dot(new .- old, metric_sum) / 2 - dissipation) <= 1.0e-9 * before
         assembly = work.assembly
-        change = zeros(0)
-        TP._mimetic_gather!(change, assembly, flow.velocity)
-        before_values = zeros(0)
-        TP._mimetic_gather!(before_values, assembly, state.convected)
-        change .-= before_values
-        impulse = map(eachindex(assembly.dof_face)) do dof
-            face = assembly.dof_face[dof]
-            assembly.dof_mass[dof] * (state.diffused_mixture.interior[face] - state.mixture_velocity.interior[face])
+        uniform_x = [case.mesh.faces[face].axis == 1 ? 1.0 : 0.0 for face in eachindex(case.mesh.faces)]
+        @test maximum(abs, stiffness * uniform_x) <= 1.0e-10 * maximum(abs, stiffness)
+        x_values = [uniform_x[assembly.dof_face[dof]] for dof in eachindex(new)]
+        momentum_change = dot(x_values, TP._mimetic_metric_product!(zeros(0), work, new .- old))
+        @test abs(momentum_change) <= 1.0e-10 * dot(x_values, TP._mimetic_metric_product!(zeros(0), work, abs.(old)))
+        @test _phase_storage_contract(case.flow.velocity, case.interface)
+    end
+    # The common increment raises the metric energy of these states.
+    @test grows > 0
+    # Without cut cells 𝓜 = W (interface on a grid line, single-valued
+    # identified values): the step is the common increment of the
+    # Crank--Nicolson mixture solve, up to the solver tolerances.
+    for number in (0.1, 10.0)
+        case = _mimetic_viscous_flow(n, (3.0, 1.0); viscosity, levelset = (x, y) -> y - 0.5)
+        state = case.state
+        dt = number / (viscosity * n^2)
+        for phase in 1:2, (index, face) in pairs(case.mesh.faces)
+            state.convected[phase].interior[index] = sinpi(2face.center[1]) * cospi(face.center[2]) + 0.3face.axis
         end
-        @test maximum(abs, TP._mimetic_metric_product!(zeros(0), work, change) .- impulse) <=
-            1.0e-10 * maximum(abs, impulse)
-        off_band = findall(iszero, assembly.band_position)
-        @test !isempty(off_band)
-        @test all(off_band) do dof
-            face = assembly.dof_face[dof]
-            all(phase -> isequal(flow.velocity[phase].interior[face], common[phase].interior[face]), 1:2)
-        end
-        @test _phase_storage_contract(flow.velocity, interface)
+        fill!.((state.convected[1].boundary, state.convected[2].boundary), 0.0)
+        TP._mark_inactive_phase_velocities!(state.convected, case.interface)
+        TP._diffusion_substep!(
+            case.flow.velocity, case.flow.system, case.flow.workspace, dt, 0.0, case.model;
+            tolerance = 1.0e-12,
+        )
+        @test state.projection_workspace.assembly.cut_cells == 0
+        common, _ = _mimetic_common_viscous_step(case, dt)
+        @test maximum(
+            maximum(abs, filter(isfinite, case.flow.velocity[phase].interior .- common[phase].interior))
+                for phase in 1:2
+        ) <= 1.0e-9
     end
 end
 
 @testset "Two-value model of the viscous step and the projection" begin
     # Note static_drop_stability, prop. toy: two values on one face, phase
     # masses W, a symmetric positive definite metric 𝓜 and the constraint
-    # a_l u_l + a_g u_g = 0. A viscous step that damps the W-mixture by 1 - θ,
-    # followed by the 𝓜-orthogonal projection, maps the admissible slip s to
-    # g s. With the common increment g > 1 exactly where the two mixture
-    # momenta of s have opposite signs; through the metric g ≤ 1.
+    # a_l u_l + a_g u_g = 0. The mixture ū = w·u (w = m/Σm) is damped by the
+    # Crank--Nicolson factor (1 - τ/2)/(1 + τ/2), τ = dt λ(B⁻¹K) ∈ [0, ∞), and
+    # the 𝓜-orthogonal projection maps the admissible slip s to g s. The common
+    # increment grows the slip (|g| > 1) for some metrics; the implicit midpoint
+    # in 𝓜 with A = (Σm) w wᵀ has |g| ≤ 1 for every metric and τ, and for
+    # 𝓜 = W it is the common increment.
     random = 11
     uniform() = (random = mod(1103515245random + 12345, 2^31); random / 2^31)
-    grows = unexplained = 0
+    grows = 0
     largest = -Inf
+    reduction = 0.0
     for _ in 1:10_000
-        masses = (uniform() + 1.0e-3, uniform() + 1.0e-3)
-        W = Diagonal([masses...])
+        masses = [uniform() + 1.0e-3, uniform() + 1.0e-3]
+        W = Diagonal(masses)
         liquid = uniform()
         s = [1 - liquid, -liquid]
         L = [uniform() + 0.1 0.0; 2uniform() - 1 uniform() + 0.1]
         M = L * L'
-        θ = uniform()
-        w = [masses...] / sum(masses)
+        τ = 10.0^(8uniform() - 4)
+        w = masses / sum(masses)
+        A = sum(masses) * w * w'
         factor(v) = dot(s, M * v) / dot(s, M * s)
-        g_common = factor(s - θ * ones(2) * dot(w, s))
-        g_metric = factor(s - θ * (M \ (W * ones(2))) * dot(w, s))
-        momentum_W, momentum_M = dot(ones(2), W * s), dot(ones(2), M * s)
-        grows += g_common > 1 + 1.0e-12
-        unexplained += g_common > 1 + 1.0e-12 && momentum_W * momentum_M >= 0
-        largest = max(largest, g_metric)
+        common = s .+ ((1 - τ / 2) / (1 + τ / 2) - 1) * dot(w, s)
+        metric(N) = (N + τ / 2 * A) \ ((N - τ / 2 * A) * s)
+        grows += abs(factor(common)) > 1 + 1.0e-12
+        largest = max(largest, abs(factor(metric(M))))
+        # Round-off of the 2×2 solve grows with τ (condition number ~ 1 + τ).
+        reduction = max(reduction, maximum(abs, metric(Matrix(W)) .- common) / (1 + τ))
     end
-    @test grows > 0 && unexplained == 0
+    @test grows > 0
     @test largest <= 1 + 1.0e-12
+    @test reduction <= 1.0e-12
 end
 
 # The phase polygon of the former construction (candidate MM) from the liquid

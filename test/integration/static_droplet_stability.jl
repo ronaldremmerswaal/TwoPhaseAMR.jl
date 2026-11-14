@@ -431,8 +431,8 @@ end
                     # NUMERICS CONCERN: at n = 32 the mimetic currents still
                     # grow in the second half of the run, at the 1e-2 level.
                     # Measured max|u|, first half -> second half at t = 0.4:
-                    # gas 4.2e-3 -> 7.1e-3 (DR 1), 5.5e-3 -> 1.0e-2 (DR 3),
-                    # 1.6e-2 -> 2.7e-2 (DR 1000; decayed with the common
+                    # gas 4.1e-3 -> 7.3e-3 (DR 1), 5.5e-3 -> 1.0e-2 (DR 3),
+                    # 1.7e-2 -> 2.9e-2 (DR 1000; decayed with the common
                     # jump); liquid 7.8e-3 -> 9.7e-3 (DR 1). The n = 16
                     # currents decay at every ratio. Cause and candidate fix
                     # as for the inviscid energy above (sec:zero).

@@ -87,6 +87,8 @@ mutable struct MimeticProjectionWorkspace{T, M <: BlockTreeMesh}
     force_solution::Vector{T}
     cell_curvature::Vector{T}
     curvature_weight::Vector{T}
+    viscous_values::Vector{T}
+    viscous_face_mass::Vector{T}
 end
 
 """
@@ -100,7 +102,7 @@ function MimeticProjectionWorkspace(solver::MimeticProjectionSolver{T}) where {T
         FaceField{1}(mesh, T), FaceField{2}(mesh, T), nothing, nothing,
         CellRef[], _MimeticAssembly(T), nothing, spzeros(T, 0, 0), spzeros(T, 0, 0),
         spzeros(T, 0, 0), T[], T[], Bool[], Int8[], T[], nothing, nothing, nothing,
-        T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], nothing, T[], T[], T[], T[],
+        T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], nothing, T[], T[], T[], T[], T[], T[],
     )
 end
 
@@ -814,42 +816,70 @@ function _mimetic_capillary_force!(
     return velocity
 end
 
-"""Add the viscous increment `δ = diffused - mixture` of the mixture velocity
-through the metric: `u⁺ = u + 𝓜⁻¹ W P δ`. Every phase value receives the
-impulse `m^π_f δ_f` of its staggered mass, and its velocity changes by `𝓜⁻¹`
-of the impulses, as the forces do. Away from the band `𝓜 = W` and the value
-changes by `δ_f`, the common increment of the two phases. Absent (`NaN`)
-values stay absent."""
-function _mimetic_viscous_increment!(
-        velocity::TwoPhaseVelocity, solver::MimeticProjectionSolver{T},
-        workspace::MimeticProjectionWorkspace{T}, diffused, mixture,
+"""Sparse matrix of the assembled metric `𝓜` on all degrees of freedom."""
+function _mimetic_metric_matrix(workspace::MimeticProjectionWorkspace{T}) where {T}
+    assembly = workspace.assembly
+    dofs = length(assembly.dof_face)
+    band = assembly.band
+    rows, columns, values = findnz(assembly.band_matrix)
+    for index in eachindex(rows)
+        rows[index] = band[rows[index]]
+        columns[index] = band[columns[index]]
+    end
+    for dof in 1:dofs
+        assembly.band_position[dof] > 0 && continue
+        push!(rows, dof)
+        push!(columns, dof)
+        push!(values, assembly.diagonal[dof])
+    end
+    return sparse(rows, columns, values, dofs, dofs)
+end
+
+"""Implicit-midpoint viscous step of the phase values in the metric `𝓜`.
+
+With the mixture map `R = B⁻¹PᵀW` (the staggered-mass mean `ū = Ru` of the
+values of a face, `B = PᵀWP`) and the symmetric positive semi-definite stress
+matrix `K` of the mixture solve, `A = RᵀKR` and
+
+    (𝓜 + dt/2 A) u⁺ = (𝓜 - dt/2 A) u.
+
+The amplification factors `(1 - dtλ/2)/(1 + dtλ/2)` of the pencil `(A, 𝓜)` lie
+in `(-1, 1]` for every `dt`: the step does not increase `uᵀ𝓜u`, the energy of
+the projection, for any time step. For `𝓜 = W` it is the common increment of
+the Crank--Nicolson mixture solve, `u⁺ = u + Pδ`. The values of `source` are
+gathered as for the projection (an identified grid-line value is the
+mass-weighted mean of the two phase values) and the result is written to
+`destination`; absent (`NaN`) values stay absent. The system is solved
+directly (sparse Cholesky); returns its relative residual and size."""
+function _mimetic_viscous_step!(
+        destination::TwoPhaseVelocity, source::TwoPhaseVelocity,
+        solver::MimeticProjectionSolver{T}, workspace::MimeticProjectionWorkspace{T},
+        stiffness::AbstractMatrix{T}, dt,
     ) where {T}
     assembly = _mimetic_assemble!(solver, workspace)
-    band = assembly.band
-    scratch = resize!(workspace.band_scratch, length(band))
-    solution = resize!(workspace.band_solution, length(band))
-    for (position, dof) in pairs(band)
-        face = assembly.dof_face[dof]
-        scratch[position] = assembly.dof_mass[dof] *
-            (diffused.interior[face] - mixture.interior[face])
+    dofs = length(assembly.dof_face)
+    faces = size(stiffness, 1)
+    values = workspace.viscous_values
+    _mimetic_gather!(values, assembly, source)
+    mass = resize!(workspace.viscous_face_mass, faces)
+    fill!(mass, zero(T))
+    for dof in 1:dofs
+        mass[assembly.dof_face[dof]] += assembly.dof_mass[dof]
     end
-    if !isempty(band)
-        ldiv!(solution, workspace.factor, scratch)
-        for (position, dof) in pairs(band)
-            _mimetic_scatter!(velocity, assembly, dof, solution[position], true)
-        end
+    weights = [assembly.dof_mass[dof] / mass[assembly.dof_face[dof]] for dof in 1:dofs]
+    mixture = sparse(assembly.dof_face, 1:dofs, weights, faces, dofs)
+    viscous = mixture' * (stiffness * mixture)
+    metric = _mimetic_metric_matrix(workspace)
+    half = T(dt) / 2
+    matrix = metric + half * viscous
+    rhs = metric * values - half * (viscous * values)
+    solution = cholesky(Symmetric(matrix)) \ rhs
+    residual = norm(matrix * solution - rhs, Inf) / max(norm(rhs, Inf), floatmin(T))
+    _copy_velocity!(destination, source)
+    for dof in 1:dofs
+        _mimetic_scatter!(destination, assembly, dof, solution[dof], false)
     end
-    for dof in eachindex(assembly.dof_face)
-        assembly.band_position[dof] > 0 && continue
-        face = assembly.dof_face[dof]
-        # The ratio is exactly one where the diagonal is the staggered mass.
-        ratio = assembly.dof_mass[dof] / assembly.diagonal[dof]
-        _mimetic_scatter!(
-            velocity, assembly, dof,
-            ratio * (diffused.interior[face] - mixture.interior[face]), true,
-        )
-    end
-    return velocity
+    return (; residual, unknowns = dofs)
 end
 
 """Add `dt g` to every active interior phase value: gravity as the uniform

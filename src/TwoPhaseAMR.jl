@@ -12,7 +12,7 @@ import LinearAlgebra: issymmetric, ldiv!, mul!
 import SparseArrays: nnz
 using LinearAlgebra: ColumnNorm, Diagonal, I, Symmetric, diag, dot, isposdef,
     cholesky, eigen, lu, norm, nullspace, qr, qr!, rank, tr, svdvals
-using SparseArrays: SparseMatrixCSC, dropzeros!, nonzeros, nzrange, rowvals,
+using SparseArrays: SparseMatrixCSC, dropzeros!, findnz, nonzeros, nzrange, rowvals,
     sparse, spdiagm, spzeros
 using StaticArrays: SVector
 

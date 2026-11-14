@@ -144,25 +144,6 @@ function _apply_two_velocity_diffusion_update!(
     return _prescribe_two_velocity_diffusion_values!(destination, source, dirichlet_faces)
 end
 
-"""Apply the viscous increment through the mimetic metric (see
-`_mimetic_viscous_increment!`), enforcing prescribed phase velocities."""
-function _apply_mimetic_diffusion_update!(
-        destination::TwoPhaseVelocity, source::TwoPhaseVelocity,
-        diffused_mixture::FaceVelocity, mixture::FaceVelocity,
-        projection::MimeticProjectionSolver, work::MimeticProjectionWorkspace;
-        dirichlet_faces = (),
-    )
-    mesh = mixture.mesh
-    diffused_mixture.mesh === mesh || throw(
-        ArgumentError("diffusion mixture fields must share a mesh"),
-    )
-    _validate_two_phase_velocity(destination, mesh, eltype(mixture))
-    _validate_two_phase_velocity(source, mesh, eltype(mixture))
-    _copy_velocity!(destination, source)
-    _mimetic_viscous_increment!(destination, projection, work, diffused_mixture, mixture)
-    return _prescribe_two_velocity_diffusion_values!(destination, source, dirichlet_faces)
-end
-
 function _prescribe_two_velocity_diffusion_values!(destination, source, dirichlet_faces)
     T = eltype(destination[1])
     for phase in 1:2, index in dirichlet_faces
@@ -177,14 +158,19 @@ function _prescribe_two_velocity_diffusion_values!(destination, source, dirichle
     return destination
 end
 
-_two_velocity_diffusion_update!(destination, source, diffused, mixture, ::Any, ::Any; dirichlet_faces) =
-    _apply_two_velocity_diffusion_update!(destination, source, diffused, mixture; dirichlet_faces)
-_two_velocity_diffusion_update!(
-    destination, source, diffused, mixture, projection::MimeticProjectionSolver, work;
-    dirichlet_faces,
-) = _apply_mimetic_diffusion_update!(
-    destination, source, diffused, mixture, projection, work; dirichlet_faces,
-)
+"""Record the direct metric viscous solve of `MimeticProjection` in the
+statistics of the diffusion solver: one cycle with the relative residual."""
+function _record_mimetic_viscous_solve!(stats::LinearSolverStats{T}, residual, tolerance) where {T}
+    stats.cycles = 1
+    stats.converged = residual <= _dimensionless_tolerance(T, tolerance)
+    stats.final_l2 = stats.final_linf = T(residual)
+    stats.method = :cholesky
+    stats.preconditioner = :none
+    stats.converged || throw(
+        ErrorException("mimetic viscous solve: relative residual $residual above the tolerance $tolerance"),
+    )
+    return stats
+end
 
 function _diffusion_substep!(
         velocity::TwoPhaseVelocity, solver, workspace, dt, time,
@@ -201,21 +187,35 @@ function _diffusion_substep!(
         workspace.two_phase.diffusion,
         model.interface, model.dynamic_viscosity,
     )
-    density = workspace.two_phase.density
-    _mass_weighted_one_velocity!(
-        state.mixture_velocity, density, state.convected, model,
-    )
-    implicit_midpoint_diffusion!(
-        state.diffused_mixture, state.mixture_velocity, diffusion, dt,
-        workspace.two_phase.diffusion_solver;
-        density, tolerance, max_cycles,
-    )
-    _two_velocity_diffusion_update!(
-        velocity, state.convected,
-        state.diffused_mixture, state.mixture_velocity,
-        state.projection_solver, state.projection_workspace;
-        dirichlet_faces = diffusion.dirichlet_faces,
-    )
+    if state.projection_solver isa MimeticProjectionSolver
+        # Implicit midpoint of the phase values in the metric of the
+        # projection, unconditionally non-increasing in that metric.
+        result = _mimetic_viscous_step!(
+            velocity, state.convected, state.projection_solver,
+            state.projection_workspace, diffusion.stiffness, dt,
+        )
+        _record_mimetic_viscous_solve!(
+            workspace.two_phase.diffusion_solver.stats, result.residual, tolerance,
+        )
+        _prescribe_two_velocity_diffusion_values!(
+            velocity, state.convected, diffusion.dirichlet_faces,
+        )
+    else
+        density = workspace.two_phase.density
+        _mass_weighted_one_velocity!(
+            state.mixture_velocity, density, state.convected, model,
+        )
+        implicit_midpoint_diffusion!(
+            state.diffused_mixture, state.mixture_velocity, diffusion, dt,
+            workspace.two_phase.diffusion_solver;
+            density, tolerance, max_cycles,
+        )
+        _apply_two_velocity_diffusion_update!(
+            velocity, state.convected,
+            state.diffused_mixture, state.mixture_velocity;
+            dirichlet_faces = diffusion.dirichlet_faces,
+        )
+    end
     _mark_inactive_phase_velocities!(
         velocity, model.interface, workspace.two_phase.inactive_failures,
     )
@@ -364,9 +364,10 @@ increment that is added to the physical pressure.
 For a shortened CMDGFM step, the old-aperture mixture flux is scaled by
 the reference step, which must be at least `dt`.
 Viscosity acts implicitly on the phase-mass weighted one-velocity state; its
-common increment is applied to both phases (with `MimeticProjection` as the
-impulse of the staggered phase masses through the metric, `𝓜⁻¹WPδ`, which
-is the common increment away from the interface).
+common increment is applied to both phases. With `MimeticProjection` the
+phase values instead take the implicit-midpoint step of the same stress in
+the projection's metric (see `_mimetic_viscous_step!`), which is that common
+increment where the metric is the staggered phase mass.
 
 The two-velocity projection keeps a Neumann pressure boundary and cannot
 correct open normal velocities. Boundary preparation extrapolates each phase;

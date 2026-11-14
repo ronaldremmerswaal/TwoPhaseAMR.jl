@@ -914,49 +914,61 @@ reproduces. (A density-weighted jump force $\mathcal M^{-1}(\phaseaperture{\phas
 would give the gas value of a mixed face the weight of the mixture: about
 $500\,\dt g$ after one step at densities $(1000,1)$.)
 
-\emph{Viscosity.} With this projection the viscous increment
-$\delta=\onevelo^{\stage{2}}-\onevelo^{\stage{1}}$ of the mixture
-solve~\cref{eq:viscosity:two-velocity} enters as an impulse: every phase value
-receives $\dualvol{f}\facemass{\phase}{f}\delta_f$, its staggered mass times
-the increment, and the velocities change by $\mathcal M^{-1}$ of it,
+\emph{Viscosity.} With this projection the phase values take the implicit
+midpoint step of the mixture stress in the metric of the projection. With the
+mixture map $\mathsf R=\mathsf B_{\mathsf W}^{-1}\mathsf P^{\transpose}\mathsf W$
+($\onevelo=\mathsf Ru$, the staggered-mass mean of the values of a face;
+$\mathsf P$ copies a face field to the phase values of each face,
+$\mathsf B_{\mathsf W}=\mathsf P^{\transpose}\mathsf W\mathsf P$ is the mixture mass)
+and the symmetric positive semi-definite stress matrix $\mathsf K$
+of~\cref{eq:viscosity:phase-midpoint} (its viscosity mixture and walls),
 \begin{equation}\label{eq:projection:mimetic-viscous}
-  u^{\stage{2}}=u^{\stage{1}}+\mathcal M^{-1}\mathsf W\mathsf P\delta ,
+  \bigl(\mathcal M+\tfrac{\dt}2\mathsf R^{\transpose}\mathsf K\mathsf R\bigr)u^{\stage{2}}
+  =\bigl(\mathcal M-\tfrac{\dt}2\mathsf R^{\transpose}\mathsf K\mathsf R\bigr)u^{\stage{1}} .
 \end{equation}
-with $\mathsf P$ copying a face field to the phase values of each face. Away
-from the band $\mathcal M=\mathsf W$ and this is the common increment of
-\cref{eq:viscosity:two-velocity}, bit for bit; the band part is one solve with
-the factorisation of the projection. The common increment
-$u+\mathsf P\delta$ contracts the mixture in $\mathsf W$, but the energy in the
-metric changes by
-$\delta^{\transpose}\mathsf P^{\transpose}\mathcal Mu+\tfrac12\delta^{\transpose}\mathsf P^{\transpose}\mathcal M\mathsf P\delta$:
-on a mixed face whose slip carries mixture momenta of opposite signs in the
-two norms the viscous step feeds the slip, which the $\mathcal M$-orthogonal
+For $\mathcal M=\mathsf W$ this is the common increment
+of~\cref{eq:viscosity:two-velocity}: with $u=\mathsf P\onevelo+s$,
+$\mathsf P^{\transpose}\mathsf Ws=0$, the step reads
+$u^{\stage{2}}-u^{\stage{1}}=-\tfrac{\dt}2\mathsf P\mathsf B_{\mathsf W}^{-1}\mathsf K(\onevelo^{\stage{2}}+\onevelo^{\stage{1}})$,
+the Crank--Nicolson mixture solve applied to both phases. In general the
+amplification factors $(1-\dt\lambda/2)/(1+\dt\lambda/2)$ of the pencil
+$(\mathsf R^{\transpose}\mathsf K\mathsf R,\mathcal M)$ lie in $(-1,1]$ for every
+$\dt$, and
+\[
+  E_{\mathcal M}(u^{\stage{2}})-E_{\mathcal M}(u^{\stage{1}})
+  =-\tfrac{\dt}4\,(\onevelo^{\stage{2}}+\onevelo^{\stage{1}})^{\transpose}\mathsf K(\onevelo^{\stage{2}}+\onevelo^{\stage{1}})\le0,
+  \qquad E_{\mathcal M}(u)=\tfrac12u^{\transpose}\mathcal Mu :
+\]
+the viscous step and the projection are non-expansive in one norm, with no
+restriction of the time step. The common increment $u+\mathsf P\delta$ is not:
+it contracts the mixture in $\mathsf W$, but $E_{\mathcal M}$ changes by
+$\delta^{\transpose}\mathsf P^{\transpose}\mathcal Mu+\tfrac12\delta^{\transpose}\mathsf P^{\transpose}\mathcal M\mathsf P\delta$,
+and on a mixed face whose slip carries mixture momenta of opposite signs in
+the two norms the viscous step feeds the slip, which the $\mathcal M$-orthogonal
 projection keeps. For two values on one face with the constraint
 $\phaseaperture{\liq}{f}\velo^{\liq}+\phaseaperture{\gas}{f}\velo^{\gas}=0$, a
 step that damps the mixture by $1-\theta$ and the projection map the slip $s$
 to $gs$ with $g=1-\theta\,p_{\mathsf W}p_{\mathcal M}/((m^{\liq}+m^{\gas})s^{\transpose}\mathcal Ms)$,
 $p_{\mathsf W}=\mathbf 1^{\transpose}\mathsf Ws$, $p_{\mathcal M}=\mathbf 1^{\transpose}\mathcal Ms$:
-the slip grows exactly if the two momenta have opposite signs; the static drop
+the slip grows if the two momenta have opposite signs; the static drop
 at density ratios 1 to 3 grew exponentially at a rate of about $\nu/h^2$ (the
-audit's note \emph{Static drop stability}). Through the metric the
-first-order change is
-$\delta^{\transpose}\mathsf P^{\transpose}\mathsf Wu$, the dissipation of the mixture
-solve,
-\[
-  E_{\mathcal M}(u^{\stage{2}})-E_{\mathcal M}(u^{\stage{1}})
-  =\bigl[E_{\mathsf W}(u^{\stage{1}}+\mathsf P\delta)-E_{\mathsf W}(u^{\stage{1}})\bigr]
-  -\tfrac12\,\delta^{\transpose}\bigl(\mathsf B_{\mathsf W}-\mathsf P^{\transpose}\mathsf W\mathcal M^{-1}\mathsf W\mathsf P\bigr)\delta ,
-  \qquad \mathsf B_{\mathsf W}=\mathsf P^{\transpose}\mathsf W\mathsf P,
-\]
-and the factor of the two-value model is
-$g=1-\theta\,p_{\mathsf W}^2/((m^{\liq}+m^{\gas})s^{\transpose}\mathcal Ms)\le1$
-for every metric. The second-order term has no sign in general; on states of
-opposite momenta on a drop ($h=1/32$, densities $1{:}1$, $3{:}1$, $1{:}3$,
-$\dt\nu/h^2$ from $0.01$ to $1$) $E_{\mathcal M}$ fell in every case, while the common
-increment raised it in 84 of 108. The step changes the first-moment momentum
-$e_i^{\transpose}\mathcal Mu$ by the viscous impulse $e_i^{\transpose}\mathsf W\mathsf P\delta$
-of the mixture solve; in the band the transported momentum and the velocity
-jump are no longer those of the common increment.
+audit's note \emph{Static drop stability}). The impulse form
+$u+\mathcal M^{-1}\mathsf W\mathsf P\delta$ proposed there is non-expansive in
+$\mathcal M$ only below a geometry-dependent $\dt\,\lambda_{\max}(\mathsf B_{\mathsf W}^{-1}\mathsf K)$
+($2.3$ to $9.3$ in the audit's derivation check,
+\code{proof_review/lem-visc-prop-toy-remedy/}), because the Crank--Nicolson
+damping $\theta$ tends to $2$ for stiff modes; it is not used. The step
+changes the first-moment momentum $e_i^{\transpose}\mathcal Mu$, the momentum
+the projection conserves, by
+$-\tfrac{\dt}2(\mathsf Ke_i)^{\transpose}(\onevelo^{\stage{2}}+\onevelo^{\stage{1}})$,
+zero where the stress annihilates the uniform field (a periodic direction
+with free-slip walls); in the band the transported momentum
+$e_i^{\transpose}\mathsf Wu$ and the velocity jump are no longer those of the
+common increment. An identified grid-line value enters with the
+mass-weighted mean of its two phase values, as in the projection. The system
+has one unknown per phase value, is symmetric positive definite and is
+solved directly (sparse Cholesky factorisation, rebuilt every step since
+$\mathcal M$ follows the interface).
 
 \emph{Properties} (the note's propositions on the meaning of consistency
 and on the assembly). $\mathcal M$ is symmetric positive definite (under the
@@ -1014,7 +1026,7 @@ preconditioner \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_
 forces \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_capillary_force!}~\cref{eq:projection:mimetic-capillary}
 with \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_cell_curvature!},
 \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_uniform_acceleration!};
-viscous impulse \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_viscous_increment!}~\cref{eq:projection:mimetic-viscous}.
+viscous step \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_viscous_step!}~\cref{eq:projection:mimetic-viscous}.
 Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric: symmetry, definiteness, diagonal masses and consistency},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic Gram blocks: the polygon block where the polygon exists, degenerate data},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric on averaged apertures that close no region},
@@ -1023,7 +1035,7 @@ Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mi
 (the audit laboratory's numbers on exact geometry),
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic forces balance constant curvature and gravity},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic per-phase surface tension drives the liquid only},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic viscous increment through the metric},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic viscous step in the metric},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Two-value model of the viscous step and the projection},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection rejects cut cells at walls},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection with an interface on a grid line}.
