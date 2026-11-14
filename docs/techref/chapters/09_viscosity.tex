@@ -852,21 +852,32 @@ over the step, applied to the result of~\cref{eq:viscosity:two-velocity}.
 Here $\visc_{\interface}$ is the cell viscosity mixture of
 \cref{sec:viscosity:stress} at the staggered fraction (for a flat interface
 the series mean of the phases at the distances of their centroids from it)
-and $\stagvol{f}$ the volume of the mixture solve. The geometry is that of
-the staggered fraction: half of each adjacent cell over the tangential strip
-of the face. Each mixed cell's PLIC plane is clipped to its strip;
-$\abs{\interface_f}$ is half the sum of the two chord lengths, the interface
-normal $\inormal$ their length-weighted mean normal, and $\delta_f$ the
-distance of the liquid and gas centroids of the volume along $\inormal$, at
-least a quarter of the mean cell width along $\fnormal{f}$. A flat interface
-parallel to the face gives $\abs{\interface_f}=h$, $\delta_f=h/2$, so
+and $\stagvol{f}$ the volume of the mixture solve. The control volume is the
+one of the staggered fraction and the masses: each adjacent cell contributes
+half the open part of the face's strip with the cell's phase fractions, so
+its open-cell PLIC chord and phase centroids (the PLIC half-plane clipped to
+the cell outside a solid's plane) enter scaled by that contribution over the
+open cell area, and the liquid fraction of the volume is $\clampfrac{f}$ on
+level transitions and cut cells as well. $\abs{\interface_f}$ is the sum of
+the scaled chords, the interface normal $\inormal$ their length-weighted mean
+normal, and $\delta_f$ the distance of the liquid and gas centroids of the
+volume along $\inormal$, at least a quarter of the mean cell width along
+$\fnormal{f}$. A flat interface parallel to the face gives
+$\abs{\interface_f}=h$, $\delta_f=h/2$, so
 $\lambda_f=2\nu/(h^2\clampfrac{f}(1-\clampfrac{f}))$ at equal kinematic
 viscosities and densities; one normal to the face gives half the chord at
 $\delta_f=h$, and between a pure liquid and a pure gas cell the face itself
-is the interface. An embedded solid is ignored in this geometry. The
-component weight is $w_f=\abs{\fnormal{f}\cdot\itangent}$, the share of the
-component tangential to the interface (the default
-\code{component=:tangential}); \code{component=:full} takes $w_f=1$. Both
+is the interface. The default component weight (\code{component=:tangential})
+is $w_f=\itangent_k^2/(\itangent_1^4+\itangent_2^4)$ for the face axis $k$:
+a jump $J\itangent$ along the interface then gives
+$\sum_k\itangent_k^2w_k=1$ per unit chord length for every orientation, as
+$w_f=1$ (\code{component=:full}) does, while a jump $J\inormal$ normal to it
+gives $2\itangent_1^2\itangent_2^2/(\itangent_1^4+\itangent_2^4)$, zero for a
+grid-aligned interface and one at $45^\circ$, where the face components
+cannot separate the two. Between a pure liquid and a pure gas cell the
+tangential weight is zero: the face component is the normal velocity, and the
+tangential velocities there sit on one-phase faces, coupled by the mixture
+operator. Both
 reduce the capillary-wave error with a per-phase surface-tension force at
 density ratio one from $0.0112$ to $0.0019$ (tangential) and $0.0023$ (full)
 at $n=16$ and a quarter-period step factor $1/8$, and otherwise differ by a
@@ -944,8 +955,9 @@ and \srcsym{src/two_phase/two_velocity/stepping.jl}{_apply_two_velocity_diffusio
 the drag~\cref{eq:viscosity:drag} \apitype{InterphaseDrag} in
 \srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_interphase_drag!} with
 \srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_interphase_drag_rate},
-\srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_interphase_contact} and
-\srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_plic_rectangle_clip}.
+\srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_interphase_contact},
+\srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_cell_phase_geometry} and
+\srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_clip_convex}.
 Tests: \testsym{test/operators/staggered_diffusion.jl}{implicit midpoint staggered elliptic solve},
 \testsym{test/operators/staggered_diffusion.jl}{dimensionless diffusion tolerance and failure report},
 \testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Two-phase diffusion uses the thesis split state}
@@ -958,5 +970,8 @@ the transported state),
 \testsym{test/two_phase/two_velocity/interphase_drag.jl}{Interphase drag relaxes the jump at fixed mixture momentum},
 \testsym{test/two_phase/two_velocity/interphase_drag.jl}{Interphase drag is inactive at rest, for equal phases and without viscosity},
 \testsym{test/two_phase/two_velocity/interphase_drag.jl}{Interphase drag locks the phases as lambda dt grows},
+\testsym{test/two_phase/two_velocity/interphase_drag.jl}{Interphase drag control volume on transitions, cut cells and small bubbles},
+\testsym{test/two_phase/two_velocity/interphase_drag.jl}{Interphase drag semigroup and zero step},
+\testsym{test/two_phase/two_velocity/interphase_drag.jl}{Default two-velocity viscous step is bitwise the mixture step},
 \testsym{test/navier_stokes/navier_stokes.jl}{single-phase material scaling}.
 \end{implnote}

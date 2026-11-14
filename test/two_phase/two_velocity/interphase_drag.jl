@@ -59,20 +59,26 @@ end
 
 @testset "Interphase drag geometry" begin
     # Liquid part of the unit cell below a horizontal line and on the left of
-    # a diagonal: area, first moments and the chord vector.
-    area, moment_x, moment_y, chord = TID._plic_rectangle_clip(0.0, 1.0, 0.1, -0.5, 0.5, -0.5, 0.5)
-    @test area ≈ 0.6
+    # a diagonal: area, first moments and the chord.
+    half = 0.5
+    square = ((-half, -half), (half, -half), (half, half), (-half, half), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0))
+    clipped, count, first, second = TID._clip_convex(square, 4, 0.0, 1.0, 0.1, true)
+    area, moment_x, moment_y = TID._tuple_polygon_area_moments(clipped, count, Float64)
+    @test count == 4 && area ≈ 0.6
     @test abs(moment_x) <= 1.0e-15
     @test moment_y ≈ 0.6 * (0.1 - 0.5) / 2
-    @test abs.(chord) == (1.0, 0.0)
-    area, moment_x, moment_y, chord = TID._plic_rectangle_clip(1 / sqrt(2), 1 / sqrt(2), 0.0, -0.5, 0.5, -0.5, 0.5)
-    @test area ≈ 0.5 && hypot(chord...) ≈ sqrt(2)
+    @test hypot((second .- first)...) ≈ 1
+    clipped, count, first, second = TID._clip_convex(square, 4, 1 / sqrt(2), 1 / sqrt(2), 0.0, true)
+    area, moment_x, moment_y = TID._tuple_polygon_area_moments(clipped, count, Float64)
+    @test area ≈ 0.5 && hypot((second .- first)...) ≈ sqrt(2)
     @test moment_x ≈ -1 / 12 && moment_y ≈ -1 / 12
 
     # A flat interface parallel to a face lies in its control volume with the
     # face length and a centroid distance of half a cell; one normal to it
     # gives half the chord at the distance of one cell, and on a grid line
-    # (the periodic seam) the face itself at the cell-centre distance.
+    # (the periodic seam) the face itself at the cell-centre distance. The
+    # tangential weight is one for the tangential and zero for the normal
+    # component, also on the grid line.
     mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, true))
     h = 1 / 8
     for (levelset, axis, expected, tangential_weight) in (
@@ -93,17 +99,118 @@ end
             contact = TID._interphase_contact(interface, face, false)
             @test contact[1] ≈ (grid_line ? h : expected[1])
             @test contact[2] ≈ (grid_line ? h : expected[2])
+            @test contact[4] ≈ c
             tangential = TID._interphase_contact(interface, face, true)
             @test tangential[3] ≈ tangential_weight atol = 1.0e-14
             checked += 1
         end
         @test checked > 0
     end
+
+    # The decay rate of the horizontal interface: |Gamma| = h, delta = h/2,
+    # harmonic mu_Gamma at the staggered fraction, masses rho c h^2.
+    interface = InterfaceField(mesh, (x, y) -> y - 0.5 - 0.3h; lipschitz = 1)
+    density, viscosity = (5.0, 1.0), (0.03, 0.002)
+    face = mesh.faces[findfirst(f -> f.axis == 1 && 0 < TID._staggered_liquid_fraction(interface, nothing, f) < 1, mesh.faces)]
+    c = TID._staggered_liquid_fraction(interface, nothing, face)
+    mu = 1 / (c / viscosity[1] + (1 - c) / viscosity[2])
+    expected = mu * h / (h / 2) / h^2 * (1 / (density[1] * c) + 1 / (density[2] * (1 - c)))
+    for tangential in (false, true)
+        @test TID._interphase_drag_rate(
+            interface, face, c, h^2, density, viscosity, HarmonicViscosityAveraging(), tangential,
+        ) ≈ expected rtol = 1.0e-12
+    end
+
+    # Orientation: per unit chord length, a tangential jump gets the same
+    # coupling from the tangential weight as from the full component (the
+    # weight sums t_k^2 w_k to one), and a normal jump none where the
+    # interface is grid-aligned. The remaining dependence on the angle is the
+    # centroid distance of the control volume, which makes the stress of a
+    # resolved linear shear exact.
+    function coupling(theta; n = 32)
+        mesh = BlockTreeMesh(block_size = (n, n), periodic = (false, false))
+        c, s = cos(theta), sin(theta)
+        interface = InterfaceField(mesh, (x, y) -> -s * (x - 0.5) + c * (y - 0.5 - 0.013); lipschitz = 1)
+        inside(p) = abs(p[1] - 0.5) < 0.3 && abs(p[2] - 0.5) < 0.3
+        tangential = normal = full = 0.0
+        for face in mesh.faces
+            inside(face.center) && 0 < TID._staggered_liquid_fraction(interface, nothing, face) < 1 || continue
+            t, m = face.axis == 1 ? (c, -s) : (s, c)
+            L, d, w, _ = TID._interphase_contact(interface, face, true)
+            Lf, df, _, _ = TID._interphase_contact(interface, face, false)
+            tangential += L * w * t^2 / d
+            normal += L * w * m^2 / d
+            full += Lf * t^2 / df
+        end
+        return tangential / full, normal / full
+    end
+    for (theta, leak) in ((0.0, 0.0), (pi / 6, nothing), (pi / 4, 1.0))
+        ratio, normal = coupling(theta)
+        @test 0.95 <= ratio <= 1.05
+        isnothing(leak) || @test normal ≈ leak atol = 1.0e-8
+    end
+
     @test_throws ArgumentError InterphaseDrag(; component = :normal)
     @test_throws ArgumentError TwoVelocityModel(; interphase_drag = :on)
     @test isnothing(TwoVelocityModel().interphase_drag)
     @test TwoVelocityModel(; interphase_drag = InterphaseDrag()).interphase_drag == InterphaseDrag(; component = :tangential)
     @test isnothing(TwoVelocityModel(; interphase_drag = nothing).interphase_drag)
+end
+
+@testset "Interphase drag control volume on transitions, cut cells and small bubbles" begin
+    # The control volume is the one of the staggered fraction: on a level
+    # transition and next to a solid its liquid fraction is that fraction,
+    # and every mixed face gets a contact.
+    for kind in (:mixed, :geometry, :mixed_geometry)
+        flow = _drag_flow(kind)
+        interface = flow.system.two_phase.interface
+        mixed = transitions = 0
+        for face in interface.mesh.faces
+            c = TID._staggered_liquid_fraction(interface, interface.geometry, face)
+            0 < c < 1 || continue
+            contact = TID._interphase_contact(interface, face, false)
+            mixed += 1
+            @test contact[1] > 0
+            @test contact[4] ≈ c rtol = 1.0e-10
+            transitions += interface.mesh.blocks[face.minus.block].spacing !=
+                interface.mesh.blocks[face.plus.block].spacing
+        end
+        @test mixed > 0
+        kind === :mixed && @test transitions > 0
+    end
+
+    # A horizontal interface through a column cut by a vertical wall: the open
+    # width a of the cut cell and the full neighbour give |Gamma| = (a + h)/2
+    # on the face between them, at the distance h/2.
+    n = 8
+    h = 1 / n
+    mesh = BlockTreeMesh(block_size = (n, n), periodic = (false, false))
+    geometry = GeometryField(mesh, (x, y) -> x - 0.25 - 0.4h; lipschitz = 1)
+    interface = InterfaceField(mesh, (x, y) -> y - 0.5 - 0.3h; geometry, lipschitz = 1)
+    face = only(
+        filter(
+            f -> f.axis == 1 && f.center[1] ≈ 0.375 && 0.5 < f.center[2] < 0.625,
+            mesh.faces,
+        ),
+    )
+    contact = TID._interphase_contact(interface, face, true)
+    @test contact[1] ≈ (0.6h + h) / 2 rtol = 1.0e-8
+    @test contact[2] ≈ h / 2 rtol = 1.0e-8
+    @test contact[3] ≈ 1 rtol = 1.0e-8
+    @test contact[4] ≈ TID._staggered_liquid_fraction(interface, geometry, face) rtol = 1.0e-10
+
+    # A liquid film thinner than a cell: the two cells of an x-face hold
+    # opposite interfaces, and the centroid distance is raised to the floor
+    # of a quarter cell.
+    mesh = BlockTreeMesh(block_size = (32, 32), periodic = (true, true))
+    interface = InterfaceField(mesh, (x, y) -> abs(x - 0.5) - 0.3 / 32; lipschitz = 1)
+    distances = Float64[]
+    for face in mesh.faces
+        0 < TID._staggered_liquid_fraction(interface, nothing, face) < 1 || continue
+        push!(distances, TID._interphase_contact(interface, face, false)[2])
+    end
+    @test minimum(distances) ≈ 1 / 128
+    @test count(d -> d ≈ 1 / 128, distances) > 0
 end
 
 @testset "Interphase drag relaxes the jump at fixed mixture momentum" begin
@@ -189,7 +296,9 @@ end
         locked = 0
         for (index, face) in pairs(interface.mesh.faces)
             rate = TID._interphase_drag_rate(
-                interface, face, operator.volumes[index], model.density,
+                interface, face,
+                TID._staggered_liquid_fraction(interface, interface.geometry, face),
+                operator.volumes[index], model.density,
                 model.dynamic_viscosity, operator.averaging,
                 model.interphase_drag.component === :tangential,
             )
@@ -206,5 +315,66 @@ end
             locked += 1
         end
         @test locked > 0
+    end
+end
+
+@testset "Interphase drag semigroup and zero step" begin
+    for kind in (:mixed, :mixed_geometry)
+        flow = _drag_flow(kind)
+        model = flow.system.two_phase
+        operator = TID._update_dynamic_viscosity!(
+            flow.workspace.two_phase.diffusion, model.interface, model.dynamic_viscosity,
+        )
+        start = (copy(flow.velocity[1].interior), copy(flow.velocity[2].interior))
+        once = (FaceVelocity(model.interface.mesh), FaceVelocity(model.interface.mesh))
+        twice = (FaceVelocity(model.interface.mesh), FaceVelocity(model.interface.mesh))
+        for (target, steps) in ((once, (0.4,)), (twice, (0.2, 0.2)))
+            copyto!(target[1].interior, start[1]); copyto!(target[2].interior, start[2])
+            for dt in steps
+                TID._interphase_drag!(target, model.interphase_drag, model, operator, dt)
+            end
+        end
+        scale = maximum(x -> isfinite(x) ? abs(x) : 0.0, start[1]) +
+            maximum(x -> isfinite(x) ? abs(x) : 0.0, start[2])
+        for phase in 1:2
+            @test all(
+                isequal(a, b) || abs(a - b) <= 16eps() * scale
+                    for (a, b) in zip(once[phase].interior, twice[phase].interior)
+            )
+        end
+        @test any(index -> !isequal(once[2].interior[index], start[2][index]), eachindex(start[2]))
+        TID._interphase_drag!(flow.velocity, model.interphase_drag, model, operator, 0.0)
+        @test isequal(flow.velocity[1].interior, start[1]) && isequal(flow.velocity[2].interior, start[2])
+    end
+end
+
+@testset "Default two-velocity viscous step is bitwise the mixture step" begin
+    for kind in (:uniform, :mixed_geometry)
+        dt = 0.002
+        default = _drag_flow(kind; interphase_drag = TwoVelocityModel().interphase_drag)
+        result = _drag_viscous_step!(default, dt)
+        reference = _drag_flow(kind; interphase_drag = nothing)
+        model = reference.system.two_phase
+        phase = reference.workspace.two_phase
+        state = TID._two_velocity_flow_workspace!(phase, model)
+        @test any(
+            index -> isfinite(state.convected[1].interior[index]) &&
+                isfinite(state.convected[2].interior[index]) &&
+                state.convected[1].interior[index] != state.convected[2].interior[index],
+            eachindex(state.convected[1].interior),
+        )
+        diffusion = TID._update_dynamic_viscosity!(phase.diffusion, model.interface, model.dynamic_viscosity)
+        TID._mass_weighted_one_velocity!(state.mixture_velocity, phase.density, state.convected, model)
+        implicit_midpoint_diffusion!(
+            state.diffused_mixture, state.mixture_velocity, diffusion, dt, phase.diffusion_solver;
+            density = phase.density, tolerance = 1.0e-12, max_cycles = 1000,
+        )
+        TID._apply_two_velocity_diffusion_update!(
+            reference.velocity, state.convected, state.diffused_mixture, state.mixture_velocity;
+            dirichlet_faces = diffusion.dirichlet_faces,
+        )
+        TID._mark_inactive_phase_velocities!(reference.velocity, model.interface, phase.inactive_failures)
+        @test isequal(result[1], reference.velocity[1].interior)
+        @test isequal(result[2], reference.velocity[2].interior)
     end
 end

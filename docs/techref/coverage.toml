@@ -1262,6 +1262,7 @@ label = "eq:viscosity:drag"
 sources = [
   { file = "src/two_phase/two_velocity/interphase_drag.jl", symbol = "InterphaseDrag" },
   { file = "src/two_phase/two_velocity/interphase_drag.jl", symbol = "_interphase_contact" },
+  { file = "src/two_phase/two_velocity/interphase_drag.jl", symbol = "_cell_phase_geometry" },
   { file = "src/two_phase/two_velocity/interphase_drag.jl", symbol = "_interphase_drag_rate" },
   { file = "src/two_phase/two_velocity/interphase_drag.jl", symbol = "_interphase_drag!" }
 ]
@@ -1269,7 +1270,10 @@ tests = [
   { file = "test/two_phase/two_velocity/interphase_drag.jl", testset = "Interphase drag geometry" },
   { file = "test/two_phase/two_velocity/interphase_drag.jl", testset = "Interphase drag relaxes the jump at fixed mixture momentum" },
   { file = "test/two_phase/two_velocity/interphase_drag.jl", testset = "Interphase drag is inactive at rest, for equal phases and without viscosity" },
-  { file = "test/two_phase/two_velocity/interphase_drag.jl", testset = "Interphase drag locks the phases as lambda dt grows" }
+  { file = "test/two_phase/two_velocity/interphase_drag.jl", testset = "Interphase drag locks the phases as lambda dt grows" },
+  { file = "test/two_phase/two_velocity/interphase_drag.jl", testset = "Interphase drag control volume on transitions, cut cells and small bubbles" },
+  { file = "test/two_phase/two_velocity/interphase_drag.jl", testset = "Interphase drag semigroup and zero step" },
+  { file = "test/two_phase/two_velocity/interphase_drag.jl", testset = "Default two-velocity viscous step is bitwise the mixture step" }
 ]
 [[claims]]
 label = "eq:projection:one-system"
