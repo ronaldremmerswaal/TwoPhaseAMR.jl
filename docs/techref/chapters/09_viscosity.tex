@@ -923,12 +923,24 @@ $3.3\,\%$, $11.5\,\%$ instead of $3.3\,\%$ at $128$); the sheet's
 $\mathrm{Re}_f$ is $6$--$1400$ (10--90\,\% quantiles of its mixed faces at
 $\lambda/h=64$; $2.4$--$430$ at $128$), the slipping layer of the capillary
 wave's $0.04$ (median; $0.67$ at 90\,\%), and the slip law gives $3.4\,\%$ and
-$3.1\,\%$ with the same wave errors. A resolved layer at density ratio ten
-(\code{r10_thick}, $\nu^{\gas}/\nu^{\liq}=4$) is a known failure: the
-growth-rate error rises from $16.5\,\%$/$21.5\,\%$ to $54\,\%$/$106\,\%$ at
-$\lambda/h=64/128$; the drag, dissipative in the staggered masses, does
-positive work in the mimetic metric there (and in \code{r1_thick}, which it
-improves from $17\,\%$ to $0.9\,\%$); these numbers are those of the exact update after the earlier common viscous increment. With the drag in the metric step of the mimetic projection (\cref{eq:projection:mimetic-viscous-drag}) \code{r10_thick} gives $21.9\,\%$/$23.0\,\%$ against $0.05\,\%$/$22.9\,\%$ without drag and \code{r1_thick} $49.9\,\%$/$3.6\,\%$ against $11.8\,\%$/$0.24\,\%$, while \code{r1_thin}, \code{r10_thin} and the capillary-wave gain ($0.0015$--$0.0017$ instead of $0.008$--$0.014$) are kept. With CMDGFM the drag changes the results
+$3.1\,\%$ with the same wave errors (these drag numbers were measured with
+the exact update after the earlier common viscous increment).
+
+With the mimetic projection the drag is a term of the implicit-midpoint step
+in the metric~\cref{eq:projection:mimetic-viscous-drag}: the stress and the
+drag together never increase $u^{\transpose}\mathcal Mu$, for every $\dt$.
+(The exact update above, dissipative in the staggered masses, did positive
+work in the metric in 97\,\% of the steps of \code{r10_thick}, $\nu^{\gas}/\nu^{\liq}=4$,
+density ratio ten, and raised its growth-rate error from $16.5\,\%$/$21.5\,\%$
+to $54\,\%$/$106\,\%$ at $\lambda/h=64/128$.) Since $\mathrm{Re}_f$ is taken
+from the jump at the start of the step, the midpoint drag is second order in
+time only where $\mathrm{Re}_f$ is fixed (a linear drag); with the lagged
+$\mathrm{Re}_f$ it is first order. Measured with the metric step:
+\code{r10_thick} gives $21.9\,\%$/$23.0\,\%$ against $0.05\,\%$/$22.9\,\%$
+without drag and \code{r1_thick} $49.9\,\%$/$3.6\,\%$ against
+$11.8\,\%$/$0.24\,\%$, while \code{r1_thin}, \code{r10_thin} and the
+capillary-wave gain ($0.0015$--$0.0017$ instead of $0.008$--$0.014$ at
+density ratio one) are kept. With CMDGFM the drag changes the results
 by less than $10^{-4}$, because that projection recreates the tangential jump
 of the cut faces in every step.
 
