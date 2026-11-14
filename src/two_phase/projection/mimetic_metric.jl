@@ -1,5 +1,6 @@
 # The mimetic (MFD) kinetic metric of `MimeticProjection` on the Gram tensors
-# of the cut cells (candidate MMd of the audit note on kinetic metrics).
+# of the cut cells (audit note "Kinetic metrics for shared apertures that close
+# no region").
 #
 # Notation follows docs/techref/chapters/10_projection.tex, section "Mimetic
 # cut-cell projection": a cell side k = 1, 2, 3, 4 is its bottom, right, top
@@ -535,17 +536,17 @@ end
     return nothing
 end
 
-"""Assemble the MFD cut-cell metric (candidate MMd of the audit note on
-kinetic metrics, with the tie terms of the audit's laboratory).
+"""Assemble the mimetic cut-cell metric (Gram-tensor blocks of the cut cells,
+with the tie terms of the audit's laboratory).
 
 Every cut cell (a cell whose four liquid apertures are not all `0` or all
 `1`) gets one pressure point (`_mimetic_pressure_point`) and per phase the
 Gram block of the sides that phase wets (`_mimetic_gram_block!`); a cell in
 which a block is only least-squares consistent counts as defective. Uncut
 cells give their face values `ρh²/2`. A phase value on a face that the phase
-does not reach is tied to a donor with its staggered mass, and with the
-small-cell stabilisation every value with aperture below one half on a mixed
-face is tied to a donor with weight `(1 - 2a)` times its mass.
+does not reach is tied to a donor with its staggered mass, and every value
+with aperture below one half on a mixed face is tied to a donor with weight
+`(1 - 2a)` times its mass (small-cell stabilisation).
 
 The geometry enters only through `data` (staggered liquid fractions, phase
 apertures and masses of the interior faces), the wet-end `flags` of the
@@ -560,7 +561,7 @@ limit of the cut-cell construction as the chord approaches the face. Its one
 value carries the summed staggered mass and the full aperture.
 """
 function _assemble_cut_cell_metric!(
-        assembly::_MimeticAssembly{T}, metric::MFDCutCellMetric, mesh,
+        assembly::_MimeticAssembly{T}, mesh,
         topology, data, flags, boundary_aperture, boundary_low, density;
         allow_wall_cuts = false, gridline = nothing,
     ) where {T}
@@ -723,10 +724,7 @@ function _assemble_cut_cell_metric!(
                 lumped_values += 1
             end
             fraction = data.liquid_fraction[face]
-            (
-                metric.small_cell_stabilization && zero(T) < fraction < one(T) &&
-                    aperture < T(0.5)
-            ) || continue
+            zero(T) < fraction < one(T) && aperture < T(0.5) || continue
             larger(g) = (
                 d = dof_at(g); reaches(d) &&
                     assembly.dof_aperture[d] > aperture + T(1.0e-12)

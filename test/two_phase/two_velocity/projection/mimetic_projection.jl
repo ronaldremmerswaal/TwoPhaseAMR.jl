@@ -3,12 +3,11 @@ include("../helpers.jl")
 include("mimetic_lab_helpers.jl")
 
 function _mimetic_case(
-        n, levelset; density = (1.0, 1.0), metric = MFDCutCellMetric(),
-        periodic = (true, false), lipschitz = 1.5,
+        n, levelset; density = (1.0, 1.0), periodic = (true, false), lipschitz = 1.5,
     )
     mesh = BlockTreeMesh(; block_size = (n, n), periodic)
     interface = InterfaceField(mesh, levelset; lipschitz)
-    solver = MimeticProjectionSolver(interface; density, metric)
+    solver = MimeticProjectionSolver(interface; density)
     workspace = MimeticProjectionWorkspace(solver)
     return (; mesh, interface, solver, workspace)
 end
@@ -40,12 +39,12 @@ _mimetic_circle(n; x = 0.5, y = 0.5, radius = 0.25) =
 @testset "Mimetic projection option and validation" begin
     projection = MimeticProjection()
     @test projection isa AbstractTwoVelocityProjection
-    @test projection.metric isa MFDCutCellMetric
-    @test projection.metric.small_cell_stabilization
-    @test !MFDCutCellMetric(small_cell_stabilization = false).small_cell_stabilization
-    # The polygon fallback and its option are gone: every cut cell has a block.
-    @test_throws MethodError MFDCutCellMetric(nonsimple_cells = :lumped)
-    @test_throws ArgumentError MimeticProjection(metric = :mfd)
+    # The projection implies its metric and force maps: it takes no options.
+    @test_throws MethodError MimeticProjection(metric = :mfd)
+    @test_throws MethodError MimeticProjectionSolver(
+        InterfaceField(BlockTreeMesh(block_size = (8, 8)), (x, y) -> y - 0.53; lipschitz = 1);
+        metric = :mfd,
+    )
     @test TwoVelocityModel(pressure_projection = projection).pressure_projection === projection
     @test TwoVelocityModel().pressure_projection isa CMDGFMProjection
 
@@ -423,7 +422,7 @@ function _mmd_data_point(apertures, starts)
     return xr - defect * ey, yr + defect * ex
 end
 
-@testset "Mimetic Gram blocks: the MM block where the polygon exists, degenerate data" begin
+@testset "Mimetic Gram blocks: the polygon block where the polygon exists, degenerate data" begin
     # Simple cut cells (note on kinetic metrics, prop. gram(d)): the pressure
     # point is the chord midpoint, G = |P| I and the block is that of MM.
     for (apertures, starts) in (
@@ -557,7 +556,7 @@ end
             liquid_mass = fraction, gas_mass = 1 .- fraction,
         )
         assembly = TP._mimetic_assemble_from_data!(
-            case.workspace, MFDCutCellMetric(), mesh, data, flags, zeros(boundaries),
+            case.workspace, mesh, data, flags, zeros(boundaries),
             falses(boundaries), (1.0, 1.0),
         )
         @test (assembly.cut_cells, assembly.defective_cells, assembly.lumped_values) == expected

@@ -143,8 +143,9 @@ impulses; pass fresh zero pressure for an absolute velocity projection.
 
 [`TwoVelocityModel`](@ref) selects its pressure projection through the
 `pressure_projection` field; `CMDGFMProjection()` is the default.
-`MimeticProjection()` is an optional absolute projection for uniform meshes
-without solids (see [Choosing a model](choosing-a-model.md)). The interface
+`MimeticProjection()` is the optional mimetic projection, absolute and without
+options, for uniform meshes without solids (see
+[Choosing a model](choosing-a-model.md)). The interface
 transport of both uses the frozen liquid/gas subfaces described in
 [Two-velocity advection](two-velocity-advection.md).
 

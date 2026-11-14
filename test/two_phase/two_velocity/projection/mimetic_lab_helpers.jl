@@ -161,14 +161,14 @@ end
 projected phase values, the jump on the mixed faces and the solve result.
 """
 function project(
-        mesh, interface, geo, ul, ug; density, metric = TP.MFDCutCellMetric(),
+        mesh, interface, geo, ul, ug; density,
         dt = 1.0, tolerance = 1.0e-12,
     )
-    solver = TP.MimeticProjectionSolver(interface; density, metric)
+    solver = TP.MimeticProjectionSolver(interface; density)
     work = TP.MimeticProjectionWorkspace(solver)
     data, flags, bal, blow = face_data(mesh, geo; density)
     assembly = TP._mimetic_assemble_from_data!(
-        work, metric, mesh, data, flags, bal, blow, solver.density,
+        work, mesh, data, flags, bal, blow, solver.density,
     )
     work.predictor = [
         assembly.dof_phase[r] == 1 ? ul(assembly.dof_face[r]) : ug(assembly.dof_face[r])

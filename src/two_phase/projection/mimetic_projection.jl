@@ -6,22 +6,20 @@
 import SparseArrays: UMFPACK
 
 """
-    MimeticProjectionSolver(interface; density=(1, 1), metric=MFDCutCellMetric())
+    MimeticProjectionSolver(interface; density=(1, 1))
 
 Configuration of the mimetic cut-cell projection on `interface`. Throws
 `ArgumentError` for embedded solids, non-uniform (adaptive) meshes, non-square
 cells and element types other than `Float64`.
 """
-struct MimeticProjectionSolver{T, I, M <: AbstractCutCellMetric}
+struct MimeticProjectionSolver{T, I}
     interface::I
     density::NTuple{2, T}
-    metric::M
     allow_wall_cuts::Bool
 end
 
 function MimeticProjectionSolver(
         interface::InterfaceField{T}; density = (one(T), one(T)),
-        metric::AbstractCutCellMetric = MFDCutCellMetric(),
         _allow_wall_cuts = false,
     ) where {T}
     T === Float64 || throw(ArgumentError("MimeticProjection requires Float64"))
@@ -33,8 +31,8 @@ function MimeticProjectionSolver(
         ArgumentError("MimeticProjection does not support embedded solid geometry"),
     )
     _mimetic_uniform_spacing(interface.mesh)
-    return MimeticProjectionSolver{T, typeof(interface), typeof(metric)}(
-        interface, rho, metric, Bool(_allow_wall_cuts),
+    return MimeticProjectionSolver{T, typeof(interface)}(
+        interface, rho, Bool(_allow_wall_cuts),
     )
 end
 
@@ -117,7 +115,7 @@ must equal; `transported_momentum_change` is the change of the transported
 momentum `e_iᵀWu` with the diagonal phase masses `W`, which this projection
 does not conserve, and `transported_momentum` its value before projection.
 `defective_cells` counts the cut cells whose Gram tensor has no consistent
-block (least-squares fallback, see [`MFDCutCellMetric`](@ref)); `lumped_values`
+block (least-squares fallback, see [`MimeticProjection`](@ref)); `lumped_values`
 the phase values that no block and no tie gives inertia (lumped mass).
 """
 struct MimeticProjectionStats{T}
@@ -203,7 +201,7 @@ function _mimetic_assemble!(
         ) > 0
     end
     _mimetic_assemble_from_data!(
-        workspace, solver.metric, mesh, data, flags, boundary_aperture,
+        workspace, mesh, data, flags, boundary_aperture,
         boundary_low, solver.density; allow_wall_cuts = solver.allow_wall_cuts,
         gridline,
     )
@@ -214,7 +212,7 @@ end
 """Assemble `𝓜`, factorize its band block and build the reduced divergence
 operators from given face geometry (see `_assemble_cut_cell_metric!`)."""
 function _mimetic_assemble_from_data!(
-        workspace::MimeticProjectionWorkspace{T}, metric, mesh, data, flags,
+        workspace::MimeticProjectionWorkspace{T}, mesh, data, flags,
         boundary_aperture, boundary_low, density; allow_wall_cuts = false,
         gridline = nothing,
     ) where {T}
@@ -224,7 +222,7 @@ function _mimetic_assemble_from_data!(
     end
     topology = workspace.topology
     assembly = _assemble_cut_cell_metric!(
-        workspace.assembly, metric, mesh, topology, data, flags,
+        workspace.assembly, mesh, topology, data, flags,
         boundary_aperture, boundary_low, density; allow_wall_cuts, gridline,
     )
     workspace.factor = isempty(assembly.band) ? nothing : lu(assembly.band_matrix)

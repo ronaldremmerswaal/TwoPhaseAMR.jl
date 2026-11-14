@@ -85,7 +85,7 @@ _two_velocity_projection_types(projection::CMDGFMProjection, T, M, F) = (
     CMDGFMProjectionWorkspace{T, M},
 )
 _two_velocity_projection_types(projection::MimeticProjection, T, M, F) = (
-    MimeticProjectionSolver{T, F, typeof(projection.metric)},
+    MimeticProjectionSolver{T, F},
     MimeticProjectionWorkspace{T, M},
 )
 
