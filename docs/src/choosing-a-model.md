@@ -55,9 +55,14 @@ conservative multidimensional ghost-fluid projection.
 mimetic projection: the kinetic-energy-orthogonal projection in a
 non-diagonal metric built, per cut cell and phase, on the Gram tensor of the
 wetted face parts (the shared face apertures and their midpoints; no phase
-polygon is needed), with surface tension through the same gradient map and
-gravity as the uniform acceleration of both phases. It takes no options and
-works with either surface-tension formulation; it builds its own pressure
+polygon is needed). Surface tension goes through the same gradient map as a
+per-phase force: each phase has its own capillary potential, so a drop of
+constant curvature is exactly at rest and a varying curvature drives the
+liquid, not a thin gas layer next to it. Gravity is the uniform acceleration
+of both phases, and the viscous increment enters as an impulse through the
+metric (the common increment of both phases away from the interface). It
+takes no options and works with either surface-tension formulation; it
+builds its own pressure
 solver, so non-default `pressure_*` solver settings of the system throw
 `ArgumentError`. It runs on uniform meshes of
 square cells without solids and throws for adaptive meshes, solids and cut

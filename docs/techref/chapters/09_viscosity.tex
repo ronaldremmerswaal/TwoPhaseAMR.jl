@@ -13,7 +13,8 @@ $\strainmat^{\transpose}\stressw\strainmat$ from normal-stress rows in the
 cells, shear rows at the cell corners and wall rows, with a mixture of the
 phase viscosities that is harmonic (series) by default and geometric as an
 option; the two-velocity model diffuses the mass-weighted mixture velocity with
-the same operator and gives both phases the same increment, so the rule applies
+the same operator and gives both phases the same increment (with the mimetic
+projection as an impulse through its metric), so the rule applies
 to both velocity models. This chapter
 states the continuous model, the semi-discrete operators with their walls,
 the fully discrete midpoint solves with their stopping criteria, and the
@@ -818,7 +819,13 @@ a solid, therefore changes exactly as the mixture momentum
 $\sum_f\stagdens_f\opendualvol{f}\onevelo_f$, on a periodic mesh without
 solid as in~\cref{eq:viscosity:momentum}, and a continuous velocity,
 $\velo^{\liq}=\velo^{\gas}$, is diffused exactly as in the one-velocity
-model.
+model. With \apitype{MimeticProjection} the increment enters instead as the
+impulse of the staggered phase masses through the kinetic metric of that
+projection, $u^{\stage{2}}=u^{\stage{1}}+\mathcal M^{-1}\mathsf W\mathsf P\delta$
+(\cref{sec:projection:mimetic}, \cref{eq:projection:mimetic-viscous}); it equals
+\cref{eq:viscosity:two-velocity} away from the cut cells, and near them the
+jump and the combined momentum above are no longer those of the common
+increment.
 
 \begin{sloppypar}
 \emph{Checks} (\code{midpoint_check}, \code{two_velocity_viscosity_check},
@@ -864,7 +871,8 @@ stages \srcsym{src/single_phase/stepping.jl}{_diffusion_substep!},
 \srcsym{src/two_phase/stepping.jl}{_diffusion_substep!} and
 \srcsym{src/two_phase/two_velocity/stepping.jl}{_diffusion_substep!} with
 \srcsym{src/two_phase/two_velocity/stepping.jl}{_mass_weighted_one_velocity!}
-and \srcsym{src/two_phase/two_velocity/stepping.jl}{_apply_two_velocity_diffusion_update!}~\cref{eq:viscosity:two-velocity}.
+and \srcsym{src/two_phase/two_velocity/stepping.jl}{_apply_two_velocity_diffusion_update!}~\cref{eq:viscosity:two-velocity}
+(\srcsym{src/two_phase/two_velocity/stepping.jl}{_apply_mimetic_diffusion_update!} with the mimetic projection).
 Tests: \testsym{test/operators/staggered_diffusion.jl}{implicit midpoint staggered elliptic solve},
 \testsym{test/operators/staggered_diffusion.jl}{dimensionless diffusion tolerance and failure report},
 \testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Two-phase diffusion uses the thesis split state}

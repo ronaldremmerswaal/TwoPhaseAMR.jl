@@ -85,6 +85,8 @@ mutable struct MimeticProjectionWorkspace{T, M <: BlockTreeMesh}
     krylov::Union{Nothing, Krylov.CgWorkspace{T, T, Vector{T}}}
     force_rhs::Vector{T}
     force_solution::Vector{T}
+    cell_curvature::Vector{T}
+    curvature_weight::Vector{T}
 end
 
 """
@@ -98,7 +100,7 @@ function MimeticProjectionWorkspace(solver::MimeticProjectionSolver{T}) where {T
         FaceField{1}(mesh, T), FaceField{2}(mesh, T), nothing, nothing,
         CellRef[], _MimeticAssembly(T), nothing, spzeros(T, 0, 0), spzeros(T, 0, 0),
         spzeros(T, 0, 0), T[], T[], Bool[], Int8[], T[], nothing, nothing, nothing,
-        T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], nothing, T[], T[],
+        T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], nothing, T[], T[], T[], T[],
     )
 end
 
@@ -671,25 +673,181 @@ function _mimetic_solve!(
     )
 end
 
-"""Add `dt 𝓜⁻¹ (a^π J)` to each phase: a face jump force through the mimetic
-gradient map. `J` holds integrated face jumps (`|f|` times the jump of a cell
-potential for a gradient force), exactly as for the CMDGFM force map."""
-function _mimetic_jump_force!(
-        velocity::TwoPhaseVelocity, solver::MimeticProjectionSolver{T},
-        workspace::MimeticProjectionWorkspace{T}, jumps, dt,
+"""Phase indicator of a cell for the capillary potentials: the Heaviside
+`[C > ½]` (CGFM) or the liquid fraction (CSF)."""
+@inline _mimetic_indicator(formulation, fraction) = formulation isa CSF ? fraction :
+    fraction > 0.5 ? one(fraction) : zero(fraction)
+
+"""Cell curvature `κ_c` of the per-phase capillary potentials, in
+`workspace.cell_curvature` (`NaN` where none is available).
+
+A cut cell keeps its own (height-function) curvature. Every other cell, and a
+cut cell without a finite curvature, takes the `C(1 - C)`-weighted mean of the
+curvatures of its cut face neighbours; the curvatures of the cut cells are not
+averaged among themselves. A pure cell can carry phase values of both phases
+(the apertures of a face come from the adjacent PLIC traces) and then needs a
+curvature: every cell whose potential enters a phase value with an aperture is
+a face neighbour of a cut cell. A prescribed constant `curvature` fills every
+cell."""
+function _mimetic_cell_curvature!(
+        workspace::MimeticProjectionWorkspace{T}, interface, curvature,
     ) where {T}
+    references = workspace.references
+    cells = length(references)
+    kappa = resize!(workspace.cell_curvature, cells)
+    if !isnothing(curvature)
+        fill!(kappa, T(curvature))
+        return kappa
+    end
+    weight = resize!(workspace.curvature_weight, cells)
+    for cell in 1:cells
+        reference = references[cell]
+        fraction = _conditional_fraction(interface, reference)
+        value = _get(interface.curvature, reference)
+        if zero(T) < fraction < one(T) && isfinite(value)
+            kappa[cell] = value
+            weight[cell] = fraction * (one(T) - fraction)
+        else
+            kappa[cell] = T(NaN)
+            weight[cell] = zero(T)
+        end
+    end
+    topology = workspace.topology
+    for cell in 1:cells
+        iszero(weight[cell]) || continue
+        total = weights = zero(T)
+        for k in 1:4
+            face = topology.sides[k, cell]
+            face > 0 || continue
+            minus = topology.face_cells[1, face]
+            neighbour = minus == cell ? topology.face_cells[2, face] : minus
+            w = weight[neighbour]
+            if w > zero(T)
+                total += w * kappa[neighbour]
+                weights += w
+            end
+        end
+        weights > zero(T) && (kappa[cell] = total / weights)
+    end
+    return kappa
+end
+
+"""Add the per-phase surface-tension increment `dt 𝓜⁻¹(a^π J^π)` to each phase.
+
+Each phase has its own capillary potential, `φ^g = σκI` and
+`φ^l = σκI - σκ` with the cell curvature `κ` of
+[`_mimetic_cell_curvature!`](@ref) and the indicator `I` (Heaviside `[C > ½]`
+for CGFM, the liquid fraction for CSF), and the value of phase `π` on face `f`
+gets the integrated jump `J^π_f = |f| (φ^π_+ - φ^π_-)`. The two potentials
+differ by `σκ`, the capillary pressure jump, so a static drop of constant
+curvature is exactly balanced (both jumps are then the common CGFM/CSF jump
+`σκ [I]_f |f|`, a gradient), while a varying curvature drives only the liquid
+(up to a common gradient the force is `-σ a^l |f| Δ_f κ` on the liquid alone).
+An identified grid-line value (one value for both phases on a face between a
+pure liquid and a pure gas cell) gets the common jump `σ κ_f [I]_f |f|` with
+the face curvature of [`surface_tension!`](@ref). A face whose force needs a
+curvature that is not available gets no force; such faces are counted in
+`unresolved_curvature_faces`. `curvature` prescribes a constant curvature
+(tests of the balance)."""
+function _mimetic_capillary_force!(
+        velocity::TwoPhaseVelocity, solver::MimeticProjectionSolver{T},
+        workspace::MimeticProjectionWorkspace{T}, dt;
+        sigma, formulation = CGFM(), curvature = nothing,
+        unresolved_curvature_faces::Union{Nothing, Base.RefValue{Int}} = nothing,
+    ) where {T}
+    _validate_surface_tension_formulation(formulation)
+    isfinite(sigma) && sigma >= 0 || throw(ArgumentError("sigma must be finite and nonnegative"))
+    isnothing(curvature) || isfinite(curvature) || throw(ArgumentError("constant curvature must be finite"))
+    interface = solver.interface
+    mesh = interface.mesh
     assembly = _mimetic_assemble!(solver, workspace)
+    topology = workspace.topology
     count = length(assembly.band)
     resize!(workspace.band_scratch, count)
     resize!(workspace.band_solution, count)
+    kappa = _mimetic_cell_curvature!(workspace, interface, curvature)
     rhs = workspace.force_rhs
     resize!(rhs, length(assembly.dof_face))
-    for dof in eachindex(rhs)
-        rhs[dof] = assembly.dof_aperture[dof] * jumps[assembly.dof_face[dof]]
+    fill!(rhs, zero(T))
+    sigma = T(sigma)
+    unresolved = 0
+    for (face, entry) in pairs(mesh.faces)
+        liquid, gas = assembly.liquid_dof[face], assembly.gas_dof[face]
+        minus, plus = topology.face_cells[1, face], topology.face_cells[2, face]
+        cm = _conditional_fraction(interface, entry.minus)
+        cp = _conditional_fraction(interface, entry.plus)
+        if liquid > 0 && liquid == gas
+            jump = _surface_tension_jump(formulation, cm, cp)
+            (iszero(sigma) || iszero(jump)) && continue
+            value = isnothing(curvature) ? _face_curvature(interface, entry) : curvature
+            if isnothing(value)
+                unresolved += 1
+            else
+                rhs[liquid] = sigma * value * jump * entry.area
+            end
+            continue
+        end
+        im, ip = _mimetic_indicator(formulation, cm), _mimetic_indicator(formulation, cp)
+        # Potentials φ^g = σκI and φ^l = -σκ(1 - I); a vanishing factor needs
+        # no curvature.
+        gas_aperture = gas > 0 ? assembly.dof_aperture[gas] : zero(T)
+        liquid_aperture = liquid > 0 ? assembly.dof_aperture[liquid] : zero(T)
+        gas_minus = iszero(im) ? zero(T) : sigma * kappa[minus] * im
+        gas_plus = iszero(ip) ? zero(T) : sigma * kappa[plus] * ip
+        liquid_minus = isone(im) ? zero(T) : -sigma * kappa[minus] * (one(T) - im)
+        liquid_plus = isone(ip) ? zero(T) : -sigma * kappa[plus] * (one(T) - ip)
+        gas_jump = entry.area * (gas_plus - gas_minus)
+        liquid_jump = entry.area * (liquid_plus - liquid_minus)
+        if (gas_aperture > zero(T) && !isfinite(gas_jump)) ||
+                (liquid_aperture > zero(T) && !isfinite(liquid_jump))
+            unresolved += 1
+            continue
+        end
+        gas_aperture > zero(T) && (rhs[gas] = gas_aperture * gas_jump)
+        liquid_aperture > zero(T) && (rhs[liquid] = liquid_aperture * liquid_jump)
     end
+    isnothing(unresolved_curvature_faces) || (unresolved_curvature_faces[] = unresolved)
     acceleration = _mimetic_metric_solve!(workspace.force_solution, workspace, rhs)
     for dof in eachindex(acceleration)
         _mimetic_scatter!(velocity, assembly, dof, T(dt) * acceleration[dof], true)
+    end
+    return velocity
+end
+
+"""Add the viscous increment `δ = diffused - mixture` of the mixture velocity
+through the metric: `u⁺ = u + 𝓜⁻¹ W P δ`. Every phase value receives the
+impulse `m^π_f δ_f` of its staggered mass, and its velocity changes by `𝓜⁻¹`
+of the impulses, as the forces do. Away from the band `𝓜 = W` and the value
+changes by `δ_f`, the common increment of the two phases. Absent (`NaN`)
+values stay absent."""
+function _mimetic_viscous_increment!(
+        velocity::TwoPhaseVelocity, solver::MimeticProjectionSolver{T},
+        workspace::MimeticProjectionWorkspace{T}, diffused, mixture,
+    ) where {T}
+    assembly = _mimetic_assemble!(solver, workspace)
+    band = assembly.band
+    scratch = resize!(workspace.band_scratch, length(band))
+    solution = resize!(workspace.band_solution, length(band))
+    for (position, dof) in pairs(band)
+        face = assembly.dof_face[dof]
+        scratch[position] = assembly.dof_mass[dof] *
+            (diffused.interior[face] - mixture.interior[face])
+    end
+    if !isempty(band)
+        ldiv!(solution, workspace.factor, scratch)
+        for (position, dof) in pairs(band)
+            _mimetic_scatter!(velocity, assembly, dof, solution[position], true)
+        end
+    end
+    for dof in eachindex(assembly.dof_face)
+        assembly.band_position[dof] > 0 && continue
+        face = assembly.dof_face[dof]
+        # The ratio is exactly one where the diagonal is the staggered mass.
+        ratio = assembly.dof_mass[dof] / assembly.diagonal[dof]
+        _mimetic_scatter!(
+            velocity, assembly, dof,
+            ratio * (diffused.interior[face] - mixture.interior[face]), true,
+        )
     end
     return velocity
 end

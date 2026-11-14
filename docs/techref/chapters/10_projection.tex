@@ -860,20 +860,103 @@ differs from it by $1.8\times10^{-3}$, against $2.2\times10^{-4}$ with the
 identification, and a normal jump of $8.7\times10^{-3}$ remains on the face.
 The identification is therefore kept.
 
-\emph{Forces.} Surface tension uses the same map: the integrated face jumps
-$J_f$ of~\cref{ch:forces} give the increment
-$\dt\,\mathcal M^{-1}(\phaseaperture{\phase}{f}J_f)$, which for the jumps of a
-cell potential $\varphi$ is $-\dt\,\mathcal M^{-1}\mathsf B^{\transpose}\varphi$
-and is therefore removed exactly. Both surface-tension formulations
-(\apitype{CGFM}, \apitype{CSF}) enter this map unchanged; for a constant
-curvature both give the jumps of a cell potential ($\sigma\kappa$ times the
-Heaviside or the liquid fraction). The projection has no options of its own.
-Gravity is the uniform acceleration
+\emph{Surface tension.} The surface tension is a per-phase force through the
+same map (the mimetic-projection audit's note \emph{Small apertures},
+section~3). Each phase has its own capillary potential on the cells,
+\begin{equation}\label{eq:projection:mimetic-capillary}
+  \varphi^{\gas}_c=\sigma\kappa_cI_c,\qquad
+  \varphi^{\liq}_c=\sigma\kappa_cI_c-\sigma\kappa_c,\qquad
+  J^{\phase}_f=\meas{f}\bigl(\varphi^{\phase}_{\cplus{f}}-\varphi^{\phase}_{\cminus{f}}\bigr),
+\end{equation}
+with the Heaviside $I_c=[C_c>\tfrac12]$ (\apitype{CGFM}) or the liquid
+fraction $I_c=C_c$ (\apitype{CSF}), and the value of phase $\phase$ on face $f$
+gets the increment $\dt\,\mathcal M^{-1}(\phaseaperture{\phase}{f}J^{\phase}_f)$.
+The two potentials differ by the capillary pressure jump $\sigma\kappa_c$. One
+pressure per cell absorbs both exactly where that difference is the same on
+the neighbouring cells that carry values of both phases (the audit's balance
+lemma): for a constant curvature both jumps are the common jump
+$\sigma\kappa\jump{I}_f\meas{f}$, the face jump of the cell potential
+$\sigma\kappa I$, which the projection removes exactly at any density ratio.
+For a varying curvature the force is, up to such a gradient,
+$-\sigma\phaseaperture{\liq}{f}\meas{f}(\kappa_{\cplus{f}}-\kappa_{\cminus{f}})$
+on the liquid alone. The common jump $\sigma\kappa_f\jump{I}_f\meas{f}$ on both
+phases, used before, gave the gas value of a face between two cells with
+$I=1$ (a thin gas layer over liquid-dominated cells) the variation of the
+liquid's capillary pressure, $\dens^{\liq}/\dens^{\gas}$ times the liquid's
+tangential acceleration: after the projection $0.64$--$0.69$ of
+$\sigma\abs{\Delta\kappa}\dt/(\dens^{\gas}h)$ on such faces of a wave at
+densities $(1000,1)$, $h=1/16$ and $1/32$, against $10^{-3}$--$4\times10^{-3}$
+per phase. Changing the indicator changes both potentials by one cell field,
+so CGFM and CSF give the same velocities and differ in the pressure. The
+curvature $\kappa_c$ must be a cell field on every cell that carries values
+of both phases, pure cells included: a pure cell carries both where the PLIC
+trace of a cut neighbour gives one of its faces partial apertures, and with
+$\kappa=0$ there a static drop at constant curvature is not at rest (gas
+$4\times10^{-3}$ after one step at densities $(1000,1)$, $h=1/16$; audit
+\code{proof_review/sec-remedies-forcemap/}). A cut cell keeps its
+height-function curvature; every other cell, and a cut cell without a finite
+curvature, takes the $C(1-C)$-weighted mean of the curvatures of its cut face
+neighbours, which reproduces a constant curvature. Every cell whose potential
+enters a value with an aperture is a face neighbour of a cut cell. The
+curvatures of the cut cells are not averaged among themselves: replacing them
+by the weighted mean over a cut cell and its cut neighbours made the static
+drop violently unstable in the audit's runs (note \emph{Static drop
+stability}). An identified grid-line value (both cells pure) gets the common
+jump $\sigma\kappa_f\jump{I}_f\meas{f}$ with the face curvature
+of~\cref{ch:forces}. A face whose force needs a curvature that is not
+available gets no force and is counted in \code{unresolved_curvature_faces},
+as for the other projections. The projection has no options of its own.
+
+\emph{Gravity} is the uniform acceleration
 $\velo^{\phase}_f\mathrel{+}=\dt\,g\cdot\fnormal{f}$ of every present phase value:
 $\dens^{\phase}g$ is $\mathcal M$ times the constant field, which the metric
 reproduces. (A density-weighted jump force $\mathcal M^{-1}(\phaseaperture{\phase}{f}\stagdens_fJ_f)$
 would give the gas value of a mixed face the weight of the mixture: about
 $500\,\dt g$ after one step at densities $(1000,1)$.)
+
+\emph{Viscosity.} With this projection the viscous increment
+$\delta=\onevelo^{\stage{2}}-\onevelo^{\stage{1}}$ of the mixture
+solve~\cref{eq:viscosity:two-velocity} enters as an impulse: every phase value
+receives $\dualvol{f}\facemass{\phase}{f}\delta_f$, its staggered mass times
+the increment, and the velocities change by $\mathcal M^{-1}$ of it,
+\begin{equation}\label{eq:projection:mimetic-viscous}
+  u^{\stage{2}}=u^{\stage{1}}+\mathcal M^{-1}\mathsf W\mathsf P\delta ,
+\end{equation}
+with $\mathsf P$ copying a face field to the phase values of each face. Away
+from the band $\mathcal M=\mathsf W$ and this is the common increment of
+\cref{eq:viscosity:two-velocity}, bit for bit; the band part is one solve with
+the factorisation of the projection. The common increment
+$u+\mathsf P\delta$ contracts the mixture in $\mathsf W$, but the energy in the
+metric changes by
+$\delta^{\transpose}\mathsf P^{\transpose}\mathcal Mu+\tfrac12\delta^{\transpose}\mathsf P^{\transpose}\mathcal M\mathsf P\delta$:
+on a mixed face whose slip carries mixture momenta of opposite signs in the
+two norms the viscous step feeds the slip, which the $\mathcal M$-orthogonal
+projection keeps. For two values on one face with the constraint
+$\phaseaperture{\liq}{f}\velo^{\liq}+\phaseaperture{\gas}{f}\velo^{\gas}=0$, a
+step that damps the mixture by $1-\theta$ and the projection map the slip $s$
+to $gs$ with $g=1-\theta\,p_{\mathsf W}p_{\mathcal M}/((m^{\liq}+m^{\gas})s^{\transpose}\mathcal Ms)$,
+$p_{\mathsf W}=\mathbf 1^{\transpose}\mathsf Ws$, $p_{\mathcal M}=\mathbf 1^{\transpose}\mathcal Ms$:
+the slip grows exactly if the two momenta have opposite signs; the static drop
+at density ratios 1 to 3 grew exponentially at a rate of about $\nu/h^2$ (the
+audit's note \emph{Static drop stability}). Through the metric the
+first-order change is
+$\delta^{\transpose}\mathsf P^{\transpose}\mathsf Wu$, the dissipation of the mixture
+solve,
+\[
+  E_{\mathcal M}(u^{\stage{2}})-E_{\mathcal M}(u^{\stage{1}})
+  =\bigl[E_{\mathsf W}(u^{\stage{1}}+\mathsf P\delta)-E_{\mathsf W}(u^{\stage{1}})\bigr]
+  -\tfrac12\,\delta^{\transpose}\bigl(\mathsf B_{\mathsf W}-\mathsf P^{\transpose}\mathsf W\mathcal M^{-1}\mathsf W\mathsf P\bigr)\delta ,
+  \qquad \mathsf B_{\mathsf W}=\mathsf P^{\transpose}\mathsf W\mathsf P,
+\]
+and the factor of the two-value model is
+$g=1-\theta\,p_{\mathsf W}^2/((m^{\liq}+m^{\gas})s^{\transpose}\mathcal Ms)\le1$
+for every metric. The second-order term has no sign in general; on states of
+opposite momenta on a drop ($h=1/32$, densities $1{:}1$, $3{:}1$, $1{:}3$,
+$\dt\nu/h^2$ from $0.01$ to $1$) $E_{\mathcal M}$ fell in every case, while the common
+increment raised it in 84 of 108. The step changes the first-moment momentum
+$e_i^{\transpose}\mathcal Mu$ by the viscous impulse $e_i^{\transpose}\mathsf W\mathsf P\delta$
+of the mixture solve; in the band the transported momentum and the velocity
+jump are no longer those of the common increment.
 
 \emph{Properties} (the note's propositions on the meaning of consistency
 and on the assembly). $\mathcal M$ is symmetric positive definite (under the
@@ -928,8 +1011,10 @@ grid-line faces \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic
 predictor and removed jump energy \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_gather!};
 solve \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_solve!}~\cref{eq:projection:mimetic},
 preconditioner \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_preconditioner!};
-forces \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_jump_force!},
-\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_uniform_acceleration!}.
+forces \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_capillary_force!}~\cref{eq:projection:mimetic-capillary}
+with \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_cell_curvature!},
+\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_uniform_acceleration!};
+viscous impulse \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_viscous_increment!}~\cref{eq:projection:mimetic-viscous}.
 Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric: symmetry, definiteness, diagonal masses and consistency},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic Gram blocks: the polygon block where the polygon exists, degenerate data},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric on averaged apertures that close no region},
@@ -937,6 +1022,9 @@ Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mi
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection under a uniform acceleration (T3)}
 (the audit laboratory's numbers on exact geometry),
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic forces balance constant curvature and gravity},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic per-phase surface tension drives the liquid only},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic viscous increment through the metric},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Two-value model of the viscous step and the projection},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection rejects cut cells at walls},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection with an interface on a grid line}.
 \end{implnote}

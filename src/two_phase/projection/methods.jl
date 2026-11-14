@@ -30,9 +30,15 @@ CMDGFMProjection(;
 Kinetic-energy-orthogonal two-velocity projection onto vanishing
 aperture-weighted mixture divergence in a non-diagonal cut-cell kinetic metric
 (no normal-jump rows: in a cut cell the mixture divergence imposes the normal
-velocity jump). Surface tension and the pressure gradient use the same map
-`𝓜⁻¹Dᵀ`; gravity is the uniform acceleration of both phases. An interior face
-between a pure liquid and a pure gas cell carries one shared phase value.
+velocity jump). The pressure gradient uses the map `𝓜⁻¹Dᵀ`; surface tension
+is a per-phase force through the same map, with the capillary potentials
+`σκH` (gas) and `σκH - σκ` (liquid) of a cell curvature `κ` that is defined on
+every cell carrying both phases, so that a constant curvature is exactly
+balanced and a varying one drives the liquid only. Gravity is the uniform
+acceleration of both phases, and the viscous increment of the mixture enters
+as the impulse of the staggered phase masses through the metric, `𝓜⁻¹WPδ`.
+An interior face between a pure liquid and a pure gas cell carries one
+shared phase value.
 
 The metric is built per cut cell and phase from the Gram tensor
 `G = Σ_k b_k h n_k (x_k - x*)ᵀ` of the wetted sides (wetted lengths `b_k h`

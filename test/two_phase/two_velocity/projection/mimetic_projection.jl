@@ -293,7 +293,10 @@ end
         )
         force = _mimetic_maximum(flow.velocity) / dt
         @test force > 1.0
-        # The force is -𝓜⁻¹Dᵀφ with the cell potential φ = σκH of the jumps.
+        # The per-phase force with a constant curvature (also on the pure
+        # cells that carry both phases) is the common jump force -𝓜⁻¹Dᵀφ with
+        # the cell potential φ = σκH (CSF: σκC): exactly balanced.
+        @test flow.workspace.unresolved_curvature_faces[] == 0
         work = state.projection_workspace
         assembly = work.assembly
         potential = map(TwoPhaseAMR._cell_references(mesh)) do reference
@@ -359,6 +362,260 @@ end
         @test stats.converged
         @test 0.5 <= _mimetic_maximum(flow.velocity) / dt <= 2.0
     end
+end
+
+# Unprojected zero phase velocities of a case (absent values marked).
+function _mimetic_zero_velocity(case)
+    velocity = (FaceVelocity(case.mesh), FaceVelocity(case.mesh))
+    TwoPhaseAMR._mark_inactive_phase_velocities!(velocity, case.interface)
+    return velocity
+end
+
+# Add `dt 𝓜⁻¹ rhs` to the phase values (rhs per degree of freedom).
+function _mimetic_add_force!(velocity, case, rhs, dt)
+    assembly = case.workspace.assembly
+    acceleration = TwoPhaseAMR._mimetic_metric_solve!(zeros(0), case.workspace, rhs)
+    for dof in eachindex(acceleration)
+        TwoPhaseAMR._mimetic_scatter!(velocity, assembly, dof, dt * acceleration[dof], true)
+    end
+    return velocity
+end
+
+@testset "Mimetic per-phase surface tension drives the liquid only" begin
+    # A wave whose trough cells are more than half liquid with a thin gas layer
+    # on top (note mmd_small_apertures, fig. mech), with a curvature that varies
+    # along the interface. The common jump σκ_f[H]_f|f| on both phases gives
+    # the gas value of a face between two H = 1 cells the variation σΔκ of the
+    # liquid's capillary pressure, ρ_l/ρ_g times the liquid's tangential
+    # acceleration. Per phase, φ^g = σκH and φ^l = σκH - σκ: up to a common
+    # gradient the force is -σ a^l |f| Δκ on the liquid alone.
+    TP = TwoPhaseAMR
+    sigma, dt = 0.5, 1.0e-3
+    kappa(x) = 4.0 + 2.0sinpi(2x)
+    for density in ((1.0, 1.0), (1000.0, 1.0)), n in (16, 32)
+        case = _mimetic_case(n, (x, y) -> y - 0.5 - 0.37 / n - 0.02cospi(2x); density, lipschitz = 1.0)
+        mesh, interface, work = case.mesh, case.interface, case.workspace
+        reconstruct!(interface)
+        for reference in TP._cell_references(mesh)
+            x = cellcenter(mesh, reference.block, reference.i, reference.j)[1]
+            TP._set!(interface.curvature, kappa(x), reference)
+        end
+        unresolved = Ref(-1)
+        per_phase = _mimetic_zero_velocity(case)
+        TP._mimetic_capillary_force!(
+            per_phase, case.solver, work, dt; sigma, unresolved_curvature_faces = unresolved,
+        )
+        assembly, topology = work.assembly, work.topology
+        @test unresolved[] == 0 && assembly.gridline_faces == 0
+        # Pure cells next to the interface carry a curvature (cell field).
+        field = replace(work.cell_curvature, NaN => 0.0)
+        Δκ(face) = field[topology.face_cells[2, face]] - field[topology.face_cells[1, face]]
+        liquid_only = _mimetic_zero_velocity(case)
+        _mimetic_add_force!(
+            liquid_only, case, map(eachindex(assembly.dof_face)) do dof
+                face = assembly.dof_face[dof]
+                assembly.dof_phase[dof] == 1 ?
+                    -sigma * assembly.dof_aperture[dof] * mesh.faces[face].area * Δκ(face) : 0.0
+            end, dt,
+        )
+        jumps = TP._surface_tension_jumps!(zeros(length(mesh.faces)), interface; sigma)
+        common = _mimetic_zero_velocity(case)
+        _mimetic_add_force!(
+            common, case, [assembly.dof_aperture[dof] * jumps[assembly.dof_face[dof]] for dof in eachindex(assembly.dof_face)], dt,
+        )
+        for velocity in (per_phase, liquid_only, common)
+            stats = project!(
+                velocity, CellField(mesh), case.solver, dt, work; tolerance = 1.0e-12, max_iterations = 2000,
+            )
+            @test stats.converged
+        end
+        @test maximum(
+            maximum(abs, filter(isfinite, per_phase[phase].interior .- liquid_only[phase].interior))
+                for phase in 1:2
+        ) <= 1.0e-8 * _mimetic_maximum(per_phase)
+        # Gas values on faces between two H = 1 cells, against the scale
+        # σ max|Δκ| dt / (ρ_g h) of the misplaced force (measured: per phase
+        # 1e-3 to 4e-3 of it at 1000:1, the common jump 0.64 to 0.69).
+        gas_faces = filter(eachindex(mesh.faces)) do face
+            gas = assembly.gas_dof[face]
+            gas > 0 && assembly.dof_phase[gas] == 2 && assembly.dof_aperture[gas] > 0 &&
+                TP._conditional_fraction(interface, mesh.faces[face].minus) > 0.5 &&
+                TP._conditional_fraction(interface, mesh.faces[face].plus) > 0.5
+        end
+        @test !isempty(gas_faces)
+        scale = sigma * maximum(abs ∘ Δκ, gas_faces) * dt * n / density[2]
+        density[1] == density[2] && continue
+        @test maximum(face -> abs(per_phase[2].interior[face]), gas_faces) <= 0.02scale
+        @test maximum(face -> abs(common[2].interior[face]), gas_faces) >= 0.3scale
+    end
+    # A curvature on the cut cells only (as the height functions give it):
+    # the pure cells that carry values of both phases take the weighted mean
+    # of their cut neighbours, so a constant curvature stays balanced (with
+    # κ = 0 there the gas moved by 4e-3 after one step, audit
+    # sec-remedies-forcemap).
+    for density in ((1.0, 1.0), (1000.0, 1.0))
+        case = _mimetic_case(16, _mimetic_circle(16); density, periodic = (false, false), lipschitz = 1.0)
+        interface, work = case.interface, case.workspace
+        reconstruct!(interface)
+        references = TP._cell_references(case.mesh)
+        for reference in references
+            fraction = TP._conditional_fraction(interface, reference)
+            TP._set!(interface.curvature, 0 < fraction < 1 ? 4.0 : NaN, reference)
+        end
+        velocity = _mimetic_zero_velocity(case)
+        TP._mimetic_capillary_force!(velocity, case.solver, work, 1.0e-3; sigma = 1.0)
+        assembly, topology = work.assembly, work.topology
+        mixed(face) = face > 0 && assembly.liquid_dof[face] > 0 && assembly.gas_dof[face] > 0 &&
+            assembly.dof_aperture[assembly.liquid_dof[face]] > 0 && assembly.dof_aperture[assembly.gas_dof[face]] > 0
+        pure_mixed = count(eachindex(references)) do cell
+            fraction = TP._conditional_fraction(interface, references[cell])
+            (fraction == 0 || fraction == 1) && any(k -> mixed(topology.sides[k, cell]), 1:4)
+        end
+        @test pure_mixed > 0
+        @test _mimetic_maximum(velocity) > 1.0e-3
+        stats = project!(
+            velocity, CellField(case.mesh), case.solver, 1.0e-3, work; tolerance = 1.0e-12, max_iterations = 2000,
+        )
+        @test stats.converged
+        @test _mimetic_maximum(velocity) <= 1.0e-11
+    end
+end
+
+# Two-velocity state of a mimetic flow on a drop for the viscous step: phase
+# values u = s + Pū with a slip s that carries no mixture momentum in the
+# staggered masses W (m_l s_l + m_g s_g = 0) and a mixture ū = -c Pᵀ𝓜s / m
+# opposite to the slip's mixture momentum in the metric 𝓜: the states of
+# opposite momenta in the two norms (note static_drop_stability, fig. toy).
+function _mimetic_opposite_momenta!(velocity, state, c; seed = 7)
+    TP = TwoPhaseAMR
+    solver, work = state.projection_solver, state.projection_workspace
+    assembly = TP._mimetic_assemble!(solver, work)
+    dofs = eachindex(assembly.dof_face)
+    slip = zeros(length(dofs))
+    random = seed
+    for face in eachindex(assembly.liquid_dof)
+        liquid, gas = assembly.liquid_dof[face], assembly.gas_dof[face]
+        liquid > 0 && gas > 0 && liquid != gas || continue
+        random = mod(1103515245random + 12345, 2^31)
+        r = random / 2^31 - 0.5
+        slip[liquid] = r * assembly.dof_mass[gas]
+        slip[gas] = -r * assembly.dof_mass[liquid]
+    end
+    metric_slip = TP._mimetic_metric_product!(zeros(0), work, slip)
+    momentum = zeros(length(assembly.liquid_dof))
+    mass = zeros(length(assembly.liquid_dof))
+    for dof in dofs
+        momentum[assembly.dof_face[dof]] += metric_slip[dof]
+        mass[assembly.dof_face[dof]] += assembly.dof_mass[dof]
+    end
+    for phase in 1:2
+        fill!(velocity[phase].interior, 0.0)
+        fill!(velocity[phase].boundary, 0.0)
+    end
+    for dof in dofs
+        face = assembly.dof_face[dof]
+        TP._mimetic_scatter!(velocity, assembly, dof, slip[dof] - c * momentum[face] / mass[face], false)
+    end
+    TP._mark_inactive_phase_velocities!(velocity, solver.interface)
+    return velocity
+end
+
+# Kinetic energy ½uᵀ𝓜u of the phase values in the assembled metric.
+function _mimetic_metric_energy(velocity, state)
+    TP = TwoPhaseAMR
+    work = state.projection_workspace
+    assembly = TP._mimetic_assemble!(state.projection_solver, work)
+    values = zeros(0)
+    TP._mimetic_gather!(values, assembly, velocity)
+    return dot(values, TP._mimetic_metric_product!(zeros(0), work, values)) / 2
+end
+
+@testset "Mimetic viscous increment through the metric" begin
+    # The common increment u + Pδ of the mixture solve contracts the mixture in
+    # W, the projection is orthogonal in 𝓜; where a slip has mixture momenta
+    # of opposite signs in the two norms the common increment feeds it (note
+    # static_drop_stability, lem. visc). With the mimetic projection the step
+    # is the impulse u + 𝓜⁻¹WPδ: its first-order energy change in 𝓜 is the
+    # dissipation of the mixture solve.
+    TP = TwoPhaseAMR
+    n = 32
+    for density in ((1.0, 1.0), (3.0, 1.0), (1.0, 3.0)), dt in (1.0e-3, 1.0e-2)
+        mesh = BlockTreeMesh(block_size = (n, n), periodic = (false, false))
+        interface = InterfaceField(mesh, _mimetic_circle(n); lipschitz = 1)
+        flow = FlowSimulation(
+            mesh, TwoPhase(interface; density, dynamic_viscosity = (1.0e-2, 1.0e-2));
+            velocity_model = TwoVelocityModel(pressure_projection = MimeticProjection()),
+            boundary = FreeSlip(),
+        )
+        model = flow.system.two_phase
+        state = TP._two_velocity_flow_workspace!(flow.workspace.two_phase, model)
+        _mimetic_opposite_momenta!(state.convected, state, 0.1)
+        before = _mimetic_metric_energy(state.convected, state)
+        TP._diffusion_substep!(flow.velocity, flow.system, flow.workspace, dt, 0.0, model; tolerance = 1.0e-12)
+        common = (FaceVelocity(mesh), FaceVelocity(mesh))
+        TP._apply_two_velocity_diffusion_update!(
+            common, state.convected, state.diffused_mixture, state.mixture_velocity,
+        )
+        # The energy in the metric does not increase (measured: at most
+        # -1.8e-5 relative over 108 states, densities 1:1, 3:1, 1:3, dt up to
+        # 0.1); the common increment raises it for these states.
+        @test _mimetic_metric_energy(flow.velocity, state) <= before
+        @test _mimetic_metric_energy(common, state) > before
+        # 𝓜(u⁺ - u) = W P δ, and away from the band (uncut cells, 𝓜 = W)
+        # exactly the common increment.
+        work = state.projection_workspace
+        assembly = work.assembly
+        change = zeros(0)
+        TP._mimetic_gather!(change, assembly, flow.velocity)
+        before_values = zeros(0)
+        TP._mimetic_gather!(before_values, assembly, state.convected)
+        change .-= before_values
+        impulse = map(eachindex(assembly.dof_face)) do dof
+            face = assembly.dof_face[dof]
+            assembly.dof_mass[dof] * (state.diffused_mixture.interior[face] - state.mixture_velocity.interior[face])
+        end
+        @test maximum(abs, TP._mimetic_metric_product!(zeros(0), work, change) .- impulse) <=
+            1.0e-10 * maximum(abs, impulse)
+        off_band = findall(iszero, assembly.band_position)
+        @test !isempty(off_band)
+        @test all(off_band) do dof
+            face = assembly.dof_face[dof]
+            all(phase -> isequal(flow.velocity[phase].interior[face], common[phase].interior[face]), 1:2)
+        end
+        @test _phase_storage_contract(flow.velocity, interface)
+    end
+end
+
+@testset "Two-value model of the viscous step and the projection" begin
+    # Note static_drop_stability, prop. toy: two values on one face, phase
+    # masses W, a symmetric positive definite metric 𝓜 and the constraint
+    # a_l u_l + a_g u_g = 0. A viscous step that damps the W-mixture by 1 - θ,
+    # followed by the 𝓜-orthogonal projection, maps the admissible slip s to
+    # g s. With the common increment g > 1 exactly where the two mixture
+    # momenta of s have opposite signs; through the metric g ≤ 1.
+    random = 11
+    uniform() = (random = mod(1103515245random + 12345, 2^31); random / 2^31)
+    grows = unexplained = 0
+    largest = -Inf
+    for _ in 1:10_000
+        masses = (uniform() + 1.0e-3, uniform() + 1.0e-3)
+        W = Diagonal([masses...])
+        liquid = uniform()
+        s = [1 - liquid, -liquid]
+        L = [uniform() + 0.1 0.0; 2uniform() - 1 uniform() + 0.1]
+        M = L * L'
+        θ = uniform()
+        w = [masses...] / sum(masses)
+        factor(v) = dot(s, M * v) / dot(s, M * s)
+        g_common = factor(s - θ * ones(2) * dot(w, s))
+        g_metric = factor(s - θ * (M \ (W * ones(2))) * dot(w, s))
+        momentum_W, momentum_M = dot(ones(2), W * s), dot(ones(2), M * s)
+        grows += g_common > 1 + 1.0e-12
+        unexplained += g_common > 1 + 1.0e-12 && momentum_W * momentum_M >= 0
+        largest = max(largest, g_metric)
+    end
+    @test grows > 0 && unexplained == 0
+    @test largest <= 1 + 1.0e-12
 end
 
 # The phase polygon of the former construction (candidate MM) from the liquid

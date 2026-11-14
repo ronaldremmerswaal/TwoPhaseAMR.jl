@@ -141,17 +141,50 @@ function _apply_two_velocity_diffusion_update!(
                 source[2].interior[index] + increment
         end
     end
+    return _prescribe_two_velocity_diffusion_values!(destination, source, dirichlet_faces)
+end
+
+"""Apply the viscous increment through the mimetic metric (see
+`_mimetic_viscous_increment!`), enforcing prescribed phase velocities."""
+function _apply_mimetic_diffusion_update!(
+        destination::TwoPhaseVelocity, source::TwoPhaseVelocity,
+        diffused_mixture::FaceVelocity, mixture::FaceVelocity,
+        projection::MimeticProjectionSolver, work::MimeticProjectionWorkspace;
+        dirichlet_faces = (),
+    )
+    mesh = mixture.mesh
+    diffused_mixture.mesh === mesh || throw(
+        ArgumentError("diffusion mixture fields must share a mesh"),
+    )
+    _validate_two_phase_velocity(destination, mesh, eltype(mixture))
+    _validate_two_phase_velocity(source, mesh, eltype(mixture))
+    _copy_velocity!(destination, source)
+    _mimetic_viscous_increment!(destination, projection, work, diffused_mixture, mixture)
+    return _prescribe_two_velocity_diffusion_values!(destination, source, dirichlet_faces)
+end
+
+function _prescribe_two_velocity_diffusion_values!(destination, source, dirichlet_faces)
+    T = eltype(destination[1])
     for phase in 1:2, index in dirichlet_faces
         @inbounds if !isnan(source[phase].interior[index])
-            destination[phase].interior[index] = zero(eltype(mixture))
+            destination[phase].interior[index] = zero(T)
         end
     end
     for phase in 1:2, index in eachindex(destination[phase].boundary)
         destination[phase].boundary[index] = isnan(source[phase].boundary[index]) ?
-            eltype(mixture)(NaN) : zero(eltype(mixture))
+            T(NaN) : zero(T)
     end
     return destination
 end
+
+_two_velocity_diffusion_update!(destination, source, diffused, mixture, ::Any, ::Any; dirichlet_faces) =
+    _apply_two_velocity_diffusion_update!(destination, source, diffused, mixture; dirichlet_faces)
+_two_velocity_diffusion_update!(
+    destination, source, diffused, mixture, projection::MimeticProjectionSolver, work;
+    dirichlet_faces,
+) = _apply_mimetic_diffusion_update!(
+    destination, source, diffused, mixture, projection, work; dirichlet_faces,
+)
 
 function _diffusion_substep!(
         velocity::TwoPhaseVelocity, solver, workspace, dt, time,
@@ -177,9 +210,10 @@ function _diffusion_substep!(
         workspace.two_phase.diffusion_solver;
         density, tolerance, max_cycles,
     )
-    _apply_two_velocity_diffusion_update!(
+    _two_velocity_diffusion_update!(
         velocity, state.convected,
-        state.diffused_mixture, state.mixture_velocity;
+        state.diffused_mixture, state.mixture_velocity,
+        state.projection_solver, state.projection_workspace;
         dirichlet_faces = diffusion.dirichlet_faces,
     )
     _mark_inactive_phase_velocities!(
@@ -286,11 +320,12 @@ end
 
 """Apply phase forces for the mimetic projection.
 
-Surface tension goes through the mimetic gradient map `𝓜⁻¹Dᵀ`; gravity is the
-uniform acceleration of both phases (see `_mimetic_uniform_acceleration!`).
-The mimetic projection is absolute, so no old pressure gradient is
-subtracted: an `𝓜⁻¹Dᵀ` gradient in the predictor is removed exactly, and the
-projection returns the full pressure.
+Surface tension is the per-phase capillary force through the mimetic gradient
+map `𝓜⁻¹Dᵀ` (see `_mimetic_capillary_force!`); gravity is the uniform
+acceleration of both phases (see `_mimetic_uniform_acceleration!`). The
+mimetic projection is absolute, so no old pressure gradient is subtracted: an
+`𝓜⁻¹Dᵀ` gradient in the predictor is removed exactly, and the projection
+returns the full pressure.
 """
 function _two_velocity_forces_and_pressure!(
         velocity, pressure, solver, workspace,
@@ -301,24 +336,20 @@ function _two_velocity_forces_and_pressure!(
         ArgumentError("MimeticProjection does not support embedded solid geometry"),
     )
     reconstruct!(model.interface)
-    # Only the cell references and jump storage of this operator are used.
-    operator = solver.pressure_solver.operator
-    projection = state.projection_solver
-    work = state.projection_workspace
     if model.sigma > zero(T)
-        jumps = _surface_tension_jumps!(
-            operator.gradient_operator.pressure_jump, model.interface;
+        _mimetic_capillary_force!(
+            velocity, state.projection_solver, state.projection_workspace, time_step;
             sigma = model.sigma, formulation = model.formulation,
             unresolved_curvature_faces = workspace.unresolved_curvature_faces,
         )
-        _mimetic_jump_force!(velocity, projection, work, jumps, time_step)
     end
     if any(!iszero, model.gravity)
         _mimetic_uniform_acceleration!(
             velocity, model.interface.mesh, model.gravity, time_step,
         )
     end
-    return operator
+    # Only the cell references of this operator are used.
+    return solver.pressure_solver.operator
 end
 
 
@@ -333,7 +364,9 @@ increment that is added to the physical pressure.
 For a shortened CMDGFM step, the old-aperture mixture flux is scaled by
 the reference step, which must be at least `dt`.
 Viscosity acts implicitly on the phase-mass weighted one-velocity state; its
-common increment is applied to both phases.
+common increment is applied to both phases (with `MimeticProjection` as the
+impulse of the staggered phase masses through the metric, `𝓜⁻¹WPδ`, which
+is the common increment away from the interface).
 
 The two-velocity projection keeps a Neumann pressure boundary and cannot
 correct open normal velocities. Boundary preparation extrapolates each phase;
