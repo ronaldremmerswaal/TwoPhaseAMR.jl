@@ -15,12 +15,10 @@ cells and element types other than `Float64`.
 struct MimeticProjectionSolver{T, I}
     interface::I
     density::NTuple{2, T}
-    allow_wall_cuts::Bool
 end
 
 function MimeticProjectionSolver(
         interface::InterfaceField{T}; density = (one(T), one(T)),
-        _allow_wall_cuts = false,
     ) where {T}
     T === Float64 || throw(ArgumentError("MimeticProjection requires Float64"))
     rho = (T(density[1]), T(density[2]))
@@ -31,9 +29,7 @@ function MimeticProjectionSolver(
         ArgumentError("MimeticProjection does not support embedded solid geometry"),
     )
     _mimetic_uniform_spacing(interface.mesh)
-    return MimeticProjectionSolver{T, typeof(interface)}(
-        interface, rho, Bool(_allow_wall_cuts),
-    )
+    return MimeticProjectionSolver{T, typeof(interface)}(interface, rho)
 end
 
 """Gauge-reduced Schur complement `D 𝓜⁻¹ Dᵀ` of the mimetic saddle-point system.
@@ -155,6 +151,7 @@ momentum `e_iᵀ𝓜u` and `momentum_wall_force` the wall term `dt (D e_i)ᵀ p`
 must equal; `transported_momentum_change` is the change of the transported
 momentum `e_iᵀWu` with the diagonal phase masses `W`, which this projection
 does not conserve, and `transported_momentum` its value before projection.
+`wall_cells` counts the cut cells with a side on the domain boundary.
 `defective_cells` counts the cut cells whose Gram tensor has no consistent
 block (least-squares fallback, see [`MimeticProjection`](@ref)); `lumped_values`
 the phase values that no block and no tie gives inertia (lumped mass).
@@ -176,6 +173,7 @@ struct MimeticProjectionStats{T}
     band_unknowns::Int
     phase_values::Int
     cut_cells::Int
+    wall_cells::Int
     slaved_values::Int
     stabilised_values::Int
     lumped_values::Int
@@ -198,6 +196,7 @@ function Base.show(io::IO, stats::MimeticProjectionStats)
         ", unknowns=(`p`=", stats.pressure_unknowns,
         ", band=", stats.band_unknowns, ")",
         ", cut_cells=", stats.cut_cells,
+        ", wall_cells=", stats.wall_cells,
         ", slaved_values=", stats.slaved_values,
         ", stabilised_values=", stats.stabilised_values,
         ", lumped_values=", stats.lumped_values,
@@ -243,8 +242,7 @@ function _mimetic_assemble!(
     end
     _mimetic_assemble_from_data!(
         workspace, mesh, data, flags, boundary_aperture,
-        boundary_low, solver.density; allow_wall_cuts = solver.allow_wall_cuts,
-        gridline,
+        boundary_low, solver.density; gridline,
     )
     assembly.revision = revision
     return assembly
@@ -254,8 +252,7 @@ end
 operators from given face geometry (see `_assemble_cut_cell_metric!`)."""
 function _mimetic_assemble_from_data!(
         workspace::MimeticProjectionWorkspace{T}, mesh, data, flags,
-        boundary_aperture, boundary_low, density; allow_wall_cuts = false,
-        gridline = nothing,
+        boundary_aperture, boundary_low, density; gridline = nothing,
     ) where {T}
     if !_mimetic_topology_current(workspace.topology, mesh)
         workspace.topology = _mimetic_topology(mesh)
@@ -264,7 +261,7 @@ function _mimetic_assemble_from_data!(
     topology = workspace.topology
     assembly = _assemble_cut_cell_metric!(
         workspace.assembly, mesh, topology, data, flags,
-        boundary_aperture, boundary_low, density; allow_wall_cuts, gridline,
+        boundary_aperture, boundary_low, density; gridline,
     )
     workspace.factor = isempty(assembly.band) ? nothing : lu(assembly.band_matrix)
     cells = size(topology.sides, 2)
@@ -605,7 +602,7 @@ function project!(
         result.energy_identity_defect, result.momentum_change,
         result.momentum_wall_force, result.transported_momentum_change,
         result.transported_momentum, cells - 1, length(assembly.band),
-        length(projected), assembly.cut_cells, assembly.slaved_values,
+        length(projected), assembly.cut_cells, assembly.wall_cells, assembly.slaved_values,
         assembly.stabilised_values, assembly.lumped_values, assembly.defective_cells,
         assembly.gridline_faces,
         :pressure_multigrid,
@@ -1231,12 +1228,25 @@ function _mimetic_viscous_step!(
     return (; residual, iterations, unknowns = dofs)
 end
 
-"""Add `dt g` to every active interior phase value: gravity as the uniform
-acceleration of both phases. The body force `ρ_π g` is `𝓜` times the constant
-field `g`, which the metric reproduces exactly; a density-weighted jump force
-`𝓜⁻¹(a^π J)` would instead give the light phase value of a mixed face the
-weight of the mixture."""
-function _mimetic_uniform_acceleration!(velocity::TwoPhaseVelocity, mesh, gravity, dt)
+"""Add the gravity increment to every active interior phase value: the uniform
+acceleration `dt g` of both phases, plus `dt 𝓜⁻¹(C g)` in the cut cells at a
+wall (`C` = `wall_coupling` of the assembly).
+
+The body force is the Gram moment `R g` of the constant field `g`, the work
+`ρ_π g ⋅ u` of the cut-cell blocks. Away from walls the metric reproduces it,
+`𝓜 g = R g`, so the increment is `dt g`. A wall side has a prescribed flux, not
+a value, and the block is restricted to the interior sides; there
+`R g = 𝓜 g + C g` with the coupling `C` of the values to the wall flux density
+`n_w ⋅ g`, which vanishes on walls parallel to `g`. On every value `R g` is the
+face difference `ρ_π a|f| (x*₊ - x*₋) ⋅ g` of the pressure points, so a fluid
+whose cut-cell pressure points lie on a level line is at rest. A density-weighted
+jump force `𝓜⁻¹(a^π J)` would instead give the light phase value of a mixed
+face the weight of the mixture."""
+function _mimetic_uniform_acceleration!(
+        velocity::TwoPhaseVelocity, solver::MimeticProjectionSolver{T},
+        workspace::MimeticProjectionWorkspace{T}, gravity, dt,
+    ) where {T}
+    mesh = solver.interface.mesh
     all(isfinite, gravity) || throw(ArgumentError("gravity must be finite"))
     any(axis -> mesh.periodic[axis] && !iszero(gravity[axis]), 1:2) && throw(
         ArgumentError("gravity potential requires nonperiodic boundaries along gravity"),
@@ -1246,6 +1256,20 @@ function _mimetic_uniform_acceleration!(velocity::TwoPhaseVelocity, mesh, gravit
         for (index, face) in pairs(mesh.faces)
             isnan(values[index]) || (values[index] += dt * gravity[face.axis])
         end
+    end
+    assembly = _mimetic_assemble!(solver, workspace)
+    assembly.wall_cells > 0 || return velocity
+    coupling = assembly.wall_coupling
+    rhs = resize!(workspace.force_rhs, length(assembly.dof_face))
+    for dof in eachindex(rhs)
+        rhs[dof] = coupling[1, dof] * T(gravity[1]) + coupling[2, dof] * T(gravity[2])
+    end
+    count = length(assembly.band)
+    resize!(workspace.band_scratch, count)
+    resize!(workspace.band_solution, count)
+    acceleration = _mimetic_metric_solve!(workspace.force_solution, workspace, rhs)
+    for dof in eachindex(acceleration)
+        _mimetic_scatter!(velocity, assembly, dof, T(dt) * acceleration[dof], true)
     end
     return velocity
 end
