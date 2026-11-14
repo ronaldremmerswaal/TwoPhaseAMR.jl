@@ -1032,7 +1032,16 @@ $\mathsf G^{-1/2}(\mathsf I-\Pi)\mathsf G^{-1/2}$ with the
 $\mathsf G$-orthogonal projector $\Pi$ onto the face fields, positive
 semi-definite, so $\mathcal P$ is symmetric positive definite whenever the
 cycle is (equal pre- and post-smoothing). Without a mixture preconditioner
-the cycle is the inverse diagonal of the mixture matrix.
+the cycle is the inverse diagonal of the mixture matrix. In the band
+$\mathcal M\ne\mathsf W$, and $\mathcal P$ alone needs 15--21 iterations (with
+$\mathcal M$ replaced by $\mathsf W$ one iteration, with an exact cycle still
+15--21): the band is the whole defect. The preconditioner is therefore the
+symmetric multiplicative combination of $\mathcal P$ with the band block
+$\mathcal M_{bb}^{-1}$ of the metric (the factorisation the projection already
+holds), $z_1=\mathcal Pr$, $z_2=z_1+E\mathcal M_{bb}^{-1}E^{\transpose}(r-\mathcal Az_1)$,
+$z=z_2+\mathcal P(r-\mathcal Az_2)$ with the injection $E$ of the band values,
+which needs 3 iterations on the viscous Kelvin--Helmholtz case and 7 on the
+static drop.
 
 \emph{Properties} (the note's propositions on the meaning of consistency
 and on the assembly). $\mathcal M$ is symmetric positive definite (under the
@@ -1094,7 +1103,8 @@ viscous step \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_vi
 with the drag of \srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_interphase_drag_coefficients!}~\cref{eq:projection:mimetic-viscous-drag},
 solved by \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_viscous_cg!}
 with \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_viscous_apply!} and
-\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_viscous_precondition!}.
+\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_viscous_precondition!} with
+\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_lifted_mixture!}.
 Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric: symmetry, definiteness, diagonal masses and consistency},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic Gram blocks: the polygon block where the polygon exists, degenerate data},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric on averaged apertures that close no region},

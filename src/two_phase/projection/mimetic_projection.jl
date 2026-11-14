@@ -67,6 +67,9 @@ struct _MimeticViscousWork{T}
     face_stress::Vector{T}
     face_correction::Vector{T}
     face_diagonal::Vector{T}
+    band_product::Vector{T}
+    band_residual::Vector{T}
+    band_update::Vector{T}
     drag::Vector{T}
     stress_work::Vector{T}
 end
@@ -892,7 +895,7 @@ function _mimetic_mixture_cycle!(y, work, mixture_solver, x)
     return y
 end
 
-"""Lifted mixture preconditioner of the viscous step,
+"""Lifted mixture preconditioner of the viscous step for `𝓜 = W`,
 
     z = (G⁻¹ - P B⁻¹ Pᵀ) r + P 𝒱 Pᵀ r,
 
@@ -904,7 +907,7 @@ the drag of the face), `P` the copy of a face value to its phase values,
 system. `G⁻¹ - PB⁻¹Pᵀ = G^{-1/2}(I - Π)G^{-1/2}` with the `G`-orthogonal
 projector `Π` onto the face fields is positive semi-definite, so `z` is
 symmetric positive definite with `𝒱`."""
-function _mimetic_viscous_precondition!(z, workspace, mixture_solver, half, r)
+function _mimetic_lifted_mixture!(z, workspace, mixture_solver, half, r)
     work = workspace.viscous
     assembly = workspace.assembly
     sum = work.face_sum
@@ -939,6 +942,36 @@ function _mimetic_viscous_precondition!(z, workspace, mixture_solver, half, r)
     return z
 end
 
+"""Preconditioner of the viscous step: the lifted mixture preconditioner `L`
+(`_mimetic_lifted_mixture!`, exact for `𝓜 = W`) with a symmetric
+multiplicative correction on the band, where `𝓜 ≠ W`,
+
+    z₁ = L r,   z₂ = z₁ + E 𝓜_bb⁻¹ Eᵀ (r - A z₁),   z = z₂ + L (r - A z₂),
+
+`E` the injection of the band values and `𝓜_bb` the band block of the metric
+(its factorisation of the projection). Without a band it is `L`."""
+function _mimetic_viscous_precondition!(z, workspace, operator, mixture_solver, half, r)
+    _mimetic_lifted_mixture!(z, workspace, mixture_solver, half, r)
+    band = workspace.assembly.band
+    isempty(band) && return z
+    work = workspace.viscous
+    product, residual, update = work.band_product, work.band_residual, work.band_update
+    _mimetic_viscous_apply!(product, workspace, operator, half, z)
+    residual .= r .- product
+    for (position, dof) in pairs(band)
+        workspace.band_scratch[position] = residual[dof]
+    end
+    ldiv!(workspace.band_solution, workspace.factor, workspace.band_scratch)
+    for (position, dof) in pairs(band)
+        z[dof] += workspace.band_solution[position]
+    end
+    _mimetic_viscous_apply!(product, workspace, operator, half, z)
+    residual .= r .- product
+    _mimetic_lifted_mixture!(update, workspace, mixture_solver, half, residual)
+    z .+= update
+    return z
+end
+
 """Preconditioned conjugate gradients for the viscous system from
 `x = work.values`, stopped when the max-norm residual is at most `ratio`
 times that of the right-hand side; restarted from the true residual if the
@@ -957,7 +990,7 @@ function _mimetic_viscous_cg!(workspace, operator, mixture_solver, half, ratio, 
     residual = norm(r, Inf)
     iterations = 0
     while residual > target && iterations < max_cycles
-        _mimetic_viscous_precondition!(z, workspace, mixture_solver, half, r)
+        _mimetic_viscous_precondition!(z, workspace, operator, mixture_solver, half, r)
         rz = dot(r, z)
         copyto!(p, z)
         while iterations < max_cycles
@@ -967,7 +1000,7 @@ function _mimetic_viscous_cg!(workspace, operator, mixture_solver, half, ratio, 
             r .-= alpha .* q
             iterations += 1
             norm(r, Inf) <= target && break
-            _mimetic_viscous_precondition!(z, workspace, mixture_solver, half, r)
+            _mimetic_viscous_precondition!(z, workspace, operator, mixture_solver, half, r)
             next = dot(r, z)
             p .= z .+ (next / rz) .* p
             rz = next
@@ -1014,7 +1047,8 @@ function _mimetic_viscous_step!(
     _mimetic_gather!(work.values, assembly, source)
     for vector in (
             work.solution, work.rhs, work.residual, work.direction,
-            work.preconditioned, work.product,
+            work.preconditioned, work.product, work.band_product, work.band_residual,
+            work.band_update,
         )
         resize!(vector, dofs)
     end
