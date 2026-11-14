@@ -120,6 +120,7 @@ mutable struct MimeticProjectionWorkspace{T, M <: BlockTreeMesh}
     force_solution::Vector{T}
     cell_curvature::Vector{T}
     curvature_weight::Vector{T}
+    cell_potential::Vector{T}
     viscous::_MimeticViscousWork{T}
 end
 
@@ -134,7 +135,7 @@ function MimeticProjectionWorkspace(solver::MimeticProjectionSolver{T}) where {T
         FaceField{1}(mesh, T), FaceField{2}(mesh, T), nothing, nothing,
         CellRef[], _MimeticAssembly(T), nothing, spzeros(T, 0, 0), spzeros(T, 0, 0),
         spzeros(T, 0, 0), T[], T[], Bool[], Int8[], T[], nothing, nothing, nothing,
-        T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], nothing, T[], T[], T[], T[],
+        T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], nothing, T[], T[], T[], T[], T[],
         _MimeticViscousWork(T),
     )
 end
@@ -768,6 +769,152 @@ function _mimetic_cell_curvature!(
     return kappa
 end
 
+"""Prototype switch (branch `study/perphase-gravity`, `:off` by default) for the
+reference point of the per-phase capillary potentials under gravity; see
+[`_mimetic_cell_potential!`](@ref). `:off` keeps `ψ = σκ`; `:pure` refers the
+potentials of the cells without own curvature hydrostatically to the pressure
+points of their cut neighbours; `:hfpoint` also refers the cut cells to the
+interface points of their height-function columns
+([`_mimetic_height_point`](@ref)); `:plicpoint` to the point of their own PLIC
+line on the column of the dominant normal axis through the cell centre."""
+const _MIMETIC_HYDROSTATIC_POTENTIAL = Ref(:off)
+
+"""Interface point (offset from the cell centre in cell units) to which the
+local height-function curvature of cell `(i, j)` of the padded height values
+refers: the quality-weighted mean, with the weights of `_lhf_geometry`, of the
+column points `h₀ e_axis` of its valid candidates; `nothing` without one."""
+function _mimetic_height_point(values, i, j)
+    T = eltype(values)
+    candidates = ntuple(_ -> (zero(T), zero(T), zero(T)), 4)
+    count = 0
+    for axis in 1:2, orientation in (-1, 1)
+        heights = ntuple(3) do k
+            offset = k - 2
+            ii, jj = axis == 1 ? (i, j + offset) : (i + offset, j)
+            _local_height(values, ii, jj, axis, orientation)
+        end
+        any(isnothing, heights) && continue
+        hm, h0, hp = heights
+        slope = (hp - hm) / 2
+        quality = _height_quality(abs(orientation / sqrt(1 + slope^2)))
+        quality > 0 || continue
+        count += 1
+        point = axis == 1 ? (T(h0), zero(T)) : (zero(T), T(h0))
+        candidates = Base.setindex(candidates, (point..., T(quality)), count)
+    end
+    count == 0 && return nothing
+    x = y = total = zero(T)
+    for index in 1:count
+        w = candidates[index][3]
+        for other in 1:count
+            other == index || (w *= one(T) - candidates[other][3])
+        end
+        x += w * candidates[index][1]; y += w * candidates[index][2]; total += w
+    end
+    total > zero(T) || return nothing
+    return x / total, y / total
+end
+
+"""Potential difference `ψ_c = φ^g_c - φ^l_c` of the per-phase capillary
+potentials, in `workspace.cell_potential`.
+
+By default (`_MIMETIC_HYDROSTATIC_POTENTIAL[] === :off`, or no gravity) it is
+`σκ_c`. One pressure per cell balances the per-phase potentials and the Gram
+moment of gravity (`ρ_π a|f| g⋅(x*₊ - x*₋)` on each value) exactly where
+`Ψ_c = ψ_c - (ρ_l - ρ_g) g⋅x*_c` is the same on the cells that carry values of
+both phases. The continuum value at a point `x` off the interface is the
+hydrostatic extension `σκ(x_Γ) + (ρ_l - ρ_g) g⋅(x - x_Γ)` of the pressure jump
+from the interface point `x_Γ` where `κ` is known. With the switch on, a cell
+with own curvature (`_mimetic_cell_curvature!`: a cut cell with a finite
+curvature; every cut cell for a `prescribed` curvature or `σ = 0`) has
+`Ψ_c = σκ_c - Δρ g⋅x_ref` with `x_ref = x*_c` (`:pure`), the interface point
+of its height-function columns (`:hfpoint`, [`_mimetic_height_point`](@ref);
+where it has none, as `:plicpoint`) or the point of its PLIC line on the column
+of the dominant normal axis through the cell centre (`:plicpoint`), and every
+other cell takes the `C(1 - C)`-weighted mean of the `Ψ` of its cut face
+neighbours, `ψ_c = mean(Ψ) + Δρ g⋅x*_c`. With `σ = 0` the potentials are
+purely hydrostatic."""
+function _mimetic_cell_potential!(
+        workspace::MimeticProjectionWorkspace{T}, interface, kappa, sigma, gravity, density;
+        prescribed = false,
+    ) where {T}
+    cells = length(kappa)
+    psi = resize!(workspace.cell_potential, cells)
+    mode = _MIMETIC_HYDROSTATIC_POTENTIAL[]
+    if mode === :off || isnothing(gravity) || all(iszero, gravity)
+        for cell in 1:cells
+            psi[cell] = sigma * kappa[cell]
+        end
+        return psi
+    end
+    mode in (:pure, :hfpoint, :plicpoint) || throw(ArgumentError("unknown hydrostatic potential mode $mode"))
+    values = mode === :hfpoint ? _fill_height_values!(interface) : nothing
+    assembly = workspace.assembly
+    topology = workspace.topology
+    references = workspace.references
+    mesh = interface.mesh
+    h = topology.spacing
+    gx, gy = T(gravity[1]), T(gravity[2])
+    contrast = T(density[1]) - T(density[2])
+    # The weights of `_mimetic_cell_curvature!` mark its cells with own curvature.
+    weight = resize!(workspace.curvature_weight, cells)
+    # Ψ of the cells with own curvature.
+    for cell in 1:cells
+        reference = references[cell]
+        fraction = _conditional_fraction(interface, reference)
+        own = zero(T) < fraction < one(T) &&
+            (iszero(sigma) || prescribed || weight[cell] > zero(T))
+        if own
+            weight[cell] = fraction * (one(T) - fraction)
+            x, y = assembly.pressure_x[cell], assembly.pressure_y[cell]
+            if mode !== :pure
+                center = cellcenter(mesh, reference.block, reference.i, reference.j)
+                point = mode === :hfpoint ?
+                    _mimetic_height_point(values[reference.block], reference.i + 4, reference.j + 4) : nothing
+                if !isnothing(point)
+                    x, y = center[1] + h * point[1], center[2] + h * point[2]
+                else
+                    nx, ny = _get(interface.normal_x, reference), _get(interface.normal_y, reference)
+                    intercept = _get(interface.intercept, reference)
+                    half = T(0.5)
+                    if abs(ny) >= abs(nx)
+                        x, y = center[1], center[2] + h * clamp(intercept / ny, -half, half)
+                    else
+                        x, y = center[1] + h * clamp(intercept / nx, -half, half), center[2]
+                    end
+                end
+            end
+            psi[cell] = (iszero(sigma) ? zero(T) : sigma * kappa[cell]) - contrast * (gx * x + gy * y)
+        else
+            weight[cell] = zero(T)
+            psi[cell] = T(NaN)
+        end
+    end
+    # The other cells: weighted mean of the cut neighbours' Ψ, then ψ = Ψ + Δρ g⋅x*.
+    for cell in 1:cells
+        iszero(weight[cell]) || continue
+        total = weights = zero(T)
+        for k in 1:4
+            face = topology.sides[k, cell]
+            face > 0 || continue
+            minus = topology.face_cells[1, face]
+            neighbour = minus == cell ? topology.face_cells[2, face] : minus
+            w = weight[neighbour]
+            if w > zero(T)
+                total += w * psi[neighbour]
+                weights += w
+            end
+        end
+        psi[cell] = weights > zero(T) ? total / weights +
+            contrast * (gx * assembly.pressure_x[cell] + gy * assembly.pressure_y[cell]) : T(NaN)
+    end
+    for cell in 1:cells
+        iszero(weight[cell]) && continue
+        psi[cell] += contrast * (gx * assembly.pressure_x[cell] + gy * assembly.pressure_y[cell])
+    end
+    return psi
+end
+
 """Add the per-phase surface-tension increment `dt 𝓜⁻¹(a^π J^π)` to each phase.
 
 Each phase has its own capillary potential, `φ^g = σκI` and
@@ -784,11 +931,13 @@ pure liquid and a pure gas cell) gets the common jump `σ κ_f [I]_f |f|` with
 the face curvature of [`surface_tension!`](@ref). A face whose force needs a
 curvature that is not available gets no force; such faces are counted in
 `unresolved_curvature_faces`. `curvature` prescribes a constant curvature
-(tests of the balance)."""
+(tests of the balance). `gravity` enters only through the prototype switch
+`_MIMETIC_HYDROSTATIC_POTENTIAL` (potential difference
+[`_mimetic_cell_potential!`](@ref) instead of `σκ`)."""
 function _mimetic_capillary_force!(
         velocity::TwoPhaseVelocity, solver::MimeticProjectionSolver{T},
         workspace::MimeticProjectionWorkspace{T}, dt;
-        sigma, formulation = CGFM(), curvature = nothing,
+        sigma, formulation = CGFM(), curvature = nothing, gravity = nothing,
         unresolved_curvature_faces::Union{Nothing, Base.RefValue{Int}} = nothing,
     ) where {T}
     _validate_surface_tension_formulation(formulation)
@@ -802,10 +951,13 @@ function _mimetic_capillary_force!(
     resize!(workspace.band_scratch, count)
     resize!(workspace.band_solution, count)
     kappa = _mimetic_cell_curvature!(workspace, interface, curvature)
+    sigma = T(sigma)
+    potential = _mimetic_cell_potential!(
+        workspace, interface, kappa, sigma, gravity, solver.density; prescribed = !isnothing(curvature),
+    )
     rhs = workspace.force_rhs
     resize!(rhs, length(assembly.dof_face))
     fill!(rhs, zero(T))
-    sigma = T(sigma)
     unresolved = 0
     for (face, entry) in pairs(mesh.faces)
         liquid, gas = assembly.liquid_dof[face], assembly.gas_dof[face]
@@ -824,14 +976,14 @@ function _mimetic_capillary_force!(
             continue
         end
         im, ip = _mimetic_indicator(formulation, cm), _mimetic_indicator(formulation, cp)
-        # Potentials φ^g = σκI and φ^l = -σκ(1 - I); a vanishing factor needs
-        # no curvature.
+        # Potentials φ^g = ψI and φ^l = -ψ(1 - I) (ψ = σκ by default); a
+        # vanishing factor needs no curvature.
         gas_aperture = gas > 0 ? assembly.dof_aperture[gas] : zero(T)
         liquid_aperture = liquid > 0 ? assembly.dof_aperture[liquid] : zero(T)
-        gas_minus = iszero(im) ? zero(T) : sigma * kappa[minus] * im
-        gas_plus = iszero(ip) ? zero(T) : sigma * kappa[plus] * ip
-        liquid_minus = isone(im) ? zero(T) : -sigma * kappa[minus] * (one(T) - im)
-        liquid_plus = isone(ip) ? zero(T) : -sigma * kappa[plus] * (one(T) - ip)
+        gas_minus = iszero(im) ? zero(T) : potential[minus] * im
+        gas_plus = iszero(ip) ? zero(T) : potential[plus] * ip
+        liquid_minus = isone(im) ? zero(T) : -potential[minus] * (one(T) - im)
+        liquid_plus = isone(ip) ? zero(T) : -potential[plus] * (one(T) - ip)
         gas_jump = entry.area * (gas_plus - gas_minus)
         liquid_jump = entry.area * (liquid_plus - liquid_minus)
         if (gas_aperture > zero(T) && !isfinite(gas_jump)) ||

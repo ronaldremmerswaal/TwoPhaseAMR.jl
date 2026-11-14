@@ -349,10 +349,11 @@ function _two_velocity_forces_and_pressure!(
         ArgumentError("MimeticProjection does not support embedded solid geometry"),
     )
     reconstruct!(model.interface)
-    if model.sigma > zero(T)
+    hydrostatic = _MIMETIC_HYDROSTATIC_POTENTIAL[] !== :off && any(!iszero, model.gravity)
+    if model.sigma > zero(T) || hydrostatic
         _mimetic_capillary_force!(
             velocity, state.projection_solver, state.projection_workspace, time_step;
-            sigma = model.sigma, formulation = model.formulation,
+            sigma = model.sigma, formulation = model.formulation, gravity = model.gravity,
             unresolved_curvature_faces = workspace.unresolved_curvature_faces,
         )
     end
