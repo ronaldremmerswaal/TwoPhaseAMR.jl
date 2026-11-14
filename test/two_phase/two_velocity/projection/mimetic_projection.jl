@@ -1,4 +1,4 @@
-using Test, LinearAlgebra, SparseArrays, TwoPhaseAMR
+using Test, LinearAlgebra, Random, SparseArrays, TwoPhaseAMR
 include("../helpers.jl")
 include("mimetic_lab_helpers.jl")
 
@@ -761,7 +761,7 @@ function _mmd_cell(apertures, starts; point = nothing)
             block, sides, lengths, moments, apertures, starts, phase, xs, ys, ex, ey,
         )
         normals = [TP._mimetic_normal(Float64, sides[q])[i] for q in 1:m, i in 1:2]
-        (; block = block[1:m, 1:m], gram = normals' * moments[1:m, :], normals, moments = moments[1:m, :], consistent)
+        (; block = block[1:m, 1:m], gram = normals' * moments[1:m, :], normals, moments = moments[1:m, :], consistent, sides = sides[1:m])
     end
     return (xs, ys), phases
 end
@@ -923,13 +923,6 @@ end
     end
 end
 
-@testset "Mimetic projection rejects cut cells at walls" begin
-    # A drop on a wall has cut cells at the domain boundary.
-    wall = _mimetic_case(32, _mimetic_circle(32; y = 0.1))
-    velocity = _mimetic_velocity(wall, (phase, face) -> 0.0)
-    @test_throws ArgumentError project!(velocity, CellField(wall.mesh), wall.solver, 1.0, wall.workspace)
-end
-
 # Liquid apertures and wet ends of the four sides of `cell` in the assembly.
 function _mimetic_cell_data(case, cell)
     TP = TwoPhaseAMR
@@ -941,11 +934,168 @@ function _mimetic_cell_data(case, cell)
     end
     starts = ntuple(4) do k
         face = topology.sides[k, cell]
-        0 < apertures[k] < 1 && face > 0 || return false
-        low = work.assembly.flags[face] == TP._MIMETIC_LIQUID_LOW
+        0 < apertures[k] < 1 || return false
+        low = face > 0 ? work.assembly.flags[face] == TP._MIMETIC_LIQUID_LOW : work.boundary_low[-face]
         return TP._MIMETIC_STARTS_LOW[k] ? low : !low
     end
     return apertures, starts
+end
+
+# Interfaces with cut cells at the walls of the unit square: a pool between
+# the side walls, drops on the floor and in a corner, and twelve circles cut by
+# a wall (random radius, wall and position).
+function _mimetic_wall_levelsets()
+    levelsets = Any[
+        (x, y) -> y - 0.5 - 0.37 / 32,
+        (x, y) -> hypot(x - 0.5 - 0.21 / 32, y - 0.1) - 0.25,
+        (x, y) -> hypot(x - 0.03, y - 0.05) - 0.3,
+    ]
+    rng = Random.Xoshiro(17)
+    for _ in 1:12
+        r = 0.12 + 0.25rand(rng)
+        side = rand(rng, 1:4)
+        t = 0.1 + 0.8rand(rng)
+        offset = r * (2rand(rng) - 1)
+        cx, cy = side == 1 ? (t, offset) : side == 2 ? (1 - offset, t) :
+            side == 3 ? (t, 1 - offset) : (offset, t)
+        push!(levelsets, (x, y) -> hypot(x - cx, y - cy) - r)
+    end
+    return levelsets
+end
+
+@testset "Mimetic metric at walls: restricted blocks and the Gram moment" begin
+    TP = TwoPhaseAMR
+    consistent_cases = wall_blocks = 0
+    for levelset in _mimetic_wall_levelsets(), density in ((1.0, 1.0), (1000.0, 1.0))
+        case = _mimetic_case(32, levelset; density, periodic = (false, false))
+        work = case.workspace
+        assembly = TP._mimetic_assemble!(case.solver, work)
+        topology = work.topology
+        @test assembly.wall_cells > 0 && assembly.defective_cells == 0
+        band = assembly.band_matrix
+        @test maximum(abs, band - band') <= 1.0e-14 * maximum(abs, band)
+        @test isposdef(Symmetric(Matrix(band)))
+        # Blocks of the cut cells at a wall. The block of all wetted sides
+        # (wall sides included) satisfies m N = R; the metric keeps its
+        # restriction to the interior sides, symmetric positive definite. A
+        # constant field w is reproduced with the coupling to the wall flux
+        # density N_w w; along the walls (N_w w = 0) by the restricted block
+        # alone, with the Gram mass wᵀGw.
+        for cell in axes(topology.sides, 2)
+            any(k -> topology.sides[k, cell] < 0, 1:4) || continue
+            apertures, starts = _mimetic_cell_data(case, cell)
+            all(==(apertures[1]), apertures) && apertures[1] in (0.0, 1.0) && continue
+            _, phases = _mmd_cell(apertures, starts)
+            for result in phases
+                wall = [topology.sides[k, cell] < 0 for k in result.sides]
+                free = .!wall
+                any(free) || continue
+                wall_blocks += 1
+                @test result.consistent
+                B, N, R = result.block, result.normals, result.moments
+                @test B[free, free] == B[free, free]'
+                @test isposdef(Symmetric(B[free, free]))
+                for w in ([1.0, 0.0], [0.0, 1.0])
+                    @test B[free, free] * (N[free, :] * w) + B[free, wall] * (N[wall, :] * w) ≈
+                        R[free, :] * w atol = 1.0e-14
+                    all(iszero, N[wall, :] * w) || continue
+                    v = N[free, :] * w
+                    @test B[free, free] * v ≈ R[free, :] * w atol = 1.0e-14
+                    @test v' * B[free, free] * v ≈ w' * result.gram * w atol = 1.0e-14
+                end
+            end
+        end
+        # Assembled (prop. assembly, at walls): 𝓜 χ^π_k + C e_k = R^π_k with the
+        # wall coupling C of the assembly, R^π_k = ρ^π a |f| (x*₊ - x*₋)_k on
+        # every value of phase π. A lumped value is not consistent.
+        assembly.lumped_values == 0 || continue
+        consistent_cases += 1
+        point = (assembly.pressure_x, assembly.pressure_y)
+        dofs = eachindex(assembly.dof_face)
+        axis(r) = case.mesh.faces[assembly.dof_face[r]].axis
+        for phase in 1:2, k in 1:2
+            field = [assembly.dof_phase[r] == phase && axis(r) == k ? 1.0 : 0.0 for r in dofs]
+            image = TP._mimetic_metric_product!(zeros(0), work, field)
+            target = map(dofs) do r
+                assembly.dof_phase[r] == phase || return 0.0
+                face = assembly.dof_face[r]
+                difference = point[k][topology.face_cells[2, face]] - point[k][topology.face_cells[1, face]]
+                density[phase] * case.mesh.faces[face].area * assembly.dof_aperture[r] * difference
+            end
+            coupled = [image[r] + (assembly.dof_phase[r] == phase ? assembly.wall_coupling[k, r] : 0.0) for r in dofs]
+            @test maximum(abs, coupled .- target) <= 1.0e-12 * maximum(abs, coupled)
+        end
+    end
+    @test consistent_cases == 28
+    println("mimetic metric at walls: restricted wall blocks checked: ", wall_blocks)
+end
+
+@testset "Mimetic rest states at walls" begin
+    TP = TwoPhaseAMR
+    function flow_at_walls(levelset, density; sigma = 0.0, gravity = (0.0, -9.81))
+        mesh = BlockTreeMesh(block_size = (32, 32), periodic = (false, false))
+        interface = InterfaceField(mesh, levelset; lipschitz = 1)
+        physics = iszero(sigma) ?
+            TwoPhase(interface; density, dynamic_viscosity = (0.0, 0.0), gravity) :
+            TwoPhase(
+                interface; density, dynamic_viscosity = (0.0, 0.0), gravity,
+                surface_tension = SurfaceTension(sigma),
+            )
+        return FlowSimulation(
+            mesh, physics; boundary = FreeSlip(),
+            velocity_model = TwoVelocityModel(pressure_projection = MimeticProjection()),
+        )
+    end
+    floor_drop(x, y) = hypot(x - 0.5 - 0.21 / 32, y - 0.1) - 0.25
+    # A flat pool between the two side walls (walls parallel to gravity: no
+    # wall coupling), and a drop on the floor at equal densities (the floor
+    # cells' coupling C g carries the Gram moment of gravity): at rest to
+    # round-off through full time steps.
+    for (levelset, density) in (
+            ((x, y) -> y - 0.5 - 0.37 / 32, (1000.0, 1.0)),
+            ((x, y) -> y - 0.5 - 0.37 / 32, (1.0, 1.0)),
+            (floor_drop, (1.0, 1.0)),
+        )
+        flow = flow_at_walls(levelset, density)
+        for _ in 1:3
+            stats = step!(
+                flow.velocity, flow.pressure, flow.system, 1.0e-3, flow.workspace;
+                tolerance = 1.0e-12, max_cycles = 2000,
+            )
+            @test stats.converged
+            @test stats.wall_cells >= 2 && stats.defective_cells == 0
+        end
+        @test _mimetic_maximum(flow.velocity) <= 1.0e-11
+    end
+    # Without the wall coupling (the uniform increment dt g alone) the drop on
+    # the floor is not at rest after one projection.
+    case = _mimetic_case(32, floor_drop; periodic = (false, false))
+    velocity = _mimetic_velocity(case, (phase, face) -> face.axis == 2 ? -9.81e-3 : 0.0)
+    stats = project!(velocity, CellField(case.mesh), case.solver, 1.0e-3, case.workspace; tolerance = 1.0e-12)
+    @test stats.converged
+    uncoupled = _mimetic_maximum(velocity)
+    println("mimetic floor drop, equal densities, dt g without the wall coupling: max |u| = ", uncoupled)
+    @test uncoupled >= 1.0e-4
+    # A constant curvature on a drop on the floor (contact angle about 66°) at
+    # densities (1000, 1): the per-phase capillary force is a gradient on the
+    # interior faces and the projection removes it exactly.
+    for formulation in (CSF(), CGFM())
+        flow = flow_at_walls(floor_drop, (1000.0, 1.0); sigma = 0.7, gravity = (0.0, 0.0))
+        model = flow.system.two_phase
+        state = TP._two_velocity_flow_workspace!(flow.workspace.two_phase, model)
+        reconstruct!(model.interface)
+        TP._mimetic_capillary_force!(
+            flow.velocity, state.projection_solver, state.projection_workspace, 1.0e-2;
+            sigma = 0.7, formulation, curvature = 4.0,
+        )
+        @test _mimetic_maximum(flow.velocity) > 1.0e-2
+        stats = TP._project_two_velocity!(
+            flow.velocity, flow.pressure, flow.system, flow.workspace, state, 1.0e-2;
+            tolerance = 1.0e-12, max_iterations = 2000,
+        )
+        @test stats.converged && stats.wall_cells >= 2
+        @test _mimetic_maximum(flow.velocity) <= 1.0e-8
+    end
 end
 
 @testset "Mimetic metric on averaged apertures that close no region" begin
