@@ -42,7 +42,7 @@ function _independent_solver(
         two_velocity_projection = isnothing(model) ?
             CMDGFMProjection() : model.pressure_projection,
         two_velocity_drag = isnothing(model) ?
-            nothing : model.interphase_drag,
+            InterphaseDrag() : model.interphase_drag,
         T,
     )
 end

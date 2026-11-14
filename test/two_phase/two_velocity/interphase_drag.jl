@@ -152,7 +152,7 @@ end
 
     @test_throws ArgumentError InterphaseDrag(; component = :normal)
     @test_throws ArgumentError TwoVelocityModel(; interphase_drag = :on)
-    @test isnothing(TwoVelocityModel().interphase_drag)
+    @test TwoVelocityModel().interphase_drag == InterphaseDrag()
     @test TwoVelocityModel(; interphase_drag = InterphaseDrag()).interphase_drag == InterphaseDrag(; component = :tangential)
     @test isnothing(TwoVelocityModel(; interphase_drag = nothing).interphase_drag)
 end
@@ -348,10 +348,10 @@ end
     end
 end
 
-@testset "Default two-velocity viscous step is bitwise the mixture step" begin
+@testset "Two-velocity viscous step without drag is bitwise the mixture step" begin
     for kind in (:uniform, :mixed_geometry)
         dt = 0.002
-        default = _drag_flow(kind; interphase_drag = TwoVelocityModel().interphase_drag)
+        default = _drag_flow(kind; interphase_drag = nothing)
         result = _drag_viscous_step!(default, dt)
         reference = _drag_flow(kind; interphase_drag = nothing)
         model = reference.system.two_phase
@@ -376,5 +376,36 @@ end
         TID._mark_inactive_phase_velocities!(reference.velocity, model.interface, phase.inactive_failures)
         @test isequal(result[1], reference.velocity[1].interior)
         @test isequal(result[2], reference.velocity[2].interior)
+    end
+end
+
+@testset "Interphase drag slip law" begin
+    # Re_j -> 0: the geometric decay exp(-lambda dt); Re_j -> Inf: no coupling.
+    for decay in (1.0e-6, 0.3, 2.0, 40.0)
+        @test TID._slip_jump(0.7, decay, 1.0e-12) ≈ 0.7exp(-decay) rtol = 1.0e-10
+        @test abs(TID._slip_jump(-0.7, decay, 1.0e12) + 0.7) <= 2decay / 1.0e12
+    end
+    # The exact solution against a fine RK4 integration of dj/dt = -l j/(1 + a|j|).
+    rhs(j, a) = -j / (1 + a * abs(j))
+    for (j0, a, decay) in ((1.0, 3.0, 0.7), (-0.2, 50.0, 5.0), (2.0, 0.01, 1.5))
+        j = j0
+        steps = 20_000
+        dt = decay / steps
+        for _ in 1:steps
+            k1 = rhs(j, a); k2 = rhs(j + dt / 2 * k1, a)
+            k3 = rhs(j + dt / 2 * k2, a); k4 = rhs(j + dt * k3, a)
+            j += dt / 6 * (k1 + 2k2 + 2k3 + k4)
+        end
+        @test TID._slip_jump(j0, decay, a) ≈ j rtol = 1.0e-10
+        # Semigroup of the exact update.
+        @test TID._slip_jump(TID._slip_jump(j0, decay / 2, a), decay / 2, a) ≈
+            TID._slip_jump(j0, decay, a) rtol = 1.0e-13
+    end
+    # |j| is non-increasing in the decay and keeps its sign; zero decay keeps j.
+    for a in (1.0e-3, 1.0, 1.0e3), j0 in (-1.3, 0.4)
+        values = [TID._slip_jump(j0, decay, a) for decay in 0.0:0.05:30.0]
+        @test values[1] ≈ j0 rtol = 4eps()
+        @test all(diff(abs.(values)) .<= 4eps())
+        @test all(v -> sign(v) == sign(j0) || iszero(v), values)
     end
 end

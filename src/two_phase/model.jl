@@ -16,7 +16,7 @@ end
 function TwoPhaseModel(
         physics::TwoPhase{<:InterfaceField{T, M}};
         pressure_projection = CMDGFMProjection(),
-        interphase_drag = nothing,
+        interphase_drag = InterphaseDrag(),
     ) where {T, M}
     interface = physics.interface
     pressure_projection isa AbstractTwoVelocityProjection || throw(

@@ -2,34 +2,40 @@
     InterphaseDrag(; component = :tangential)
 
 Viscous coupling of the two intrinsic phase velocities of `TwoVelocityModel`
-across the interface, opt-in through `TwoVelocityModel(; interphase_drag =
-InterphaseDrag())` (the default `nothing` couples nothing). It is off by
-default because it smears the vortex sheet with which the two-velocity model
-represents an unresolved shear layer into a grid-scale layer: the viscous
-Kelvin--Helmholtz case with a shear layer of half a cell decays with the
-drag (growth-rate error 3.3 % without, 182 % with it, `MimeticProjection`).
+across the interface, the default of that model
+(`TwoVelocityModel(; interphase_drag = nothing)` couples nothing).
 
 The phase-mass weighted mixture viscous step gives both phases the same
-increment, so on its own it never damps the jump `u_gas - u_liquid` of a face
-whose staggered control volume holds both phases. The drag adds, on every such
-face, the interface shear of the jump: the force `W (u_gas - u_liquid)` on the
-liquid and its negative on the gas, with the conductance
-`W = mu_Gamma |Gamma_f| w_f / delta_f`. The control volume is the one of the
+increment, so on its own it never damps the jump `j = u_gas - u_liquid` of a
+face whose staggered control volume holds both phases. The drag adds, on every
+such face, a Navier-slip interface stress: the force `W j / (1 + Re_j)` on the
+liquid and its negative on the gas. `W = mu_Gamma |Gamma_f| w_f / delta_f` is
+the no-slip conductance of the face's control volume, the one of the
 staggered liquid fraction that gives the masses: each adjacent cell
-contributes its open part of the face's strip with the cell's phase fractions,
-so its PLIC chord and phase centroids enter with the weight of that strip.
-`|Gamma_f|` is the weighted chord length, `delta_f` the distance of the two
-phase centroids along the weighted mean interface normal (at least a quarter
-of the mean cell width along the face normal), and between a pure liquid and a
-pure gas cell the face itself is the interface. `mu_Gamma` is the phase
-viscosity mixture of the staggered liquid fraction under the stress operator's
-averaging rule (harmonic by default). With the staggered phase masses
-`m_liquid`, `m_gas` the jump decays at the rate
-`lambda = W (1/m_liquid + 1/m_gas)`; the step applies the exact solution
-`jump * exp(-lambda dt)` at fixed mixture momentum after the mixture solve.
-It conserves the mixture momentum of every face, does not increase the
-kinetic energy, and does nothing at rest, on faces where a phase has no
-volume, and when both viscosities are zero.
+contributes its open part of the face's strip with the cell's phase
+fractions, so its PLIC chord and phase centroids enter with the weight of
+that strip. `|Gamma_f|` is the weighted chord length, `delta_f` the distance
+of the two phase centroids along the weighted mean interface normal (at least
+a quarter of the mean cell width along the face normal), and between a pure
+liquid and a pure gas cell the face itself is the interface. `mu_Gamma` is
+the phase viscosity mixture of the staggered liquid fraction under the stress
+operator's averaging rule (harmonic by default).
+
+`Re_j = |j| h / nu`, with the mean cell width `h` along the face normal and
+`nu = mu_Gamma / rho_f` at the staggered mixture density, is the cell
+Reynolds number of the jump: a grid-scale jump spreads by viscosity to the
+thickness `delta_s = h Re_j^(-1/2)` while it crosses a cell. A jump with
+`Re_j << 1` belongs to a resolved shear layer (`delta_s >> h`) and is
+removed (no slip); one with `Re_j >> 1` is an unresolved vortex sheet
+(`delta_s << h`), which the two-velocity model represents by the jump and
+the drag leaves alone (free slip); in between the slip length is
+`delta_f Re_j`. With the staggered phase masses `m_liquid`, `m_gas` the jump
+obeys `dj/dt = -lambda j / (1 + a|j|)`, `lambda = W (1/m_liquid + 1/m_gas)`,
+`a = h / nu`, and the step applies its exact solution
+`a|j| exp(a|j|) = a|j0| exp(a|j0|) exp(-lambda dt)` at fixed mixture momentum
+after the mixture solve. It conserves the mixture momentum of every face,
+never increases `|j|` or the kinetic energy, and does nothing at rest, on
+faces where a phase has no volume, and when both viscosities are zero.
 
 `component = :tangential` (the default) takes the component weight
 `w_f = t_k^2 / (t_1^4 + t_2^4)` with the interface tangent `t` and the face
@@ -285,9 +291,37 @@ end
 
 _interphase_drag!(velocity, ::Nothing, model, operator, dt) = velocity
 
-"""Relax the phase-velocity jump of every mixed face by `exp(-lambda dt)` at
-fixed mixture momentum (see [`InterphaseDrag`](@ref)), with the staggered
-masses and volumes of the mixture solve in `operator`."""
+"""Exact solution after the decay `decay = lambda dt` of the slip law
+`dj/dt = -lambda j / (1 + a|j|)`: `w = a|j|` solves
+`w + log(w) = a|j0| + log(a|j0|) - decay`, by Newton's method on this concave
+function from the left (`w exp(w)` is the Lambert-W relation). The result keeps
+the sign, never exceeds `|j0|`, tends to `j0 exp(-decay)` as `a|j0| -> 0` and
+to `j0` as `a|j0| -> Inf`."""
+@inline function _slip_jump(jump::T, decay::T, a::T) where {T}
+    z = a * abs(jump)
+    target = log(z) + z - decay
+    # Start below the root, where g(w) = w + log(w) - target <= 0: for
+    # target > 1 at target - log(target), else at e^t / (1 + e^t)
+    # (x / (1 + x) <= log(1 + x)). The Newton iterates of a concave increasing
+    # g then increase monotonically to the root.
+    w = if target > one(T)
+        target - log(target)
+    else
+        e = exp(target)
+        e / (one(T) + e)
+    end
+    w > zero(T) || return zero(jump)
+    for _ in 1:64
+        step = (target - w - log(w)) / (one(T) + inv(w))
+        w += step
+        abs(step) <= 4eps(T) * w && break
+    end
+    return copysign(min(w / a, abs(jump)), jump)
+end
+
+"""Relax the phase-velocity jump of every mixed face by the exact Navier-slip
+update `_slip_jump` at fixed mixture momentum (see [`InterphaseDrag`](@ref)),
+with the staggered masses and volumes of the mixture solve in `operator`."""
 function _interphase_drag!(
         velocity::TwoPhaseVelocity, drag::InterphaseDrag, model, operator, dt,
     )
@@ -310,6 +344,7 @@ function _interphase_drag!(
         averaging::AbstractViscosityAveraging, volumes, tangential, dt,
     ) where {T}
     faces = interface.mesh.faces
+    blocks = interface.mesh.blocks
     rho_liquid, rho_gas = density
     @_parallel for index in 1:length(faces)
         @inbounds begin
@@ -327,8 +362,16 @@ function _interphase_drag!(
             rate > zero(T) || continue
             liquid_mass = rho_liquid * fraction
             gas_mass = rho_gas * (one(T) - fraction)
-            # Equal and opposite momentum changes; -expm1 keeps small decays exact.
-            change = -expm1(-rate * dt) * jump / (liquid_mass + gas_mass)
+            total_mass = liquid_mass + gas_mass
+            width = (
+                blocks[face.minus.block].spacing[face.axis] +
+                    blocks[face.plus.block].spacing[face.axis]
+            ) / 2
+            mu = T(_phase_dynamic_viscosity(fraction, viscosity, averaging))
+            # a = h / nu with nu = mu_Gamma / rho_f: Re_j = a |j|.
+            new_jump = _slip_jump(jump, rate * dt, T(width) * total_mass / mu)
+            # Equal and opposite momentum changes.
+            change = (jump - new_jump) / total_mass
             liquid[index] = muladd(gas_mass, change, liquid_value)
             gas[index] = muladd(-liquid_mass, change, gas_value)
         end

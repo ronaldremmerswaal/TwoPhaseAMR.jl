@@ -72,21 +72,21 @@ See the technical reference, section
 
 The viscous step diffuses the phase-mass weighted mixture velocity and gives
 both phases the same increment, which leaves their difference untouched.
-`TwoVelocityModel(interphase_drag=InterphaseDrag())` (opt-in, for both
-projections) adds the viscous shear between the phases across the interface:
-on every face whose staggered volume holds both phases the velocity jump
-decays at the rate `lambda = W (1/m_liquid + 1/m_gas)`, with the conductance
-`W` the interface viscosity times the PLIC interface length in the face's
-control volume over the distance of the two phase centroids, exactly
-(`exp(-lambda dt)`) and at fixed mixture momentum. Without viscosity, at rest
-or for equal phase velocities it does nothing. By default only the share of
-each face component tangential to the interface is coupled;
-`InterphaseDrag(component=:full)` couples the whole component. The default
-`interphase_drag=nothing` keeps free slip between the phases, because the drag
-smears the vortex sheet with which the two-velocity model represents an
-unresolved shear layer into a grid-scale layer: with `MimeticProjection` the
-viscous Kelvin–Helmholtz instability with a shear layer of half a cell decays
-with the drag (growth-rate error 182 % instead of 3.3 %).
+`TwoVelocityModel(interphase_drag=InterphaseDrag())`, the default for both
+projections, adds a Navier-slip shear between the phases across the
+interface: on every face whose staggered volume holds both phases the jump
+`j` decays as `dj/dt = -lambda j / (1 + Re_j)`, solved exactly at fixed
+mixture momentum, with `lambda = W (1/m_liquid + 1/m_gas)`, the no-slip
+conductance `W` the interface viscosity times the PLIC interface length in
+the face's control volume over the distance of the two phase centroids, and
+`Re_j = |j| h / nu` the cell Reynolds number of the jump. A slowly slipping
+layer (`Re_j << 1`, a resolved shear layer) is removed, while a vortex sheet
+with `Re_j >> 1`, by which the two-velocity model represents an unresolved
+shear layer, is kept. Without viscosity, at rest or for equal phase velocities
+the drag does nothing. By default only the share of each face component
+tangential to the interface is coupled; `InterphaseDrag(component=:full)`
+couples the whole component, and `interphase_drag=nothing` keeps free slip
+between the phases.
 See [Interphase drag](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=eq:viscosity:drag).
 
 ## Option matrix
@@ -96,7 +96,7 @@ See [Interphase drag](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=eq:viscos
 | velocity formulation | `OneVelocityModel()`, `TwoVelocityModel(...)` | one velocity | two-phase flow |
 | surface-tension force | `CGFM()`, `CSF()` | CGFM | either two-phase velocity model |
 | pressure projection | `CMDGFMProjection()`, `MimeticProjection()` | CMDGFM | two velocity only |
-| interphase drag | `nothing`, `InterphaseDrag()`, `InterphaseDrag(component=:full)` | `nothing` (off) | two velocity only |
+| interphase drag | `InterphaseDrag()`, `InterphaseDrag(component=:full)`, `nothing` | `InterphaseDrag()` | two velocity only |
 
 Surface tension is configured by [`SurfaceTension`](@ref), while the
 projection is a field of [`TwoVelocityModel`](@ref). This ownership makes

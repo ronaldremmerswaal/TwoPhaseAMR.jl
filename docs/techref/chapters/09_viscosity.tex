@@ -14,8 +14,8 @@ cells, shear rows at the cell corners and wall rows, with a mixture of the
 phase viscosities that is harmonic (series) by default and geometric as an
 option; the two-velocity model diffuses the mass-weighted mixture velocity with
 the same operator and gives both phases the same increment, so the rule applies
-to both velocity models, and optionally relaxes the phase-velocity jump of the
-mixed faces by an implicit interphase drag. This chapter
+to both velocity models, and then relaxes the phase-velocity jump of the
+mixed faces by an implicit Navier-slip interphase drag. This chapter
 states the continuous model, the semi-discrete operators with their walls,
 the fully discrete midpoint solves with their stopping criteria, and the
 exact identities that hold for them: dissipation of the mass-weighted
@@ -828,11 +828,11 @@ holds both phases undamped, although viscosity couples the phases across the
 interface: a thin layer of one phase slips freely through the other (with a
 per-phase surface-tension force the capillary wave at density ratio one has
 the error $0.009$--$0.011$ instead of $0.0022$, audit note on small apertures,
-\S5). With the opt-in \apitype{InterphaseDrag} of
-\apitype{TwoVelocityModel} (for both projections; off by default), every face with two finite
-phase values, $0<\clampfrac{f}<1$ and an interface in its control volume adds
-the interface shear $\pm\dragcond_f\jumpvelo_f$ to the two phase momenta.
-With the staggered phase masses per volume
+\S5). With \apitype{InterphaseDrag}, the default of \apitype{TwoVelocityModel}
+for both projections, every face with two finite phase values,
+$0<\clampfrac{f}<1$ and an interface in its control volume adds a
+Navier-slip interface shear $\pm\dragcond_f\jumpvelo_f/(1+\mathrm{Re}_f)$ to
+the two phase momenta. With the staggered phase masses per volume
 $\facemass{\liq}{f}=\dens^{\liq}\clampfrac{f}$,
 $\facemass{\gas}{f}=\dens^{\gas}(1-\clampfrac{f})$ and
 $\stagdens_f=\facemass{\liq}{f}+\facemass{\gas}{f}$,
@@ -840,15 +840,31 @@ $\stagdens_f=\facemass{\liq}{f}+\facemass{\gas}{f}$,
   \begin{gathered}
   \dragcond_f=\frac{\visc_{\interface}(\clampfrac{f})\,\abs{\interface_f}\,w_f}{\delta_f},
   \qquad
-  \lambda_f=\frac{\dragcond_f}{\stagvol{f}}\roundpar{\frac{1}{\facemass{\liq}{f}}+\frac{1}{\facemass{\gas}{f}}},\\
-  \velo^{\liq}_f\leftarrow\velo^{\liq}_f+\frac{\facemass{\gas}{f}}{\stagdens_f}\roundpar{1-e^{-\lambda_f\dt}}\jumpvelo_f,
+  \lambda_f=\frac{\dragcond_f}{\stagvol{f}}\roundpar{\frac{1}{\facemass{\liq}{f}}+\frac{1}{\facemass{\gas}{f}}},
   \qquad
-  \velo^{\gas}_f\leftarrow\velo^{\gas}_f-\frac{\facemass{\liq}{f}}{\stagdens_f}\roundpar{1-e^{-\lambda_f\dt}}\jumpvelo_f,
+  \mathrm{Re}_f=a_f\abs{\jumpvelo_f},\quad a_f=\frac{h_f\stagdens_f}{\visc_{\interface}(\clampfrac{f})},\\
+  \frac{\dd\jumpvelo_f}{\dd\timevar}=-\frac{\lambda_f\jumpvelo_f}{1+a_f\abs{\jumpvelo_f}},
+  \qquad
+  a_f\abs{\jumpvelo^{+}_f}e^{a_f\abs{\jumpvelo^{+}_f}}=a_f\abs{\jumpvelo_f}e^{a_f\abs{\jumpvelo_f}}e^{-\lambda_f\dt},\\
+  \velo^{\liq}_f\leftarrow\velo^{\liq}_f+\frac{\facemass{\gas}{f}}{\stagdens_f}\roundpar{\jumpvelo_f-\jumpvelo^{+}_f},
+  \qquad
+  \velo^{\gas}_f\leftarrow\velo^{\gas}_f-\frac{\facemass{\liq}{f}}{\stagdens_f}\roundpar{\jumpvelo_f-\jumpvelo^{+}_f},
   \end{gathered}
 \end{equation}
 the exact solution of
-$\facemass{\liq}{f}\stagvol{f}\,\dot\velo^{\liq}_f=\dragcond_f\jumpvelo_f=-\facemass{\gas}{f}\stagvol{f}\,\dot\velo^{\gas}_f$
-over the step, applied to the result of~\cref{eq:viscosity:two-velocity}.
+$\facemass{\liq}{f}\stagvol{f}\,\dot\velo^{\liq}_f=\dragcond_f\jumpvelo_f/(1+\mathrm{Re}_f)=-\facemass{\gas}{f}\stagvol{f}\,\dot\velo^{\gas}_f$
+over the step (the Lambert-$W$ relation, solved by Newton's method from below,
+where the iterates of the concave $w+\log w$ increase monotonically), applied
+to the result of~\cref{eq:viscosity:two-velocity}; $h_f$ is the mean cell
+width along $\fnormal{f}$. $\mathrm{Re}_f=\abs{\jumpvelo_f}h_f/\nu_f$ is the
+cell Reynolds number of the jump: a grid-scale jump spreads by viscosity to the
+thickness $\delta_s=h_f\mathrm{Re}_f^{-1/2}$ while it crosses a cell. Three
+regimes follow from the slip length $\delta_f\mathrm{Re}_f$: a resolved shear
+layer ($\delta_s\gg h$, $\mathrm{Re}_f\ll1$) is coupled without slip, the
+exponential decay $e^{-\lambda_f\dt}$; an unresolved vortex sheet
+($\delta_s\ll h$, $\mathrm{Re}_f\gg1$), which the two-velocity model
+represents by the jump, slips freely; in between the stress is that of a
+layer of thickness $\delta_f(1+\mathrm{Re}_f)$.
 Here $\visc_{\interface}$ is the cell viscosity mixture of
 \cref{sec:viscosity:stress} at the staggered fraction (for a flat interface
 the series mean of the phases at the distances of their centroids from it)
@@ -877,26 +893,28 @@ grid-aligned interface and one at $45^\circ$, where the face components
 cannot separate the two. Between a pure liquid and a pure gas cell the
 tangential weight is zero: the face component is the normal velocity, and the
 tangential velocities there sit on one-phase faces, coupled by the mixture
-operator. Both
-reduce the capillary-wave error with a per-phase surface-tension force at
-density ratio one from $0.0112$ to $0.0019$ (tangential) and $0.0023$ (full)
-at $n=16$ and a quarter-period step factor $1/8$, and otherwise differ by a
-few percent; the normal velocity jump is the projection's. The drag does not
-change the CMDGFM results measurably, because that projection recreates the
-tangential jump of the cut faces in every step, and with the mimetic
-projection it removes the vortex sheet that represents an unresolved shear
-layer: the viscous Kelvin--Helmholtz case \code{r1_thin} at
-$\lambda/h=64$ decays (growth-rate error $3.3\,\%$ without, $182\,\%$
-with the drag; $3.3\,\%$ and $11.5\,\%$ at $\lambda/h=128$), which is why
-the drag is off by default.
+operator. The tangential and full weights reduce the capillary-wave error
+with a per-phase surface-tension force at density ratio one from $0.0112$ to
+$0.0019$ and $0.0023$ at $n=16$ and a quarter-period step factor $1/8$, and
+otherwise differ by a few percent; the normal velocity jump is the
+projection's. The slip law decides the rest: with the no-slip conductance
+alone (no $\mathrm{Re}_f$) the viscous Kelvin--Helmholtz case
+\code{r1_thin} with the mimetic projection loses its unresolved vortex sheet
+and decays at $\lambda/h=64$ (growth-rate error $182\,\%$ instead of
+$3.3\,\%$, $11.5\,\%$ instead of $3.3\,\%$ at $128$); the sheet's
+$\mathrm{Re}_f$ is $6$--$1400$ (10--90\,\% quantiles of its mixed faces at
+$\lambda/h=64$; $2.4$--$430$ at $128$), the slipping layer of the capillary
+wave's $0.04$ (median; $0.67$ at 90\,\%), and the slip law gives $3.4\,\%$ and
+$3.1\,\%$ with the same wave errors. With CMDGFM the drag changes the results
+by less than $10^{-4}$, because that projection recreates the tangential jump
+of the cut faces in every step.
 
 The update changes $\facemass{\liq}{f}\velo^{\liq}_f+\facemass{\gas}{f}\velo^{\gas}_f$
 only by round-off, so the mixture momentum and the mixture
 $\onevelo^{\stage{2}}$ are those of~\cref{eq:viscosity:two-velocity}; it
-multiplies the jump energy
-$\half\stagvol{f}\redmass{f}\jumpvelo_f^2$
-by $e^{-2\lambda_f\dt}\le1$ and leaves the mixture energy unchanged, so it is
-dissipative; it vanishes for a zero jump (rest, a continuous velocity, the
+never increases $\abs{\jumpvelo_f}$, so it decreases the jump energy
+$\half\stagvol{f}\redmass{f}\jumpvelo_f^2$ and leaves the mixture energy
+unchanged; it vanishes for a zero jump (rest, a continuous velocity, the
 static drop), on faces with one phase and for zero viscosities, and locks the
 phases at fixed mixture momentum as $\lambda_f\dt\to\infty$. Since the common
 increment leaves the jump unchanged and the drag leaves the mixture
@@ -972,6 +990,7 @@ the transported state),
 \testsym{test/two_phase/two_velocity/interphase_drag.jl}{Interphase drag locks the phases as lambda dt grows},
 \testsym{test/two_phase/two_velocity/interphase_drag.jl}{Interphase drag control volume on transitions, cut cells and small bubbles},
 \testsym{test/two_phase/two_velocity/interphase_drag.jl}{Interphase drag semigroup and zero step},
-\testsym{test/two_phase/two_velocity/interphase_drag.jl}{Default two-velocity viscous step is bitwise the mixture step},
+\testsym{test/two_phase/two_velocity/interphase_drag.jl}{Interphase drag slip law},
+\testsym{test/two_phase/two_velocity/interphase_drag.jl}{Two-velocity viscous step without drag is bitwise the mixture step},
 \testsym{test/navier_stokes/navier_stokes.jl}{single-phase material scaling}.
 \end{implnote}
