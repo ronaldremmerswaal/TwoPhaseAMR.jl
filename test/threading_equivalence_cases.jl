@@ -104,6 +104,36 @@ function mimetic_capillary_flow(; diagnostics = ())
     return flow, 0.5 * stable_timestep(flow)
 end
 
+"""Mimetic drop translating through an adapting interface band (doubly
+periodic): its regrids rebuild the mimetic metric, cut cells next to finer
+cells included."""
+function mimetic_amr_flow(; diagnostics = ())
+    level = 2
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (4, 4), max_level = level,
+        periodic = (true, true), adaptation = MeshAdaptationOptions(coarsen_delay = 2),
+    )
+    levelset = (x, y) -> hypot(x - 0.3, y - 0.4) - 0.15
+    interface = InterfaceField(mesh, levelset; lipschitz = 1)
+    refinement = InterfaceRefinementIndicator(interface; level)
+    workspace = AMRWorkspace(mesh, interface)
+    for pass in 1:level
+        adapt!(workspace, refinement; step = pass, force = true)
+        initialize!(interface, levelset; lipschitz = 1)
+    end
+    physics = TwoPhase(
+        interface; density = (10.0, 1.0), dynamic_viscosity = (1.0e-2, 1.0e-3),
+        surface_tension = 0.05,
+    )
+    model = TwoVelocityModel(pressure_projection = MimeticProjection())
+    flow = FlowSimulation(
+        mesh, physics; velocity_model = model, velocity = (1.0, 0.5),
+        boundary = FreeSlip(), diagnostics,
+        adaptivity = Adaptivity(criteria = (refinement,)),
+    )
+    return flow, 0.5 * stable_timestep(flow)
+end
+
 function cylinder_flow(max_level)
     run = Cylinder.run_example(; max_level, final_time = 0.0)
     return run.flow, stable_timestep(run.flow; cfl = 0.45)
@@ -170,6 +200,7 @@ end
 const CASES = (
     ("capillary", 10, () -> capillary_flow(diagnostics = TWO_PHASE_DIAGNOSTICS)),
     ("capillary_mimetic", 10, () -> mimetic_capillary_flow(diagnostics = TWO_PHASE_DIAGNOSTICS)),
+    ("mimetic_amr", 10, () -> mimetic_amr_flow(diagnostics = TWO_PHASE_DIAGNOSTICS)),
     ("droplet", 6, () -> droplet_flow(2; diagnostics = TWO_PHASE_DIAGNOSTICS)),
     ("stokes3_two", 6, () -> stokes3_flow(3)),
     ("cylinder", 6, () -> cylinder_flow(2)),

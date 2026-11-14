@@ -267,16 +267,26 @@ end
 end
 
 @testset "Two-velocity instability solver on fixed mixed levels" begin
-    for parameters in (
-            _kh_parameters(1.0, 0.5),
-            _rt_parameters(3.0, 0.5),
-            COMBINED_PARAMETERS,
-        )
+    # Both projections on the interface band of an adaptive tree (three
+    # levels). The mimetic projection keeps its uniform-mesh accuracy there:
+    # measured errors at 32 cells per wavelength, mixed levels (uniform mesh),
+    # CMDGFM KH 0.0666 (0.0665), RT 0.00528 (0.00561), combined 0.0515
+    # (0.0514); MM KH 0.1040 (0.1021), RT 0.0396 (0.0381), combined 0.0283
+    # (0.0283). The gate is 1.1 times the uniform-mesh MM error.
+    uniform_mimetic_errors = (0.1021, 0.03815, 0.02828)
+    for (parameters, uniform_mimetic_error) in zip(
+                (
+                    _kh_parameters(1.0, 0.5),
+                    _rt_parameters(3.0, 0.5),
+                    COMBINED_PARAMETERS,
+                ),
+                uniform_mimetic_errors,
+            ), pressure_projection in (CMDGFMProjection(), MimeticProjection())
         result = interfacial_instability(
             ; cells_per_wavelength = 32, mixed_level = true,
             parameters...,
             tolerance = 1.0e-7, max_cycles = 3000,
-            pressure_projection = CMDGFMProjection(),
+            pressure_projection,
         )
         stable = abs(imag(result.dispersion.offset)) <= sqrt(eps())
         expected_ratio = stable ? 1.0 : 2.0
@@ -294,10 +304,13 @@ end
             prod(result.mesh.root.layout) * 4^result.mesh.max_level
         @test result.flow.steps > 0
         _test_instability_diagnostics(result)
-        @test isfinite(
-            normalized_amplitude_error(
-                result.times, result.amplitudes, result.analytical,
-            )
+        error = normalized_amplitude_error(
+            result.times, result.amplitudes, result.analytical,
         )
+        @test isfinite(error)
+        if pressure_projection isa MimeticProjection
+            println("mixed-level instability MM error=$error (uniform $uniform_mimetic_error)")
+            @test error <= 1.1uniform_mimetic_error
+        end
     end
 end
