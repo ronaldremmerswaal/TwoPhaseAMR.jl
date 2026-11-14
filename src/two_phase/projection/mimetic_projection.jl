@@ -776,7 +776,10 @@ potentials of the cells without own curvature hydrostatically to the pressure
 points of their cut neighbours; `:hfpoint` also refers the cut cells to the
 interface points of their height-function columns
 ([`_mimetic_height_point`](@ref)); `:plicpoint` to the point of their own PLIC
-line on the column of the dominant normal axis through the cell centre."""
+line on the column of the dominant normal axis through the cell centre;
+`:hftangent` and `:hfproject` are `:hfpoint` with only the component of
+`x* - x^HF` along the cell's PLIC line, respectively with `x^HF` projected
+onto that line."""
 const _MIMETIC_HYDROSTATIC_POTENTIAL = Ref(:off)
 
 """Interface point (offset from the cell centre in cell units) to which the
@@ -834,7 +837,10 @@ of the dominant normal axis through the cell centre (`:plicpoint`), and every
 other cell takes the `C(1 - C)`-weighted mean of the `Ψ` of its cut face
 neighbours, `ψ_c = mean(Ψ) + Δρ g⋅x*_c`. With `σ = 0` there is no curvature
 to refer: the cut cells keep `x_ref = x*_c` in every mode (the Gram-moment
-samples) and only the extension to the other cells is hydrostatic."""
+samples) and only the extension to the other cells is hydrostatic.
+`:hftangent` takes `x_ref = x* - ((x* - x^HF)⋅t̂) t̂` (only the shift along the
+PLIC line, unit tangent `t̂`), `:hfproject` the orthogonal projection of
+`x^HF` onto the PLIC line of the cell."""
 function _mimetic_cell_potential!(
         workspace::MimeticProjectionWorkspace{T}, interface, kappa, sigma, gravity, density;
         prescribed = false,
@@ -848,8 +854,10 @@ function _mimetic_cell_potential!(
         end
         return psi
     end
-    mode in (:pure, :hfpoint, :plicpoint) || throw(ArgumentError("unknown hydrostatic potential mode $mode"))
-    values = mode === :hfpoint && !iszero(sigma) ? _fill_height_values!(interface) : nothing
+    mode in (:pure, :hfpoint, :plicpoint, :hftangent, :hfproject) ||
+        throw(ArgumentError("unknown hydrostatic potential mode $mode"))
+    column = mode in (:hfpoint, :hftangent, :hfproject)
+    values = column && !iszero(sigma) ? _fill_height_values!(interface) : nothing
     assembly = workspace.assembly
     topology = workspace.topology
     references = workspace.references
@@ -870,7 +878,7 @@ function _mimetic_cell_potential!(
             x, y = assembly.pressure_x[cell], assembly.pressure_y[cell]
             if mode !== :pure && !iszero(sigma)
                 center = cellcenter(mesh, reference.block, reference.i, reference.j)
-                point = mode === :hfpoint ?
+                point = column ?
                     _mimetic_height_point(values[reference.block], reference.i + 4, reference.j + 4) : nothing
                 if !isnothing(point)
                     x, y = center[1] + h * point[1], center[2] + h * point[2]
@@ -882,6 +890,22 @@ function _mimetic_cell_potential!(
                         x, y = center[1], center[2] + h * clamp(intercept / ny, -half, half)
                     else
                         x, y = center[1] + h * clamp(intercept / nx, -half, half), center[2]
+                    end
+                end
+                if mode === :hftangent || mode === :hfproject
+                    nx, ny = _get(interface.normal_x, reference), _get(interface.normal_y, reference)
+                    norm = hypot(nx, ny)
+                    if norm > zero(T)
+                        nx, ny = nx / norm, ny / norm
+                        if mode === :hftangent
+                            # x* - x_ref = tangential part of x* - x^HF.
+                            dn = (assembly.pressure_x[cell] - x) * nx + (assembly.pressure_y[cell] - y) * ny
+                        else
+                            # Distance of x^HF from the PLIC line n⋅(x - c)/h = a.
+                            dn = -((x - center[1]) * nx + (y - center[2]) * ny -
+                                h * _get(interface.intercept, reference) / norm)
+                        end
+                        x, y = x + dn * nx, y + dn * ny
                     end
                 end
             end
