@@ -369,9 +369,6 @@ function static_droplet_case(
     )
 end
 
-_static_drop_finite_growth_failure(model, ratio) =
-    model === :mimetic && (ratio == 1.0 || ratio == 3.0)
-
 @testset "Static-droplet stability" begin
     prescribed = Dict{Tuple{Symbol, Float64, Int}, Float64}()
     measured = Dict{Tuple{Symbol, Float64, Int, Float64}, NamedTuple}()
@@ -414,66 +411,32 @@ _static_drop_finite_growth_failure(model, ratio) =
                 @test fine.energy_late <=
                     fine.energy_early * (1 + STATIC_DROP_ENERGY_GROWTH_TOLERANCE)
             else
-                if _static_drop_finite_growth_failure(model, ratio)
-                    # NUMERICS CONCERN: at finite La the two-velocity mimetic
-                    # projection amplifies both phase velocities at density
-                    # ratios 1 and 3. Measured max|u|, first half -> second
-                    # half at t = 0.4. DR 1, n = 16: liquid 4.0e-2 -> 1.4e-1,
-                    # gas 9.1e-2 -> 1.5e-1; n = 32: liquid 4.6e-3 -> 1.9e-2,
-                    # gas 3.2e-3 -> 4.3e-3. DR 3, n = 16: liquid 1.1e-1 ->
-                    # 2.4e-1, gas 7.8e-1 -> 1.03; n = 32: liquid 5.1e-3 ->
-                    # 5.7e-3, gas 9.0e-3 -> 1.9e-2.
-                    @test_broken coarse.liquid_late <= coarse.liquid_early
-                    @test_broken coarse.gas_late <= coarse.gas_early
-                    @test_broken fine.liquid_late <= fine.liquid_early
-                    @test_broken fine.gas_late <= fine.gas_early
-                elseif model === :mimetic && ratio == 1000.0
-                    # NUMERICS CONCERN: at DR 1000 the n = 16 liquid current
-                    # grows (3.3e-1 -> 5.3e-1) while the larger gas current
-                    # decays (40.0 -> 37.1); the joint maximum would hide it.
-                    # At n = 32 both decay; the gas velocity is the
-                    # small-aperture defect cited at the capillary number.
-                    @test_broken coarse.liquid_late <= coarse.liquid_early
-                    @test coarse.gas_late <= coarse.gas_early
-                    @test fine.liquid_late <= fine.liquid_early
-                    @test fine.gas_late <= fine.gas_early
-                else
-                    @test coarse.liquid_late <= coarse.liquid_early
-                    @test coarse.gas_late <= coarse.gas_early
-                    @test fine.liquid_late <= fine.liquid_early
-                    @test fine.gas_late <= fine.gas_early
-                end
-                if _static_drop_finite_growth_failure(model, ratio) &&
-                        ratio == 1.0
-                    # NUMERICS CONCERN: at DR 1, n = 16 the finite-La energy
-                    # does not decay: first and last k = 4 peaks are both
-                    # 2.2e-4 (one peak above the 5% threshold, no envelope).
-                    @test_broken coarse.last_peak <=
-                        STATIC_DROP_ENERGY_DECAY_RATIO * coarse.first_peak
-                elseif _static_drop_finite_growth_failure(model, ratio) &&
-                        ratio == 3.0
-                    # NUMERICS CONCERN: at DR 3, n = 16 the energy grows:
-                    # first k = 4 peak 4.9e-4, last 5.4e-3. At n = 32 the
-                    # same case decays (5.9e-7 -> 1.5e-7) and is asserted.
-                    @test_broken coarse.last_peak <=
-                        STATIC_DROP_ENERGY_DECAY_RATIO * coarse.first_peak
-                else
-                    @test coarse.last_peak <=
-                        STATIC_DROP_ENERGY_DECAY_RATIO * coarse.first_peak
-                end
+                # The interphase drag (default) removes the slip of the
+                # thin minority layers that drove the mimetic currents at
+                # finite La. Measured max|u|, first half -> second half at
+                # t = 0.4, mimetic, n = 16: DR 1 liquid 4.6e-2 -> 1.8e-2, gas
+                # 7.8e-2 -> 3.2e-2 (without drag 4.0e-2 -> 1.4e-1, 9.1e-2 ->
+                # 1.5e-1); DR 3 liquid 5.2e-2 -> 1.7e-2, gas 2.1e-1 -> 6.1e-2
+                # (without 1.1e-1 -> 2.4e-1, 7.8e-1 -> 1.03); DR 1000 liquid
+                # 1.6e-1 -> 4.4e-2 (without 3.3e-1 -> 5.3e-1).
+                @test coarse.liquid_late <= coarse.liquid_early
+                @test coarse.gas_late <= coarse.gas_early
+                @test fine.liquid_late <= fine.liquid_early
+                @test fine.gas_late <= fine.gas_early
+                # k = 4 peaks with the drag, mimetic n = 16: DR 1 2.0e-4 ->
+                # 1.0e-5, DR 3 3.4e-4 -> 3.9e-5 (without: 2.2e-4 -> 2.2e-4
+                # and 4.9e-4 -> 5.4e-3).
+                @test coarse.last_peak <=
+                    STATIC_DROP_ENERGY_DECAY_RATIO * coarse.first_peak
                 @test fine.last_peak <=
                     STATIC_DROP_ENERGY_DECAY_RATIO * fine.first_peak
                 if model === :mimetic && ratio == 1000.0
                     # NUMERICS CONCERN: the single liquid viscosity scale
-                    # exposes the small-aperture gas current: max|u| = 37.1
-                    # (n = 16) and 0.857 (n = 32) give Ca 4.8e-1 and 1.1e-2,
-                    # against the 5e-3 bound. Phase-I's per-phase force (A)
-                    # bounds these gas velocities at 0.05-0.26.
-                    @test_broken coarse.capillary <= STATIC_DROP_CAPILLARY_BOUND
-                    @test_broken fine.capillary <= STATIC_DROP_CAPILLARY_BOUND
-                elseif model === :mimetic && ratio == 3.0
-                    # NUMERICS CONCERN: at DR 3, n = 16 the gas current 1.03
-                    # gives Ca 1.3e-2 (n = 32 decays and passes at 2.4e-4).
+                    # exposes the small-aperture gas current at n = 16:
+                    # max|u| = 2.39 with the drag (37.1 without) gives Ca
+                    # 3.1e-2 against the 5e-3 bound; n = 32 passes with the
+                    # drag at 1.9e-3 (1.1e-2 without). Phase-I's per-phase
+                    # force (A) bounds these gas velocities at 0.05-0.26.
                     @test_broken coarse.capillary <= STATIC_DROP_CAPILLARY_BOUND
                     @test fine.capillary <= STATIC_DROP_CAPILLARY_BOUND
                 else

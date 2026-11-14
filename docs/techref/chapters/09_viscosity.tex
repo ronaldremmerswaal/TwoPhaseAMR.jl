@@ -842,7 +842,8 @@ $\stagdens_f=\facemass{\liq}{f}+\facemass{\gas}{f}$,
   \qquad
   \lambda_f=\frac{\dragcond_f}{\stagvol{f}}\roundpar{\frac{1}{\facemass{\liq}{f}}+\frac{1}{\facemass{\gas}{f}}},
   \qquad
-  \mathrm{Re}_f=a_f\abs{\jumpvelo_f},\quad a_f=\frac{h_f\stagdens_f}{\visc_{\interface}(\clampfrac{f})},\\
+  \mathrm{Re}_f=a_f\abs{\jumpvelo_f},\quad a_f=\frac{h_f}{\nu_{\interface}},\quad
+  \nu_{\interface}=\min\roundpar{\frac{\visc^{\liq}}{\dens^{\liq}},\frac{\visc^{\gas}}{\dens^{\gas}}},\\
   \frac{\dd\jumpvelo_f}{\dd\timevar}=-\frac{\lambda_f\jumpvelo_f}{1+a_f\abs{\jumpvelo_f}},
   \qquad
   a_f\abs{\jumpvelo^{+}_f}e^{a_f\abs{\jumpvelo^{+}_f}}=a_f\abs{\jumpvelo_f}e^{a_f\abs{\jumpvelo_f}}e^{-\lambda_f\dt},\\
@@ -856,7 +857,12 @@ $\facemass{\liq}{f}\stagvol{f}\,\dot\velo^{\liq}_f=\dragcond_f\jumpvelo_f/(1+\ma
 over the step (the Lambert-$W$ relation, solved by Newton's method from below,
 where the iterates of the concave $w+\log w$ increase monotonically), applied
 to the result of~\cref{eq:viscosity:two-velocity}; $h_f$ is the mean cell
-width along $\fnormal{f}$. $\mathrm{Re}_f=\abs{\jumpvelo_f}h_f/\nu_f$ is the
+width along $\fnormal{f}$; $\nu_{\interface}$ depends on the phase properties
+only (no volume fraction), and the layer counts as resolved only if it is
+resolved in both phases (the effusivity-weighted diffusivity
+$\roundpar{(\visc^{\liq}+\visc^{\gas})/(\sqrt{\dens^{\liq}\visc^{\liq}}+\sqrt{\dens^{\gas}\visc^{\gas}})}^2$
+of two viscous half-spaces gave the same wave errors and a larger
+Kelvin--Helmholtz error at density ratio ten). $\mathrm{Re}_f=\abs{\jumpvelo_f}h_f/\nu_{\interface}$ is the
 cell Reynolds number of the jump: a grid-scale jump spreads by viscosity to the
 thickness $\delta_s=h_f\mathrm{Re}_f^{-1/2}$ while it crosses a cell. Three
 regimes follow from the slip length $\delta_f\mathrm{Re}_f$: a resolved shear

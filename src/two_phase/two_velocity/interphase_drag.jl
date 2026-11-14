@@ -22,8 +22,9 @@ the phase viscosity mixture of the staggered liquid fraction under the stress
 operator's averaging rule (harmonic by default).
 
 `Re_j = |j| h / nu`, with the mean cell width `h` along the face normal and
-`nu = mu_Gamma / rho_f` at the staggered mixture density, is the cell
-Reynolds number of the jump: a grid-scale jump spreads by viscosity to the
+`nu = min(nu_liquid, nu_gas)` (a layer counts as resolved only if it is
+resolved in both phases; no volume fraction enters), is the cell Reynolds
+number of the jump: a grid-scale jump spreads by viscosity to the
 thickness `delta_s = h Re_j^(-1/2)` while it crosses a cell. A jump with
 `Re_j << 1` belongs to a resolved shear layer (`delta_s >> h`) and is
 removed (no slip); one with `Re_j >> 1` is an unresolved vortex sheet
@@ -346,6 +347,9 @@ function _interphase_drag!(
     faces = interface.mesh.faces
     blocks = interface.mesh.blocks
     rho_liquid, rho_gas = density
+    # Interface kinematic viscosity of Re_j from the phase properties only: a
+    # layer counts as resolved only if it is resolved in both phases.
+    nu = T(min(viscosity[1] / rho_liquid, viscosity[2] / rho_gas))
     @_parallel for index in 1:length(faces)
         @inbounds begin
             liquid_value = liquid[index]
@@ -367,9 +371,8 @@ function _interphase_drag!(
                 blocks[face.minus.block].spacing[face.axis] +
                     blocks[face.plus.block].spacing[face.axis]
             ) / 2
-            mu = T(_phase_dynamic_viscosity(fraction, viscosity, averaging))
-            # a = h / nu with nu = mu_Gamma / rho_f: Re_j = a |j|.
-            new_jump = _slip_jump(jump, rate * dt, T(width) * total_mass / mu)
+            # Re_j = a |j| with a = h / nu.
+            new_jump = _slip_jump(jump, rate * dt, T(width) / nu)
             # Equal and opposite momentum changes.
             change = (jump - new_jump) / total_mass
             liquid[index] = muladd(gas_mass, change, liquid_value)
