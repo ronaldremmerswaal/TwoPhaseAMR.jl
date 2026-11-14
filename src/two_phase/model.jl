@@ -1,6 +1,7 @@
 struct TwoPhaseModel{
         T, M, F <: AbstractSurfaceTensionMethod,
         P <: AbstractTwoVelocityProjection, G <: InterfaceField{T, M}, Q <: Tuple,
+        D <: Union{Nothing, InterphaseDrag},
     }
     interface::G
     density::NTuple{2, T}
@@ -10,10 +11,12 @@ struct TwoPhaseModel{
     formulation::F
     scalars::Q
     pressure_projection::P
+    interphase_drag::D
 end
 function TwoPhaseModel(
         physics::TwoPhase{<:InterfaceField{T, M}};
         pressure_projection = CMDGFMProjection(),
+        interphase_drag = InterphaseDrag(),
     ) where {T, M}
     interface = physics.interface
     pressure_projection isa AbstractTwoVelocityProjection || throw(
@@ -21,17 +24,18 @@ function TwoPhaseModel(
             "pressure_projection must be CMDGFMProjection() or MimeticProjection()",
         ),
     )
+    _check_interphase_drag(interphase_drag)
     _validate_two_velocity_projection(pressure_projection, interface)
     any(a -> interface.mesh.periodic[a] && !iszero(physics.gravity[a]), 1:2) &&
         throw(ArgumentError("gravity requires nonperiodic boundaries in its direction"))
     tension = physics.surface_tension
     return TwoPhaseModel{
         T, M, typeof(tension.method), typeof(pressure_projection),
-        typeof(interface), typeof(physics.scalars),
+        typeof(interface), typeof(physics.scalars), typeof(interphase_drag),
     }(
         interface, T.(physics.density), T.(physics.dynamic_viscosity),
         T(tension.coefficient), T.(physics.gravity), tension.method,
-        physics.scalars, pressure_projection,
+        physics.scalars, pressure_projection, interphase_drag,
     )
 end
 

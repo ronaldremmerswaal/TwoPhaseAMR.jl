@@ -830,6 +830,12 @@
 \DefineNotation{\rhsvec}{\mathsf{b}}{\rhsvec}{Right-hand side of a linear solve}{\code{right_hand_side}}{new}
 \DefineNotation{\soltol}{\epsilon_{\mathrm{tol}}}{\soltol}
   {Relative tolerance of a viscous solve}{\code{tolerance}}{new}
+\DefineNotation{\jumpvelo}{\jmath}{\jumpvelo_f}
+  {Phase-velocity jump $\velo^{\gas}_f-\velo^{\liq}_f$ of a mixed face (\cref{eq:viscosity:drag})}
+  {\code{jump}}{new}
+\DefineNotation{\dragcond}{\mathsf{W}_{\interface}}{\dragcond_f}
+  {Interphase drag conductance $\visc_{\interface}\abs{\interface_f}w_f/\delta_f$ (\cref{eq:viscosity:drag})}
+  {\code{conductance}}{new}
 
 % ===========================================================================
 \NotationGroup{transfer}{AMR transfer and multigrid (Chapters 11--12)}

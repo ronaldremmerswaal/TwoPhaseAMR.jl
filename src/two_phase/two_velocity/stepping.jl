@@ -216,6 +216,9 @@ function _diffusion_substep!(
             dirichlet_faces = diffusion.dirichlet_faces,
         )
     end
+    # The common increment leaves the jump unchanged and the drag the mixture,
+    # so the two updates commute and the full drag step needs no splitting.
+    _interphase_drag!(velocity, model.interphase_drag, model, diffusion, dt)
     _mark_inactive_phase_velocities!(
         velocity, model.interface, workspace.two_phase.inactive_failures,
     )
@@ -367,7 +370,8 @@ Viscosity acts implicitly on the phase-mass weighted one-velocity state; its
 common increment is applied to both phases. With `MimeticProjection` the
 phase values instead take the implicit-midpoint step of the same stress in
 the projection's metric (see `_mimetic_viscous_step!`), which is that common
-increment where the metric is the staggered phase mass.
+increment where the metric is the staggered phase mass. The interphase drag
+of the model then relaxes the phase-velocity jump of the mixed faces.
 
 The two-velocity projection keeps a Neumann pressure boundary and cannot
 correct open normal velocities. Boundary preparation extrapolates each phase;

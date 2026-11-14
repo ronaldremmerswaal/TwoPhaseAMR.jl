@@ -535,9 +535,11 @@ end
 function _mimetic_viscous_flow(n, density; viscosity = 1.0e-2, levelset = _mimetic_circle(n))
     mesh = BlockTreeMesh(block_size = (n, n), periodic = (true, false))
     interface = InterfaceField(mesh, levelset; lipschitz = 1)
+    # The identities are those of the stress step alone; the interphase drag
+    # in the same system is tested in interphase_drag.jl.
     flow = FlowSimulation(
         mesh, TwoPhase(interface; density, dynamic_viscosity = (viscosity, viscosity));
-        velocity_model = TwoVelocityModel(pressure_projection = MimeticProjection()),
+        velocity_model = TwoVelocityModel(pressure_projection = MimeticProjection(), interphase_drag = nothing),
         boundary = FreeSlip(),
     )
     model = flow.system.two_phase
