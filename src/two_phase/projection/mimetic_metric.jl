@@ -508,13 +508,43 @@ mutable struct _MimeticAssembly{T}
     sides::Vector{Int}
     lengths::Vector{T}
     moments::Matrix{T}
+    # Diagnostics (study/impact-velocities): per value the metric status, see
+    # `_MIMETIC_STATUS_NAMES`, and the donor of its tie (0 without a tie).
+    status::Vector{Int8}
+    tie_donor::Vector{Int}
 end
+
+"""Names of the metric status codes in `_MimeticAssembly.status`."""
+const _MIMETIC_STATUS_NAMES = (
+    "uncut", "gram", "stabilised", "small-untied", "slaved", "lumped0", "lumped+", "gridline",
+)
+
+"""Study switches (study/impact-velocities; `0` = off, the default): a phase
+value pair `(u^l_f, u^g_f)` whose minor staggered phase fraction `α` is below
+`_MIMETIC_SLIP_TIE[]` gets the tie `w (u^l_f - u^g_f)²` in the metric with
+`w = _MIMETIC_SLIP_WEIGHT[] (1 - α/_MIMETIC_SLIP_TIE[]) m_major`, the staggered
+mass of the major phase: an inertia floor for the relative (slip) motion of
+nearly empty phase values."""
+const _MIMETIC_SLIP_TIE = Ref(0.0)
+const _MIMETIC_SLIP_WEIGHT = Ref(1.0)
+
+"""Study switch (study/impact-velocities; `0` = off, the default): with
+`K = _MIMETIC_RESPONSE_CAP[] > 0`, the minor phase value of a face with two
+phase values (aperture `a`, staggered mass `m`) is tied to the major phase
+value with `w = max(0, a (m_l + m_g)/K - m)`, so that its inertia per
+aperture is at least `1/K` times that of the face's mixture: the pressure
+response `a|f|/m` of the minor value is capped at `K` times the mixture's."""
+const _MIMETIC_RESPONSE_CAP = Ref(0.0)
+"""`:minor`: cap only the phase with the smaller staggered fraction (the tie
+weight jumps where the minor phase changes, at `α = 1/2`); `:both`: the tie
+weight is the larger of the two phases' deficits, continuous in `α`."""
+const _MIMETIC_RESPONSE_CAP_MODE = Ref(:minor)
 
 function _MimeticAssembly(::Type{T}) where {T}
     return _MimeticAssembly{T}(
         typemax(UInt), Int[], Int[], Int[], Int8[], T[], T[], T[], 0, Int[], Int[], T[],
         spzeros(T, 0, 0), nothing, T[], T[], 0, 0, 0, 0, 0, T[], Int[], Int[], T[],
-        falses(0), Int8[], zeros(T, 4, 4), zeros(Int, 4), zeros(T, 4), zeros(T, 4, 2),
+        falses(0), Int8[], zeros(T, 4, 4), zeros(Int, 4), zeros(T, 4), zeros(T, 4, 2), Int8[], Int[],
     )
 end
 
@@ -709,6 +739,13 @@ function _assemble_cut_cell_metric!(
             (block_diagonal[assembly.rows[index]] += assembly.values[index])
     end
     reaches(dof) = dof > 0 && assembly.dof_aperture[dof] > zero(T)
+    status = resize!(assembly.status, dofs)
+    tie_donor = resize!(assembly.tie_donor, dofs)
+    for dof in 1:dofs
+        # 1 uncut (diagonal), 2 Gram block; overwritten below
+        status[dof] = assembly.dof_phase[dof] == 3 ? Int8(8) : assembly.touched[dof] ? Int8(2) : Int8(1)
+        tie_donor[dof] = 0
+    end
     for dof in 1:dofs
         face = assembly.dof_face[dof]
         phase = assembly.dof_phase[dof]
@@ -722,6 +759,7 @@ function _assemble_cut_cell_metric!(
             if !(block_diagonal[dof] > T(1.0e-12) * density[phase == 2 ? 2 : 1] * h^2)
                 _mimetic_add!(assembly, dof, dof, mass)
                 lumped_values += 1
+                status[dof] = Int8(7)
             end
             fraction = data.liquid_fraction[face]
             zero(T) < fraction < one(T) && aperture < T(0.5) || continue
@@ -731,9 +769,11 @@ function _assemble_cut_cell_metric!(
             )
             ring = _mimetic_face_ring(topology, face, axis)
             donor = _mimetic_donor(topology, mesh, ring, dof_at, larger, assembly.dof_aperture)
-            donor == 0 && continue
+            donor == 0 && (status[dof] == 2 && (status[dof] = Int8(4)); continue)
             _mimetic_add_tie!(assembly, dof, donor, (one(T) - 2aperture) * mass)
             stabilised += 1
+            status[dof] == 2 && (status[dof] = Int8(3))
+            tie_donor[dof] = donor
             continue
         end
         ring = _mimetic_face_ring(topology, face, axis)
@@ -741,9 +781,42 @@ function _assemble_cut_cell_metric!(
         if donor == 0
             _mimetic_add!(assembly, dof, dof, mass)
             lumped_values += 1
+            status[dof] = Int8(6)
         else
             _mimetic_add_tie!(assembly, dof, donor, mass)
             slaved += 1
+            status[dof] = Int8(5)
+            tie_donor[dof] = donor
+        end
+    end
+    # Study switch (study/impact-velocities, default off): interphase slip tie
+    # of the two phase values of a face whose minor phase is nearly empty.
+    slip = T(_MIMETIC_SLIP_TIE[])
+    if slip > zero(T)
+        weight_scale = T(_MIMETIC_SLIP_WEIGHT[])
+        for face in 1:faces
+            liquid, gas = assembly.liquid_dof[face], assembly.gas_dof[face]
+            (liquid > 0 && gas > 0 && liquid != gas) || continue
+            fraction = data.liquid_fraction[face]
+            minor = min(fraction, one(T) - fraction)
+            minor < slip || continue
+            major = fraction >= T(0.5) ? assembly.dof_mass[liquid] : assembly.dof_mass[gas]
+            _mimetic_add_tie!(assembly, liquid, gas, weight_scale * (one(T) - minor / slip) * major)
+        end
+    end
+    cap = T(_MIMETIC_RESPONSE_CAP[])
+    if cap > zero(T)
+        for face in 1:faces
+            liquid, gas = assembly.liquid_dof[face], assembly.gas_dof[face]
+            (liquid > 0 && gas > 0 && liquid != gas) || continue
+            total = assembly.dof_mass[liquid] + assembly.dof_mass[gas]
+            deficit(dof) = assembly.dof_aperture[dof] * total / cap - assembly.dof_mass[dof]
+            weight = if _MIMETIC_RESPONSE_CAP_MODE[] === :both
+                max(deficit(liquid), deficit(gas))
+            else
+                deficit(data.liquid_fraction[face] >= T(0.5) ? gas : liquid)
+            end
+            weight > zero(T) && _mimetic_add_tie!(assembly, liquid, gas, weight)
         end
     end
     # Band: every value with a non-diagonal or non-uncut contribution.

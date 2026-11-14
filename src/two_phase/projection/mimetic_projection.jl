@@ -734,6 +734,13 @@ function _mimetic_cell_curvature!(
     return kappa
 end
 
+"""Study switch (study/impact-velocities): `:perphase` (default) is the
+per-phase force below; `:jump` gives every phase value the package face
+jump `a^π σ κ_f [I]_f |f|` (CGFM/CSF face curvature), as the identified
+grid-line values, so cells without an indicator jump (gas debris inside the
+liquid) exert no force."""
+const _MIMETIC_FORCE_MODE = Ref(:perphase)
+
 """Add the per-phase surface-tension increment `dt 𝓜⁻¹(a^π J^π)` to each phase.
 
 Each phase has its own capillary potential, `φ^g = σκI` and
@@ -778,14 +785,21 @@ function _mimetic_capillary_force!(
         minus, plus = topology.face_cells[1, face], topology.face_cells[2, face]
         cm = _conditional_fraction(interface, entry.minus)
         cp = _conditional_fraction(interface, entry.plus)
-        if liquid > 0 && liquid == gas
+        if (liquid > 0 && liquid == gas) || _MIMETIC_FORCE_MODE[] === :jump
             jump = _surface_tension_jump(formulation, cm, cp)
             (iszero(sigma) || iszero(jump)) && continue
             value = isnothing(curvature) ? _face_curvature(interface, entry) : curvature
             if isnothing(value)
                 unresolved += 1
             else
-                rhs[liquid] = sigma * value * jump * entry.area
+                # Study switch `:jump`: every value gets a^π σ κ_f [I]_f |f|.
+                jump_force = sigma * value * jump * entry.area
+                if liquid == gas
+                    rhs[liquid] = jump_force
+                else
+                    liquid > 0 && (rhs[liquid] = assembly.dof_aperture[liquid] * jump_force)
+                    gas > 0 && (rhs[gas] = assembly.dof_aperture[gas] * jump_force)
+                end
             end
             continue
         end
