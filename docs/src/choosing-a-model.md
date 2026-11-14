@@ -48,17 +48,25 @@ A shared initializer is copied to both phase fields. To initialize different
 velocities, pass a `(liquid, gas)` tuple of callables or `FaceVelocity`
 objects. The tuple never selects the velocity model implicitly.
 
+The projection decides the pressure and force discretisation; nothing else
+has to be selected. `CMDGFMProjection()` (the default) is the thesis'
+conservative multidimensional ghost-fluid projection.
 `TwoVelocityModel(pressure_projection=MimeticProjection())` selects the
-optional mimetic cut-cell projection: the kinetic-energy-orthogonal
-projection in a non-diagonal metric built, per cut cell and phase, on the
-Gram tensor of the wetted face parts (the shared face apertures and their
-midpoints; no phase polygon is needed). It runs on uniform meshes of square
-cells without solids and throws for adaptive meshes, solids and cut cells at
-a wall. A cut cell whose Gram tensor admits no consistent block gets a
-least-squares fallback and is counted in
-`MimeticProjectionStats.defective_cells`, which the run summary prints. Each
-projection solves a conjugate-gradient system with a sparse factorization of
-the cut-cell block, so it is more expensive than the CMDGFM.
+mimetic projection: the kinetic-energy-orthogonal projection in a
+non-diagonal metric built, per cut cell and phase, on the Gram tensor of the
+wetted face parts (the shared face apertures and their midpoints; no phase
+polygon is needed), with surface tension through the same gradient map and
+gravity as the uniform acceleration of both phases. It takes no options and
+works with either surface-tension formulation; it builds its own pressure
+solver, so non-default `pressure_*` solver settings of the system throw
+`ArgumentError`. It runs on uniform meshes of
+square cells without solids and throws for adaptive meshes, solids and cut
+cells at a wall. A cut cell whose Gram tensor admits no consistent block gets
+a least-squares fallback and is counted in
+`MimeticProjectionStats.defective_cells`; the run summary prints the totals of
+a `simulate!` call. Each projection solves a conjugate-gradient system with a
+sparse factorization of the cut-cell block, so it is more expensive than the
+CMDGFM.
 See the technical reference, section
 [Mimetic cut-cell projection](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:projection:mimetic).
 

@@ -90,7 +90,7 @@ export ProjectionWorkspace, project!
 export AbstractTwoVelocityProjection
 export CMDGFMProjection, CMDGFMProjectionSolver, CMDGFMProjectionWorkspace
 export CMDGFMProjectionStats, cmdgfm_gradient!, cmdgfm_jump_interpolant
-export AbstractCutCellMetric, MFDCutCellMetric, MimeticProjection
+export MimeticProjection
 export MimeticProjectionSolver, MimeticProjectionWorkspace, MimeticProjectionStats
 export PhysicalDimension, DiagnosticInfo, diagnostic_info
 export DiagnosticGroup, diagnostic_groups, diagnostic_names

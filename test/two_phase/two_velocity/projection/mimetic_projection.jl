@@ -3,12 +3,11 @@ include("../helpers.jl")
 include("mimetic_lab_helpers.jl")
 
 function _mimetic_case(
-        n, levelset; density = (1.0, 1.0), metric = MFDCutCellMetric(),
-        periodic = (true, false), lipschitz = 1.5,
+        n, levelset; density = (1.0, 1.0), periodic = (true, false), lipschitz = 1.5,
     )
     mesh = BlockTreeMesh(; block_size = (n, n), periodic)
     interface = InterfaceField(mesh, levelset; lipschitz)
-    solver = MimeticProjectionSolver(interface; density, metric)
+    solver = MimeticProjectionSolver(interface; density)
     workspace = MimeticProjectionWorkspace(solver)
     return (; mesh, interface, solver, workspace)
 end
@@ -40,12 +39,12 @@ _mimetic_circle(n; x = 0.5, y = 0.5, radius = 0.25) =
 @testset "Mimetic projection option and validation" begin
     projection = MimeticProjection()
     @test projection isa AbstractTwoVelocityProjection
-    @test projection.metric isa MFDCutCellMetric
-    @test projection.metric.small_cell_stabilization
-    @test !MFDCutCellMetric(small_cell_stabilization = false).small_cell_stabilization
-    # The polygon fallback and its option are gone: every cut cell has a block.
-    @test_throws MethodError MFDCutCellMetric(nonsimple_cells = :lumped)
-    @test_throws ArgumentError MimeticProjection(metric = :mfd)
+    # The projection implies its metric and force maps: it takes no options.
+    @test_throws MethodError MimeticProjection(metric = :mfd)
+    @test_throws MethodError MimeticProjectionSolver(
+        InterfaceField(BlockTreeMesh(block_size = (8, 8)), (x, y) -> y - 0.53; lipschitz = 1);
+        metric = :mfd,
+    )
     @test TwoVelocityModel(pressure_projection = projection).pressure_projection === projection
     @test TwoVelocityModel().pressure_projection isa CMDGFMProjection
 
@@ -86,6 +85,39 @@ _mimetic_circle(n; x = 0.5, y = 0.5, radius = 0.25) =
         velocity_model = model, boundary = FreeSlip(),
     )
     @test flow.system.two_phase.pressure_projection === projection
+    # The mimetic projection builds its own pressure solver: pressure-solver
+    # settings it would ignore are rejected at construction, naming the option.
+    for (keyword, pressure) in (
+            ("pressure_preconditioner", LinearSolverOptions(preconditioner = :amg)),
+            ("pressure_preconditioner_options", LinearSolverOptions(preconditioner_options = (; pre_sweeps = 2))),
+            ("pressure_krylov", LinearSolverOptions(krylov = TwoPhaseAMR.Krylov.CgWorkspace)),
+            ("pressure_krylov_options", LinearSolverOptions(krylov_options = (; atol = 0.0))),
+        )
+        error = try
+            FlowSimulation(
+                uniform, physics(InterfaceField(uniform, circle; lipschitz = 1));
+                velocity_model = model, boundary = FreeSlip(),
+                numerics = NavierStokesOptions(; pressure),
+            )
+            nothing
+        catch caught
+            caught
+        end
+        @test error isa ArgumentError
+        @test occursin(keyword, sprint(showerror, error))
+        @test occursin("builds its own pressure solver", sprint(showerror, error))
+    end
+    @test_throws ArgumentError NavierStokesSystem(
+        uniform; density = (2.0, 1.0), dynamic_viscosity = (1.0e-3, 1.0e-3),
+        interface = InterfaceField(uniform, circle; lipschitz = 1),
+        two_velocity_projection = projection, pressure_preconditioner = :amg,
+    )
+    # The same settings remain valid for the CMDGFM.
+    @test FlowSimulation(
+        uniform, physics(InterfaceField(uniform, circle; lipschitz = 1));
+        velocity_model = TwoVelocityModel(), boundary = FreeSlip(),
+        numerics = NavierStokesOptions(; pressure = LinearSolverOptions(preconditioner = :ilu)),
+    ) isa FlowSimulation
     # `simulate!` accounts the mimetic solves and reports them in the summary.
     dt = 1.0e-3  # the flow starts at rest without surface tension: no CFL limit
     result = simulate!(flow, 2dt; dt)
@@ -423,7 +455,7 @@ function _mmd_data_point(apertures, starts)
     return xr - defect * ey, yr + defect * ex
 end
 
-@testset "Mimetic Gram blocks: the MM block where the polygon exists, degenerate data" begin
+@testset "Mimetic Gram blocks: the polygon block where the polygon exists, degenerate data" begin
     # Simple cut cells (note on kinetic metrics, prop. gram(d)): the pressure
     # point is the chord midpoint, G = |P| I and the block is that of MM.
     for (apertures, starts) in (
@@ -557,7 +589,7 @@ end
             liquid_mass = fraction, gas_mass = 1 .- fraction,
         )
         assembly = TP._mimetic_assemble_from_data!(
-            case.workspace, MFDCutCellMetric(), mesh, data, flags, zeros(boundaries),
+            case.workspace, mesh, data, flags, zeros(boundaries),
             falses(boundaries), (1.0, 1.0),
         )
         @test (assembly.cut_cells, assembly.defective_cells, assembly.lumped_values) == expected

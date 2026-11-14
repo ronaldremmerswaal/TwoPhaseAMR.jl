@@ -654,8 +654,8 @@ and operator of the one-velocity pressure solver are shared. Tests:
 \section{Mimetic cut-cell projection (option)}\label{sec:projection:mimetic}
 \apitype{MimeticProjection} replaces the CMDGFM in
 \apitype{TwoVelocityModel} on request; the CMDGFM stays the default and its
-results are unchanged. It is candidate~MMd of the mimetic-projection audit's
-note \emph{Kinetic metrics for shared apertures that close no region}:
+results are unchanged. It follows the mimetic-projection audit's note
+\emph{Kinetic metrics for shared apertures that close no region}:
 the kinetic-energy-orthogonal projection of the two phase velocities onto
 vanishing mixture divergence~\cref{eq:projection:mixture-divergence} in a
 non-diagonal kinetic metric~$\mathcal M$, without jump rows. It is defined
@@ -784,7 +784,7 @@ with the rows at the chord midpoint is the slaved form of
 $\mathsf R_P\mathsf R_P^{\transpose}/\meas{P}$ with the rows at the centroid, and
 $\Gamma_c$ is the chord: \cref{eq:projection:mimetic-local} is then the MFD
 product $\mathsf R_P\mathsf R_P^{\transpose}/\meas{P}+\tfrac12\mathsf D_P\mathsf Q\mathsf D_P$
-of the polygon with its chord flux slaved (candidate~MM of the audit), and
+of the polygon with its chord flux slaved, and
 $\mathcal M^{\phase}_c=\tfrac12h^2I$ on an uncut cell. $\mathcal M$ assembles
 $\dens^{\phase}\mathcal M^{\phase}_c$ over cells and phases
 through~\cref{eq:projection:mimetic-slave}; away from the cut cells it is the
@@ -834,8 +834,8 @@ $3\,\%$. A phase value on a face that its phase does not reach
 $\dualvol{f}\facemass{\phase}{f}(\velo^{\phase}_f-\velo^{\phase}_{d(f)})^2$ to the
 neighbouring same-axis face $d(f)$ with the largest aperture of the phase, and
 a value with $0<\phaseaperture{\phase}{f}<\tfrac12$ on a mixed face the same tie
-with the weight $1-2\phaseaperture{\phase}{f}$ (small-cell stabilisation,
-\code{small_cell_stabilization}). Both ties vanish on fields that are constant
+with the weight $1-2\phaseaperture{\phase}{f}$ (small-cell stabilisation).
+Both ties vanish on fields that are constant
 per phase and axis.
 
 \emph{Interface on a grid line.} On an interior face between a pure liquid
@@ -864,7 +864,11 @@ The identification is therefore kept.
 $J_f$ of~\cref{ch:forces} give the increment
 $\dt\,\mathcal M^{-1}(\phaseaperture{\phase}{f}J_f)$, which for the jumps of a
 cell potential $\varphi$ is $-\dt\,\mathcal M^{-1}\mathsf B^{\transpose}\varphi$
-and is therefore removed exactly. Gravity is the uniform acceleration
+and is therefore removed exactly. Both surface-tension formulations
+(\apitype{CGFM}, \apitype{CSF}) enter this map unchanged; for a constant
+curvature both give the jumps of a cell potential ($\sigma\kappa$ times the
+Heaviside or the liquid fraction). The projection has no options of its own.
+Gravity is the uniform acceleration
 $\velo^{\phase}_f\mathrel{+}=\dt\,g\cdot\fnormal{f}$ of every present phase value:
 $\dens^{\phase}g$ is $\mathcal M$ times the constant field, which the metric
 reproduces. (A density-weighted jump force $\mathcal M^{-1}(\phaseaperture{\phase}{f}\stagdens_fJ_f)$
@@ -911,8 +915,7 @@ that differs between the phases and the tolerance $10^{-10}$, the iteration
 counts are $59$, $66$, $67$ for $h=1/32,1/64,1/128$.
 
 \begin{implnote}
-Option \srcsym{src/two_phase/projection/methods.jl}{MimeticProjection},
-\srcsym{src/two_phase/projection/methods.jl}{MFDCutCellMetric};
+Option \srcsym{src/two_phase/projection/methods.jl}{MimeticProjection};
 wet ends \srcsym{src/two_phase/projection/mimetic_metric.jl}{_mimetic_face_sides!},
 pressure point \srcsym{src/two_phase/projection/mimetic_metric.jl}{_mimetic_pressure_point}~\cref{eq:projection:mimetic-point},
 \srcsym{src/two_phase/projection/mimetic_metric.jl}{_mimetic_admissible_point}~\cref{eq:projection:mimetic-interval},
@@ -928,7 +931,7 @@ preconditioner \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_
 forces \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_jump_force!},
 \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_uniform_acceleration!}.
 Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric: symmetry, definiteness, diagonal masses and consistency},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic Gram blocks: the MM block where the polygon exists, degenerate data},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic Gram blocks: the polygon block where the polygon exists, degenerate data},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric on averaged apertures that close no region},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection: idempotence, energy identity and momentum},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection under a uniform acceleration (T3)}

@@ -47,7 +47,7 @@ _two_velocity_projection_solver(projection::CMDGFMProjection, field, density) =
     preconditioner_options = projection.preconditioner_options,
 )
 _two_velocity_projection_solver(projection::MimeticProjection, field, density) =
-    MimeticProjectionSolver(field; density, metric = projection.metric)
+    MimeticProjectionSolver(field; density)
 
 _two_velocity_projection_workspace(solver::CMDGFMProjectionSolver) =
     CMDGFMProjectionWorkspace(solver)
