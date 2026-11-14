@@ -177,3 +177,37 @@ normals or blocks from the VOF donating regions).
 - The merge has uncovered cases (no donor, identified donor) and adds the momentum/energy term μ.
 - DR 1000 static/translating drop currents are 1.2–2× worse under aperture activity.
 - Not run: KH, RT, waves, combined, cost.
+
+---
+
+# Inviscid static drop at n = 64: does the transport cause the growth?
+
+Configuration of `test/integration/static_droplet_stability.jl` (R = 0.2, σ = 1, free-slip box, La = ∞, t = 0.4,
+package HF curvature, `static_droplet_case(:mimetic, …)`), driver `static_hf.jl`, outputs `static_hf.txt` (volume
+activity) and `static_hf_ap.txt` (aperture activity + small ties). Speeds: max |u| on mixed faces with phase aperture > 0.05,
+first → second half of the run. E: largest energy peak in the last third / first third ("—": no peak in the first third;
+then the last-third peak is given). D0 with volume activity reproduces the reported n = 64 numbers exactly.
+
+| n | DR | activity | D0 liquid / gas | DI liquid / gas | DP+mm liquid / gas | E ratio D0 / DI / DP |
+|---|---|---|---|---|---|---|
+| 32 | 1 | volume | 7.6e-3→7.8e-3 / 5.5e-3→5.8e-3 | 7.6e-3→7.7e-3 / 5.5e-3→5.9e-3 | 7.6e-3→7.7e-3 / 5.5e-3→5.9e-3 | 2.18 / 2.21 / 2.21 |
+| 32 | 3 | volume | 8.8e-3→1.1e-2 / 6.8e-3→7.9e-3 | 8.9e-3→1.1e-2 / 6.8e-3→8.1e-3 | 8.8e-3→1.1e-2 / 6.8e-3→8.0e-3 | 1.98 / 2.00 / 2.02 |
+| 32 | 1000 | volume | 9.8e-3→1.1e-2 / 1.0e-2→8.9e-3 | 9.8e-3→1.1e-2 / 1.0e-2→8.8e-3 | 9.8e-3→1.0e-2 / 1.0e-2→8.7e-3 | 1.68 / 1.71 / 1.67 |
+| 64 | 1 | volume | 0.18→**0.82** / 0.012→0.080 | 0.18→0.23 / 0.012→0.015 | 0.18→0.24 / 0.012→0.015 | — (2.2e-6) / 3.14 / 3.15 |
+| 64 | 3 | volume | 0.19→**1.29** / 0.012→0.155 | 0.20→0.73 / 0.012→0.057 | 0.20→0.71 / 0.012→0.054 | — / — (3.1e-6) / 3.00 |
+| 64 | 1000 | volume | 0.15→**7.90** / 0.016→**32.0** | 0.16→4.35 / 0.015→2.17 | 0.16→4.32 / 0.015→2.19 | — (1.1e-2) / — (1.8e-3) / — (1.8e-3) |
+| 32 | 1/3/1000 | aperture | as volume (≤ 1 %) | as volume | as volume | 2.18–1.69 / 2.21–1.71 / 2.22–1.71 |
+| 64 | 1 | aperture | 0.18→0.70 / 0.012→0.062 | 0.18→0.26 / 0.012→0.016 | 0.18→0.26 / 0.012→0.016 | — (2.1e-6) / 3.70 / 3.66 |
+| 64 | 3 | aperture | 0.19→0.73 / 0.012→0.054 | 0.20→0.48 / 0.012→0.028 | 0.20→0.50 / 0.012→0.030 | — (3.4e-6) / 3.77 / 3.83 |
+| 64 | 1000 | aperture | 0.11→0.95 / 0.015→0.24 | 0.12→0.83 / 0.015→0.29 | 0.12→0.83 / 0.015→0.29 | — (3.0e-5) / — (3.4e-5) / — (3.4e-5) |
+
+Findings:
+- No variant removes the growth: every n = 64 run grows in the second half (liquid ×1.3–×8, energy ×3–×4 where measurable),
+  and every n = 32 run keeps the energy growth ×1.7–×2.2 of the current method.
+- The metric-consistent transport (DI, DP+mm; the two agree) reduces it: at DR 1 the n = 64 liquid current grows to 0.23
+  instead of 0.82, at DR 1000 to 4.3 instead of 7.9 and the gas to 2.2 instead of 32.
+- Aperture activity reduces the DR 1000 growth much more than the transport does (D0: liquid 7.9 → 0.95, gas 32 → 0.24,
+  last-third energy 1.1e-2 → 3.0e-5); combined with DI/DP it changes little further (0.83 / 0.29).
+- So the W-transport/𝓜-projection mismatch contributes (it accounts for most of the DR 1 growth at n = 64) but is not the
+  cause of the instability; the residual growth (energy ×3–×4 at n = 64, ×2 at n = 32) is in the force/projection pair, as in
+  the CHF + dual-aperture results of `mm_chf` (energy ×1.16 / ×0.77 with the transport unchanged).
