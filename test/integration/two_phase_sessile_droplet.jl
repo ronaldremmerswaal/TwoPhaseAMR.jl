@@ -252,12 +252,11 @@ end
     # NUMERICS CONCERN: with gravity at the density ratio 1000 (Bo = 1.21) the
     # mimetic shape converges at about first order (rates 0.91, 0.79) and its
     # largest phase value stays near 1 (1.04 at n = 48 against 0.064 for the
-    # CMDGFM). Those values are gas values of small aperture near the top of
-    # the drop, seven cells above the floor; the wall coupling of gravity
-    # changes nothing there, and without gravity (below) the two projections
-    # agree. The per-phase capillary potentials with the height-function
-    # curvature do not balance the gravity of a curved interface at a density
-    # contrast (inference; the curvature model is outside the wall treatment).
+    # CMDGFM): gas values of small aperture near the top of the drop, seven
+    # cells above the floor. The wall coupling of gravity changes nothing there;
+    # the cause is the cell-to-cell scatter of the height-function curvature,
+    # which the per-phase force puts on the liquid (with an affine curvature
+    # the drop stays at rest to 1e-8; numerics review, mm_walls/review).
     @test_broken all(rates["MM"] .>= 1.2)
     @test_broken last(results["MM"]).maximum_velocity <=
         2last(results["CMDGFM"]).maximum_velocity
@@ -276,9 +275,11 @@ end
     # times those of the CMDGFM (0.23 against 0.025, 0.11 against 0.044) and
     # the shape errors 2.5 and 1.8 times. With the exact constant curvature
     # the same drops stay at rest to 1e-10 for a capillary time (the wall
-    # blocks are consistent); the contact cells' height-function curvatures
-    # (at n = 32: 4 to 8 % off at 60°, 34 % in a corner sliver at 120°) drive
-    # the liquid alone through the per-phase force (inference).
+    # blocks are consistent). At 60° the height-function contact-angle closure
+    # over the first wall rows drives it (the exact curvature in rows 1 and 2
+    # gives 0.019 against 0.053 for the CMDGFM); at 120° the near-top slivers
+    # with C ≈ 0.015–0.023 and curvatures 6–9 % high (numerics review,
+    # mm_walls/review).
     for angle in (pi / 3, 2pi / 3)
         inclined = cap(angle)
         @test isfinite(inclined["MM"].maximum_velocity)
