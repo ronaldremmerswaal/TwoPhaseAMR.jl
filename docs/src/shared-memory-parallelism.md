@@ -132,7 +132,7 @@ changes a sign, a rounding, or an iteration count, and a flow can be restarted
 or compared across machines that differ only in `-t`.
 
 The regression oracle records one state, valid for every thread count. The
-`threading_equivalence` test group checks the claim directly. It runs five short
+`threading_equivalence` test group checks the claim directly. It runs seven short
 cases in fresh Julia processes with one, two and four threads, with the grain
 `_PARALLEL_GRAIN[]` at one so that small meshes take the threaded branch of
 every loop:
@@ -140,6 +140,8 @@ every loop:
 | Case | Workload |
 | --- | --- |
 | `capillary` | two-phase CMDGFM capillary wave with interface AMR |
+| `capillary_mimetic` | the capillary wave with `MimeticProjection()`, uniform mesh |
+| `mimetic_amr` | a drop translating through an adapting interface band with `MimeticProjection()`; must regrid |
 | `droplet` | two-phase CMDGFM on an embedded sloped wall (example 09), AMR |
 | `stokes3_two` | the two-velocity Stokes-3 wave (example 10); must regrid |
 | `cylinder` | the one-phase cylinder (example 04) with geometry and vorticity AMR |
@@ -150,8 +152,8 @@ phase, pressure, liquid fraction) and over every recorded diagnostic history
 (its name, the time and step of each sample and the sample values, which are
 vectors for the momentum and volume diagnostics), the step and mesh-update
 counts and the leaf block count, and the group requires all of them to be equal
-across thread counts. The Stokes-3 case must adapt its mesh during the run, so the transfer,
-rebuild and re-solve paths are compared as well. A warm step of the Taylor--Green and the capillary
+across thread counts. The Stokes-3 and the `mimetic_amr` cases must adapt their mesh during the run, so the transfer,
+rebuild and re-solve paths of both two-velocity projections are compared as well. A warm step of the Taylor--Green and the capillary
 case must also stay within a recorded allocation budget at one and at two
 threads, so a threaded launch cannot start allocating per cell or per launch.
 Run it locally with

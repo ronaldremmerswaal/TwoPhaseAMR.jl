@@ -659,9 +659,10 @@ results are unchanged. It follows the mimetic-projection audit's note
 the kinetic-energy-orthogonal projection of the two phase velocities onto
 vanishing mixture divergence~\cref{eq:projection:mixture-divergence} in a
 non-diagonal kinetic metric~$\mathcal M$, without jump rows. It is defined
-for uniform meshes of square cells $h\times h$ without solid, cut cells at
-the domain walls included (paragraph \emph{Walls} below); adaptive meshes,
-solids and non-square cells throw \code{ArgumentError}.
+for meshes of square cells without solid, uniform or adaptive (2:1 graded,
+paragraph \emph{Adaptive meshes} below), cut cells at the domain walls
+included (paragraph \emph{Walls} below); solids and non-square cells throw
+\code{ArgumentError}.
 
 \emph{Projection.} Let $\mathsf B$ be the cell-outflow matrix
 of~\cref{eq:projection:mixture-divergence} on the vector $u$ of all present
@@ -936,6 +937,98 @@ at densities $(1000,1)$ runs through the impact on the wall at $h=1/32$ and
 $1/64$ with the liquid at the physical velocity scale; near-empty phase values
 reach $10^3$--$10^4$ and shorten single steps, as away from walls.
 
+\emph{Adaptive meshes.} On a 2:1 graded mesh (\cref{eq:mesh:grading}) the
+side of a cell next to two finer cells consists of two faces of half its
+length~\cref{eq:mesh:hanging}; there is no coarse face, and $\mathsf B$ is the
+composite divergence~\cref{eq:setting:divergence}: the outflow of the coarse
+cell through that side is the sum of the two fine fluxes, and the defects of
+\cref{sec:projection:defects} divide by the volume $h_c^2$ of each cell $c$.
+The mimetic metric takes the faces as they are. The data of a cell are the
+segments $s$ of its sides, one per face, with outward normal $n_s$, length
+$\ell_sh_c$ ($\ell_s=1$, or $\frac12$ on a side of two faces), wetted
+fraction $b^{\phase}_s=\phaseaperture{\phase}{f}$ of the face and wetted
+midpoint $x^{\phase}_s$ on the segment, its wet end decided as above on the
+half of the side that the face covers. Every sum over the sides
+in~\cref{eq:projection:mimetic-gram,eq:projection:mimetic-point,eq:projection:mimetic-local,eq:projection:mimetic-slave}
+runs over the segments with the wetted length $b^{\phase}_s\ell_s$,
+\begin{equation}\label{eq:projection:mimetic-segments}
+  \mathsf R^{\phase}_c=\bigl[\,b^{\phase}_s\ell_sh_c\,(x^{\phase}_s-x^{*}_c)^{\transpose}\bigr],\qquad
+  \mathsf G^{\phase}_c=\sum_sb^{\phase}_s\ell_sh_c\,n_s(x^{\phase}_s-x^{*}_c)^{\transpose},\qquad
+  \eta_c=\sum_sb^{\liq}_s\ell_sh_c\,n_s .
+\end{equation}
+The segments partition the boundary of the cell, so
+$\mathsf G^{\liq}_c+\mathsf G^{\gas}_c=h_c^2I$ and the statements on the pressure
+point, the admissible interval, consistency, definiteness and walls hold
+verbatim. A fine cell next to a coarser one has one face per side: its data
+are those of a uniform mesh, with the staggered masses
+$\dualvol{f}\facemass{\phase}{f}$ of the composite dual volume~\cref{eq:setting:dual-volume}.
+
+A pure cell with one face per side keeps the masses $\frac12\dens h_c^2$ on its
+values, its Gram block. A pure cell with a side of two faces cannot keep the
+corresponding masses $\frac12\dens h_c\meas{f}$: its segment midpoints lie
+$\pm\frac14h_c$ from the midpoint of the side, so for a constant field $w$
+the rows of the side carry $\dens\meas{f}(\frac12h_cw_n\pm\frac14h_cw_t)$ and
+the diagonal misses the tangential part. It gets the Gram block of its phase
+instead, with $x^{*}_c$ its centre and $\eta_c=0$: $\mathsf G_c=h_c^2I$, the block
+$\mathsf R_c\mathsf R_c^{\transpose}/h_c^2+\frac12\mathsf T^{\transpose}\mathsf D\mathsf Q\mathsf D\mathsf T$
+on its five to eight values is consistent and positive definite. Every block
+being consistent, $\mathcal M_c\mathsf N_c=\mathsf R_c$, a constant field $w$
+gives on a value $(f,\phase)$ the sum over the two cells of the face, whose
+segment on $f$ is the same (a segment of the coarse side is the whole side of
+the fine cell), with opposite orientation,
+\begin{equation}\label{eq:projection:mimetic-transition}
+  (\mathcal Mw+\mathsf Cw)_{(f,\phase)}=\dens^{\phase}\phaseaperture{\phase}{f}\meas{f}\bigl((x_f-x^{*}_{\cminus{f}})-(x_f-x^{*}_{\cplus{f}})\bigr)\cdot w
+  =\dens^{\phase}\phaseaperture{\phase}{f}\meas{f}\,(x^{*}_{\cplus{f}}-x^{*}_{\cminus{f}})\cdot w ,
+\end{equation}
+the face difference of the potential $\dens^{\phase}w\cdot x^{*}$: in a region
+of one phase, $\mathcal Mw+\mathsf Cw$ is the gradient
+$-\mathsf B^{\transpose}(\dens w\cdot x^{*})$, and $\mathcal M^{-1}\mathsf B^{\transpose}$
+maps an affine pressure to the constant field across the transitions. At a
+coarse--fine face the centres are offset tangentially by
+$\pm\frac12h_{\mathrm{fine}}$; with the diagonal masses the identity would
+fail by $\dens\meas{f}\frac14h_cw_t$ there, and a uniform acceleration along
+a transition (gravity along a vertical one) would drive currents of order
+$\dt\,\abs{g}$ at every transition face. With~\cref{eq:projection:mimetic-transition}
+the properties below (rest of a uniform acceleration at equal densities,
+hydrostatics where the pressure points lie on a level line, the balance of a
+constant curvature) hold on adaptive meshes. The projection~\cref{eq:projection:mimetic}
+uses only that $\mathsf B$ is the outflow matrix and $\mathcal M$ symmetric
+positive definite: it is $\mathcal M$-orthogonal with its energy identity,
+and its mixture divergence is exact (to the tolerance) in the composite
+divergence. Its preconditioner is the composite pressure operator with the
+face coefficient $\sum_{\phase}(\phaseaperture{\phase}{f})^2\dualvol{f}/W_r$
+(per conductance $\meas{f}/\facedist{f}$), rebuilt with its multigrid
+hierarchy when the topology changes. The viscous
+step~\cref{eq:projection:mimetic-viscous-drag} uses the composite mixture
+stress $\mathsf K$ of the viscous solve (symmetric positive
+semi-definite), so its dissipation for every $\dt$ holds unchanged.
+
+No level restriction is imposed on cut cells. The interface band
+(\cref{sec:amr:band}) keeps the mixed cells and their neighbours at its
+target level when the mesh adapts, but between two regrids the interface
+moves into cells next to a coarser block, other criteria refine beyond the
+target, and a target below the ceiling leaves coarse cut cells next to finer
+blocks; the segment blocks cover all of these. After a regrid the phase
+values have been transferred by the face map of \cref{sec:amr:face}
+(conservative along each line, constants and affine fields exact,
+divergence-preserving on the refined cells) and the pressure by the cell
+maps of \cref{sec:amr:cell} (constants exact); the cell sides, the metric,
+its factorisations and the preconditioner are rebuilt for the new topology
+generation, and~\cref{eq:projection:regrid} projects in the new metric.
+Measured on twelve composite configurations ($16^2$ base cells in blocks of
+$4^2$; a refined strip with vertical transitions, and two random trees of
+three levels; a drop and a wave crossing the transitions; densities $(1,1)$
+and $(1000,1)$; $36$ cut cells with a side of two faces):
+no defective cell or lumped value, the band symmetric positive definite,
+\cref{eq:projection:mimetic-transition} on every value to
+$2\times10^{-15}$ (relative), the mixture defect after the projection at the
+tolerance $10^{-10}$, the energy identity to $6\times10^{-16}$, and a uniform
+acceleration at equal densities projected to rest to $8\times10^{-15}$. A
+pool at $(1000,1)$ across the transitions stays at rest to $3\times10^{-12}$
+over three steps, a drop of constant curvature to $4\times10^{-16}$ of its
+force, and a drop translating at constant velocity (densities $(10,1)$, with
+viscosity) through $10$ regrids keeps the constant field exactly.
+
 \emph{Surface tension.} The surface tension is a per-phase force through the
 same map (the mimetic-projection audit's note \emph{Small apertures},
 section~3). Each phase has its own capillary potential on the cells,
@@ -1206,6 +1299,9 @@ Gram tensor and local block \srcsym{src/two_phase/projection/mimetic_metric.jl}{
 \srcsym{src/two_phase/projection/mimetic_metric.jl}{_mimetic_fill_gram_block!},
 assembly with~\cref{eq:projection:mimetic-slave}, ties and grid-line values
 \srcsym{src/two_phase/projection/mimetic_metric.jl}{_assemble_cut_cell_metric!};
+cell sides and their faces on adaptive meshes \srcsym{src/two_phase/projection/mimetic_metric.jl}{_mimetic_topology},
+segments~\cref{eq:projection:mimetic-segments} \srcsym{src/two_phase/projection/mimetic_metric.jl}{_MimeticSegment}
+and \srcsym{src/two_phase/projection/mimetic_metric.jl}{_mimetic_segment};
 grid-line faces \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_gridline_faces!},
 predictor and removed jump energy \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_gather!};
 solve \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_solve!}~\cref{eq:projection:mimetic},
@@ -1234,7 +1330,11 @@ Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mi
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric at walls: restricted blocks and the Gram moment},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic rest states at walls},
 \testsym{test/integration/two_phase_sessile_droplet.jl}{Sessile droplet with the two-velocity projections},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection with an interface on a grid line}.
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection with an interface on a grid line},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric on adaptive meshes: Gram moment, definiteness, level transitions},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection on adaptive meshes: composite divergence, energy identity, rest},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic rest states on adaptive meshes},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic viscous step on adaptive meshes}.
 \end{implnote}
 
 \section{Fully discrete projection stage}\label{sec:projection:time}
@@ -1565,7 +1665,10 @@ so $(\presinc,\gradjump)$ scales with $1/\dtprop$ and the corrected
 velocity does not depend on $\dtprop$; the step only sets the gauge of
 $\defect{V}=\dtprop\max\abs{\divmix}$, and the untruncated step keeps a step
 shortened to reach the end time from loosening the constraint for a resumed
-run. A failure to converge throws. The defect that the transfer leaves is
+run. A failure to converge throws. With \apitype{MimeticProjection} the
+correction is that of~\cref{eq:projection:mimetic}, $\dtprop\,\mathcal M^{-1}\mathsf B^{\transpose}\pres$
+in the metric of the new mesh (paragraph \emph{Adaptive meshes} of
+\cref{sec:projection:mimetic}), with the same scaling. The defect that the transfer leaves is
 associated with the same $\dtprop$, which enters the reference step of the
 next step (\cref{sec:projection:pressure-update}). The one-velocity model has
 no such projection: the transfer of a shared velocity corrects the refined
