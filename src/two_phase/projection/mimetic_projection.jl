@@ -677,7 +677,11 @@ function _mimetic_solve!(
         defect < previous || break
     end
     final_residual = norm(outflow)
-    mixture_divergence = maximum(c -> abs(outflow[c]) / spacing[c]^2, 1:cells)
+    # A plain loop: a closure over the reassigned `outflow` would box it.
+    mixture_divergence = zero(T)
+    for cell in 1:cells
+        mixture_divergence = max(mixture_divergence, abs(outflow[cell]) / spacing[cell]^2)
+    end
 
     # Diagnostics in the metric 𝓜 and the transported momentum.
     projected = workspace.velocity
