@@ -535,13 +535,14 @@ end
 function _mimetic_viscous_flow(
         n, density; viscosity = 1.0e-2, levelset = _mimetic_circle(n),
         mesh = BlockTreeMesh(block_size = (n, n), periodic = (true, false)),
+        interphase_drag = nothing,
     )
     interface = InterfaceField(mesh, levelset; lipschitz = 1)
-    # The identities are those of the stress step alone; the interphase drag
-    # in the same system is tested in interphase_drag.jl.
+    # By default the identities are those of the stress step alone; the
+    # interphase drag in the same system is tested in interphase_drag.jl.
     flow = FlowSimulation(
         mesh, TwoPhase(interface; density, dynamic_viscosity = (viscosity, viscosity));
-        velocity_model = TwoVelocityModel(pressure_projection = MimeticProjection(), interphase_drag = nothing),
+        velocity_model = TwoVelocityModel(; pressure_projection = MimeticProjection(), interphase_drag),
         boundary = FreeSlip(),
     )
     model = flow.system.two_phase
@@ -1449,10 +1450,21 @@ end
     TP = TwoPhaseAMR
     model = TwoVelocityModel(pressure_projection = MimeticProjection())
     # Hydrostatic pool at density ratio 1000 across vertical level
-    # transitions (cut cells with a side of two faces on the coarse side).
-    for (region, max_level) in _MIMETIC_COMPOSITE_REGIONS[1:2]
+    # transitions (cut cells with a side of two faces on the coarse side),
+    # also with the interface 1e-3 of a finest cell above a grid line, where
+    # the pressure points of the sliver cells are clamped by the margin of
+    # the admissible interval: one length on the whole mesh, so the clamped
+    # points of coarse and fine neighbours stay level (a margin relative to
+    # each cell left 2.5e-4 here).
+    finest = 1 / (16 * 2^2)
+    for (region, max_level, height) in (
+            (_MIMETIC_COMPOSITE_REGIONS[1]..., 0.5 + 0.37 / 32),
+            (_MIMETIC_COMPOSITE_REGIONS[2]..., 0.5 + 0.37 / 32),
+            (_MIMETIC_COMPOSITE_REGIONS[2]..., 0.5 + 1.0e-3finest),
+            (_MIMETIC_COMPOSITE_REGIONS[3]..., 0.5 + 1.0e-3finest),
+        )
         mesh = _mimetic_composite_mesh(region; max_level)
-        interface = InterfaceField(mesh, (x, y) -> y - 0.5 - 0.37 / 32; lipschitz = 1)
+        interface = InterfaceField(mesh, (x, y) -> y - height; lipschitz = 1)
         flow = FlowSimulation(
             mesh, TwoPhase(interface; density = (1000.0, 1.0), dynamic_viscosity = (0.0, 0.0), gravity = (0.0, -9.81));
             velocity_model = model, boundary = FreeSlip(),
@@ -1569,5 +1581,54 @@ end
             maximum(abs, filter(isfinite, case.flow.velocity[phase].interior .- state.convected[phase].interior); init = 0.0)
                 for phase in 1:2
         ) <= 1.0e-10
+        # With the interphase drag in the same system the step stays
+        # non-increasing in 𝓜.
+        dragged = _mimetic_viscous_flow(
+            16, density; viscosity, mesh = _mimetic_composite_mesh(region; max_level),
+            levelset = _MIMETIC_COMPOSITE_LEVELSETS[1], interphase_drag = InterphaseDrag(),
+        )
+        _mimetic_opposite_momenta!(dragged.state.convected, dragged.state, 0.1)
+        before = _mimetic_metric_energy(dragged.state.convected, dragged.state)
+        TP._diffusion_substep!(
+            dragged.flow.velocity, dragged.flow.system, dragged.flow.workspace, dt, 0.0, dragged.model;
+            tolerance = 1.0e-12,
+        )
+        @test dragged.flow.workspace.two_phase.diffusion_solver.stats.converged
+        @test _mimetic_metric_energy(dragged.flow.velocity, dragged.state) <= before
     end
+end
+
+@testset "Mimetic projection after a regrid to an equal cell count" begin
+    # One family coarsened and one root refined: the cell count is unchanged,
+    # the topology is not. The pressure operator of the preconditioner and its
+    # hierarchy must be rebuilt for the new topology (they used to be reused
+    # whenever the cell count matched).
+    TP = TwoPhaseAMR
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (4, 4), max_level = 1, periodic = (true, false),
+        adaptation = MeshAdaptationOptions(coarsen_delay = 0),
+        refine = (key, origin, extent) -> key.level == 0 && key.i == 0 && key.j == 0,
+    )
+    interface = InterfaceField(mesh, _MIMETIC_COMPOSITE_LEVELSETS[1]; lipschitz = 1)
+    case = (; mesh, interface, solver = MimeticProjectionSolver(interface; density = (10.0, 1.0)))
+    case = (; case..., workspace = MimeticProjectionWorkspace(case.solver))
+    random = Random.Xoshiro(5)
+    @test project!(
+        _mimetic_velocity(case, (phase, face) -> randn(random)), CellField(mesh),
+        case.solver, 1.0e-2, case.workspace; tolerance = 1.0e-10,
+    ).converged
+    cells = TP.ncells(mesh)
+    old_operator = case.workspace.pressure_operator
+    labels = [
+        block.key.level == 1 ? :coarsen : (block.key.i, block.key.j) == (3, 3) ? :refine : :keep
+            for block in mesh.blocks
+    ]
+    @test adapt!(AMRWorkspace(mesh, interface), labels; step = 1, force = true).changed
+    @test TP.ncells(mesh) == cells
+    velocity = _mimetic_velocity(case, (phase, face) -> randn(random))
+    stats = project!(velocity, CellField(mesh), case.solver, 1.0e-2, case.workspace; tolerance = 1.0e-10)
+    @test stats.converged
+    @test case.workspace.preconditioner_topology === case.workspace.topology
+    @test case.workspace.pressure_operator !== old_operator
+    @test 1.0e-2 * maximum(abs, _mimetic_composite_divergence(case, velocity)) <= 1.0e-10
 end
