@@ -296,12 +296,15 @@ the phase boundaries on the partially wetted segments (if every segment is
 wetted by one phase only: the length-weighted mean of the midpoints of the
 segments of the minority phase). It is kept if `0 ⪯ G^l ⪯ I` there;
 otherwise it moves along the line into the admissible interval
-(`_mimetic_admissible_point`). For `η = 0` the tensors do not depend on `x*`;
+(`_mimetic_admissible_point`, with the margin `cap`, by default that of a
+cell of the finest level). For `η = 0` the tensors do not depend on `x*`;
 the point satisfies the kernel condition instead (`_mimetic_kernel_point`). A
 point more than `1.5h` from the centre is replaced by the data mean (the cell
 is then defective).
 """
-function _mimetic_pressure_point(segments::AbstractVector{_MimeticSegment{T}}) where {T}
+function _mimetic_pressure_point(
+        segments::AbstractVector{_MimeticSegment{T}}, cap = T(_MIMETIC_POINT_MARGIN),
+    ) where {T}
     ex = ey = sx = sy = zero(T)
     m11 = m12 = m21 = m22 = zero(T)
     crossed = zero(T)
@@ -341,7 +344,7 @@ function _mimetic_pressure_point(segments::AbstractVector{_MimeticSegment{T}}) w
     if e2 > T(1.0e-18)
         defect = (m12 - m21) - (ex * yr - ey * xr)
         xs, ys, admissible = _mimetic_admissible_point(
-            m11, m12, m21, m22, ex, ey, xr - defect * ey / e2, yr + defect * ex / e2,
+            m11, m12, m21, m22, ex, ey, xr - defect * ey / e2, yr + defect * ex / e2, cap,
         )
     else
         xs, ys = _mimetic_kernel_point(segments, m11, (m12 + m21) / 2, m22, xr, yr)
@@ -359,14 +362,17 @@ In the frame `η̂ = η/|η|`, `e = η̂^⊥` the entries `g₂₂ = eᵀG^l e` 
 `g₁₂ = η̂ᵀG^l e` do not change along the line and `g₁₁(s) = g₁₁(0) - s|η|` at
 `x* + s η̂`; an admissible point exists if and only if `0 ≤ g₂₂ ≤ 1` and
 `g₁₂² ≤ g₂₂(1 - g₂₂)`, and then `g₁₁ ∈ [g₁₂²/g₂₂, 1 - g₁₂²/(1 - g₂₂)]`. The
-point is clamped into that interval shrunk at both ends by
-`min(w/100, _MIMETIC_POINT_MARGIN)` of its length `w` along the line, where both
+point is clamped into that interval shrunk at both ends by `min(w/100, cap)`
+of its length `w` along the line (`cap`: `_MIMETIC_POINT_MARGIN` times the
+finest cell width of the mesh, in units of this cell's width, so that the
+clamped points of neighbouring cells of different levels lie on one level
+line), where both
 tensors are positive definite: the point, hence the metric, depends
 continuously on the data, and a phase of vanishing area gets a block of order
 its wetted length times the margin instead of a block that vanishes or blows
 up at the end of the interval. Without an admissible point it stays (the cell
 is defective)."""
-function _mimetic_admissible_point(m11, m12, m21, m22, ex, ey, xs, ys)
+function _mimetic_admissible_point(m11, m12, m21, m22, ex, ey, xs, ys, cap)
     T = typeof(xs)
     tolerance = T(1.0e-12)
     c = sqrt(ex^2 + ey^2)
@@ -384,13 +390,14 @@ function _mimetic_admissible_point(m11, m12, m21, m22, ex, ey, xs, ys)
         (abs(q12) < tolerance ? one(T) : -T(Inf))
     lo > hi + tolerance && return xs, ys, false
     smin, smax = (q11 - hi) / c, (q11 - lo) / c
-    margin = min(max(smax - smin, zero(T)) / 100, T(_MIMETIC_POINT_MARGIN))
+    margin = min(max(smax - smin, zero(T)) / 100, cap)
     s = clamp(zero(T), smin + margin, max(smin + margin, smax - margin))
     return xs + s * hx, ys + s * hy, true
 end
 
-"""Largest distance (units of `h`) by which `_mimetic_admissible_point` keeps
-the pressure point inside the ends of its admissible interval."""
+"""Largest distance (units of the finest cell width of the mesh) by which
+`_mimetic_admissible_point` keeps the pressure point inside the ends of its
+admissible interval."""
 const _MIMETIC_POINT_MARGIN = 0.01
 
 """Pressure point of a cut cell with `η = 0`: the Gram tensors `G^l` (symmetric
@@ -753,6 +760,10 @@ function _assemble_cut_cell_metric!(
     cut_cells = defective_cells = wall_cells = 0
     segments = assembly.segments
     segment_faces = assembly.segment_faces
+    # The pressure-point margin is one length on the whole mesh (that of the
+    # finest cells), so clamped points of neighbours of different levels are
+    # level; on a uniform mesh the factor is one.
+    finest = minimum(spacing)
     for cell in 1:cells
         h = spacing[cell]
         block_index = div(cell - 1, nx * ny) + 1
@@ -797,7 +808,7 @@ function _assemble_cut_cell_metric!(
         end
         xs = ys = ex = ey = zero(T)
         if !uncut
-            xs, ys, ex, ey = _mimetic_pressure_point(segments)
+            xs, ys, ex, ey = _mimetic_pressure_point(segments, T(_MIMETIC_POINT_MARGIN) * (finest / h))
             assembly.pressure_x[cell] = center[1] + h * xs
             assembly.pressure_y[cell] = center[2] + h * ys
             cut_cells += 1
