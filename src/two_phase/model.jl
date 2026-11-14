@@ -99,7 +99,7 @@ function _validate_two_velocity_projection(::MimeticProjection, interface)
     isnothing(interface.geometry) || throw(
         ArgumentError("MimeticProjection does not support embedded solid geometry"),
     )
-    _mimetic_uniform_spacing(interface.mesh)
+    _mimetic_square_cells(interface.mesh)
     return nothing
 end
 

@@ -51,17 +51,17 @@ _mimetic_circle(n; x = 0.5, y = 0.5, radius = 0.25) =
     circle(x, y) = hypot(x - 0.5, y - 0.5) - 0.2
     physics(interface) = TwoPhase(interface; density = (2.0, 1.0), dynamic_viscosity = (0.0, 0.0))
     model = TwoVelocityModel(pressure_projection = projection)
-    # Adaptive meshes with hanging faces are rejected at construction.
+    # Adaptive (2:1 graded) meshes are accepted.
     graded = BlockTreeMesh(
         base_mesh = (16, 16), block_size = (4, 4), max_level = 1,
         refine = (key, origin, extent) -> key.level == 0 && key.i >= 2,
     )
     @test length(unique(block.key.level for block in graded.blocks)) == 2
     graded_interface = InterfaceField(graded, circle; lipschitz = 1)
-    @test_throws ArgumentError MimeticProjectionSolver(graded_interface)
-    @test_throws ArgumentError FlowSimulation(
+    @test MimeticProjectionSolver(graded_interface) isa MimeticProjectionSolver
+    @test FlowSimulation(
         graded, physics(graded_interface); velocity_model = model, boundary = FreeSlip(),
-    )
+    ) isa FlowSimulation
     # Embedded solids are rejected, through the interface or the system.
     mesh = BlockTreeMesh(block_size = (16, 16), periodic = (false, false))
     geometry = GeometryField(mesh, (x, y) -> y - 0.1; lipschitz = 1)
@@ -532,8 +532,10 @@ end
 
 # Mimetic two-velocity flow on a drop (periodic in x, free-slip walls in y)
 # with the state of the viscous stage.
-function _mimetic_viscous_flow(n, density; viscosity = 1.0e-2, levelset = _mimetic_circle(n))
-    mesh = BlockTreeMesh(block_size = (n, n), periodic = (true, false))
+function _mimetic_viscous_flow(
+        n, density; viscosity = 1.0e-2, levelset = _mimetic_circle(n),
+        mesh = BlockTreeMesh(block_size = (n, n), periodic = (true, false)),
+    )
     interface = InterfaceField(mesh, levelset; lipschitz = 1)
     # The identities are those of the stress step alone; the interphase drag
     # in the same system is tested in interphase_drag.jl.
@@ -748,19 +750,25 @@ function _mm_block(edges)
     return slave' * metric * slave, area, midpoint
 end
 
+# The four whole-side segments of a unit cell with liquid apertures and wet
+# ends (`true`: liquid at the counter-clockwise start of the side).
+_mmd_segments(apertures, starts) =
+    [TwoPhaseAMR._MimeticSegment(k, Float64(apertures[k]), starts[k]) for k in 1:4]
+
 # MMd blocks of one unit cell from the package: pressure point and, per phase,
 # the block, the Gram tensor G = Σ n_k R_kᵀ and the consistency flag. `point`
-# replaces the package's pressure point.
-function _mmd_cell(apertures, starts; point = nothing)
+# replaces the package's pressure point. `segments` are the cell's side
+# segments (default: its four whole sides).
+function _mmd_cell(apertures, starts; point = nothing, segments = _mmd_segments(apertures, starts))
     TP = TwoPhaseAMR
-    xs, ys, ex, ey = TP._mimetic_pressure_point(apertures, starts)
+    xs, ys, ex, ey = TP._mimetic_pressure_point(segments)
     isnothing(point) || ((xs, ys) = point)
     phases = map(1:2) do phase
-        block, sides, lengths, moments = zeros(4, 4), zeros(Int, 4), zeros(4), zeros(4, 2)
+        block, sides, lengths, moments = zeros(8, 8), zeros(Int, 8), zeros(8), zeros(8, 2)
         m, consistent = TP._mimetic_gram_block!(
-            block, sides, lengths, moments, apertures, starts, phase, xs, ys, ex, ey,
+            block, sides, lengths, moments, segments, phase, xs, ys, ex, ey,
         )
-        normals = [TP._mimetic_normal(Float64, sides[q])[i] for q in 1:m, i in 1:2]
+        normals = [TP._mimetic_normal(Float64, segments[sides[q]].side)[i] for q in 1:m, i in 1:2]
         (; block = block[1:m, 1:m], gram = normals' * moments[1:m, :], normals, moments = moments[1:m, :], consistent, sides = sides[1:m])
     end
     return (xs, ys), phases
@@ -770,7 +778,7 @@ end
 # the mean of the phase boundaries on the partially wetted sides.
 function _mmd_data_point(apertures, starts)
     TP = TwoPhaseAMR
-    parts = [TP._mimetic_side_parts(Float64, k, apertures[k], starts[k]) for k in 1:4]
+    parts = [TP._mimetic_segment_parts(segment) for segment in _mmd_segments(apertures, starts)]
     crossed = [first(parts[k]) for k in 1:4 if 0 < apertures[k] < 1]
     xr, yr = sum(first, crossed) / length(crossed), sum(last, crossed) / length(crossed)
     normals = [TP._mimetic_normal(Float64, k) for k in 1:4]
@@ -1282,4 +1290,284 @@ end
         @test stats.converged
     end
     @test _mimetic_maximum(flow.velocity) <= 1.0e-8
+end
+
+# Adaptive (2:1 graded) mesh of square cells: n×n base cells in blocks of b×b,
+# a block refined where `region(origin, extent, level)` holds.
+function _mimetic_composite_mesh(region; n = 16, b = 4, max_level = 2, periodic = (true, false))
+    return BlockTreeMesh(;
+        base_mesh = (n, n), block_size = (b, b), max_level, periodic,
+        refine = (key, origin, extent) -> region(origin, extent, key.level),
+    )
+end
+
+# Blocks overlapping the vertical strip x0 < x < x1 (vertical level transitions).
+_mimetic_strip(x0, x1) = (origin, extent, level) -> origin[1] < x1 && origin[1] + extent[1] > x0
+
+# A random set of refined blocks (fixed seed; one draw per block).
+function _mimetic_random_region(seed; p = 0.4)
+    rng = Random.Xoshiro(seed)
+    choice = Dict{Tuple{NTuple{2, Float64}, Int}, Bool}()
+    return (origin, extent, level) -> get!(() -> rand(rng) < p, choice, (origin, level))
+end
+
+# Composite configurations: a refined strip (one level), two random trees
+# (three levels); a drop and a wave of the interface, crossing the transitions.
+const _MIMETIC_COMPOSITE_REGIONS = (
+    (_mimetic_strip(0.25, 0.75), 1), (_mimetic_random_region(1), 2), (_mimetic_random_region(2), 2),
+)
+const _MIMETIC_COMPOSITE_LEVELSETS = (
+    (x, y) -> hypot(x - 0.51, y - 0.47) - 0.23, (x, y) -> y - 0.53 - 0.02cos(2pi * x),
+)
+
+function _mimetic_composite_case(region, max_level, levelset; density, periodic = (true, false))
+    mesh = _mimetic_composite_mesh(region; max_level, periodic)
+    interface = InterfaceField(mesh, levelset; lipschitz = 1)
+    solver = MimeticProjectionSolver(interface; density)
+    workspace = MimeticProjectionWorkspace(solver)
+    return (; mesh, interface, solver, workspace)
+end
+
+@testset "Mimetic metric on adaptive meshes: Gram moment, definiteness, level transitions" begin
+    # A cell next to two finer cells has a side of two faces; its segments
+    # enter the pressure point and the Gram blocks (techref ch. 10, Adaptive
+    # meshes). Uncut such cells get the Gram block of their phase (not the
+    # diagonal masses, which miss the tangential offsets of the segments), so
+    # the assembled identity 𝓜χ^π_k + Ce_k = ρ^π a|f|(x*₊ - x*₋)_k holds on
+    # every value, across the transitions and in cut cells at them.
+    TP = TwoPhaseAMR
+    transition_cut_cells = 0
+    for (region, max_level) in _MIMETIC_COMPOSITE_REGIONS, levelset in _MIMETIC_COMPOSITE_LEVELSETS,
+            density in ((1.0, 1.0), (1000.0, 1.0))
+        case = _mimetic_composite_case(region, max_level, levelset; density)
+        mesh, work = case.mesh, case.workspace
+        @test length(unique(block.key.level for block in mesh.blocks)) > 1
+        assembly = TP._mimetic_assemble!(case.solver, work)
+        topology = work.topology
+        split = [any(!iszero, topology.second[:, cell]) for cell in axes(topology.sides, 2)]
+        @test any(split)
+        transition_cut_cells += count(eachindex(split)) do cell
+            fraction = TP._conditional_fraction(case.interface, work.references[cell])
+            split[cell] && 0 < fraction < 1
+        end
+        band = assembly.band_matrix
+        @test maximum(abs, band - band') <= 1.0e-14 * maximum(abs, band)
+        @test isposdef(Symmetric(Matrix(band)))
+        @test assembly.defective_cells == 0 && assembly.lumped_values == 0
+        point = (assembly.pressure_x, assembly.pressure_y)
+        dofs = eachindex(assembly.dof_face)
+        axis(r) = mesh.faces[assembly.dof_face[r]].axis
+        for phase in 1:2, k in 1:2
+            # An identified grid-line value belongs to both phases.
+            field = [assembly.dof_phase[r] in (phase, 3) && axis(r) == k ? 1.0 : 0.0 for r in dofs]
+            image = TP._mimetic_metric_product!(zeros(0), work, field)
+            defect = scale = 0.0
+            for r in dofs
+                assembly.dof_phase[r] == phase || continue
+                face = assembly.dof_face[r]
+                difference = point[k][topology.face_cells[2, face]] - point[k][topology.face_cells[1, face]]
+                mesh.periodic[k] && (difference -= round(difference / mesh.extent[k]) * mesh.extent[k])
+                target = density[phase] * mesh.faces[face].area * assembly.dof_aperture[r] * difference
+                value = image[r] + TP._mimetic_wall_coupling(assembly, k, r)
+                defect = max(defect, abs(value - target))
+                scale = max(scale, abs(value))
+            end
+            @test defect <= 1.0e-12 * scale
+        end
+    end
+    println("mimetic metric on adaptive meshes: cut cells with a side of two faces: ", transition_cut_cells)
+    @test transition_cut_cells > 0
+end
+
+# Composite mixture divergence of the package, (Σ_f ±|f| Σ_π a^π u^π)/|c|, per cell.
+function _mimetic_composite_divergence(case, velocity)
+    mesh = case.mesh
+    data = case.workspace.face_data
+    nx, ny = mesh.block_size
+    flux = zeros(TwoPhaseAMR.ncells(mesh))
+    for (index, face) in pairs(mesh.faces)
+        value = face.area * TwoPhaseAMR._projection_phase_sum(
+            data.liquid_aperture[index], velocity[1].interior[index],
+            data.gas_aperture[index], velocity[2].interior[index],
+        )
+        flux[TwoPhaseAMR._cell_index(face.minus, nx, ny)] += value
+        flux[TwoPhaseAMR._cell_index(face.plus, nx, ny)] -= value
+    end
+    return [flux[c] / mesh.blocks[div(c - 1, nx * ny) + 1].volume for c in eachindex(flux)]
+end
+
+@testset "Mimetic projection on adaptive meshes: composite divergence, energy identity, rest" begin
+    TP = TwoPhaseAMR
+    for (region, max_level) in _MIMETIC_COMPOSITE_REGIONS, levelset in _MIMETIC_COMPOSITE_LEVELSETS,
+            density in ((1.0, 1.0), (1000.0, 1.0))
+        case = _mimetic_composite_case(region, max_level, levelset; density)
+        random = Random.Xoshiro(3)
+        velocity = _mimetic_velocity(case, (phase, face) -> randn(random))
+        pressure = CellField(case.mesh)
+        dt = 1.0e-2
+        stats = project!(velocity, pressure, case.solver, dt, case.workspace; tolerance = 1.0e-10)
+        @test stats.converged
+        # The mixture divergence is the package's composite divergence: the
+        # fine faces of a coarse side carry its flux, per cell volume.
+        @test dt * maximum(abs, _mimetic_composite_divergence(case, velocity)) <= 1.0e-10
+        @test abs(stats.energy_identity_defect) <= 1.0e-12
+        scale = maximum(abs, case.workspace.metric_predictor)
+        @test abs(stats.momentum_change[1]) <= 1.0e-12 * scale * length(case.mesh.faces)
+        projected = deepcopy(velocity)
+        project!(velocity, pressure, case.solver, dt, case.workspace; tolerance = 1.0e-10)
+        @test maximum(
+            maximum(abs, filter(isfinite, velocity[phase].interior .- projected[phase].interior); init = 0.0)
+                for phase in 1:2
+        ) <= 1.0e-9 * _mimetic_maximum(projected)
+        @test _phase_storage_contract(velocity, case.interface)
+        # A uniform acceleration of both phases with equal densities (the
+        # gravity increment, wall coupling included; along the vertical
+        # transitions) is projected to rest.
+        density[1] == density[2] || continue
+        accelerated = _mimetic_velocity(case, (phase, face) -> 0.0)
+        TP._mimetic_uniform_acceleration!(accelerated, case.solver, case.workspace, (0.0, -1.0), 1.0)
+        rest = project!(accelerated, CellField(case.mesh), case.solver, 1.0, case.workspace; tolerance = 1.0e-12)
+        @test rest.converged
+        @test _mimetic_maximum(accelerated) <= 1.0e-12
+    end
+    # A constant field on a doubly periodic adaptive mesh is solenoidal in the
+    # mixture divergence and stays unchanged.
+    case = _mimetic_composite_case(
+        _mimetic_random_region(1), 2, _MIMETIC_COMPOSITE_LEVELSETS[1];
+        density = (10.0, 1.0), periodic = (true, true),
+    )
+    constant = _mimetic_velocity(case, (phase, face) -> face.axis == 1 ? 1.0 : 0.5)
+    before = deepcopy(constant)
+    @test project!(constant, CellField(case.mesh), case.solver, 1.0e-2, case.workspace; tolerance = 1.0e-12).converged
+    @test maximum(
+        maximum(abs, filter(isfinite, constant[phase].interior .- before[phase].interior); init = 0.0)
+            for phase in 1:2
+    ) <= 1.0e-14
+end
+
+@testset "Mimetic rest states on adaptive meshes" begin
+    TP = TwoPhaseAMR
+    model = TwoVelocityModel(pressure_projection = MimeticProjection())
+    # Hydrostatic pool at density ratio 1000 across vertical level
+    # transitions (cut cells with a side of two faces on the coarse side).
+    for (region, max_level) in _MIMETIC_COMPOSITE_REGIONS[1:2]
+        mesh = _mimetic_composite_mesh(region; max_level)
+        interface = InterfaceField(mesh, (x, y) -> y - 0.5 - 0.37 / 32; lipschitz = 1)
+        flow = FlowSimulation(
+            mesh, TwoPhase(interface; density = (1000.0, 1.0), dynamic_viscosity = (0.0, 0.0), gravity = (0.0, -9.81));
+            velocity_model = model, boundary = FreeSlip(),
+        )
+        for _ in 1:3
+            @test step!(
+                flow.velocity, flow.pressure, flow.system, 1.0e-3, flow.workspace;
+                tolerance = 1.0e-12, max_cycles = 2000,
+            ).converged
+        end
+        @test _mimetic_maximum(flow.velocity) <= 1.0e-9
+    end
+    # A drop of constant curvature: the per-phase capillary force is the
+    # common jump force, balanced exactly by the projection.
+    for formulation in (CSF(), CGFM()), density in ((1.0, 1.0), (1000.0, 1.0))
+        mesh = _mimetic_composite_mesh(_mimetic_random_region(1); periodic = (false, false))
+        interface = InterfaceField(mesh, _MIMETIC_COMPOSITE_LEVELSETS[1]; lipschitz = 1)
+        sigma, curvature, dt = 0.7, 1 / 0.23, 1.0e-2
+        flow = FlowSimulation(
+            mesh, TwoPhase(
+                interface; density, dynamic_viscosity = (0.0, 0.0),
+                surface_tension = SurfaceTension(sigma; method = formulation),
+            );
+            velocity_model = model, boundary = FreeSlip(),
+        )
+        state = TP._two_velocity_flow_workspace!(flow.workspace.two_phase, flow.system.two_phase)
+        reconstruct!(interface)
+        for block in eachindex(mesh.blocks)
+            fill!(interior(interface.curvature, block), curvature)
+        end
+        TP._two_velocity_forces_and_pressure!(
+            flow.velocity, flow.pressure, flow.system, flow.workspace, state, flow.system.two_phase, dt,
+        )
+        force = _mimetic_maximum(flow.velocity) / dt
+        @test force > 1.0
+        stats = TP._project_two_velocity!(
+            flow.velocity, flow.pressure, flow.system, flow.workspace, state, dt;
+            tolerance = 1.0e-12, max_iterations = 2000,
+        )
+        @test stats.converged
+        @test _mimetic_maximum(flow.velocity) <= 1.0e-12 * dt * force
+    end
+    # A drop translating at constant velocity on a doubly periodic mesh whose
+    # interface band is refined as it moves: the regrids rebuild the metric and
+    # the projection after each regrid keeps the constant field.
+    level = 2
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (4, 4), max_level = level, periodic = (true, true),
+        adaptation = MeshAdaptationOptions(coarsen_delay = 2),
+    )
+    circle(x, y) = hypot(x - 0.3, y - 0.4) - 0.15
+    interface = InterfaceField(mesh, circle; lipschitz = 1)
+    indicator = InterfaceRefinementIndicator(interface; level)
+    adaptation = AMRWorkspace(mesh, interface)
+    for step in 1:level
+        adapt!(adaptation, indicator; step, force = true)
+        initialize!(interface, circle; lipschitz = 1)
+    end
+    U = (1.0, 0.5)
+    flow = FlowSimulation(
+        mesh, TwoPhase(interface; density = (10.0, 1.0), dynamic_viscosity = (1.0e-3, 1.0e-4));
+        velocity_model = model, velocity = U, boundary = FreeSlip(),
+        adaptivity = Adaptivity(criteria = (indicator,)),
+    )
+    dt = 0.25 / (16 * 2^level)
+    result = simulate!(flow, 40dt; dt, tolerance = 1.0e-12)
+    @test result.projection.converged
+    @test flow.mesh_updates > 0
+    @test length(unique(block.key.level for block in mesh.blocks)) > 1
+    @test maximum(
+        maximum(abs, filter(isfinite, flow.velocity[phase].interior .- [U[face.axis] for face in mesh.faces]); init = 0.0)
+            for phase in 1:2
+    ) <= 1.0e-12
+end
+
+@testset "Mimetic viscous step on adaptive meshes" begin
+    # The implicit midpoint in 𝓜 with the composite mixture stress: the
+    # energy identity and the dissipation for every time step, as on uniform
+    # meshes, and a constant field is kept.
+    TP = TwoPhaseAMR
+    viscosity = 1.0e-2
+    for (region, max_level) in _MIMETIC_COMPOSITE_REGIONS[1:2], density in ((1.0, 1.0), (3.0, 1.0)),
+            number in (0.1, 10.0)
+        mesh = _mimetic_composite_mesh(region; max_level)
+        case = _mimetic_viscous_flow(16, density; viscosity, mesh, levelset = _MIMETIC_COMPOSITE_LEVELSETS[1])
+        state = case.state
+        h = minimum(block -> block.spacing[1], mesh.blocks)
+        dt = number * min(density...) * h^2 / viscosity
+        _mimetic_opposite_momenta!(state.convected, state, 0.1)
+        before = _mimetic_metric_energy(state.convected, state)
+        TP._diffusion_substep!(
+            case.flow.velocity, case.flow.system, case.flow.workspace, dt, 0.0, case.model;
+            tolerance = 1.0e-12,
+        )
+        @test case.flow.workspace.two_phase.diffusion_solver.stats.converged
+        @test _mimetic_metric_energy(case.flow.velocity, state) <= before
+        _, stiffness = _mimetic_common_viscous_step(case, dt)
+        old, old_mixture = _mimetic_values_and_mixture(state.convected, state)
+        new, new_mixture = _mimetic_values_and_mixture(case.flow.velocity, state)
+        metric_sum = TP._mimetic_metric_product!(zeros(0), state.projection_workspace, new .+ old)
+        dissipation = -dt / 4 * dot(new_mixture .+ old_mixture, stiffness * (new_mixture .+ old_mixture))
+        @test abs(dot(new .- old, metric_sum) / 2 - dissipation) <= 1.0e-9 * before
+        # A constant field (periodic x) is not changed by the stress.
+        for phase in 1:2, (index, face) in pairs(mesh.faces)
+            state.convected[phase].interior[index] = face.axis == 1 ? 0.7 : 0.0
+        end
+        fill!.((state.convected[1].boundary, state.convected[2].boundary), 0.0)
+        TP._mark_inactive_phase_velocities!(state.convected, case.interface)
+        TP._diffusion_substep!(
+            case.flow.velocity, case.flow.system, case.flow.workspace, dt, 0.0, case.model;
+            tolerance = 1.0e-12,
+        )
+        @test maximum(
+            maximum(abs, filter(isfinite, case.flow.velocity[phase].interior .- state.convected[phase].interior); init = 0.0)
+                for phase in 1:2
+        ) <= 1.0e-10
+    end
 end

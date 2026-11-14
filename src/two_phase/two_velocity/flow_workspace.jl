@@ -67,15 +67,9 @@ end
 
 function _reconfigure_two_velocity_flow_workspace(state, model, advection)
     # Preserve Krylov and geometric templates across AMR. Topology-dependent
-    # caches are validated against block keys at the next assembly.
+    # caches are validated against block keys (CMDGFM) or the mesh's topology
+    # generation (mimetic projection) at the next assembly.
     state isa TwoVelocityFlowWorkspace || return nothing
-    if state.projection_solver isa MimeticProjectionSolver
-        # A regrid that leaves the mesh non-uniform is unsupported; otherwise
-        # the mimetic workspace is rebuilt lazily for the new topology.
-        _mimetic_uniform_spacing(model.interface.mesh)
-        return nothing
-    end
-    state.projection_solver isa CMDGFMProjectionSolver || return nothing
     mesh = model.interface.mesh
     for velocity in (
             state.old_velocity..., state.convected...,
@@ -84,25 +78,27 @@ function _reconfigure_two_velocity_flow_workspace(state, model, advection)
         _resize_zero_velocity!(velocity, mesh)
     end
     work = state.projection_workspace
-    for velocity in (
-            work.pressure_gradient, work.base_gradient,
-            work.liquid_gradient, work.gas_gradient,
-        )
-        _resize_zero_velocity!(velocity, mesh)
-    end
-    resize!(work.jump, length(mesh.faces))
-    fill!(work.jump, zero(eltype(mesh.origin)))
     _resize_face_field!(work.liquid_fraction_x, mesh)
     _resize_face_field!(work.liquid_fraction_y, mesh)
-    # Old matrix indices no longer refer to this live mesh; never expose it
-    # as a current assembled system before the next projection.
-    work.matrix = spzeros(eltype(mesh.origin), 0, 0)
-    work.jump_block = spzeros(eltype(mesh.origin), 0, 0)
-    empty!(work.stencils)
-    # The visible indices may alias the cache's gauge/active buffers. Detach
-    # instead of clearing the cached state if a rebuild retains the topology.
-    work.pressure_indices = Int[]
-    work.mixed_faces = Int[]
+    if state.projection_solver isa CMDGFMProjectionSolver
+        for velocity in (
+                work.pressure_gradient, work.base_gradient,
+                work.liquid_gradient, work.gas_gradient,
+            )
+            _resize_zero_velocity!(velocity, mesh)
+        end
+        resize!(work.jump, length(mesh.faces))
+        fill!(work.jump, zero(eltype(mesh.origin)))
+        # Old matrix indices no longer refer to this live mesh; never expose it
+        # as a current assembled system before the next projection.
+        work.matrix = spzeros(eltype(mesh.origin), 0, 0)
+        work.jump_block = spzeros(eltype(mesh.origin), 0, 0)
+        empty!(work.stencils)
+        # The visible indices may alias the cache's gauge/active buffers. Detach
+        # instead of clearing the cached state if a rebuild retains the topology.
+        work.pressure_indices = Int[]
+        work.mixed_faces = Int[]
+    end
     return TwoVelocityFlowWorkspace(
         advection,
         _reconfigure_momentum_workspace!(state.momentum, model.interface),

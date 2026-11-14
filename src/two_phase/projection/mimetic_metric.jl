@@ -7,7 +7,8 @@
 # and left side (counter-clockwise), the liquid aperture of a side is the
 # package's face aperture, and the data of a cut cell are the wetted part of
 # each side and its midpoint, shared with the neighbour across the side. No
-# polygon is formed.
+# polygon is formed. On an adaptive (2:1 graded) mesh the side of a cell next
+# to two finer cells consists of two faces, the two segments of the side.
 
 # Outward normal of side k as a multiple of the face orientation (+axis).
 const _MIMETIC_OUTWARD = (-1, 1, 1, -1)
@@ -19,75 +20,102 @@ const _MIMETIC_STARTS_LOW = (true, true, false, false)
 const _MIMETIC_LIQUID_LOW = Int8(1)
 const _MIMETIC_LIQUID_HIGH = Int8(-1)
 
-"""Sides of the cells of a uniform square-cell mesh.
+"""Sides of the cells of a mesh of square cells.
 
 `sides[k, cell]` is the interior face index (positive) or minus the boundary
-face index (negative) of side `k`; `face_cells[:, face]` are the minus and plus
-cells of an interior face.
+face index (negative) of side `k`; on a side that consists of two faces (a
+cell next to two finer cells), it is the face at the low tangential end and
+`second[k, cell]` the one at the high end (zero on a side of one face).
+`face_cells[:, face]` are the minus and plus cells of an interior face,
+`spacing[cell]` the width of a cell and `area[face]` that of a face.
 """
 struct _MimeticTopology{T}
-    spacing::T
+    spacing::Vector{T}
+    area::Vector{T}
     sides::Matrix{Int}
+    second::Matrix{Int}
     face_cells::Matrix{Int}
     identity::Base.RefValue{Nothing}
     generation::UInt
 end
 
-"""Return the cell size of a uniform square-cell mesh, or throw."""
-function _mimetic_uniform_spacing(mesh)
+"""Throw unless every cell of `mesh` is square."""
+function _mimetic_square_cells(mesh)
     isempty(mesh.blocks) && throw(ArgumentError("MimeticProjection requires a nonempty mesh"))
-    spacing = first(mesh.blocks).spacing
     for block in mesh.blocks
-        block.spacing == spacing || throw(
-            ArgumentError(
-                "MimeticProjection supports only uniform meshes; this mesh has " *
-                    "leaf blocks on different levels (hanging faces)",
-            ),
+        spacing = block.spacing
+        T = eltype(spacing)
+        abs(spacing[1] - spacing[2]) <= 64eps(T) * max(spacing...) || throw(
+            ArgumentError("MimeticProjection requires square cells"),
         )
     end
-    T = eltype(spacing)
-    abs(spacing[1] - spacing[2]) <= 64eps(T) * max(spacing...) || throw(
-        ArgumentError("MimeticProjection requires square cells"),
-    )
-    return spacing[1]
+    return mesh
 end
 
 function _mimetic_topology(mesh)
-    h = _mimetic_uniform_spacing(mesh)
+    _mimetic_square_cells(mesh)
     nx, ny = mesh.block_size
     cells = length(mesh.blocks) * nx * ny
+    spacing = Vector{eltype(mesh.origin)}(undef, cells)
+    for (index, block) in pairs(mesh.blocks)
+        fill!(view(spacing, ((index - 1) * nx * ny + 1):(index * nx * ny)), block.spacing[1])
+    end
+    area = [face.area for face in mesh.faces]
     sides = zeros(Int, 4, cells)
+    second = zeros(Int, 4, cells)
     face_cells = zeros(Int, 2, length(mesh.faces))
+    function attach!(k, cell, index)
+        first = sides[k, cell]
+        if iszero(first)
+            sides[k, cell] = index
+            return
+        end
+        (first > 0 && iszero(second[k, cell])) || throw(
+            ArgumentError("MimeticProjection requires a 2:1 graded mesh"),
+        )
+        # Order the two faces of the side by their tangential centres.
+        t = 3 - mesh.faces[index].axis
+        if mesh.faces[index].center[t] < mesh.faces[first].center[t]
+            sides[k, cell], second[k, cell] = index, first
+        else
+            second[k, cell] = index
+        end
+        return
+    end
     for (index, face) in pairs(mesh.faces)
         minus = _cell_index(face.minus, nx, ny)
         plus = _cell_index(face.plus, nx, ny)
         face_cells[1, index] = minus
         face_cells[2, index] = plus
         if face.axis == 1
-            sides[2, minus] = index
-            sides[4, plus] = index
+            attach!(2, minus, index)
+            attach!(4, plus, index)
         else
-            sides[3, minus] = index
-            sides[1, plus] = index
+            attach!(3, minus, index)
+            attach!(1, plus, index)
         end
     end
     for (index, face) in pairs(mesh.boundary_faces)
         cell = _cell_index(face.cell, nx, ny)
         side = face.axis == 1 ? (face.side > 0 ? 2 : 4) : (face.side > 0 ? 3 : 1)
+        iszero(sides[side, cell]) || throw(
+            ArgumentError("MimeticProjection requires one boundary face per cell side"),
+        )
         sides[side, cell] = -index
     end
     any(iszero, sides) && throw(
-        ArgumentError("MimeticProjection requires one face per cell side"),
+        ArgumentError("MimeticProjection requires a face on every cell side"),
     )
     cache = mesh.topology_cache
-    return _MimeticTopology(h, sides, face_cells, cache.identity, cache.generation)
+    return _MimeticTopology(spacing, area, sides, second, face_cells, cache.identity, cache.generation)
 end
 
 _mimetic_topology_current(topology, mesh) =
     !isnothing(topology) && topology.identity === mesh.topology_cache.identity &&
     topology.generation == mesh.topology_cache.generation
 
-"""Cell across side `side` of `cell`, or zero at a domain boundary."""
+"""Cell across side `side` of `cell` (across its low face if the side has
+two), or zero at a domain boundary."""
 @inline function _mimetic_neighbour(topology, cell, side)
     face = topology.sides[side, cell]
     face > 0 || return 0
@@ -95,45 +123,51 @@ _mimetic_topology_current(topology, mesh) =
     return minus == cell ? topology.face_cells[2, face] : minus
 end
 
+"""Interval `(lo, hi)` of the tangential cell coordinate (unit cell, centre
+zero) covered by face `face` on side `k` of `cell`: the whole side, or its low
+or high half on a side of two faces."""
+@inline function _mimetic_face_interval(topology, cell, k, face, ::Type{T}) where {T}
+    half = T(0.5)
+    iszero(topology.second[k, cell]) && return -half, half
+    return topology.sides[k, cell] == face ? (-half, zero(T)) : (zero(T), half)
+end
+
 # Same-axis interior faces near `face` in the order of the donor search
 # (thesis/audit laboratory): first the faces across its two cells, then the
-# collinear faces shifted by one cell along the face. Zero entries are absent.
+# collinear faces shifted by one cell along the face, then the high faces of
+# the sides across its cells that consist of two faces. Zero entries are absent.
 function _mimetic_face_ring(topology, face, axis)
     minus = topology.face_cells[1, face]
     plus = topology.face_cells[2, face]
     sides = topology.sides
-    if axis == 1
-        below = _mimetic_neighbour(topology, plus, 1)
-        above = _mimetic_neighbour(topology, plus, 3)
-        return (
-            max(sides[4, minus], 0), max(sides[2, plus], 0),
-            below == 0 ? 0 : max(sides[4, below], 0),
-            above == 0 ? 0 : max(sides[4, above], 0),
-        )
-    end
-    left = _mimetic_neighbour(topology, plus, 4)
-    right = _mimetic_neighbour(topology, plus, 2)
+    second = topology.second
+    low, high = axis == 1 ? (4, 2) : (1, 3)
+    before, after = axis == 1 ? (1, 3) : (4, 2)
+    previous = _mimetic_neighbour(topology, plus, before)
+    next = _mimetic_neighbour(topology, plus, after)
     return (
-        max(sides[1, minus], 0), max(sides[3, plus], 0),
-        left == 0 ? 0 : max(sides[1, left], 0),
-        right == 0 ? 0 : max(sides[1, right], 0),
+        max(sides[low, minus], 0), max(sides[high, plus], 0),
+        previous == 0 ? 0 : max(sides[low, previous], 0),
+        next == 0 ? 0 : max(sides[low, next], 0),
+        second[low, minus], second[high, plus],
     )
 end
 
 # Tangential component of the unit PLIC normal of `cell` on a face with local
-# normal coordinate `normal_coordinate`, and whether the PLIC line cuts the face
-# strictly inside. A positive component puts the liquid at the low end.
-function _mimetic_trace_vote(interface, reference, axis, normal_coordinate)
+# normal coordinate `normal_coordinate` that covers the tangential interval
+# `(lo, hi)` of the cell, and whether the PLIC line cuts the face strictly
+# inside. A positive component puts the liquid at the low end.
+function _mimetic_trace_vote(interface, reference, axis, normal_coordinate, (lo, hi))
     nx = _get(interface.normal_x, reference)
     ny = _get(interface.normal_y, reference)
     intercept = _get(interface.intercept, reference)
     normal, tangent = axis == 1 ? (nx, ny) : (ny, nx)
     T = typeof(intercept)
-    lo, hi = _clip_line_interval(
-        -T(0.5), T(0.5), tangent, normal * normal_coordinate - intercept;
+    low, high = _clip_line_interval(
+        T(lo), T(hi), tangent, normal * normal_coordinate - intercept;
         keep_less = true,
     )
-    return tangent / hypot(nx, ny), zero(T) < hi - lo < one(T)
+    return tangent / hypot(nx, ny), zero(T) < high - low < T(hi) - T(lo)
 end
 
 """Classify the wetted end of every partially wetted interior face.
@@ -145,8 +179,9 @@ crosses, the first cut neighbour decides by the direction of its tangential
 normal; without a cut neighbour, or for a vanishing sum, the liquid is at the
 low end. Every face gets one shared decision, which is all the consistency of
 the metric needs (the wetted midpoint of a face is the same for both cells).
+A face on a side of two faces covers half of that side of its coarser cell.
 """
-function _mimetic_face_sides!(flags, interface, liquid_aperture)
+function _mimetic_face_sides!(flags, interface, topology, liquid_aperture)
     mesh = interface.mesh
     resize!(flags, length(mesh.faces))
     for (index, face) in pairs(mesh.faces)
@@ -157,11 +192,14 @@ function _mimetic_face_sides!(flags, interface, liquid_aperture)
         end
         strong = weak = zero(aperture)
         crossings = 0
-        for (reference, coordinate) in ((face.minus, 0.5), (face.plus, -0.5))
+        for (reference, coordinate, end_index) in ((face.minus, 0.5, 1), (face.plus, -0.5, 2))
             fraction = _conditional_fraction(interface, reference)
             zero(fraction) < fraction < one(fraction) || continue
+            cell = topology.face_cells[end_index, index]
+            k = face.axis == 1 ? (end_index == 1 ? 2 : 4) : (end_index == 1 ? 3 : 1)
             tangent, crosses = _mimetic_trace_vote(
                 interface, reference, face.axis, coordinate,
+                _mimetic_face_interval(topology, cell, k, index, typeof(aperture)),
             )
             if crosses
                 strong += tangent
@@ -192,14 +230,44 @@ end
     return (-one(T), zero(T))
 end
 
-"""Phase boundary on side `k` and the midpoints of its liquid and gas parts in
-unit cell coordinates (origin at the cell centre), for the liquid aperture `a`
-of the side; `start` puts the liquid part at the counter-clockwise start of the
-side. A part of length zero has its midpoint at the side's end."""
-@inline function _mimetic_side_parts(::Type{T}, k, a, start) where {T}
-    ax, ay = _mimetic_corner(T, k)
-    bx, by = _mimetic_corner(T, mod1(k + 1, 4))
-    s = start ? a : one(T) - a
+"""Segment of a cell side in unit cell coordinates (origin at the cell
+centre): the part `from ≤ t ≤ to` of side `side` on its counter-clockwise walk
+(`t = 0` at the start of the side), the liquid aperture of the segment (its
+wetted fraction) and whether the liquid lies at the segment's
+counter-clockwise start. A side of one face is one segment `0 ≤ t ≤ 1`, a side
+of two faces two segments of half its length."""
+struct _MimeticSegment{T}
+    side::Int
+    from::T
+    to::T
+    aperture::T
+    start::Bool
+end
+
+"""Segment of a whole side `k` (one face)."""
+_MimeticSegment(k::Integer, aperture::T, start::Bool) where {T} =
+    _MimeticSegment{T}(k, zero(T), one(T), aperture, start)
+
+"""Length of a segment in units of the cell width."""
+@inline _mimetic_length(segment) = segment.to - segment.from
+
+"""End points of a segment in unit cell coordinates."""
+@inline function _mimetic_segment_ends(segment::_MimeticSegment{T}) where {T}
+    k = segment.side
+    cx, cy = _mimetic_corner(T, k)
+    dx, dy = _mimetic_corner(T, mod1(k + 1, 4))
+    a = (cx + segment.from * (dx - cx), cy + segment.from * (dy - cy))
+    b = (cx + segment.to * (dx - cx), cy + segment.to * (dy - cy))
+    return a, b
+end
+
+"""Phase boundary on a segment and the midpoints of its liquid and gas parts
+in unit cell coordinates (origin at the cell centre). A part of length zero has
+its midpoint at the segment's end."""
+@inline function _mimetic_segment_parts(segment::_MimeticSegment{T}) where {T}
+    (ax, ay), (bx, by) = _mimetic_segment_ends(segment)
+    start = segment.start
+    s = start ? segment.aperture : one(T) - segment.aperture
     qx, qy = ax + s * (bx - ax), ay + s * (by - ay)
     low = ((ax + qx) / 2, (ay + qy) / 2)
     high = ((qx + bx) / 2, (qy + by) / 2)
@@ -217,52 +285,58 @@ end
 
 """Pressure point of a cut cell in unit cell coordinates (eqs. mimetic-point,
 mimetic-interval) and the liquid closing vector `η = Σ_k a_k n_k` (eq.
-mimetic-gram, in units of `h`).
+mimetic-gram, in units of `h`), for the `segments` of its sides
+(`_MimeticSegment`; `a_k` is the wetted length of segment `k`).
 
 With `M = Σ_k a_k n_k (x^l_k)ᵀ` the liquid Gram tensor at `x*` is
 `G^l = M - η x*ᵀ` and the gas one `G^g = I - G^l`. For `η ≠ 0` both are
 symmetric exactly on the line `η × x* = τ`, `τ = M₁₂ - M₂₁`. The data point
 is the point of that line closest to the interface of the data, the mean of
-the phase boundaries on the partially wetted sides (if every side is wetted by
-one phase only: the mean of the midpoints of the sides of the minority phase).
-It is kept if `0 ⪯ G^l ⪯ I` there; otherwise it moves along the line into
-the admissible interval (`_mimetic_admissible_point`). For `η = 0` the tensors
-do not depend on `x*`; the point satisfies the kernel condition instead
-(`_mimetic_kernel_point`). A point more than `1.5h` from the centre is
-replaced by the data mean (the cell is then defective).
+the phase boundaries on the partially wetted segments (if every segment is
+wetted by one phase only: the length-weighted mean of the midpoints of the
+segments of the minority phase). It is kept if `0 ⪯ G^l ⪯ I` there;
+otherwise it moves along the line into the admissible interval
+(`_mimetic_admissible_point`). For `η = 0` the tensors do not depend on `x*`;
+the point satisfies the kernel condition instead (`_mimetic_kernel_point`). A
+point more than `1.5h` from the centre is replaced by the data mean (the cell
+is then defective).
 """
-function _mimetic_pressure_point(apertures::NTuple{4, T}, starts) where {T}
+function _mimetic_pressure_point(segments::AbstractVector{_MimeticSegment{T}}) where {T}
     ex = ey = sx = sy = zero(T)
     m11 = m12 = m21 = m22 = zero(T)
-    crossed = 0
-    for k in 1:4
-        a = apertures[k]
-        nx, ny = _mimetic_normal(T, k)
-        (qx, qy), (lx, ly), _ = _mimetic_side_parts(T, k, a, starts[k])
-        ex += a * nx
-        ey += a * ny
-        m11 += a * nx * lx
-        m12 += a * nx * ly
-        m21 += a * ny * lx
-        m22 += a * ny * ly
+    crossed = zero(T)
+    wetted = perimeter = zero(T)
+    for segment in segments
+        a = segment.aperture
+        b = a * _mimetic_length(segment)
+        nx, ny = _mimetic_normal(T, segment.side)
+        (qx, qy), (lx, ly), _ = _mimetic_segment_parts(segment)
+        ex += b * nx
+        ey += b * ny
+        m11 += b * nx * lx
+        m12 += b * nx * ly
+        m21 += b * ny * lx
+        m22 += b * ny * ly
+        wetted += b
+        perimeter += _mimetic_length(segment)
         if zero(T) < a < one(T)
             sx += qx
             sy += qy
-            crossed += 1
+            crossed += one(T)
         end
     end
-    if crossed == 0
-        minority = sum(apertures) >= 2 ? zero(T) : one(T)
-        for k in 1:4
-            apertures[k] == minority || continue
-            ax, ay = _mimetic_corner(T, k)
-            bx, by = _mimetic_corner(T, mod1(k + 1, 4))
-            sx += (ax + bx) / 2
-            sy += (ay + by) / 2
-            crossed += 1
+    if iszero(crossed)
+        minority = wetted >= perimeter / 2 ? zero(T) : one(T)
+        for segment in segments
+            segment.aperture == minority || continue
+            length = _mimetic_length(segment)
+            (ax, ay), (bx, by) = _mimetic_segment_ends(segment)
+            sx += length * ((ax + bx) / 2)
+            sy += length * ((ay + by) / 2)
+            crossed += length
         end
     end
-    xr, yr = crossed > 0 ? (sx / crossed, sy / crossed) : (zero(T), zero(T))
+    xr, yr = crossed > zero(T) ? (sx / crossed, sy / crossed) : (zero(T), zero(T))
     e2 = ex^2 + ey^2
     if e2 > T(1.0e-18)
         defect = (m12 - m21) - (ex * yr - ey * xr)
@@ -270,7 +344,7 @@ function _mimetic_pressure_point(apertures::NTuple{4, T}, starts) where {T}
             m11, m12, m21, m22, ex, ey, xr - defect * ey / e2, yr + defect * ex / e2,
         )
     else
-        xs, ys = _mimetic_kernel_point(apertures, starts, m11, (m12 + m21) / 2, m22, xr, yr)
+        xs, ys = _mimetic_kernel_point(segments, m11, (m12 + m21) / 2, m22, xr, yr)
         admissible = false
     end
     !admissible && hypot(xs, ys) > T(1.5) && ((xs, ys) = (xr, yr))
@@ -323,20 +397,23 @@ const _MIMETIC_POINT_MARGIN = 0.01
 part `[g11 g12; g12 g22]`) and `G^g = I - G^l` do not depend on `x*`, and a
 block with `m N = R` needs `ker G ⊂ ker R`. For every eigenvector `v` with
 eigenvalue `0` of `G^l` (or `1`: kernel of `G^g`) the component `v ⋅ x*` is
-set to the wetted-length weighted mean of `v ⋅ x_k` over the sides of that
+set to the wetted-length weighted mean of `v ⋅ x_k` over the segments of that
 phase, which satisfies the condition when the `v ⋅ x_k` agree (a film along a
 grid line: its mid-height); the other component is that of the data point."""
-function _mimetic_kernel_point(apertures::NTuple{4, T}, starts, g11, g12, g22, xs, ys) where {T}
+function _mimetic_kernel_point(
+        segments::AbstractVector{_MimeticSegment{T}}, g11, g12, g22, xs, ys,
+    ) where {T}
     lambda1, lambda2, c, s = _mimetic_symmetric_eigen(g11, g12, g22)
     tolerance = T(1.0e-10)
     for (lambda, vx, vy) in ((lambda1, -s, c), (lambda2, c, s))
         for phase in 1:2
             (phase == 1 ? lambda : one(T) - lambda) <= tolerance || continue
             total = weighted = zero(T)
-            for k in 1:4
-                b = phase == 1 ? apertures[k] : one(T) - apertures[k]
+            for segment in segments
+                a = segment.aperture
+                b = (phase == 1 ? a : one(T) - a) * _mimetic_length(segment)
                 b > zero(T) || continue
-                _, liquid, gas = _mimetic_side_parts(T, k, apertures[k], starts[k])
+                _, liquid, gas = _mimetic_segment_parts(segment)
                 mx, my = phase == 1 ? liquid : gas
                 total += b
                 weighted += b * (vx * mx + vy * my)
@@ -353,31 +430,34 @@ end
 """Gram block of one phase of a cut cell in unit coordinates (eqs.
 mimetic-gram, mimetic-local).
 
-For the `m` sides wetted by `phase` (`sides[1:m]`, wetted lengths
-`lengths[1:m]`, outward normals `n_k`, wetted midpoints `x_k`) and the pressure
-point `(xs, ys)`, fills `moments[1:m, :]` with `R = [b_k (x_k - x*)ᵀ]` and
-`block[1:m, 1:m]` with `R G⁺ Rᵀ + S`, `G = Σ_k b_k n_k (x_k - x*)ᵀ`. `S` is
-the stabilisation `½ D Q D` of the wetted sides closed by one more edge of
-length `|η|` and outward normal `∓η/|η|` (liquid, gas), whose flux is slaved
-to close the region (eq. mimetic-slave). Returns `m` and whether the block
-is consistent, `block N = R`: that needs a symmetric positive semi-definite
-`G` whose kernel lies in that of `R`. Otherwise the eigenvalues of the
-symmetric part of `G` are raised to `1/50` (least-squares consistency).
+For the `m` segments wetted by `phase` (`sides[1:m]`: their indices in
+`segments`, wetted lengths `lengths[1:m]`, outward normals `n_k`, wetted
+midpoints `x_k`) and the pressure point `(xs, ys)`, fills `moments[1:m, :]`
+with `R = [b_k (x_k - x*)ᵀ]` and `block[1:m, 1:m]` with `R G⁺ Rᵀ + S`,
+`G = Σ_k b_k n_k (x_k - x*)ᵀ`. `S` is the stabilisation `½ D Q D` of the
+wetted segments closed by one more edge of length `|η|` and outward normal
+`∓η/|η|` (liquid, gas), whose flux is slaved to close the region (eq.
+mimetic-slave). Returns `m` and whether the block is consistent,
+`block N = R`: that needs a symmetric positive semi-definite `G` whose kernel
+lies in that of `R`. Otherwise the eigenvalues of the symmetric part of `G`
+are raised to `1/50` (least-squares consistency). A pure cell is the phase
+that wets all its segments, with `x*` its centre and `η = 0`: then `G = I`.
 """
 function _mimetic_gram_block!(
-        block, sides, lengths, moments, apertures, starts, phase, xs, ys, ex, ey,
+        block, sides, lengths, moments, segments, phase, xs, ys, ex, ey,
     )
     T = eltype(block)
     m = 0
     g11 = g12 = g21 = g22 = zero(T)
-    for k in 1:4
-        b = phase == 1 ? apertures[k] : one(T) - apertures[k]
+    for (index, segment) in pairs(segments)
+        a = segment.aperture
+        b = (phase == 1 ? a : one(T) - a) * _mimetic_length(segment)
         b > zero(T) || continue
-        _, liquid, gas = _mimetic_side_parts(T, k, apertures[k], starts[k])
+        _, liquid, gas = _mimetic_segment_parts(segment)
         mx, my = phase == 1 ? liquid : gas
-        nx, ny = _mimetic_normal(T, k)
+        nx, ny = _mimetic_normal(T, segment.side)
         m += 1
-        sides[m] = k
+        sides[m] = index
         lengths[m] = b
         rx, ry = b * (mx - xs), b * (my - ys)
         moments[m, 1] = rx
@@ -391,11 +471,11 @@ function _mimetic_gram_block!(
     lambda1, lambda2, c, s = _mimetic_symmetric_eigen(g11, (g12 + g21) / 2, g22)
     consistent = abs(g12 - g21) <= T(1.0e-10) && lambda1 > -T(1.0e-10)
     if consistent
-        _mimetic_fill_gram_block!(block, m, sides, lengths, moments, lambda1, lambda2, c, s, false, phase, ex, ey)
+        _mimetic_fill_gram_block!(block, m, sides, lengths, moments, segments, lambda1, lambda2, c, s, false, phase, ex, ey)
         for q in 1:m
             rx = ry = zero(T)
             for r in 1:m
-                nx, ny = _mimetic_normal(T, sides[r])
+                nx, ny = _mimetic_normal(T, segments[sides[r]].side)
                 rx += block[q, r] * nx
                 ry += block[q, r] * ny
             end
@@ -403,7 +483,7 @@ function _mimetic_gram_block!(
         end
     end
     consistent || _mimetic_fill_gram_block!(
-        block, m, sides, lengths, moments, lambda1, lambda2, c, s, true, phase, ex, ey,
+        block, m, sides, lengths, moments, segments, lambda1, lambda2, c, s, true, phase, ex, ey,
     )
     return m, consistent
 end
@@ -416,7 +496,7 @@ const _MIMETIC_GRAM_FLOOR = 0.02
 eigen decomposition of `G`; with `floored`, the eigenvalues are raised to
 `_MIMETIC_GRAM_FLOOR` instead of inverting only the positive ones."""
 function _mimetic_fill_gram_block!(
-        block, m, sides, lengths, moments, lambda1, lambda2, c, s, floored, phase, ex, ey,
+        block, m, sides, lengths, moments, segments, lambda1, lambda2, c, s, floored, phase, ex, ey,
     )
     T = eltype(block)
     least = T(_MIMETIC_GRAM_FLOOR)
@@ -434,7 +514,7 @@ function _mimetic_fill_gram_block!(
     cl = closing ? sqrt(e2) : zero(T)
     orientation = phase == 1 ? -one(T) : one(T)
     cnx, cny = closing ? (orientation * ex / cl, orientation * ey / cl) : (zero(T), zero(T))
-    edge(q) = q <= m ? (lengths[q], _mimetic_normal(T, sides[q])) : (cl, (cnx, cny))
+    edge(q) = q <= m ? (lengths[q], _mimetic_normal(T, segments[sides[q]].side)) : (cl, (cnx, cny))
     p11 = p12 = p22 = zero(T)
     for q in 1:(m + closing)
         L, (nx, ny) = edge(q)
@@ -510,13 +590,16 @@ mutable struct _MimeticAssembly{T}
     sides::Vector{Int}
     lengths::Vector{T}
     moments::Matrix{T}
+    segments::Vector{_MimeticSegment{T}}
+    segment_faces::Vector{Int}
 end
 
 function _MimeticAssembly(::Type{T}) where {T}
     return _MimeticAssembly{T}(
         typemax(UInt), Int[], Int[], Int[], Int8[], T[], T[], T[], 0, Int[], Int[], T[],
         spzeros(T, 0, 0), nothing, T[], T[], T[], 0, 0, 0, 0, 0, 0, T[], Int[], Int[], T[],
-        falses(0), Int8[], zeros(T, 4, 4), zeros(Int, 4), zeros(T, 4), zeros(T, 4, 2),
+        falses(0), Int8[], zeros(T, 8, 8), zeros(Int, 8), zeros(T, 8), zeros(T, 8, 2),
+        _MimeticSegment{T}[], Int[],
     )
 end
 
@@ -538,14 +621,41 @@ end
     return nothing
 end
 
+"""Segment `from ≤ t ≤ to` of side `k` of `cell` on interior face `face` (or
+boundary face `-face`) with its liquid aperture and wet end. A grid-line
+interface face is fully wet from its own cell's side."""
+function _mimetic_segment(
+        ::Type{T}, k, from, to, face, cell, topology, data, flags,
+        boundary_aperture, boundary_low, gridline,
+    ) where {T}
+    aperture = if face < 0
+        boundary_aperture[-face]
+    elseif isnothing(gridline) || iszero(gridline[face])
+        data.liquid_aperture[face]
+    else
+        minus = topology.face_cells[1, face] == cell
+        (gridline[face] > 0) == minus ? one(T) : zero(T)
+    end
+    start = if zero(T) < aperture < one(T)
+        low = face > 0 ? flags[face] == _MIMETIC_LIQUID_LOW : boundary_low[-face]
+        _MIMETIC_STARTS_LOW[k] ? low : !low
+    else
+        false
+    end
+    return _MimeticSegment{T}(k, from, to, aperture, start)
+end
+
 """Assemble the mimetic cut-cell metric (Gram-tensor blocks of the cut cells,
 with the tie terms of the audit's laboratory).
 
-Every cut cell (a cell whose four liquid apertures are not all `0` or all
-`1`) gets one pressure point (`_mimetic_pressure_point`) and per phase the
-Gram block of the sides that phase wets (`_mimetic_gram_block!`); a cell in
-which a block is only least-squares consistent counts as defective. Uncut
-cells give their face values `ρh²/2`. A phase value on a face that the phase
+Every cut cell (a cell whose liquid apertures are not all `0` or all `1`) gets
+one pressure point (`_mimetic_pressure_point`) and per phase the Gram block
+of the segments of its sides that phase wets (`_mimetic_gram_block!`); a cell
+in which a block is only least-squares consistent counts as defective. Uncut
+cells with one face per side give their face values `ρh²/2`, the Gram block
+of the square; an uncut cell with a side of two faces (next to two finer
+cells) gets the Gram block of its phase on its five to eight segments, with
+the pressure point at its centre. A phase value on a face that the phase
 does not reach is tied to a donor with its staggered mass, and every value
 with aperture below one half on a mixed face is tied to a donor with weight
 `(1 - 2a)` times its mass (small-cell stabilisation).
@@ -582,7 +692,7 @@ function _assemble_cut_cell_metric!(
         topology, data, flags, boundary_aperture, boundary_low, density;
         gridline = nothing,
     ) where {T}
-    h = topology.spacing
+    spacing = topology.spacing
     faces = length(mesh.faces)
     cells = size(topology.sides, 2)
     on_gridline(face) = !isnothing(gridline) && !iszero(gridline[face])
@@ -641,71 +751,82 @@ function _assemble_cut_cell_metric!(
     fill!(resize!(assembly.wall_coupling, 2dofs), zero(T))
     nx, ny = mesh.block_size
     cut_cells = defective_cells = wall_cells = 0
+    segments = assembly.segments
+    segment_faces = assembly.segment_faces
     for cell in 1:cells
+        h = spacing[cell]
         block_index = div(cell - 1, nx * ny) + 1
         local_index = rem(cell - 1, nx * ny)
         i, j = rem(local_index, nx) + 1, div(local_index, nx) + 1
         center = cellcenter(mesh, block_index, i, j)
         assembly.pressure_x[cell] = center[1]
         assembly.pressure_y[cell] = center[2]
-        apertures = ntuple(Val(4)) do k
-            face = topology.sides[k, cell]
-            face > 0 || return boundary_aperture[-face]
-            # A grid-line interface face is fully wet from its own cell's side.
-            on_gridline(face) || return data.liquid_aperture[face]
-            minus = topology.face_cells[1, face] == cell
-            return (gridline[face] > 0) == minus ? one(T) : zero(T)
+        # The segments of the sides along the counter-clockwise walk.
+        empty!(segments)
+        empty!(segment_faces)
+        split = false
+        for k in 1:4
+            low, high = topology.sides[k, cell], topology.second[k, cell]
+            if iszero(high)
+                push!(segment_faces, low)
+                push!(segments, _mimetic_segment(T, k, zero(T), one(T), low, cell, topology, data, flags, boundary_aperture, boundary_low, gridline))
+            else
+                split = true
+                first, last = _MIMETIC_STARTS_LOW[k] ? (low, high) : (high, low)
+                half = T(0.5)
+                push!(segment_faces, first, last)
+                push!(segments, _mimetic_segment(T, k, zero(T), half, first, cell, topology, data, flags, boundary_aperture, boundary_low, gridline))
+                push!(segments, _mimetic_segment(T, k, half, one(T), last, cell, topology, data, flags, boundary_aperture, boundary_low, gridline))
+            end
         end
-        dof_of(k, phase) = (
-            face = topology.sides[k, cell]; face <= 0 ? 0 :
+        dof_of(q, phase) = (
+            face = segment_faces[q]; face <= 0 ? 0 :
                 (phase == 1 ? assembly.liquid_dof[face] : assembly.gas_dof[face])
         )
-        uncut = all(==(apertures[1]), apertures) &&
-            (iszero(apertures[1]) || isone(apertures[1]))
-        if uncut
+        reference = segments[1].aperture
+        uncut = all(segment -> segment.aperture == reference, segments) &&
+            (iszero(reference) || isone(reference))
+        if uncut && !split
             # Uncut cell: (1/2) rho h^2 on every face value, the diagonal metric.
-            phase = isone(apertures[1]) ? 1 : 2
-            for k in 1:4
-                dof = dof_of(k, phase)
+            phase = isone(reference) ? 1 : 2
+            for q in 1:4
+                dof = dof_of(q, phase)
                 dof > 0 && (assembly.full_diagonal[dof] += density[phase] * h^2 / 2)
             end
             continue
         end
-        starts = ntuple(Val(4)) do k
-            zero(T) < apertures[k] < one(T) || return false
-            face = topology.sides[k, cell]
-            low = face > 0 ? flags[face] == _MIMETIC_LIQUID_LOW : boundary_low[-face]
-            return _MIMETIC_STARTS_LOW[k] ? low : !low
+        xs = ys = ex = ey = zero(T)
+        if !uncut
+            xs, ys, ex, ey = _mimetic_pressure_point(segments)
+            assembly.pressure_x[cell] = center[1] + h * xs
+            assembly.pressure_y[cell] = center[2] + h * ys
+            cut_cells += 1
+            wall_cells += any(<(0), segment_faces)
         end
-        xs, ys, ex, ey = _mimetic_pressure_point(apertures, starts)
-        assembly.pressure_x[cell] = center[1] + h * xs
-        assembly.pressure_y[cell] = center[2] + h * ys
-        cut_cells += 1
-        wall_cells += any(k -> topology.sides[k, cell] < 0, 1:4)
         defective = false
         for phase in 1:2
             m, consistent = _mimetic_gram_block!(
                 assembly.block, assembly.sides, assembly.lengths, assembly.moments,
-                apertures, starts, phase, xs, ys, ex, ey,
+                segments, phase, xs, ys, ex, ey,
             )
             defective |= !consistent
             scale = density[phase] * h^2
             for q in 1:m
-                kq = assembly.sides[q]
-                rq = dof_of(kq, phase)
+                sq = assembly.sides[q]
+                rq = dof_of(sq, phase)
                 if rq == 0
-                    topology.sides[kq, cell] < 0 && continue
+                    segment_faces[sq] < 0 && continue
                     error("mimetic metric: wetted face without a phase value")
                 end
                 for r in 1:m
-                    kr = assembly.sides[r]
-                    rr = dof_of(kr, phase)
-                    value = _MIMETIC_OUTWARD[kq] * scale * assembly.block[q, r]
+                    sr = assembly.sides[r]
+                    rr = dof_of(sr, phase)
+                    value = _MIMETIC_OUTWARD[segments[sq].side] * scale * assembly.block[q, r]
                     if rr > 0
-                        _mimetic_add!(assembly, rq, rr, _MIMETIC_OUTWARD[kr] * value)
-                    elseif topology.sides[kr, cell] < 0
+                        _mimetic_add!(assembly, rq, rr, _MIMETIC_OUTWARD[segments[sr].side] * value)
+                    elseif segment_faces[sr] < 0
                         # Wall side: coupling to its prescribed flux density n_w ⋅ w.
-                        wx, wy = _mimetic_normal(T, kr)
+                        wx, wy = _mimetic_normal(T, segments[sr].side)
                         assembly.wall_coupling[2rq - 1] += value * wx
                         assembly.wall_coupling[2rq] += value * wy
                     end
@@ -733,7 +854,7 @@ function _assemble_cut_cell_metric!(
         if aperture > zero(T)
             # A block that gives the value no inertia beyond round-off (a phase
             # of vanishing area) does not count: lump the staggered mass.
-            if !(block_diagonal[dof] > T(1.0e-12) * density[phase == 2 ? 2 : 1] * h^2)
+            if !(block_diagonal[dof] > T(1.0e-12) * density[phase == 2 ? 2 : 1] * topology.area[face]^2)
                 _mimetic_add!(assembly, dof, dof, mass)
                 lumped_values += 1
             end

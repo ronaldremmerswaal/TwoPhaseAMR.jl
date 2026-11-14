@@ -1,7 +1,7 @@
 # Kinetic-energy-orthogonal two-velocity projection in the mimetic cut-cell
-# metric (`MimeticProjection`). Uniform square-cell meshes without embedded
-# solids only. See docs/techref/chapters/10_projection.tex, "Mimetic cut-cell
-# projection".
+# metric (`MimeticProjection`). Meshes of square cells, uniform or adaptive
+# (2:1 graded), without embedded solids. See
+# docs/techref/chapters/10_projection.tex, "Mimetic cut-cell projection".
 
 import SparseArrays: CHOLMOD, UMFPACK
 
@@ -9,8 +9,8 @@ import SparseArrays: CHOLMOD, UMFPACK
     MimeticProjectionSolver(interface; density=(1, 1))
 
 Configuration of the mimetic cut-cell projection on `interface`. Throws
-`ArgumentError` for embedded solids, non-uniform (adaptive) meshes, non-square
-cells and element types other than `Float64`.
+`ArgumentError` for embedded solids, non-square cells and element types other
+than `Float64`.
 """
 struct MimeticProjectionSolver{T, I}
     interface::I
@@ -28,7 +28,7 @@ function MimeticProjectionSolver(
     isnothing(interface.geometry) || throw(
         ArgumentError("MimeticProjection does not support embedded solid geometry"),
     )
-    _mimetic_uniform_spacing(interface.mesh)
+    _mimetic_square_cells(interface.mesh)
     return MimeticProjectionSolver{T, typeof(interface)}(interface, rho)
 end
 
@@ -104,6 +104,7 @@ mutable struct MimeticProjectionWorkspace{T, M <: BlockTreeMesh}
     pressure_operator::Any
     multigrid::Any
     preconditioner::Any
+    preconditioner_topology::Union{Nothing, _MimeticTopology{T}}
     predictor::Vector{T}
     velocity::Vector{T}
     metric_predictor::Vector{T}
@@ -133,7 +134,7 @@ function MimeticProjectionWorkspace(solver::MimeticProjectionSolver{T}) where {T
     return MimeticProjectionWorkspace{T, typeof(mesh)}(
         FaceField{1}(mesh, T), FaceField{2}(mesh, T), nothing, nothing,
         CellRef[], _MimeticAssembly(T), nothing, spzeros(T, 0, 0), spzeros(T, 0, 0),
-        spzeros(T, 0, 0), T[], T[], Bool[], Int8[], T[], nothing, nothing, nothing,
+        spzeros(T, 0, 0), T[], T[], Bool[], Int8[], T[], nothing, nothing, nothing, nothing,
         T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], nothing, T[], T[], T[], T[],
         _MimeticViscousWork(T),
     )
@@ -229,7 +230,7 @@ function _mimetic_assemble!(
     assembly = workspace.assembly
     revision = interface.phase_aperture_updates[]
     !topology_changed && assembly.revision == revision && return assembly
-    flags = _mimetic_face_sides!(assembly.flags, interface, data.liquid_aperture)
+    flags = _mimetic_face_sides!(assembly.flags, interface, workspace.topology, data.liquid_aperture)
     gridline = _mimetic_gridline_faces!(workspace.gridline, interface)
     boundary_aperture = resize!(workspace.boundary_aperture, length(mesh.boundary_faces))
     boundary_low = resize!(workspace.boundary_low, length(mesh.boundary_faces))
@@ -238,7 +239,7 @@ function _mimetic_assemble!(
         fraction = _conditional_fraction(interface, face.cell)
         boundary_low[index] = zero(T) < fraction < one(T) && first(
             _mimetic_trace_vote(
-                interface, face.cell, face.axis, face.side > 0 ? 0.5 : -0.5,
+                interface, face.cell, face.axis, face.side > 0 ? 0.5 : -0.5, (-0.5, 0.5),
             ),
         ) > 0
     end
@@ -307,14 +308,16 @@ function _mimetic_assemble_from_data!(
     resize!(workspace.cell_scratch, cells)
     resize!(workspace.multiplier, cells)
     # Face coefficient of the preconditioning pressure operator `D W⁻¹ Dᵀ`, in
-    # units of 1/rho: Σ_π (a|f|)² / W_r with W_r the diagonal phase mass.
+    # units of 1/rho: Σ_π (a|f|)² / W_r with W_r the diagonal phase mass, per
+    # the conductance |f|/d of the face (d the distance of the cell centres
+    # normal to it, |f| d its dual volume).
     beta = resize!(workspace.preconditioner_coefficient, length(mesh.faces))
     fill!(beta, zero(T))
     for dof in eachindex(assembly.dof_face)
         aperture = assembly.dof_aperture[dof]
         iszero(aperture) && continue
         face = assembly.dof_face[dof]
-        beta[face] += aperture^2 * mesh.faces[face].area^2 / assembly.dof_mass[dof]
+        beta[face] += aperture^2 * mesh.face_dual_volumes[face] / assembly.dof_mass[dof]
     end
     return assembly
 end
@@ -480,7 +483,7 @@ function _mimetic_recover!(workspace, multiplier)
         aperture = assembly.dof_aperture[dof]
         iszero(aperture) && continue
         face = assembly.dof_face[dof]
-        weight = topology.spacing * aperture
+        weight = topology.area[face] * aperture
         minus = topology.face_cells[1, face]
         plus = topology.face_cells[2, face]
         velocity[dof] += weight * (multiplier[minus] - multiplier[plus]) /
@@ -498,7 +501,7 @@ function _mimetic_outflow!(outflow, workspace, values)
         aperture = assembly.dof_aperture[dof]
         iszero(aperture) && continue
         face = assembly.dof_face[dof]
-        flux = topology.spacing * aperture * values[dof]
+        flux = topology.area[face] * aperture * values[dof]
         outflow[topology.face_cells[1, face]] += flux
         outflow[topology.face_cells[2, face]] -= flux
     end
@@ -507,16 +510,18 @@ end
 
 """Gauge-reduced V-cycle of the pressure operator with the face coefficient
 `workspace.preconditioner_coefficient` (by default `D W⁻¹ Dᵀ`, the pressure
-operator of the diagonal phase-mass metric)."""
+operator of the diagonal phase-mass metric). The operator and its multigrid
+hierarchy are rebuilt when the mesh topology changes (a regrid)."""
 function _mimetic_preconditioner!(solver, workspace)
     interface = solver.interface
     cells = size(workspace.topology.sides, 2)
     operator = workspace.pressure_operator
     fresh = !(operator isa EllipticOperator) || operator.mesh !== interface.mesh ||
-        length(operator.volumes) != cells
+        workspace.preconditioner_topology !== workspace.topology
     if fresh
         operator = PoissonOperator(interface; density = solver.density)
         workspace.pressure_operator = operator
+        workspace.preconditioner_topology = workspace.topology
     end
     _replace_face_coefficient(operator, workspace.preconditioner_coefficient)
     multigrid = workspace.multigrid
@@ -529,7 +534,7 @@ function _mimetic_preconditioner!(solver, workspace)
     previous = workspace.preconditioner
     workspace.preconditioner = _cmdgfm_reduced_pressure(
         multigrid, operator, collect(2:cells), ones(Int, cells - 1), nothing;
-        reuse = previous isa CMDGFMReducedPressurePreconditioner ? previous : nothing,
+        reuse = !fresh && previous isa CMDGFMReducedPressurePreconditioner ? previous : nothing,
     )
     return workspace.preconditioner
 end
@@ -629,8 +634,8 @@ function _mimetic_solve!(
     predictor = workspace.predictor
     resize!(workspace.velocity, length(predictor))
     target(cell) = iszero(weight) ? zero(T) : -weight * inherited[cell]
-    volume = topology.spacing^2
-    defect_of(outflow) = dt * maximum(c -> abs(outflow[c] - target(c)), 1:cells) / volume
+    spacing = topology.spacing
+    defect_of(outflow) = maximum(c -> dt * abs(outflow[c] - target(c)) / spacing[c]^2, 1:cells)
     multiplier = workspace.multiplier
     multiplier[1] = zero(T)
     initial_residual = norm(_mimetic_outflow!(workspace.cell_scratch, workspace, predictor))
@@ -672,7 +677,7 @@ function _mimetic_solve!(
         defect < previous || break
     end
     final_residual = norm(outflow)
-    mixture_divergence = maximum(abs, outflow) / volume
+    mixture_divergence = maximum(c -> abs(outflow[c]) / spacing[c]^2, 1:cells)
 
     # Diagnostics in the metric 𝓜 and the transported momentum.
     projected = workspace.velocity
@@ -691,7 +696,8 @@ function _mimetic_solve!(
     transported_before = zeros(T, 2)
     for dof in eachindex(predictor)
         face = assembly.dof_face[dof]
-        axis = topology.sides[2, topology.face_cells[1, face]] == face ? 1 : 2
+        minus = topology.face_cells[1, face]
+        axis = topology.sides[2, minus] == face || topology.second[2, minus] == face ? 1 : 2
         momentum[axis] += mv[dof] - mp[dof]
         # Wall coupling: the first moment of the constant field is 𝓜e_i + Ce_i.
         change = projected[dof] - predictor[dof]
@@ -700,7 +706,7 @@ function _mimetic_solve!(
         mass = assembly.dof_mass[dof]
         transported[axis] += mass * (projected[dof] - predictor[dof])
         transported_before[axis] += mass * predictor[dof]
-        wall[axis] += topology.spacing * assembly.dof_aperture[dof] * (
+        wall[axis] += topology.area[face] * assembly.dof_aperture[dof] * (
             multiplier[topology.face_cells[1, face]] -
                 multiplier[topology.face_cells[2, face]]
         )
@@ -758,8 +764,7 @@ function _mimetic_cell_curvature!(
     for cell in 1:cells
         iszero(weight[cell]) || continue
         total = weights = zero(T)
-        for k in 1:4
-            face = topology.sides[k, cell]
+        for k in 1:4, face in (topology.sides[k, cell], topology.second[k, cell])
             face > 0 || continue
             minus = topology.face_cells[1, face]
             neighbour = minus == cell ? topology.face_cells[2, face] : minus
