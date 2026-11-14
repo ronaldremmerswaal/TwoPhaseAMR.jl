@@ -983,7 +983,12 @@ the fine cell), with opposite orientation,
 the face difference of the potential $\dens^{\phase}w\cdot x^{*}$: in a region
 of one phase, $\mathcal Mw+\mathsf Cw$ is the gradient
 $-\mathsf B^{\transpose}(\dens w\cdot x^{*})$, and $\mathcal M^{-1}\mathsf B^{\transpose}$
-maps an affine pressure to the constant field across the transitions. At a
+maps an affine pressure to the constant field across the transitions. That
+exactness is for affine pressures only: for a smooth pressure the gradient
+$\mathcal M^{-1}\mathsf B^{\transpose}p$ is first order on the values of the
+transition cells (its error halves under refinement there, measured in the
+review of this extension) and second order on the rows of the uniform
+regions, where it quarters. At a
 coarse--fine face the centres are offset tangentially by
 $\pm\frac12h_{\mathrm{fine}}$; with the diagonal masses the identity would
 fail by $\dens\meas{f}\frac14h_cw_t$ there, and a uniform acceleration along
