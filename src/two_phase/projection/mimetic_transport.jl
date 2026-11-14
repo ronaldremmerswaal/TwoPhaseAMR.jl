@@ -23,6 +23,8 @@ import Krylov
 const _MIMETIC_TRANSPORT = Ref{Symbol}(:none)
 const _MIMETIC_TRANSPORT_THETA = Ref(1.0)
 const _MIMETIC_TRANSPORT_LOG = Ref{Any}(nothing)
+"""Apply the momentum restoration of `:increment_conservative` after any design."""
+const _MIMETIC_TRANSPORT_FIX = Ref(false)
 
 struct _MimeticTransportSnapshot{T}
     dof_face::Vector{Int}
@@ -35,6 +37,7 @@ struct _MimeticTransportSnapshot{T}
     w_momentum::NTuple{2, T}
     excess_columns::NTuple{6, T}
     excess_tensor::Matrix{T}
+    mass_tensor::Matrix{T}
     assembly_time::Float64
 end
 
@@ -97,15 +100,19 @@ function _mimetic_transport_before!(
     _mimetic_gather!(values, assembly, velocity)
     metric = _mimetic_metric_matrix(work)
     mu = metric * values
-    excess = mu .- assembly.dof_mass .* values
+    wn = _PHASE_ACTIVITY[] === :aperture ?
+        first(_mimetic_merged_masses(assembly, work.face_data, metric, work.topology, mesh)) :
+        assembly.dof_mass
+    excess = mu .- wn .* values
     Z = _mimetic_constant_fields(assembly, mesh)
-    excess_constant = metric * Z .- assembly.dof_mass .* Z
+    excess_constant = metric * Z .- wn .* Z
     return _MimeticTransportSnapshot(
         copy(assembly.dof_face), copy(assembly.dof_phase),
         copy(assembly.dof_liquid_weight), excess, excess_constant,
         _mimetic_columns(Z, mu, assembly, mesh), dot(values, mu) / 2,
         _mimetic_w_momentum(assembly, mesh, values),
-        _mimetic_columns(Z, excess, assembly, mesh), Z' * excess_constant, assembly_time,
+        _mimetic_columns(Z, excess, assembly, mesh), Z' * excess_constant, Z' * (metric * Z),
+        assembly_time,
     )
 end
 
@@ -175,6 +182,86 @@ function _mimetic_transport_sources(state, mesh)
         gas[index] = q.scratch.source_gas[counter[]]
     end
     return liquid, gas
+end
+
+"""STUDY: largest staggered mass a value keeps under aperture activity, in units
+of its metric inertia; the rest is merged into a donor."""
+const _MIMETIC_MERGE_KAPPA = Ref(1.0)
+
+"""Transported phase values after the `W` sweeps (before the final marking), as
+phase arrays indexed by mesh face."""
+function _mimetic_transport_raw(state, mesh)
+    T = eltype(state.convected[1].interior)
+    liquid = fill(T(NaN), length(mesh.faces))
+    gas = fill(T(NaN), length(mesh.faces))
+    counters = (Ref(0), Ref(0))
+    for (index, face) in pairs(mesh.faces)
+        counter = counters[face.axis]
+        counter[] += 1
+        q = face.axis == 1 ? state.momentum.x : state.momentum.y
+        liquid[index] = q.liquid.interior[counter[]]
+        gas[index] = q.gas.interior[counter[]]
+    end
+    return liquid, gas
+end
+
+"""STUDY (aperture activity): merged staggered phase masses `W̃` on the degrees
+of freedom. A phase value keeps at most `κ 𝓜_ff` of its staggered mass `m_f`;
+the excess, and the whole mass of a value without degree of freedom (phase
+volume, no wetted face), goes to the same-phase value of the face ring with
+the largest aperture (same axis: the constant fields and the totals `ZᵀW̃Z =
+ZᵀWZ` are kept). With `increment` (per phase, per face) the same merge maps
+the covector `m_f Δu_f`."""
+function _mimetic_merged_masses(assembly, data, metric, topology, mesh; increment = nothing)
+    T = eltype(assembly.dof_mass)
+    kappa = T(_MIMETIC_MERGE_KAPPA[])
+    dofs = length(assembly.dof_face)
+    merged = zeros(T, dofs)
+    covector = zeros(T, dofs)
+    moved = 0
+    dropped = zero(T)
+    delta(phase, face) = isnothing(increment) ? zero(T) :
+        (d = increment[phase][face]; isfinite(d) ? d : zero(T))
+    for face in eachindex(mesh.faces)
+        volume = mesh.face_dual_volumes[face]
+        identified = assembly.liquid_dof[face]
+        if identified > 0 && identified == assembly.gas_dof[face]
+            for phase in 1:2
+                m = volume * (phase == 1 ? data.liquid_mass[face] : data.gas_mass[face])
+                merged[identified] += m
+                covector[identified] += m * delta(phase, face)
+            end
+            continue
+        end
+        for phase in 1:2
+            m = volume * (phase == 1 ? data.liquid_mass[face] : data.gas_mass[face])
+            m > zero(T) || continue
+            dof_at(g) = g <= 0 ? 0 : (phase == 1 ? assembly.liquid_dof[g] : assembly.gas_dof[g])
+            dof = dof_at(face)
+            keep = dof > 0 ? min(m, kappa * metric[dof, dof]) : zero(T)
+            excess = m - keep
+            d = delta(phase, face)
+            if dof > 0
+                merged[dof] += keep
+                covector[dof] += keep * d
+            end
+            excess > zero(T) || continue
+            ring = _mimetic_face_ring(topology, face, mesh.faces[face].axis)
+            donor = _mimetic_donor(
+                topology, mesh, ring, dof_at, g -> (e = dof_at(g); e > 0 && e != dof),
+                assembly.dof_aperture,
+            )
+            target = donor > 0 ? donor : dof
+            if target > 0
+                merged[target] += excess
+                covector[target] += excess * d
+                moved += donor > 0
+            else
+                dropped += excess
+            end
+        end
+    end
+    return merged, covector, (; moved, dropped)
 end
 
 """Skew band coupling `Y` (edge values `y` on same-phase pairs of faces of a
@@ -282,8 +369,17 @@ function _mimetic_transport_after!(snapshot::_MimeticTransportSnapshot{T}, state
     )
     metric = _mimetic_metric_matrix(work)
     Z = _mimetic_constant_fields(assembly, mesh)
-    mass = assembly.dof_mass
-    rhs = mass .* (transported .- old)
+    merge_stats = (moved = 0, dropped = zero(T))
+    if _PHASE_ACTIVITY[] === :aperture
+        raw_liquid, raw_gas = _mimetic_transport_raw(state, mesh)
+        increment = (raw_liquid .- liquid_old, raw_gas .- gas_old)
+        mass, rhs, merge_stats = _mimetic_merged_masses(
+            assembly, work.face_data, metric, work.topology, mesh; increment,
+        )
+    else
+        mass = assembly.dof_mass
+        rhs = mass .* (transported .- old)
+    end
     theta = mode === :theta ? T(_MIMETIC_TRANSPORT_THETA[]) :
         mode === :redistribute ? T(1 // 2) : one(T)
     orphan = zeros(T, 4)
@@ -333,13 +429,15 @@ function _mimetic_transport_after!(snapshot::_MimeticTransportSnapshot{T}, state
         end
     end
     fixer = zeros(T, 4)
-    if mode === :increment_conservative
-        # Restore the 𝓜-momentum change Zᵀ(E⁺ū - Eⁿuⁿ) of the increment form,
-        # less its constant part (the Gram-versus-VOF mass obstruction, zero
-        # with mass-matched points), by a mass-proportional uniform force per
-        # phase and axis. Constants give a zero force.
-        ET = Z' * (metric * Z .- mass .* Z)
-        new_columns = Z' * (metric * old .- mass .* old)
+    if mode === :increment_conservative || _MIMETIC_TRANSPORT_FIX[]
+        # Restore the 𝓜-momentum: the update gives 𝓜⁺u⁺ = 𝓜⁺ū + rhs, so its
+        # change is Zᵀ(𝓜⁺ū + rhs) - Zᵀ𝓜ⁿuⁿ; less the constant part
+        # Zᵀ(𝓜⁺ - 𝓜ⁿ)Z⟨ū⟩ (the Gram-versus-VOF mass obstruction, zero with
+        # mass-matched points) it is removed by a mass-proportional uniform
+        # force per phase and axis. A design that keeps constants exactly
+        # gives a zero force for a constant field.
+        predicted = Z' * (metric * old .+ rhs)
+        MT = Z' * (metric * Z)
         means = zeros(T, 4)
         totals = zeros(T, 4)
         for c in 1:4
@@ -353,9 +451,9 @@ function _mimetic_transport_after!(snapshot::_MimeticTransportSnapshot{T}, state
         end
         for c in 1:4
             totals[c] > 0 || continue
-            defect = new_columns[c] - snapshot.excess_columns[c]
+            defect = predicted[c] - snapshot.momentum[c]
             for k in 1:4
-                defect -= (ET[c, k] - snapshot.excess_tensor[c, k]) * means[k]
+                defect -= (MT[c, k] - snapshot.mass_tensor[c, k]) * means[k]
             end
             fixer[c] = defect
             for dof in 1:dofs
@@ -405,7 +503,7 @@ function _mimetic_transport_after!(snapshot::_MimeticTransportSnapshot{T}, state
                         band = assembly.band_position[k] > 0,
                     )
                 end,
-                orphan = Tuple(orphan), redistribution, fixer = Tuple(fixer),
+                orphan = Tuple(orphan), redistribution, fixer = Tuple(fixer), merge = merge_stats,
                 mass_match = _MIMETIC_MASS_MATCH[] ? _MIMETIC_MASS_MATCH_LAST[] : nothing,
                 band = length(assembly.band), dofs,
                 assembly_time = snapshot.assembly_time + assembly_time, solve_time,

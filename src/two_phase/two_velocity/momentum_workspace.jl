@@ -86,6 +86,12 @@ function _prepare_phase_momentum_values!(component, interface::InterfaceField)
         fractions[index] = clamp(fractions[index], zero(eltype(fractions)), one(eltype(fractions)))
     end
     interior_count = length(component.fraction.interior)
+    # STUDY: aperture activity needs the phase apertures of the interior faces.
+    by_aperture = _PHASE_ACTIVITY[] === :aperture
+    apertures = by_aperture ? _current_phase_face_apertures!(interface) : nothing
+    axis = component.fraction isa FaceField{1} ? 1 : 2
+    global_index = by_aperture ?
+        [index for (index, face) in pairs(interface.mesh.faces) if face.axis == axis] : Int[]
     for (field, liquid) in ((component.liquid, true), (component.gas, false))
         values = _pack_phase_faces!(component.scratch.values, field)
         for index in eachindex(values)
@@ -98,6 +104,9 @@ function _prepare_phase_momentum_values!(component, interface::InterfaceField)
                 local_index; boundary
             ) > 0
             present = open && (liquid ? fractions[index] > 0 : fractions[index] < 1)
+            if present && by_aperture && !boundary
+                present = apertures[liquid ? 1 : 2][global_index[local_index]] > 0
+            end
             if present && !isfinite(values[index])
                 throw(ArgumentError("non-finite active phase velocity in momentum transport"))
             elseif !present

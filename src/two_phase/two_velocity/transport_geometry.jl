@@ -252,9 +252,21 @@ function _check_phase_wy_velocities(velocity, work::WYAdvectionWorkspace, geomet
     number_of_faces = length(work.mesh.faces)
     chunks = _reduction_chunks(number_of_faces)
     failures = _reduction_partials!(work.velocity_failure, number_of_faces)
-    _check_phase_wy_interior!(
-        failures, velocity[1].interior, velocity[2].interior, interface, geometry,
-    )
+    if _PHASE_ACTIVITY[] === :aperture
+        # STUDY: aperture activity, only values with a wetted face must be finite.
+        fill!(failures, 0)
+        liquid_aperture, gas_aperture = _current_phase_face_apertures!(interface)
+        for index in 1:number_of_faces
+            liquid_aperture[index] > 0 && !isfinite(velocity[1].interior[index]) &&
+                throw(ArgumentError("active liquid velocity must be finite"))
+            gas_aperture[index] > 0 && !isfinite(velocity[2].interior[index]) &&
+                throw(ArgumentError("active gas velocity must be finite"))
+        end
+    else
+        _check_phase_wy_interior!(
+            failures, velocity[1].interior, velocity[2].interior, interface, geometry,
+        )
+    end
     for (bit, phase, phase_velocity) in ((1, :liquid, velocity[1]), (2, :gas, velocity[2]))
         for chunk in 1:chunks
             iszero(@inbounds(failures[chunk]) & bit) ||
@@ -458,6 +470,18 @@ end
     face = @inbounds field.mesh.faces[index]
     open = isnothing(geometry) ? one(T) :
         @inbounds(geometry.aperture[index])
+    if _APERTURE_PLAIN[]
+        # STUDY: the plain 1/2-1/2 average of the two cell traces, no snaps.
+        liquid = clamp(
+            T(
+                (
+                    _face_aperture(field, geometry, face, face.minus) +
+                        _face_aperture(field, geometry, face, face.plus)
+                ) / 2
+            ), zero(T), open,
+        )
+        return liquid, open - liquid
+    end
     # In a pure phase the complementary aperture is exactly zero. Clipping
     # two independently reconstructed polygons can otherwise leave a 1e-17
     # opening on an absent phase, which must never access its NaN velocity.

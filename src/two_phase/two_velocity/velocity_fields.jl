@@ -18,7 +18,11 @@ end
 @inline function _phase_face_is_active(interface, geometry, index, face, phase)
     !isnothing(geometry) && iszero(geometry.face_dual_volumes[index]) && return false
     fraction = _staggered_liquid_fraction(interface, geometry, face)
-    return phase == :liquid ? fraction > 0 : fraction < 1
+    active = phase == :liquid ? fraction > 0 : fraction < 1
+    (active && _PHASE_ACTIVITY[] === :aperture) || return active
+    # STUDY: aperture activity, a phase value needs a wetted face.
+    liquid, gas = _phase_face_apertures(interface, geometry, index)
+    return (phase == :liquid ? liquid : gas) > 0
 end
 
 """Mark absent intrinsic velocities, using the open staggered phase volume.
@@ -42,7 +46,12 @@ function _mark_inactive_phase_velocities!(
     geometry = interface.geometry
     chunks = _reduction_chunks(length(interface.mesh.faces))
     _reduction_partials!(failures, length(interface.mesh.faces))
-    _mark_inactive_interior!(failures, velocity[1].interior, velocity[2].interior, interface, geometry)
+    if _PHASE_ACTIVITY[] === :aperture
+        fill!(failures, 0)
+        _mark_inactive_by_aperture!(velocity, interface)
+    else
+        _mark_inactive_interior!(failures, velocity[1].interior, velocity[2].interior, interface, geometry)
+    end
     for chunk in 1:chunks
         failure = @inbounds failures[chunk]
         iszero(failure) && continue
@@ -66,6 +75,31 @@ function _mark_inactive_phase_velocities!(
                 )
             else
                 velocity[phase].boundary[index] = T(NaN)
+            end
+        end
+    end
+    return velocity
+end
+
+"""STUDY (`_PHASE_ACTIVITY[] === :aperture`): a phase value is active iff its
+staggered phase volume and its phase aperture are positive; serial."""
+function _mark_inactive_by_aperture!(velocity, interface::InterfaceField{T}) where {T}
+    geometry = interface.geometry
+    liquid_aperture, gas_aperture = _current_phase_face_apertures!(interface)
+    for (index, face) in pairs(interface.mesh.faces)
+        open = isnothing(geometry) || geometry.face_dual_volumes[index] > zero(T)
+        fraction = _staggered_liquid_fraction(interface, geometry, face)
+        for (phase, active) in (
+                (1, open && fraction > zero(T) && liquid_aperture[index] > zero(T)),
+                (2, open && fraction < one(T) && gas_aperture[index] > zero(T)),
+            )
+            values = velocity[phase].interior
+            if active
+                isfinite(values[index]) || throw(
+                    ArgumentError("non-finite active phase-$phase velocity on face $index"),
+                )
+            else
+                values[index] = T(NaN)
             end
         end
     end

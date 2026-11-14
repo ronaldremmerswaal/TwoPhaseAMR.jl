@@ -594,7 +594,9 @@ function _assemble_cut_cell_metric!(
             assembly.gridline_faces += 1
             continue
         end
-        if fraction > zero(T)
+        # STUDY: with aperture activity a phase value needs a wetted face.
+        by_aperture = _PHASE_ACTIVITY[] === :aperture
+        if fraction > zero(T) && (!by_aperture || data.liquid_aperture[face] > zero(T))
             push!(assembly.dof_face, face)
             push!(assembly.dof_phase, Int8(1))
             push!(assembly.dof_aperture, data.liquid_aperture[face])
@@ -602,7 +604,7 @@ function _assemble_cut_cell_metric!(
             push!(assembly.dof_liquid_weight, one(T))
             assembly.liquid_dof[face] = length(assembly.dof_face)
         end
-        if fraction < one(T)
+        if fraction < one(T) && (!by_aperture || data.gas_aperture[face] > zero(T))
             push!(assembly.dof_face, face)
             push!(assembly.dof_phase, Int8(2))
             push!(assembly.dof_aperture, data.gas_aperture[face])
@@ -735,7 +737,7 @@ function _assemble_cut_cell_metric!(
                 lumped_values += 1
             end
             fraction = data.liquid_fraction[face]
-            zero(T) < fraction < one(T) && aperture < T(0.5) || continue
+            zero(T) < fraction < one(T) && aperture < T(0.5) && _MIMETIC_SMALL_TIES[] || continue
             larger(g) = (
                 d = dof_at(g); reaches(d) &&
                     assembly.dof_aperture[d] > aperture + T(1.0e-12)
@@ -827,6 +829,15 @@ end
 
 # STUDY (branch study/mm-momentum-transport): mass-matched pressure points.
 const _MIMETIC_MASS_MATCH = Ref(false)
+"""STUDY: phase activity rule, `:volume` (default: staggered phase volume > 0)
+or `:aperture` (phase aperture > 0), applied by the marking of the phase
+velocities, the metric assembly and the transport preparation."""
+const _PHASE_ACTIVITY = Ref(:volume)
+"""STUDY: tie values of aperture below one half to a donor (default true)."""
+const _MIMETIC_SMALL_TIES = Ref(true)
+"""STUDY: phase apertures as the plain 1/2-1/2 average of the two cell traces,
+without the pure-phase and round-off snaps of `_phase_face_apertures`."""
+const _APERTURE_PLAIN = Ref(false)
 const _MIMETIC_MASS_MATCH_LAST = Ref{Any}(nothing)
 
 """Liquid Gram tensor `G^l = M - η x*ᵀ` (symmetric part) at `(xs, ys)`."""
