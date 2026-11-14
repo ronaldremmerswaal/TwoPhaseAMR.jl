@@ -1,0 +1,76 @@
+\subsection{Measurements under aperture activity}\label{sec:ap:results}
+Same drivers as \cref{sec:results} with \code{MM\_ACTIVITY=aperture} (outputs
+\code{*\_ap.txt}; \code{\_apnt}: without small ties).
+
+\emph{Free stream} \meas\ (\code{freestream\_ap.txt}, same cases as \cref{sec:freestream}):
+\begin{center}\footnotesize
+\setlength\tabcolsep{4pt}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+design & drop, $\sqrt\epsilon$ & drop, $10^{-12}$ & band & $\max\frac{|\Delta P_{\mathrm{mix}}|}{\rho V|U|}$ (drop)\\
+\midrule
+D0, DI & \g $5.2\times10^{-17}$ & \g $5.2\times10^{-17}$ & \g 0 & $2.2\times10^{-4}$\\
+DP+mm & \g $5.2\times10^{-17}$ & \g $5.2\times10^{-17}$ & \g $2.6\times10^{-16}$ & \g $3.1\times10^{-12}$\\
+DG+mm & \g $4.1\times10^{-14}$ & \g $1.4\times10^{-14}$ & \g $2.0\times10^{-15}$ & \g $3.1\times10^{-12}$\\
+DS & \rd $5.1\times10^{4}$ & \rd $2.6\times10^{5}$ & \rd 140 & $2.0\times10^{-2}$\\
+DF & \rd $3.3\times10^{4}$ & \rd $4.3\times10^{6}$ & \rd 460 & $2.2\times10^{-2}$\\
+\bottomrule
+\end{tabular}
+\end{center}
+(maximum $|u-U|/|U|$ after the step).  DG with mass matching is now exact for constants to
+round-off ($\le4\times10^{-14}$, against up to 310 under volume activity) and conserves the
+$\MM$-momentum of the constant field: the $\theta=\tfrac12$ defect $\tfrac12\Delta\E\Z$ is
+redistributed exactly, and no slaved inertia amplifies the round-off.  DS and DF still do not
+preserve constants (\cref{prop:aperture}(c)).
+
+\emph{One-step identities} \meas\ (\code{smoke\_ap.jl}, drop, $\rho_\gas=10^{-3}$, eight steps,
+uniform field and the vortex field of \cref{sec:smallcell}): DG+mm: constants $6\times10^{-16}$,
+momentum change of the constant field $1.9\times10^{-16}$, energy change $-1.4\times10^{-17}$;
+with the vortex the largest correction $|u^+-u_\W|$ is $0.16$ (volume activity: $4\times10^3$ to
+$6\times10^4$).  DI and DP: $0.03$.  DS, DF: $23$ and $18$, on small-aperture values.
+
+\emph{Small cut volumes} \meas\ (\code{smallcell\_ap.txt}, \code{smallcell\_apnt.txt}; runs
+completed out of six per density, maxima over the completed ones):
+\begin{center}\footnotesize
+\setlength\tabcolsep{4pt}
+\begin{tabular}{@{}l|cc|cc|cc@{}}
+\toprule
+ & \multicolumn{2}{c|}{volume activity} & \multicolumn{2}{c|}{aperture, small ties} & \multicolumn{2}{c}{aperture, no small ties}\\
+design & $\rho_\gas=1$ & $10^{-3}$ & $\rho_\gas=1$ & $10^{-3}$ & $\rho_\gas=1$ & $10^{-3}$\\
+\midrule
+D0 & \g 6/6, 1.01 & 5/6, 6.33 & \g 6/6, 1.03 & \g 6/6, 3.35 & \rd 0/6 & \rd 1/6\\
+DI & \g 6/6, 1.03 & \g 6/6, 3.35 & \g 6/6, 1.03 & \g 6/6, 2.28 & \rd 0/6 & \rd 0/6\\
+DP+mm & \g 6/6, 1.03 & \g 6/6, 5.31 & \g 6/6, 1.03 & \g 6/6, 1.89 & \rd 0/6 & \rd 0/6\\
+DG+mm & \rd 0/6 (1--21) & \rd 0/6 (1--6) & \rd 1/6 (85--452) & \rd 0/6 (46--761) & \rd 0/6 & \rd 0/6\\
+DS & --- & --- & \rd 0/6 & \rd 0/6 & \rd 0/6 & \rd 0/6\\
+DF & \rd 0/6 & \rd 0/6 & \rd 0/6 & \rd 0/6 & \rd 0/6 & \rd 0/6\\
+\bottomrule
+\end{tabular}
+\end{center}
+Entries: completed runs, worst ``wet'' maximum $\max|u|/u_0$; in parentheses the steps at
+which DG stopped.  The ``all'' maxima (small-aperture values included) of the completed runs at
+$\rho_\gas=10^{-3}$: D0 $897$, DI $1.0\times10^3$, DP $2.6\times10^3$ (volume activity: $\ge10^3$,
+$1.9\times10^3$, $5.2\times10^3$); $\MM$-energy maxima $\le1.0018E_0$ for D0, DI, DP.
+\begin{itemize}[leftmargin=*,itemsep=1pt]
+\item With the small ties, aperture activity keeps D0, DI and DP bounded at every CFL up to
+  $\tfrac12$ and cut volumes to $10^{-12}$, and lowers their wet maxima at $\rho_\gas=10^{-3}$
+  (D0 $3.35$ against $6.33$; DP $1.89$ against $5.31$).
+\item DG survives an order of magnitude longer than under volume activity but is still
+  unbounded; DS and DF are unbounded.  The remaining jumps of the metric (the small ties with
+  their donors, the merge donors, lumping) are enough.
+\item Without the small ties \emph{every} design fails, the current transport included: values
+  born with Gram inertia $O(b)$ receive pressure and force increments of order $1/b$ from the
+  projection (\cref{prop:aperture}(a,b)).  The continuity of (a) is therefore not usable with the
+  present Gram blocks: the small ties are needed for the projection itself, and they bring the
+  birth jumps back.
+\end{itemize}
+
+\emph{Static and translating drop} \meas\ (\code{drop\_*\_ap.txt}, $n=32$, first half $\to$ second
+half): D0, DI and DP+mm under aperture activity keep the inviscid static energy growth
+($2.18$--$2.22$ at DR~1, $1.69$--$1.72$ at DR~1000) and the DR~1 currents (viscous gas
+$4.1\to6.1\times10^{-3}$ against $4.1\to7.3\times10^{-3}$).  At DR~1000 the viscous static gas
+current doubles ($3.9\to5.8\times10^{-2}$ against $1.7\to2.9\times10^{-2}$; Ca $7.4\times10^{-4}$,
+below the test bound $5\times10^{-3}$) and the translating drop is 20--60\% worse (D0
+$0.60\to2.32$ against $0.49\to1.78$).  DG+mm completes the static drops (inviscid DR~1 growth
+$2.42$) and the DR~1 translating drops but stops with a non-finite velocity in the DR~1000
+translating drop at $n=16$.

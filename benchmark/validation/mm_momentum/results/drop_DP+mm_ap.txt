@@ -1,0 +1,16 @@
+static     DR=1      n=16 La=Inf    DP+mm  liquid 1.315e-01->9.291e-02 gas 7.597e-02->6.466e-02 Ca=0.000e+00 Elate/Eearly=0.848 peaks 1.907e-04->1.221e-04 steps=65 wall=17.7s
+static     DR=1      n=16 La=1200   DP+mm  liquid 1.201e-01->5.709e-02 gas 7.831e-02->3.286e-02 Ca=7.370e-04 Elate/Eearly=0.217 peaks 1.881e-04->2.014e-05 steps=65 wall=0.9s
+static     DR=1      n=32 La=Inf    DP+mm  liquid 7.631e-03->7.660e-03 gas 5.543e-03->5.867e-03 Ca=0.000e+00 Elate/Eearly=2.217 peaks 7.185e-07->1.593e-06 steps=182 wall=1.7s
+static     DR=1      n=32 La=1200   DP+mm  liquid 8.091e-03->9.449e-03 gas 4.232e-03->6.149e-03 Ca=1.220e-04 Elate/Eearly=0.439 peaks 5.305e-07->2.330e-07 steps=182 wall=2.5s
+static     DR=1000   n=16 La=Inf    DP+mm  liquid 1.735e-01->1.341e-01 gas 1.140e-01->1.094e-01 Ca=0.000e+00 Elate/Eearly=0.637 peaks 2.677e-04->1.467e-04 steps=91 wall=0.3s
+static     DR=1000   n=16 La=1200   DP+mm  liquid 1.702e-01->8.930e-02 gas 8.981e-02->6.840e-02 Ca=1.153e-03 Elate/Eearly=0.162 peaks 2.505e-04->2.336e-05 steps=91 wall=0.4s
+static     DR=1000   n=32 La=Inf    DP+mm  liquid 9.773e-03->1.059e-02 gas 1.031e-02->8.771e-03 Ca=0.000e+00 Elate/Eearly=1.711 peaks 7.862e-07->9.779e-07 steps=257 wall=2.5s
+static     DR=1000   n=32 La=1200   DP+mm  liquid 7.967e-03->1.950e-03 gas 3.820e-02->5.734e-02 Ca=7.403e-04 Elate/Eearly=0.072 peaks 6.311e-07->4.565e-08 steps=257 wall=3.2s
+periodic   DR=1      n=16 U=(0.0, 0.0)  DP+mm  max|u-U| early=1.201e-01 late=5.709e-02 dP/(ρV|U|)=7.50e+283 steps=65 wall=7.6s ok
+periodic   DR=1      n=16 U=(1.0, 0.37) DP+mm  max|u-U| early=1.520e+00 late=2.281e+00 dP/(ρV|U|)=1.61e-02 steps=69 wall=0.3s ok
+periodic   DR=1      n=32 U=(0.0, 0.0)  DP+mm  max|u-U| early=8.091e-03 late=9.379e-03 dP/(ρV|U|)=8.48e+295 steps=182 wall=2.5s ok
+periodic   DR=1      n=32 U=(1.0, 0.37) DP+mm  max|u-U| early=1.761e-01 late=1.723e-01 dP/(ρV|U|)=1.03e-03 steps=182 wall=2.5s ok
+periodic   DR=1000   n=16 U=(0.0, 0.0)  DP+mm  max|u-U| early=1.702e-01 late=8.930e-02 dP/(ρV|U|)=1.83e+284 steps=91 wall=0.3s ok
+periodic   DR=1000   n=16 U=(1.0, 0.37) DP+mm  max|u-U| early=2.618e+01 late=3.231e+01 dP/(ρV|U|)=1.38e-01 steps=270 wall=1.3s ok
+periodic   DR=1000   n=32 U=(0.0, 0.0)  DP+mm  max|u-U| early=3.828e-02 late=5.321e-02 dP/(ρV|U|)=2.09e+295 steps=257 wall=3.2s ok
+periodic   DR=1000   n=32 U=(1.0, 0.37) DP+mm  max|u-U| early=5.556e-01 late=2.424e+00 dP/(ρV|U|)=8.05e-03 steps=262 wall=3.5s ok

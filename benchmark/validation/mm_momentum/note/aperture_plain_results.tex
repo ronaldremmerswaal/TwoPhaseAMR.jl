@@ -1,0 +1,32 @@
+\emph{Time continuity} \meas\ (\code{transitions.jl}, aperture activity, $\rho=(1,10^{-3})$,
+$U=(1,0.37)$, $n=32$, 60 steps at CFL $0.45$; per step):
+\begin{center}\footnotesize
+\setlength\tabcolsep{4pt}
+\begin{tabular}{@{}llrrrrrr@{}}
+\toprule
+case & aperture & births & deaths & $a$ at birth (median, min) & $a$ at death (median, min) & $\max|\Delta a|$ & tie switches\\
+\midrule
+drop & current & 17.9 & 18.0 & 0.20, $2.2\times10^{-4}$ & 0.19, $1.9\times10^{-4}$ & 0.997 & 29.9\\
+drop & plain & 17.9 & 18.0 & 0.20, $2.2\times10^{-4}$ & 0.19, $1.9\times10^{-4}$ & 0.997 & 29.9\\
+band & current & 73.6 & 72.5 & 0.20, $3.7\times10^{-4}$ & 0.17, $8.6\times10^{-3}$ & 0.572 & 136.0\\
+band & plain & 73.1 & 73.1 & 0.20, $3.7\times10^{-4}$ & 0.17, $1.1\times10^{-16}$ & 0.572 & 136.5\\
+\bottomrule
+\end{tabular}
+\end{center}
+($\max|\Delta a|$: largest change in one step of a value that stays active; no value had
+$0<a<10^{-6}$.)  The births and deaths of aperture-active values coincide with the births and
+deaths of staggered volume (drop: $18.0$ per step): a phase reaches a face exactly when it enters
+an adjacent cell, and the PLIC of that cell then already has a trace of typically $0.2$ on the
+face.  A value is therefore born with a \emph{finite} aperture, not with $a\to0$, and the
+apertures of surviving values jump by up to $1$ in one step (the reconstructed line of a cell
+changes its normal from step to step).  The plain average changes nothing measurable: identical
+counts for the drop, one death on a $10^{-16}$ opening in the band.  The time continuity
+required by \cref{prop:aperture}(a) is not a property of the PLIC apertures with either
+definition.
+
+\emph{Key checks with the plain average} \meas: free stream (\code{freestream\_ap\_pl.txt}),
+small-cell sweep (\code{smallcell\_ap\_pl.txt}) and the one-step identities
+(\code{smoke\_ap\_pl.txt}) are identical to those of the current aperture to the printed digits
+(the small-cell step counts agree exactly), except that DP's restoration now acts on round-off
+($\le2.4\times10^{-14}$ for constants, momentum change $1.9\times10^{-14}$ with the vortex).
+The impact with D0 is bitwise the same run (3092 steps, same maxima).

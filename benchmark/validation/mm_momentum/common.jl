@@ -8,6 +8,17 @@ const WT = "/home/ronald/Documents/wt-mm-momentum"
 @assert startswith(Base.active_project(), WT)
 const OUT = "/home/ronald/Documents/mm-runs/mm_momentum"
 
+
+# Activity rule of the phase values (env MM_ACTIVITY=volume|aperture), small-
+# aperture ties (MM_TIES=1|0) and the merge factor κ (MM_KAPPA); output suffix.
+const ACTIVITY = Symbol(get(ENV, "MM_ACTIVITY", "volume"))
+const TIES = get(ENV, "MM_TIES", "1") == "1"
+TP._PHASE_ACTIVITY[] = ACTIVITY
+TP._MIMETIC_SMALL_TIES[] = TIES
+TP._MIMETIC_MERGE_KAPPA[] = parse(Float64, get(ENV, "MM_KAPPA", "1.0"))
+const PLAIN = get(ENV, "MM_APERTURE", "current") == "plain"
+TP._APERTURE_PLAIN[] = PLAIN
+const SUFFIX = (ACTIVITY === :aperture ? "_ap" * (TIES ? "" : "nt") : "") * (PLAIN ? "_pl" : "") * get(ENV, "MM_SUFFIX", "")
 "Designs: label => (mode, theta)."
 const DESIGNS = (
     D0 = (:none, 1.0),     # current: W transport only
@@ -16,12 +27,14 @@ const DESIGNS = (
     DP = (:increment_conservative, 1.0),  # DI + uniform momentum restoration
     DF = (:theta, 0.0),    # flux form (momentum exact)
     DG = (:redistribute, 0.5),  # DS + skew redistribution Y + remainder
+    DGP = (:redistribute, 0.5), # DG + uniform momentum restoration
 )
 
 function set_design!(name)
     mode, theta = DESIGNS[name]
     TP._MIMETIC_TRANSPORT[] = mode
     TP._MIMETIC_TRANSPORT_THETA[] = theta
+    TP._MIMETIC_TRANSPORT_FIX[] = name === :DGP
     return nothing
 end
 

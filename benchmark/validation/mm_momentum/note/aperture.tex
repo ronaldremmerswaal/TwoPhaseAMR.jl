@@ -1,0 +1,93 @@
+The negative results above come from values that the activity rule of the package creates:
+a phase value $(f,\pi)$ is active iff its staggered phase volume is positive
+(\code{\_phase\_face\_is\_active}).  A value with volume but without a wetted face
+(aperture $a^\pi_f=0$, a \emph{slaved} value) carries no flux, enters $\MM$ only through a tie
+to a donor with the weight of its staggered mass (down to $10^{-14}$), and is where DF, DS and
+DG blew up (\cref{rem:unbounded}).  This section studies the alternative: \emph{a value is
+active iff its phase aperture is positive}, the flux carriers of the projection.
+
+\subsection{Formulation}\label{sec:ap:formulation}
+\emph{Unknowns and metric.}  The degrees of freedom are the values with $a^\pi_f>0$ (and the
+identified grid-line values).  The metric is the Gram assembly without slaved values: per cut
+cell and phase the block on the wetted sides, $\tfrac12\rho^\pi h^2$ per side of an uncut
+cell, lumped masses where no block gives inertia, and optionally the ties of the values with
+$a<\tfrac12$ (``small ties'', weight $(1-2a)m_f$).  The prototype switch
+\code{\_PHASE\_ACTIVITY[] = :aperture} applies the rule consistently to the marking of the
+phase velocities (absent values are \code{NaN}), the metric assembly (hence the projection,
+the capillary force and the viscous step, which act on its degrees of freedom), the
+preparation of the $\W$ transport (aperture-inactive values are extended like absent ones)
+and its velocity check; \code{\_MIMETIC\_SMALL\_TIES[]} switches the small ties.  The default
+path is unchanged.
+
+\emph{Mass and momentum of a cut cell} live in its Gram blocks: $\Z^\top\MM\Z=\rho\sum_c\G_c$
+does not change with the activity rule, because slaved values had $(\MM\Z)_f=0$ (ties vanish on
+constants).  With mass matching it is $\rho^\pi V^\pi$ (\cref{sec:constant}).  A region with
+phase volume but no wetted face of that phase (a cell with all apertures $0$ or $1$ but
+$0<\alpha_c<1$, the \code{crossed==0} case, a grid-line face, a sliver behind a trace) has no
+value: its mass enters the totals through mass matching (the uncut cell contributes
+$\G_c=h^2\mathsf I$ or $0$, the difference to $\alpha_ch^2\mathsf I$ is absorbed by the slides of
+the cut cells), and its momentum is that of the neighbouring values.
+
+\emph{Merge of the staggered masses.}  The transport fluxes are still those of the VOF volumes
+mapped to the staggered control volumes, i.e.\ they move the staggered masses $m_f$, also of
+values that are no longer unknowns.  The prototype merges them: a value keeps
+$k_f=\min(m_f,\kappa\MM_{ff})$, and the excess $m_f-k_f$ (all of $m_f$ for a value without
+degree of freedom) goes to the value of the same phase in the face ring (same axis) with the
+largest aperture.  This defines $\widetilde\W=\operatorname{diag}(\widetilde m)$ on the degrees of
+freedom, with $\Z^\top\widetilde\W\Z=\Z^\top\W\Z$ (donors of the same axis and phase) and
+$\widetilde m_f\le\kappa\MM_{ff}$ for every value that is not a donor; the same merge maps the
+covector $m_f\Delta u_f$ of the sweeps.  All designs of \cref{sec:designs} are defined with
+$\widetilde\W$ in place of $\W$ ($\kappa=1$).
+
+\subsection{Analysis}\label{sec:ap:analysis}
+\begin{proposition}[What the activity rule changes and what it does not]\label{prop:aperture}
+Under aperture activity:
+\begin{enumerate}[leftmargin=*,itemsep=1pt,label=(\alph*)]
+\item \emph{Births and deaths (without small ties).}  For aperture data that close a polygon
+  (a straight interface in the cell) the row of a value with wetted length $b$ is $O(b)$ and
+  its diagonal between $b^2$ and $b/2$ (the clamp margin gives exactly $0.01\,b\rho h^2$ for a
+  single partial side): a value is born and dies with a vanishing row, and a birth or death
+  changes $\MM$-momentum and $\MM$-energy by $O(b)$ (not $O(\MM_{ff})$: the off-diagonal
+  entries are $O(b)$ while $\MM_{ff}$ may be $O(b^2)$).  The slaved values and their ties are
+  gone.  The metric is \emph{not} continuous in time, however: the block of the other phase
+  jumps when the cell becomes uncut, the pressure point jumps for non-closed (averaged-trace)
+  data, whose rows need not be $O(b)$, and $\widetilde\W$ jumps at the lump threshold; donor
+  switches of the merge remain.  With the small ties a newborn value enters with a tie of
+  weight $(1-2a)m_f\to m_f$.
+\item \emph{Inertia.}  $\lambda_{\max}(\W,\MM)\ge m_f(\MM^{-1})_{ff}\ge m_f/\MM_{ff}$, which is
+  unbounded at birth without small ties ($\MM_{ff}=O(b^2)$ for a corner wedge while $m_f$ need
+  not vanish).  The merge does not cure it: the cap $\widetilde m_f\le\kappa\MM_{ff}$ bounds the
+  diagonal ratio, not $\lambda_{\max}(\widetilde\W,\MM)$, which grows like $10^{-3}/b$ because a
+  corner wedge makes $\MM$ nearly singular ($\lambda_{\min}\approx3.5\,b^2$).  The small ties
+  restore an inertia of order $m_f$ for $a<\tfrac12$ (measured $\lambda_{\max}\le2.5$ with them).
+\item \emph{The algebra.}  \Cref{prop:obstruction} carries over (the merge keeps the totals,
+  the VOF mass is conserved), and so does the conclusion of \cref{prop:flux}.  \Cref{prop:theta}(a)
+  (constants) holds with $\widetilde\W$; (b) and (c) acquire the merge term
+  $\mu(v)=\sum_f(m_f-k_f)(v_{d(f)}-v_f)\Z_f$ (the excess of $f$ moves with the velocity of its donor
+  in $\widetilde\W u$ but with its own in the merged flux covector), so momentum and energy are
+  no longer exact for DF, DS and DG; the merged covector cannot satisfy both
+  $\Z^\top\widetilde\C=0$ and $\dt\widetilde\C(\Z)=-\Delta\widetilde\W\Z$ because the keep/excess split
+  changes between the levels.  The momentum restoration of DP (and DGP, DG with the same
+  restoration) uses the momentum $\Z^\top(\MM^+\ubar+\text{rhs})$ of the actual update and is
+  therefore exact whatever the update, $\mu$ included, up to the constant part
+  $\Z^\top\Delta\MM\Z\langle\ubar\rangle$ (zero with mass matching).
+\end{enumerate}
+\end{proposition}
+\begin{proof}
+(a) For closed data the block is that of MM on a polygon; its rows are $b_k(x_k-x^*)$ and the
+stabilisation, both $O(b)$; the counterexamples (non-closed data with an entry $2.07$ at
+$b=10^{-8}$; the cut$\to$uncut jump $1.48$ of the other block; the lump threshold) are in the
+derivation check.  The momentum change of a dying value is $\sum_g\MM_{fg}u_g\,\Z_g$-weighted,
+$O(b)$.  (b) The diagonal of $\W^{1/2}\MM^{-1}\W^{1/2}$.  (c) Expand the update with
+$\widetilde\W$ and compare the merged covector $\sum_f k_f\Delta u_f+\sum_f(m_f-k_f)\Delta u_f$
+(at the donors) with $\widetilde\W\Delta u$.  DP: \cref{sec:designs}, with
+$\MM^+u^+=\MM^+\ubar+\text{rhs}$.
+\end{proof}
+The derivation check of this section (379 randomised checks, Python port of the Gram block and a
+lattice model) is archived with the proof reviews of the audit (folder
+\code{mimetic-momentum-}\allowbreak\code{transport-aperture}); its corrections are incorporated above.  It also
+found that an identified grid-line donor moves liquid excess into the gas column, and that a
+value without donor keeps $\widetilde m_f>\kappa\MM_{ff}$ (or drops its mass if it has no
+degree of freedom); both are conditions of the merge, not measured to matter.
+So aperture activity can only help where the old failures were caused by slaved values; it
+does not by itself make the metric continuous in time.

@@ -6,7 +6,7 @@
 # bulk), relative to the initial max; 𝓜-energy max/initial; min fraction.
 include(joinpath(@__DIR__, "common.jl"))
 
-const VARIANTS = ((:D0, false), (:DI, false), (:DP, true), (:DG, true), (:DF, false))
+const VARIANTS = ((:D0, false), (:DI, false), (:DP, true), (:DG, true), (:DS, false), (:DF, false))
 
 function sweep(design, match, cfl; n = 32, density = (1.0, 1.0e-3), floor = sqrt(eps()), final = 1.0)
     set_design!(design)
@@ -48,7 +48,7 @@ function sweep(design, match, cfl; n = 32, density = (1.0, 1.0e-3), floor = sqrt
 end
 
 const CFLS = isempty(ARGS) ? (0.1, 0.25, 0.5) : Tuple(parse.(Float64, ARGS))
-open(joinpath(OUT, "smallcell.txt"), "w") do io
+open(joinpath(OUT, "smallcell" * SUFFIX * ".txt"), "w") do io
     for density in ((1.0, 1.0), (1.0, 1.0e-3)), floor in (sqrt(eps()), 1.0e-12), cfl in CFLS, (design, match) in VARIANTS
         r = sweep(design, match, cfl; floor, density)
         s = @sprintf("rho_g=%.0e floor=%.0e cfl=%.2f %-3s%-3s max|u|/u0 all=%9.3f wet=%7.4f Emax/E0=%9.4f minC=%.1e steps=%d wall/step=%.2ems %s",

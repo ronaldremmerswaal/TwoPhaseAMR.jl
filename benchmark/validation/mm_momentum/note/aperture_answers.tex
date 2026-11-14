@@ -1,0 +1,67 @@
+\emph{Drop impact} \meas\ (\code{impact.jl}: pool $y<0.3$, drop $R=0.08$ falling at $2$, DR~1000,
+$\sigma=0.05$, $\mu=(10^{-3},10^{-6})$, $n=32$, $t\le0.25$, package CGFM force; $\max|u|$ over all
+phase values with its location, $\MM$-energy relative to the start):
+\begin{center}\footnotesize
+\setlength\tabcolsep{4pt}
+\begin{tabular}{@{}lrrll@{}}
+\toprule
+run & steps & $\max E/E_0$ & $\max|u|$ & where\\
+\midrule
+D0, volume activity & 779 & \rd 186 & $4.6\times10^4$ & slaved gas value ($a=0$, $\alpha=1.1\times10^{-8}$)\\
+D0, aperture & 3092 & 1.12 & $1.2\times10^4$ & gas, $a=5\times10^{-5}$, $\alpha=7\times10^{-9}$\\
+DI, aperture & --- & \rd $10^{14}$ & $5\times10^{8}$ & blew up at $t=0.207$\\
+DP+mm, aperture & 586 & 1.19 & $1.2\times10^4$ & gas, $a=1.3\times10^{-4}$, $\alpha=4\times10^{-8}$\\
+DG+mm, aperture & --- & \rd $\infty$ & --- & non-finite at $t=0.065$\\
+\bottomrule
+\end{tabular}
+\end{center}
+The plain aperture gives the same runs (D0 and DP bitwise the same maxima and steps, DG non-finite
+at the same time).  Aperture activity removes the energy excursion of the current method
+($186E_0$, carried by slaved gas values) and the slaved outliers, but the largest gas velocities
+($10^4$, against the physical scale $2$) remain, now on values of aperture $10^{-5}$--$10^{-4}$ and
+gas fraction $10^{-8}$: the small-aperture half of the outliers found by the separate impact
+diagnosis (branch \code{study/impact-velocities}).  DP completes the impact with a fifth of the steps of D0.
+
+\emph{Energy as $\dt\to0$.}  The test of \cref{sec:missing} was attempted on the vortex drop with
+Lax--Wendroff \emph{without} the CTU switch (the switch is upwind in the band, an $O(1)$
+dissipation): every design, the current one included, left the advective stability bound within
+2--60 steps at $\rho_\gas=10^{-3}$ and in most runs at $\rho_\gas=1$ (\code{invariants*.txt}).
+The completed runs with aperture activity at $\rho_\gas=1$ give $\sum\Delta E_{\text{transport}}/E_0$
+$=5.5\times10^{-5},1.8\times10^{-4},1.9\times10^{-4}$ for DI at $\dt$, $\dt/2$, $\dt/4$ (not
+decreasing, as \cref{prop:theta}(c) predicts for $\theta=1$), and $2.2\times10^{-3}$,
+$3.2\times10^{-3}$ for DGP.  The same runs confirm exact $\MM$-momentum of DP and DGP with mass
+matching under the merge: $|\sum\Delta P|/S\le6\times10^{-11}$ against $10^{-4}$--$10^{-3}$ for D0
+and DI.
+
+\emph{Answers.}
+\begin{enumerate}[leftmargin=*,itemsep=2pt]
+\item \emph{Formulation.}  Aperture activity is implemented consistently (marking, metric,
+  projection, capillary force, viscous step, transport preparation, VOF velocity check) as a
+  non-default switch; slaved values disappear; regions with volume but no wetted face enter
+  through mass matching, their staggered masses through a merge into same-axis donors.  The
+  $\MM$-mass of a constant field is unchanged and equals the VOF mass with mass matching.
+\item \emph{Births and deaths} happen when a phase enters or leaves an adjacent cell, with a
+  finite aperture (median $0.2$) and with aperture jumps of up to $1$ per step for surviving
+  values; the metric is not continuous in time (cut$\to$uncut, non-closed data, lumping, donors).
+  The small ties are required by the projection itself (without them every design blows up),
+  and they bring an $O(m_f)$ jump at every birth.
+\item \emph{Identities.}  Exact free stream: D0, DI, DP, DG (to round-off, DG now without
+  amplification).  Exact $\MM$-momentum: DP and DGP with mass matching (also under the merge).
+  Semi-discrete energy: no bounded design (DG's exactness is lost to the merge term $\mu$, and DG
+  is unbounded).  The trilemma of \cref{prop:theta} and the flux-form impossibility are unchanged.
+\item \emph{Boundedness and time step.}  With the small ties D0, DI and DP are bounded at every
+  CFL up to $\tfrac12$ for cut volumes to $10^{-12}$; DG, DS and DF are not.  DI blew up in the
+  impact; DP and D0 completed it.
+\item \emph{Plain $\tfrac12$--$\tfrac12$ aperture.}  The package already uses it up to a round-off
+  snap and the grid-line identification; removing the snap changes no result.  The time
+  continuity is set by the PLIC reconstruction, not by the averaging.
+\item \emph{Recommendation} (for the owner): adopt aperture activity only together with the
+  small ties, and only as a fix of the current method's slaved-value outliers (energy excursion
+  of the impact $186E_0\to1.1E_0$); it does not open the way to an $\MM$-native transport with
+  explicit metric-change terms.  If a metric-consistent transport is wanted, DP with mass
+  matching remains the candidate (exact constants and $\MM$-momentum, bounded in the sweeps,
+  completed the impact); DI alone is not robust in the impact.  A time-continuous metric would
+  need apertures (or blocks) that change continuously as the interface moves --- e.g.\ traces
+  from a reconstruction whose normal is advanced in time instead of recomputed, or blocks built
+  from the VOF donating regions --- which is a geometry question, not a transport one.
+\end{enumerate}

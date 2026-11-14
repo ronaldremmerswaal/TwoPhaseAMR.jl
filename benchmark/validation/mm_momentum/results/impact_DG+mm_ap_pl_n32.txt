@@ -1,0 +1,1 @@
+impact n=32 DG+mm_ap_pl    t=0.0650 steps=573 wall=19s max|u|=2.449e+160 [t=0.0650 face 1588 axis 2 phase 1 aperture 3.60e-04 staggered-fraction 2.90e-07 small] E_end/E0=NaN maxE/E0=NaN non-finite

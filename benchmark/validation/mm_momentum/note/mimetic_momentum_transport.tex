@@ -62,11 +62,15 @@ needs one solve with the band factorisation that the projection computes anyway,
 increment is bounded by $\lambda_{\max}(\W,\MM)\le2.7$ \meas\ independently of the cut
 volumes; a mass-proportional momentum restoration (DP) makes its $\MM$-momentum exact with
 mass matching.  Exact semi-discrete energy is not reachable with a bounded design for the
-present, piecewise-in-time, metric.  \textbf{Open items}: R3 (energy) with a bounded design;
-gas values on faces of aperture below $0.05$ at density ratio 1000 stay unbounded with DP
-(as with the current transport); DP's momentum restoration is verified for constant fields
-only; the KH, RT, capillary-wave, combined-case and cost measurements were not run (study
-parked by the owner).  \meas\ marks a measurement, \infr\ an inference.
+present, piecewise-in-time, metric.  \Cref{sec:aperture} (added later) replaces the activity
+rule ``staggered phase volume $>0$'' by ``phase aperture $>0$'': it removes the slaved values,
+makes DG exact for constants to round-off and DP's restoration exact under the necessary mass
+merge, and removes the energy excursion of a drop impact ($186E_0\to1.1E_0$); but births happen
+at finite apertures, the metric stays discontinuous in time, the small ties remain necessary
+for the projection, and DG, DS, DF remain unbounded.  \textbf{Open items}: R3 (energy) with a
+bounded design; gas values on faces of aperture $10^{-5}$--$10^{-4}$ at density ratio 1000 stay
+unbounded ($10^4$) with every design; the KH, RT, capillary-wave, combined-case and cost
+measurements were not run.  \meas\ marks a measurement, \infr\ an inference.
 Prototype: worktree \code{wt-mm-momentum}, branch \code{study/mm-momentum-transport};
 runs and report in \code{mm-runs/mm\_momentum/}.
 \end{abstract}
@@ -233,9 +237,12 @@ to the new values (an identified value split by its mass weight; values that dis
   and of the face ring), plus the remainder $\Psi(\ubar)=\sum_k r_k\langle\ubar\rangle_k$ that
   keeps constants exact ($r=\tfrac12\Delta\E\Z-\Y\Z$, $\langle\cdot\rangle_k$ the mass mean of
   column $k$ over the ring).
-\item[DP] DI plus a mass-proportional momentum restoration: the $\MM$-momentum change of
-  DI less its constant part, $d_k=\Z_k^\top(\E^+\ubar-\E u)-\sum_j\Z_k^\top\Delta\E\Z_j\langle\ubar\rangle_j$,
-  is removed by the force $-\W\Z_k\,d_k/\Z_k^\top\W\Z_k$ (identified values excluded).
+\item[DP] DI plus a mass-proportional momentum restoration: with the update written as
+  $\MM^+u^+=\MM^+\ubar+r$, the $\MM$-momentum change less its constant part,
+  $d_k=\Z_k^\top(\MM^+\ubar+r)-\Z_k^\top\MM u-\sum_j\Z_k^\top\Delta\MM\Z_j\langle\ubar\rangle_j$
+  ($=\Z_k^\top(\E^+\ubar-\E u)-\sum_j\Z_k^\top\Delta\E\Z_j\langle\ubar\rangle_j$ for DI with conservative
+  sweeps), is removed by the force $-\W\Z_k\,d_k/\Z_k^\top\W\Z_k$ (identified values excluded).
+  DGP is DG with the same restoration.
 \end{description}
 Each needs the excess of the old level (one product with the cached $\MM$ before the
 sweeps) and one solve with the band factorisation of $\MM^+$ (\code{\_mimetic\_metric\_solve!}),
@@ -355,5 +362,17 @@ measured, not analytic, cut-volume independence of the increment bound) are inco
 %======================================================================
 \section{Results}\label{sec:results}
 \input{results.tex}
+
+%======================================================================
+\section{Aperture activity}\label{sec:aperture}
+\input{aperture.tex}
+\input{aperture_results.tex}
+
+\subsection{\texorpdfstring{The aperture definition: plain $\tfrac12$--$\tfrac12$ average}{The aperture definition: plain half-half average}}\label{sec:ap:plain}
+\input{aperture_plain.tex}
+\input{aperture_plain_results.tex}
+
+\subsection{Answers for aperture activity}\label{sec:ap:answers}
+\input{aperture_answers.tex}
 
 \end{document}

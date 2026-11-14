@@ -1,0 +1,47 @@
+
+##### step01_slaved_removal.py
+  [PASS] FINDING identified donor [0]: Z^T M Z changes by 0.951 (= w) and (M Z)_s != 0  
+  [PASS] FINDING identified donor [1]: Z^T M Z changes by 0.699 (= w) and (M Z)_s != 0  
+  [PASS] FINDING identified donor [2]: Z^T M Z changes by 0.553 (= w) and (M Z)_s != 0  
+  [PASS] FINDING identified donor [3]: Z^T M Z changes by 1.564 (= w) and (M Z)_s != 0  
+  [PASS] FINDING identified donor [4]: Z^T M Z changes by 0.639 (= w) and (M Z)_s != 0  
+== step01 slaved-value removal: 130/130 checks passed
+
+##### step02_merge.py
+  [PASS] FINDING (i): value without dof and without donor: its mass is dropped (code: `dropped += excess`)  
+  [PASS] FINDING (ii): a value with dof but no donor keeps all of m_f: W~_f = 1.0 > kappa M_ff = 0.01  
+  [PASS] FINDING (iii): excess of a liquid value merged into an identified value: liquid column unchanged, gas column grows by the excess (0.9)  
+== step02 merge: 181/181 checks passed
+
+##### step03_block_rows.py
+  [PASS] FINDING tiny corner: B numerically singular (lam_min/lam_max < 1e-8) for b <= 1e-5 (pseudo-inverse cut 1e-10, S = 0)  
+  [PASS] FINDING F2: averaged-trace data give rows >> b (sup row/b > 100 at delta=1e-6)  
+  [PASS] FINDING F3: counterexample, the row of a value of length 1e-8 has an O(1) entry (>1e-2)  
+== step03 block rows O(b): 18/18 checks passed
+
+##### step04_continuity.py
+  [PASS] FINDING: at cut->uncut the block of the OTHER phase jumps by O(1) (median jump > 0.1) although the wedge values are O(1e-9)  
+  [PASS] FINDING: for generic u the jump is O(1) (> 0.1): not 'O(M_ff)' with M_ff ~ 1e-10  
+  [PASS] FINDING: generic data: birth of a 1e-9 crossing moves the pressure point by > 0.05 in more than 20% of the cells  
+== step04 continuity at birth/death: 7/7 checks passed
+
+##### step05_lambda_bounds.py
+  [PASS] FINDING (e=0.01): m/M_ff = 1 but lambda_max(W,M) = 1.0e+02: with W~ <= diag(M) boundedness does not follow from the cap  
+  [PASS] FINDING (e=0.0001): m/M_ff = 1 but lambda_max(W,M) = 1.0e+04: with W~ <= diag(M) boundedness does not follow from the cap  
+  [PASS] FINDING: with the merge, ties off, lambda_max(W~,M) is NOT bounded: 2.2 at -1e-2, > 1e5 at -1e-8 (scales like 1/b)  
+  [PASS] FINDING: lambda_max(W~,M) ~ 3.5e-3/b peaks at 3.5e5 just above the lump threshold b ~ 7e-9, then the lump resets it to O(1)  
+  [PASS] FINDING lattice R=2.4, phi=0.6: M on the common dofs jumps by > 1 at the birth of two values of length 1e-9  
+  [PASS] FINDING lattice R=2.55, phi=0.9: M on the common dofs jumps by > 1 at the birth of two values of length 1e-9  
+  [PASS] FINDING lattice R=2.4, phi=2.2: M on the common dofs jumps by > 1 at the birth of two values of length 1e-9  
+  [PASS] FINDING lattice R=2.45, phi=3.7: M on the common dofs jumps by > 1 at the birth of two values of length 1e-9  
+  [PASS] FINDING: W~ of the newborn value jumps from ~1e-10 to m_f = 0.248 at the lump threshold (the note lists the lump threshold among the remaining jumps)  
+== step05 lambda_max bounds: 24/24 checks passed
+
+##### step06_identities_merge.py
+  [PASS] FINDING (b): the note's/prop:theta(b) value theta Z^T DeltaE~ u misses the merge defect: max |DeltaP - claimed| = 1.87e-01  
+  [PASS] FINDING: merged covector S+ C: dt Ct(Z) = -(W~+ - W~) Z FAILS, defect 9.40e-02, equal to the reassignment (S+ - S) m Z (err 8.2e-16)  
+  [PASS] FINDING: update-implied flux: Z^T L != 0 (max |Z^T L| = 1.06e-01): conservation identity FAILS  
+  [PASS] FINDING (c) energy: with the merge the theta = 1/2 energy rate is 2.484 != 0 (merge defect), so prop:theta(c)/DS/DG exactness is lost  
+== step06 identities with the merge: 19/19 checks passed
+
+ALL CHECKS PASSED

@@ -1,0 +1,1 @@
+impact n=32 D0_ap_pl       t=0.2500 steps=3092 wall=49s max|u|=1.201e+04 [t=0.1224 face 1295 axis 2 phase 2 aperture 5.30e-05 staggered-fraction 7.45e-09 small] E_end/E0=0.6690 maxE/E0=1.1199 ok

@@ -56,7 +56,7 @@ function translating(ratio, n, U; laplace = STATIC_DROP_LAPLACE, final_time = 0.
     return (; early, late, dP, steps, wall, status)
 end
 
-open(joinpath(OUT, "drop_$(TAG).txt"), "w") do io
+open(joinpath(OUT, "drop_$(TAG)$(SUFFIX).txt"), "w") do io
     say(s) = (println(io, s); flush(io); println(s); flush(stdout))
     for ratio in (1.0, 1000.0), n in (16, 32), laplace in (Inf, STATIC_DROP_LAPLACE)
         wall = @elapsed r = try

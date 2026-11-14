@@ -25,28 +25,36 @@ function mass_tensors(a)
     return Z' * (a.M * Z), Z' * (W .* Z)
 end
 
-function spectral(a)
+"Masses of the increment map: staggered masses on the dofs, or merged (aperture activity)."
+masses(a; merged = false) = merged ?
+    first(TP._mimetic_merged_masses(a.assembly, a.work.face_data, a.M, a.work.topology, a.mesh)) :
+    a.assembly.dof_mass
+
+function spectral(a; merged = false)
+    W = masses(a; merged)
     band = a.assembly.band
-    isempty(band) && return (1.0, 1.0, 0.0, 0.0)
+    off = [W[d] / a.M[d, d] for d in eachindex(W) if a.assembly.band_position[d] == 0]
+    offmax = isempty(off) ? 1.0 : maximum(off)
+    isempty(band) && return (offmax, 1.0, 0.0, 0.0)
     Mb = Matrix(a.M[band, band])
-    Wb = a.assembly.dof_mass[band]
+    Wb = W[band]
     L = cholesky(Symmetric(Mb)).L
     S = L \ (Diagonal(Wb) / L')
-    lmax = maximum(eigvals(Symmetric((S + S') / 2)))
+    lmax = max(offmax, maximum(eigvals(Symmetric((S + S') / 2))))
     K = Mb \ Diagonal(Wb)
-    inf = maximum(sum(abs, K; dims = 2))
+    inf = max(offmax, maximum(sum(abs, K; dims = 2)))
     neg = minimum(K)
     Z = TP._mimetic_constant_fields(a.assembly, a.mesh)
-    E = a.M * Z .- a.assembly.dof_mass .* Z
+    E = a.M * Z .- W .* Z
     rel = 0.0
     for dof in band
-        m = max(a.assembly.dof_mass[dof], 1.0e-300)
+        m = max(W[dof], 1.0e-300)
         rel = max(rel, maximum(abs, E[dof, :]) / max(m, a.M[dof, dof]))
     end
     return (lmax, inf, neg, rel)
 end
 
-open(joinpath(OUT, "geometry.txt"), "w") do io
+open(joinpath(OUT, "geometry" * SUFFIX * ".txt"), "w") do io
     say(s) = (println(io, s); flush(io); println(s); flush(stdout))
     say("# (1) Gram mass minus VOF mass, drop R=0.2 sliding by x0 + s h (s in [0,1]), density (1, 1e-3)")
     for n in (16, 32, 64), match in (false, true)
@@ -68,6 +76,7 @@ open(joinpath(OUT, "geometry.txt"), "w") do io
     say("# (2) increment bound λmax(W,𝓜), ‖𝓜⁻¹W‖∞, min entry of 𝓜⁻¹W, max |(𝓜-W)Z|/max(m,𝓜ff) over the band")
     for kind in (:drop, :line), floor in (sqrt(eps()), 1.0e-12), n in (16, 32)
         worst = (0.0, 0.0, 0.0, 0.0)
+        worst2 = (0.0, 0.0, 0.0, 0.0)
         fmin = 1.0
         for trial in 1:40
             h = 1 / n
@@ -92,8 +101,14 @@ open(joinpath(OUT, "geometry.txt"), "w") do io
             fmin = min(fmin, min_fraction(a.interface))
             s = spectral(a)
             worst = (max(worst[1], s[1]), max(worst[2], s[2]), min(worst[3], s[3]), max(worst[4], s[4]))
+            if ACTIVITY === :aperture
+                s = spectral(a; merged = true)
+                worst2 = (max(worst2[1], s[1]), max(worst2[2], s[2]), min(worst2[3], s[3]), max(worst2[4], s[4]))
+            end
         end
-        say(@sprintf("%-4s n=%2d floor=%.0e  λmax=%.3f  ‖𝓜⁻¹W‖∞=%.3f  min(𝓜⁻¹W)=%.3e  max|EZ|/m=%.3e  minC=%.1e",
+        say(@sprintf("%-4s n=%2d floor=%.0e  λmax=%.3e  ‖𝓜⁻¹W‖∞=%.3e  min(𝓜⁻¹W)=%.3e  max|EZ|/m=%.3e  minC=%.1e",
             kind, n, floor, worst..., fmin))
+        ACTIVITY === :aperture && say(@sprintf("     merged W̃ (κ=%g):  λmax=%.3e  ‖𝓜⁻¹W̃‖∞=%.3e  min(𝓜⁻¹W̃)=%.3e  max|EZ|/m=%.3e",
+            TP._MIMETIC_MERGE_KAPPA[], worst2...))
     end
 end

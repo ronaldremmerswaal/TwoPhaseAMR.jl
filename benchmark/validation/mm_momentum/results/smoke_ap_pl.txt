@@ -1,0 +1,19 @@
+activity=aperture ties=true
+D0     const  dev=5.21e-17 maxcorr=0.000e+00 max|dPx|=4.02e-05 dE=+8.15e-06 merge=(moved = 134, dropped = 0.0) ok
+D0     vortex dev=2.84e-01 maxcorr=0.000e+00 max|dPx|=6.25e-05 dE=+2.30e-05 merge=(moved = 126, dropped = 0.0) ok
+        worst=(face = 1, phase = 2, aperture = 1.0, mass = 9.765625e-7, metric = 9.765625e-7, rhs = -1.5358470340789792e-8, old = 1.0, transported = 0.9842729263710313, new = 0.9842729263710313, was_dof = true, band = false)
+DI     const  dev=5.21e-17 maxcorr=0.000e+00 max|dPx|=4.02e-05 dE=+8.15e-06 merge=(moved = 134, dropped = 0.0) ok
+DI     vortex dev=3.00e-01 maxcorr=3.173e-02 max|dPx|=4.69e-05 dE=-2.07e-05 merge=(moved = 126, dropped = 0.0) ok
+        worst=(face = 758, phase = 2, aperture = 1.0, mass = 9.602677480990434e-7, metric = 1.8820526458852024e-6, rhs = -2.2013833532314095e-9, old = 1.152912689016339, transported = 1.1506202207359149, new = 1.1823466455214928, was_dof = true, band = true)
+DP+mm  const  dev=5.21e-15 maxcorr=2.554e-15 max|dPx|=2.22e-16 dE=-3.19e-16 merge=(moved = 134, dropped = 0.0) ok
+DP+mm  vortex dev=3.02e-01 maxcorr=3.155e-02 max|dPx|=1.87e-14 dE=-4.03e-05 merge=(moved = 126, dropped = 0.0) ok
+        worst=(face = 758, phase = 2, aperture = 1.0, mass = 9.601822541403016e-7, metric = 1.8801738305768133e-6, rhs = -2.325537685456793e-9, old = 1.153172980857192, transported = 1.150853011981732, new = 1.182402132530842, was_dof = true, band = true)
+DS     const  dev=9.36e+00 maxcorr=1.352e+00 max|dPx|=5.35e-04 dE=+3.50e-03 merge=(moved = 137, dropped = 0.0) ok
+DS     vortex dev=2.25e+01 maxcorr=2.297e+01 max|dPx|=5.23e-04 dE=+3.86e-03 merge=(moved = 135, dropped = 0.0) ok
+        worst=(face = 1451, phase = 1, aperture = 0.0027645360912414985, mass = 1.3030895827290844e-7, metric = 1.2701945412455134e-7, rhs = -2.913593168767838e-6, old = -0.7432848147740022, transported = -0.6584070869204516, new = -23.626514533942075, was_dof = true, band = true)
+DF     const  dev=1.09e+01 maxcorr=2.069e+01 max|dPx|=1.05e-03 dE=+1.25e-02 merge=(moved = 143, dropped = 0.0) ok
+DF     vortex dev=4.29e+00 maxcorr=1.842e+01 max|dPx|=1.01e-03 dE=+1.19e-02 merge=(moved = 144, dropped = 0.0) ok
+        worst=(face = 553, phase = 1, aperture = 0.011137120344684504, mass = 1.486649578447771e-6, metric = 2.347968320951155e-6, rhs = 4.304909416011064e-5, old = 1.1328811870672337, transported = 1.0430577330942312, new = 19.458909741319232, was_dof = true, band = true)
+DG+mm  const  dev=6.25e-16 maxcorr=6.040e-14 max|dPx|=1.94e-16 dE=-1.39e-17 merge=(moved = 134, dropped = 0.0) ok
+DG+mm  vortex dev=3.11e-01 maxcorr=1.625e-01 max|dPx|=3.39e-04 dE=-8.63e-05 merge=(moved = 127, dropped = 0.0) ok
+        worst=(face = 553, phase = 1, aperture = 0.008788070222283784, mass = 1.7529392169691553e-6, metric = 3.3961929827973358e-6, rhs = 5.41404997085571e-7, old = 1.0058562399180335, transported = 1.0008101144872468, new = 1.1633258099902317, was_dof = true, band = true)

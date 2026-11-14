@@ -1,0 +1,24 @@
+# (1) Gram mass minus VOF mass, drop R=0.2 sliding by x0 + s h (s in [0,1]), density (1, 1e-3)
+n= 16 match=false liquid (G-V)/V xx: mean=+4.855e-02 range=5.851e-02  xy/V max=7.365e-04  max shift=-
+n= 16 match=true  liquid (G-V)/V xx: mean=+5.224e-02 range=5.976e-02  xy/V max=3.105e-17  max shift=3.05e-02 h
+n= 32 match=false liquid (G-V)/V xx: mean=+2.627e-02 range=1.858e-02  xy/V max=3.654e-05  max shift=-
+n= 32 match=true  liquid (G-V)/V xx: mean=+2.671e-02 range=1.806e-02  xy/V max=7.535e-18  max shift=7.72e-03 h
+n= 64 match=false liquid (G-V)/V xx: mean=+1.332e-02 range=6.291e-03  xy/V max=3.350e-06  max shift=-
+n= 64 match=true  liquid (G-V)/V xx: mean=+1.342e-02 range=6.336e-03  xy/V max=5.236e-18  max shift=2.45e-03 h
+# (2) increment bound λmax(W,𝓜), ‖𝓜⁻¹W‖∞, min entry of 𝓜⁻¹W, max |(𝓜-W)Z|/max(m,𝓜ff) over the band
+drop n=16 floor=1e-08  λmax=2.486e+00  ‖𝓜⁻¹W‖∞=3.695e+00  min(𝓜⁻¹W)=-7.344e-01  max|EZ|/m=9.992e-01  minC=9.2e-08
+     merged W̃ (κ=1):  λmax=2.131e+00  ‖𝓜⁻¹W̃‖∞=3.565e+00  min(𝓜⁻¹W̃)=-7.385e-01  max|EZ|/m=9.992e-01
+drop n=32 floor=1e-08  λmax=2.378e+00  ‖𝓜⁻¹W‖∞=3.455e+00  min(𝓜⁻¹W)=-6.666e-01  max|EZ|/m=9.998e-01  minC=2.1e-08
+     merged W̃ (κ=1):  λmax=2.099e+00  ‖𝓜⁻¹W̃‖∞=3.409e+00  min(𝓜⁻¹W̃)=-6.666e-01  max|EZ|/m=9.998e-01
+drop n=16 floor=1e-12  λmax=2.494e+00  ‖𝓜⁻¹W‖∞=3.604e+00  min(𝓜⁻¹W)=-7.792e-01  max|EZ|/m=1.000e+00  minC=3.0e-12
+     merged W̃ (κ=1):  λmax=2.129e+00  ‖𝓜⁻¹W̃‖∞=3.655e+00  min(𝓜⁻¹W̃)=-7.792e-01  max|EZ|/m=1.000e+00
+drop n=32 floor=1e-12  λmax=2.520e+00  ‖𝓜⁻¹W‖∞=3.873e+00  min(𝓜⁻¹W)=-8.069e-01  max|EZ|/m=9.999e-01  minC=4.1e-12
+     merged W̃ (κ=1):  λmax=2.023e+00  ‖𝓜⁻¹W̃‖∞=3.295e+00  min(𝓜⁻¹W̃)=-8.069e-01  max|EZ|/m=9.999e-01
+line n=16 floor=1e-08  λmax=2.126e+00  ‖𝓜⁻¹W‖∞=3.248e+00  min(𝓜⁻¹W)=-2.500e-01  max|EZ|/m=1.000e+00  minC=1.7e-08
+     merged W̃ (κ=1):  λmax=1.907e+00  ‖𝓜⁻¹W̃‖∞=3.356e+00  min(𝓜⁻¹W̃)=-2.500e-01  max|EZ|/m=1.000e+00
+line n=32 floor=1e-08  λmax=2.072e+00  ‖𝓜⁻¹W‖∞=2.927e+00  min(𝓜⁻¹W)=-2.500e-01  max|EZ|/m=1.000e+00  minC=1.7e-08
+     merged W̃ (κ=1):  λmax=1.787e+00  ‖𝓜⁻¹W̃‖∞=2.648e+00  min(𝓜⁻¹W̃)=-2.691e-01  max|EZ|/m=1.000e+00
+line n=16 floor=1e-12  λmax=2.125e+00  ‖𝓜⁻¹W‖∞=3.294e+00  min(𝓜⁻¹W)=-2.500e-01  max|EZ|/m=1.000e+00  minC=1.0e-12
+     merged W̃ (κ=1):  λmax=1.907e+00  ‖𝓜⁻¹W̃‖∞=3.356e+00  min(𝓜⁻¹W̃)=-2.500e-01  max|EZ|/m=1.000e+00
+line n=32 floor=1e-12  λmax=2.072e+00  ‖𝓜⁻¹W‖∞=2.927e+00  min(𝓜⁻¹W)=-2.500e-01  max|EZ|/m=1.000e+00  minC=1.0e-12
+     merged W̃ (κ=1):  λmax=1.787e+00  ‖𝓜⁻¹W̃‖∞=2.646e+00  min(𝓜⁻¹W̃)=-2.691e-01  max|EZ|/m=1.000e+00

@@ -1,0 +1,40 @@
+\emph{How the apertures are defined now.}  The metric, the activity rule, the projection and the
+VOF sweeps (which freeze a copy at the start of the step) all use the interface-owned phase
+apertures of \code{\_current\_phase\_face\_apertures!}, i.e.\ \code{\_phase\_face\_apertures}: the
+liquid aperture is the mean of the two cells' traces, $a_f=\tfrac12(t_{c_-}+t_{c_+})$, with the
+trace $t_c$ of \code{\_face\_aperture} the part of the face below the PLIC line of $c$ ($0$ for
+$\alpha_c\le0$, the full open face for $\alpha_c\ge1$, a solid clipped first), and the gas
+aperture $1-a_f$.  The exceptions that clip to zero or one are:
+\begin{enumerate}[leftmargin=*,itemsep=1pt,label=(\roman*)]
+\item a phase absent in both cells gets aperture exactly $0$ (the other phase the open face);
+  this coincides with the plain mean, since both traces are then $0$ or full;
+\item the round-off snap \code{\_snap\_phase\_apertures}: an aperture below $64\epsilon$ is set to
+  $0$ (and the other to the open face), against $10^{-17}$ openings left by two independently
+  clipped polygons;
+\item indirectly, the VOF floor: cell fractions within \code{fraction\_floor} ($\sqrt\epsilon$) of
+  $0$ or $1$ are snapped after each sweep, so their traces become $0$ or full;
+\item in the metric only, a grid-line face between a pure liquid and a pure gas cell is
+  identified (one value, each cell sees its own side fully wet), whatever its mean aperture
+  ($\tfrac12$);
+\item the boundary faces (\code{\_phase\_boundary\_face\_apertures}) use the single trace with
+  the same snap.
+\end{enumerate}
+No pure-neighbour rule is left in this branch (it was removed with MMd, \code{report\_mmd.md}).
+The present aperture \emph{is} therefore the plain $\tfrac12$--$\tfrac12$ mean up to (ii)
+(round-off) and the grid-line identification (iv).  The prototype switch
+\code{\_APERTURE\_PLAIN[]} (environment \code{MM\_APERTURE=plain}) removes (i) and (ii); (iii)
+belongs to the VOF and (iv) to the metric and are kept.
+
+\emph{What changes in principle.}  A value is born when either neighbour's trace reaches the face
+and dies when neither does --- the same events as now, since (i) is not a clip.  Without (ii) a
+phase can be active on a $10^{-17}$ opening: such values have an inertia of order $b\le10^{-16}$
+and, under aperture activity, become degrees of freedom; with the small ties their inertia is
+that of their staggered mass instead.  The traces move continuously while one PLIC line
+translates, but jump when the reconstruction changes its normal between steps (a new Youngs or
+LHF normal pivots the line), so births and deaths are not smoother in time with either
+definition: the time continuity is set by the reconstruction, not by the averaging.  The Gram
+block of a cell uses the shared averaged apertures of its four sides, which need not close a
+polygon with any one cell's PLIC (\code{metric\_options}); the VOF volume fluxes are geometric
+(donating regions of the PLIC of the upwind cell), not apertures, so neither definition makes the
+fluxes and the block's wetted sides consistent.  The identities of \cref{sec:ap:analysis} do not
+depend on how the apertures are computed.

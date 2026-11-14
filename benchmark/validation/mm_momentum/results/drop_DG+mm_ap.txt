@@ -1,0 +1,13 @@
+static     DR=1      n=16 La=Inf    DG+mm  liquid 1.311e-01->9.601e-02 gas 7.605e-02->6.662e-02 Ca=0.000e+00 Elate/Eearly=0.856 peaks 1.909e-04->1.264e-04 steps=65 wall=17.6s
+static     DR=1      n=16 La=1200   DG+mm  liquid 1.205e-01->5.724e-02 gas 7.839e-02->3.222e-02 Ca=7.390e-04 Elate/Eearly=0.213 peaks 1.884e-04->1.976e-05 steps=65 wall=0.9s
+static     DR=1      n=32 La=Inf    DG+mm  liquid 7.632e-03->9.278e-03 gas 5.543e-03->6.253e-03 Ca=0.000e+00 Elate/Eearly=2.415 peaks 7.184e-07->1.670e-06 steps=182 wall=2.1s
+static     DR=1      n=32 La=1200   DG+mm  liquid 8.093e-03->1.076e-02 gas 5.465e-03->7.169e-03 Ca=1.389e-04 Elate/Eearly=0.480 peaks 5.318e-07->2.553e-07 steps=182 wall=3.1s
+static     DR=1000   n=16 La=Inf    DG+mm  liquid 1.772e-01->1.648e-01 gas 1.171e-01->1.134e-01 Ca=0.000e+00 Elate/Eearly=0.665 peaks 2.680e-04->1.667e-04 steps=91 wall=0.3s
+static     DR=1000   n=16 La=1200   DG+mm  liquid 1.739e-01->9.731e-02 gas 8.785e-02->6.737e-02 Ca=1.256e-03 Elate/Eearly=0.160 peaks 2.498e-04->2.183e-05 steps=91 wall=0.4s
+static     DR=1000   n=32 La=Inf    DG+mm  liquid 9.645e-03->1.070e-02 gas 8.662e-03->8.158e-03 Ca=0.000e+00 Elate/Eearly=1.774 peaks 7.855e-07->1.030e-06 steps=257 wall=2.9s
+static     DR=1000   n=32 La=1200   DG+mm  liquid 7.852e-03->1.983e-03 gas 3.875e-02->5.718e-02 Ca=7.382e-04 Elate/Eearly=0.072 peaks 6.344e-07->4.563e-08 steps=257 wall=3.9s
+periodic   DR=1      n=16 U=(0.0, 0.0)  DG+mm  max|u-U| early=1.205e-01 late=5.724e-02 dP/(ρV|U|)=3.02e+283 steps=65 wall=7.5s ok
+periodic   DR=1      n=16 U=(1.0, 0.37) DG+mm  max|u-U| early=1.667e+00 late=1.841e+00 dP/(ρV|U|)=2.96e-03 steps=69 wall=0.6s ok
+periodic   DR=1      n=32 U=(0.0, 0.0)  DG+mm  max|u-U| early=8.093e-03 late=1.083e-02 dP/(ρV|U|)=9.69e+295 steps=182 wall=2.8s ok
+periodic   DR=1      n=32 U=(1.0, 0.37) DG+mm  max|u-U| early=1.717e-01 late=1.432e-01 dP/(ρV|U|)=1.12e-03 steps=183 wall=2.7s ok
+periodic   DR=1000   n=16 U=(0.0, 0.0)  DG+mm  max|u-U| early=1.739e-01 late=9.731e-02 dP/(ρV|U|)=2.27e+284 steps=91 wall=0.4s ok

@@ -1,0 +1,216 @@
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.10 floor=1e-08 D0     transport=5.21e-17 step=5.21e-17 dPmix/(ρV|U|)=1.63e-16 minC=1.4e-07 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.10 floor=1e-08 DI     transport=5.21e-17 step=5.21e-17 dPmix/(ρV|U|)=1.63e-16 minC=1.4e-07 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.10 floor=1e-08 DP +mm transport=3.96e-15 step=3.96e-15 dPmix/(ρV|U|)=1.63e-16 minC=1.4e-07 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.10 floor=1e-08 DG +mm transport=1.25e-15 step=1.25e-15 dPmix/(ρV|U|)=3.26e-16 minC=1.4e-07 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.10 floor=1e-08 DS     transport=2.10e+04 step=2.10e+04 dPmix/(ρV|U|)=1.78e-03 minC=1.7e-08 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.10 floor=1e-08 DF     transport=2.08e+02 step=2.89e+02 dPmix/(ρV|U|)=1.51e-03 minC=1.6e-08 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.10 floor=1e-12 D0     transport=5.21e-17 step=5.21e-17 dPmix/(ρV|U|)=1.63e-16 minC=1.4e-07 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.10 floor=1e-12 DI     transport=5.21e-17 step=5.21e-17 dPmix/(ρV|U|)=1.63e-16 minC=1.4e-07 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.10 floor=1e-12 DP +mm transport=3.96e-15 step=3.96e-15 dPmix/(ρV|U|)=1.63e-16 minC=1.4e-07 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.10 floor=1e-12 DG +mm transport=1.25e-15 step=1.25e-15 dPmix/(ρV|U|)=3.26e-16 minC=1.4e-07 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.10 floor=1e-12 DS     transport=2.63e+05 step=2.63e+05 dPmix/(ρV|U|)=1.83e-03 minC=1.1e-12 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.10 floor=1e-12 DF     transport=8.22e+03 step=8.31e+03 dPmix/(ρV|U|)=1.49e-03 minC=3.7e-11 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.45 floor=1e-08 D0     transport=5.21e-17 step=5.21e-17 dPmix/(ρV|U|)=2.45e-16 minC=1.0e-07 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.45 floor=1e-08 DI     transport=5.21e-17 step=5.21e-17 dPmix/(ρV|U|)=2.45e-16 minC=1.0e-07 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.45 floor=1e-08 DP +mm transport=5.47e-15 step=5.47e-15 dPmix/(ρV|U|)=1.63e-16 minC=1.0e-07 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.45 floor=1e-08 DG +mm transport=4.12e-14 step=4.12e-14 dPmix/(ρV|U|)=8.15e-17 minC=1.0e-07 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.45 floor=1e-08 DS     transport=5.08e+04 step=4.82e+04 dPmix/(ρV|U|)=2.73e-03 minC=3.9e-08 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.45 floor=1e-08 DF     transport=1.08e+03 step=1.08e+03 dPmix/(ρV|U|)=2.76e-03 minC=1.6e-08 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.45 floor=1e-12 D0     transport=5.21e-17 step=5.21e-17 dPmix/(ρV|U|)=3.26e-16 minC=5.3e-10 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.45 floor=1e-12 DI     transport=5.21e-17 step=5.21e-17 dPmix/(ρV|U|)=3.26e-16 minC=5.3e-10 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.45 floor=1e-12 DP +mm transport=4.58e-15 step=4.58e-15 dPmix/(ρV|U|)=1.96e-15 minC=5.3e-10 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.45 floor=1e-12 DG +mm transport=1.35e-14 step=1.35e-14 dPmix/(ρV|U|)=1.63e-16 minC=5.3e-10 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.45 floor=1e-12 DS     transport=5.08e+04 step=4.82e+04 dPmix/(ρV|U|)=2.82e-03 minC=4.8e-10 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.45 floor=1e-12 DF     transport=2.86e+03 step=2.86e+03 dPmix/(ρV|U|)=2.30e-03 minC=2.3e-09 ok
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.90 floor=1e-08 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.90 floor=1e-08 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.90 floor=1e-08 DP +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.90 floor=1e-08 DG +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.90 floor=1e-08 DS     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.90 floor=1e-08 DF     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.90 floor=1e-12 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.90 floor=1e-12 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.90 floor=1e-12 DP +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.90 floor=1e-12 DG +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.90 floor=1e-12 DS     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(1.0, 0.37) cfl=0.90 floor=1e-12 DF     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=2.23e-16 minC=4.4e-07 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=2.23e-16 minC=4.4e-07 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 DP +mm transport=1.13e-14 step=1.13e-14 dPmix/(ρV|U|)=7.82e-16 minC=4.4e-07 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 DG +mm transport=1.97e-15 step=1.97e-15 dPmix/(ρV|U|)=1.12e-16 minC=4.4e-07 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 DS     transport=9.64e+01 step=9.77e+01 dPmix/(ρV|U|)=8.55e-05 minC=3.2e-08 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 DF     transport=9.73e+00 step=9.82e+00 dPmix/(ρV|U|)=2.60e-03 minC=3.0e-08 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.10 floor=1e-12 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=2.23e-16 minC=4.4e-07 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.10 floor=1e-12 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=2.23e-16 minC=4.4e-07 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.10 floor=1e-12 DP +mm transport=1.13e-14 step=1.13e-14 dPmix/(ρV|U|)=7.82e-16 minC=4.4e-07 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.10 floor=1e-12 DG +mm transport=1.97e-15 step=1.97e-15 dPmix/(ρV|U|)=1.12e-16 minC=4.4e-07 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.10 floor=1e-12 DS     transport=9.64e+01 step=9.77e+01 dPmix/(ρV|U|)=8.55e-05 minC=3.2e-08 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.10 floor=1e-12 DF     transport=9.73e+00 step=9.82e+00 dPmix/(ρV|U|)=2.60e-03 minC=1.4e-09 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=3.35e-16 minC=4.4e-07 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=3.35e-16 minC=4.4e-07 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 DP +mm transport=3.11e-15 step=3.11e-15 dPmix/(ρV|U|)=4.47e-16 minC=4.4e-07 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 DG +mm transport=1.52e-15 step=1.52e-15 dPmix/(ρV|U|)=4.47e-16 minC=4.4e-07 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 DS     transport=3.02e+04 step=2.88e+04 dPmix/(ρV|U|)=5.71e-03 minC=1.8e-08 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 DF     transport=3.48e+03 step=3.07e+03 dPmix/(ρV|U|)=1.96e-03 minC=1.7e-08 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.45 floor=1e-12 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=3.35e-16 minC=4.4e-07 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.45 floor=1e-12 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=3.35e-16 minC=4.4e-07 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.45 floor=1e-12 DP +mm transport=3.11e-15 step=3.11e-15 dPmix/(ρV|U|)=4.47e-16 minC=4.4e-07 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.45 floor=1e-12 DG +mm transport=1.52e-15 step=1.52e-15 dPmix/(ρV|U|)=4.47e-16 minC=4.4e-07 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.45 floor=1e-12 DS     transport=2.94e+04 step=2.80e+04 dPmix/(ρV|U|)=5.61e-03 minC=5.3e-10 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.45 floor=1e-12 DF     transport=4.25e+06 step=4.25e+06 dPmix/(ρV|U|)=2.03e-03 minC=1.1e-11 ok
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 DP +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 DG +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 DS     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 DF     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.90 floor=1e-12 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.90 floor=1e-12 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.90 floor=1e-12 DP +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.90 floor=1e-12 DG +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.90 floor=1e-12 DS     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.90 floor=1e-12 DF     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.10 floor=1e-08 D0     transport=5.21e-17 step=5.21e-17 dPmix/(ρV|U|)=1.36e-05 minC=1.4e-07 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.10 floor=1e-08 DI     transport=5.21e-17 step=5.21e-17 dPmix/(ρV|U|)=1.36e-05 minC=1.4e-07 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.10 floor=1e-08 DP +mm transport=2.42e-14 step=2.42e-14 dPmix/(ρV|U|)=1.48e-15 minC=1.4e-07 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.10 floor=1e-08 DG +mm transport=1.04e-15 step=1.04e-15 dPmix/(ρV|U|)=2.46e-15 minC=1.4e-07 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.10 floor=1e-08 DS     transport=2.12e+01 step=2.26e+01 dPmix/(ρV|U|)=2.70e-03 minC=2.2e-08 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.10 floor=1e-08 DF     transport=9.74e+01 step=9.74e+01 dPmix/(ρV|U|)=6.55e-03 minC=4.3e-07 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.10 floor=1e-12 D0     transport=5.21e-17 step=5.21e-17 dPmix/(ρV|U|)=1.36e-05 minC=1.4e-07 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.10 floor=1e-12 DI     transport=5.21e-17 step=5.21e-17 dPmix/(ρV|U|)=1.36e-05 minC=1.4e-07 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.10 floor=1e-12 DP +mm transport=2.42e-14 step=2.42e-14 dPmix/(ρV|U|)=1.48e-15 minC=1.4e-07 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.10 floor=1e-12 DG +mm transport=1.04e-15 step=1.04e-15 dPmix/(ρV|U|)=2.46e-15 minC=1.4e-07 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.10 floor=1e-12 DS     transport=2.12e+01 step=2.26e+01 dPmix/(ρV|U|)=2.56e-03 minC=1.8e-10 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.10 floor=1e-12 DF     transport=9.74e+01 step=9.74e+01 dPmix/(ρV|U|)=6.54e-03 minC=1.3e-09 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.45 floor=1e-08 D0     transport=5.21e-17 step=5.21e-17 dPmix/(ρV|U|)=1.09e-04 minC=1.0e-07 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.45 floor=1e-08 DI     transport=5.21e-17 step=5.21e-17 dPmix/(ρV|U|)=1.09e-04 minC=1.0e-07 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.45 floor=1e-08 DP +mm transport=2.28e-14 step=2.28e-14 dPmix/(ρV|U|)=3.05e-12 minC=1.0e-07 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.45 floor=1e-08 DG +mm transport=2.57e-14 step=2.57e-14 dPmix/(ρV|U|)=3.05e-12 minC=1.0e-07 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.45 floor=1e-08 DS     transport=4.19e+02 step=6.89e+02 dPmix/(ρV|U|)=6.24e-03 minC=1.9e-08 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.45 floor=1e-08 DF     transport=5.16e+03 step=3.27e+04 dPmix/(ρV|U|)=1.23e-02 minC=1.9e-08 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.45 floor=1e-12 D0     transport=5.21e-17 step=5.21e-17 dPmix/(ρV|U|)=1.09e-04 minC=5.3e-10 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.45 floor=1e-12 DI     transport=5.21e-17 step=5.21e-17 dPmix/(ρV|U|)=1.09e-04 minC=5.3e-10 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.45 floor=1e-12 DP +mm transport=2.34e-14 step=2.34e-14 dPmix/(ρV|U|)=8.69e-15 minC=5.3e-10 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.45 floor=1e-12 DG +mm transport=2.97e-15 step=2.97e-15 dPmix/(ρV|U|)=9.51e-15 minC=5.3e-10 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.45 floor=1e-12 DS     transport=4.19e+02 step=6.89e+02 dPmix/(ρV|U|)=6.37e-03 minC=3.2e-09 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.45 floor=1e-12 DF     transport=7.09e+04 step=7.09e+04 dPmix/(ρV|U|)=1.19e-02 minC=1.3e-10 ok
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.90 floor=1e-08 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.90 floor=1e-08 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.90 floor=1e-08 DP +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.90 floor=1e-08 DG +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.90 floor=1e-08 DS     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.90 floor=1e-08 DF     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.90 floor=1e-12 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.90 floor=1e-12 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.90 floor=1e-12 DP +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.90 floor=1e-12 DG +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.90 floor=1e-12 DS     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(1.0, 0.37) cfl=0.90 floor=1e-12 DF     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=1.18e-04 minC=4.4e-07 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=1.18e-04 minC=4.4e-07 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 DP +mm transport=2.32e-14 step=2.32e-14 dPmix/(ρV|U|)=4.97e-15 minC=4.4e-07 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 DG +mm transport=1.47e-15 step=1.47e-15 dPmix/(ρV|U|)=4.06e-15 minC=4.4e-07 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 DS     transport=3.28e+01 step=3.36e+01 dPmix/(ρV|U|)=3.12e-03 minC=4.3e-07 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 DF     transport=3.39e+01 step=3.58e+01 dPmix/(ρV|U|)=7.89e-03 minC=1.4e-07 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.10 floor=1e-12 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=1.18e-04 minC=4.4e-07 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.10 floor=1e-12 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=1.18e-04 minC=4.4e-07 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.10 floor=1e-12 DP +mm transport=2.32e-14 step=2.32e-14 dPmix/(ρV|U|)=4.97e-15 minC=4.4e-07 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.10 floor=1e-12 DG +mm transport=1.47e-15 step=1.47e-15 dPmix/(ρV|U|)=4.06e-15 minC=4.4e-07 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.10 floor=1e-12 DS     transport=3.28e+01 step=3.36e+01 dPmix/(ρV|U|)=3.12e-03 minC=4.3e-07 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.10 floor=1e-12 DF     transport=3.39e+01 step=3.58e+01 dPmix/(ρV|U|)=7.89e-03 minC=1.4e-07 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=2.17e-04 minC=4.4e-07 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=2.17e-04 minC=4.4e-07 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 DP +mm transport=2.30e-14 step=2.30e-14 dPmix/(ρV|U|)=2.51e-14 minC=4.4e-07 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 DG +mm transport=1.43e-15 step=1.43e-15 dPmix/(ρV|U|)=2.42e-14 minC=4.4e-07 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 DS     transport=7.61e+02 step=2.24e+03 dPmix/(ρV|U|)=2.02e-02 minC=2.0e-08 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 DF     transport=2.60e+02 step=2.87e+02 dPmix/(ρV|U|)=2.24e-02 minC=7.4e-08 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.45 floor=1e-12 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=2.17e-04 minC=4.4e-07 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.45 floor=1e-12 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=2.17e-04 minC=4.4e-07 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.45 floor=1e-12 DP +mm transport=2.30e-14 step=2.30e-14 dPmix/(ρV|U|)=2.51e-14 minC=4.4e-07 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.45 floor=1e-12 DG +mm transport=1.43e-15 step=1.43e-15 dPmix/(ρV|U|)=2.42e-14 minC=4.4e-07 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.45 floor=1e-12 DS     transport=7.61e+02 step=2.24e+03 dPmix/(ρV|U|)=2.07e-02 minC=3.3e-12 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.45 floor=1e-12 DF     transport=2.66e+02 step=2.87e+02 dPmix/(ρV|U|)=2.18e-02 minC=1.7e-09 ok
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 DP +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 DG +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 DS     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 DF     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.90 floor=1e-12 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.90 floor=1e-12 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.90 floor=1e-12 DP +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.90 floor=1e-12 DG +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.90 floor=1e-12 DS     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+drop  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.90 floor=1e-12 DF     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=1.0e-06 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e+00  U=(1.0, 0.37) cfl=0.10 floor=1e-08 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=2.59e-15 minC=2.0e-05 ok
+band  rho_g=1e+00  U=(1.0, 0.37) cfl=0.10 floor=1e-08 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=2.59e-15 minC=2.0e-05 ok
+band  rho_g=1e+00  U=(1.0, 0.37) cfl=0.10 floor=1e-08 DP +mm transport=1.81e-14 step=1.81e-14 dPmix/(ρV|U|)=1.93e-15 minC=2.0e-05 ok
+band  rho_g=1e+00  U=(1.0, 0.37) cfl=0.10 floor=1e-08 DG +mm transport=1.04e-15 step=1.04e-15 dPmix/(ρV|U|)=2.96e-15 minC=2.0e-05 ok
+band  rho_g=1e+00  U=(1.0, 0.37) cfl=0.10 floor=1e-08 DS     transport=1.73e+00 step=1.75e+00 dPmix/(ρV|U|)=2.87e-02 minC=1.3e-05 ok
+band  rho_g=1e+00  U=(1.0, 0.37) cfl=0.10 floor=1e-08 DF     transport=5.30e+00 step=5.32e+00 dPmix/(ρV|U|)=9.98e-04 minC=1.3e-07 ok
+band  rho_g=1e+00  U=(1.0, 0.37) cfl=0.45 floor=1e-08 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=6.75e-15 minC=1.3e-07 ok
+band  rho_g=1e+00  U=(1.0, 0.37) cfl=0.45 floor=1e-08 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=6.75e-15 minC=1.3e-07 ok
+band  rho_g=1e+00  U=(1.0, 0.37) cfl=0.45 floor=1e-08 DP +mm transport=1.67e-14 step=1.67e-14 dPmix/(ρV|U|)=9.79e-15 minC=1.3e-07 ok
+band  rho_g=1e+00  U=(1.0, 0.37) cfl=0.45 floor=1e-08 DG +mm transport=1.67e-15 step=1.67e-15 dPmix/(ρV|U|)=7.65e-15 minC=1.3e-07 ok
+band  rho_g=1e+00  U=(1.0, 0.37) cfl=0.45 floor=1e-08 DS     transport=9.60e+01 step=9.47e+01 dPmix/(ρV|U|)=4.79e-02 minC=7.0e-07 ok
+band  rho_g=1e+00  U=(1.0, 0.37) cfl=0.45 floor=1e-08 DF     transport=1.29e+02 step=1.29e+02 dPmix/(ρV|U|)=1.86e-02 minC=9.7e-07 ok
+band  rho_g=1e+00  U=(1.0, 0.37) cfl=0.90 floor=1e-08 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e+00  U=(1.0, 0.37) cfl=0.90 floor=1e-08 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e+00  U=(1.0, 0.37) cfl=0.90 floor=1e-08 DP +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e+00  U=(1.0, 0.37) cfl=0.90 floor=1e-08 DG +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e+00  U=(1.0, 0.37) cfl=0.90 floor=1e-08 DS     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e+00  U=(1.0, 0.37) cfl=0.90 floor=1e-08 DF     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=1.04e-15 minC=1.6e-03 ok
+band  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=1.04e-15 minC=1.6e-03 ok
+band  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 DP +mm transport=1.20e-14 step=1.20e-14 dPmix/(ρV|U|)=1.39e-15 minC=1.6e-03 ok
+band  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 DG +mm transport=7.77e-16 step=7.77e-16 dPmix/(ρV|U|)=1.39e-15 minC=1.6e-03 ok
+band  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 DS     transport=8.91e-01 step=8.84e-01 dPmix/(ρV|U|)=3.54e-02 minC=2.7e-05 ok
+band  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 DF     transport=2.45e+00 step=2.47e+00 dPmix/(ρV|U|)=7.30e-03 minC=4.2e-05 ok
+band  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=6.93e-16 minC=1.0e-04 ok
+band  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=6.93e-16 minC=1.0e-04 ok
+band  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 DP +mm transport=1.24e-14 step=1.24e-14 dPmix/(ρV|U|)=1.50e-15 minC=1.0e-04 ok
+band  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 DG +mm transport=2.00e-15 step=2.00e-15 dPmix/(ρV|U|)=3.46e-16 minC=1.0e-04 ok
+band  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 DS     transport=4.10e+00 step=4.52e+00 dPmix/(ρV|U|)=1.02e-01 minC=1.0e-04 ok
+band  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 DF     transport=4.57e+02 step=4.57e+02 dPmix/(ρV|U|)=2.46e-02 minC=8.0e-07 ok
+band  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 DP +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 DG +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 DS     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e+00  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 DF     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e-03  U=(1.0, 0.37) cfl=0.10 floor=1e-08 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=3.79e-08 minC=2.0e-05 ok
+band  rho_g=1e-03  U=(1.0, 0.37) cfl=0.10 floor=1e-08 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=3.79e-08 minC=2.0e-05 ok
+band  rho_g=1e-03  U=(1.0, 0.37) cfl=0.10 floor=1e-08 DP +mm transport=1.91e-14 step=1.91e-14 dPmix/(ρV|U|)=2.49e-08 minC=2.0e-05 ok
+band  rho_g=1e-03  U=(1.0, 0.37) cfl=0.10 floor=1e-08 DG +mm transport=1.25e-15 step=1.25e-15 dPmix/(ρV|U|)=2.49e-08 minC=2.0e-05 ok
+band  rho_g=1e-03  U=(1.0, 0.37) cfl=0.10 floor=1e-08 DS     transport=2.78e+01 step=2.97e+01 dPmix/(ρV|U|)=8.63e-03 minC=8.5e-08 ok
+band  rho_g=1e-03  U=(1.0, 0.37) cfl=0.10 floor=1e-08 DF     transport=1.60e+01 step=1.62e+01 dPmix/(ρV|U|)=1.90e-02 minC=2.4e-07 ok
+band  rho_g=1e-03  U=(1.0, 0.37) cfl=0.45 floor=1e-08 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=3.79e-08 minC=1.3e-07 ok
+band  rho_g=1e-03  U=(1.0, 0.37) cfl=0.45 floor=1e-08 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=3.79e-08 minC=1.3e-07 ok
+band  rho_g=1e-03  U=(1.0, 0.37) cfl=0.45 floor=1e-08 DP +mm transport=1.61e-14 step=1.61e-14 dPmix/(ρV|U|)=2.49e-08 minC=1.3e-07 ok
+band  rho_g=1e-03  U=(1.0, 0.37) cfl=0.45 floor=1e-08 DG +mm transport=1.51e-15 step=1.51e-15 dPmix/(ρV|U|)=2.49e-08 minC=1.3e-07 ok
+band  rho_g=1e-03  U=(1.0, 0.37) cfl=0.45 floor=1e-08 DS     transport=1.38e+02 step=1.38e+02 dPmix/(ρV|U|)=3.92e-02 minC=2.3e-08 ok
+band  rho_g=1e-03  U=(1.0, 0.37) cfl=0.45 floor=1e-08 DF     transport=4.02e+02 step=4.02e+02 dPmix/(ρV|U|)=2.50e-02 minC=1.9e-07 ok
+band  rho_g=1e-03  U=(1.0, 0.37) cfl=0.90 floor=1e-08 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e-03  U=(1.0, 0.37) cfl=0.90 floor=1e-08 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e-03  U=(1.0, 0.37) cfl=0.90 floor=1e-08 DP +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e-03  U=(1.0, 0.37) cfl=0.90 floor=1e-08 DG +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e-03  U=(1.0, 0.37) cfl=0.90 floor=1e-08 DS     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e-03  U=(1.0, 0.37) cfl=0.90 floor=1e-08 DF     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=5.46e-13 minC=1.6e-03 ok
+band  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=5.46e-13 minC=1.6e-03 ok
+band  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 DP +mm transport=1.07e-14 step=1.07e-14 dPmix/(ρV|U|)=6.90e-13 minC=1.6e-03 ok
+band  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 DG +mm transport=6.66e-16 step=6.66e-16 dPmix/(ρV|U|)=6.91e-13 minC=1.6e-03 ok
+band  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 DS     transport=1.66e+01 step=1.92e+01 dPmix/(ρV|U|)=1.85e-02 minC=6.7e-07 ok
+band  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.10 floor=1e-08 DF     transport=1.73e+01 step=1.87e+01 dPmix/(ρV|U|)=7.48e-03 minC=2.4e-07 ok
+band  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=2.71e-13 minC=1.0e-04 ok
+band  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=2.71e-13 minC=1.0e-04 ok
+band  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 DP +mm transport=1.10e-14 step=1.10e-14 dPmix/(ρV|U|)=3.41e-13 minC=1.0e-04 ok
+band  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 DG +mm transport=1.40e-15 step=1.40e-15 dPmix/(ρV|U|)=3.43e-13 minC=1.0e-04 ok
+band  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 DS     transport=4.16e+01 step=4.55e+01 dPmix/(ρV|U|)=2.87e-02 minC=4.0e-08 ok
+band  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.45 floor=1e-08 DF     transport=1.09e+02 step=1.24e+02 dPmix/(ρV|U|)=6.45e-02 minC=6.4e-07 ok
+band  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 D0     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 DI     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 DP +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 DG +mm transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 DS     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5
+band  rho_g=1e-03  U=(0.0, 1.0)  cfl=0.90 floor=1e-08 DF     transport=0.00e+00 step=0.00e+00 dPmix/(ρV|U|)=0.00e+00 minC=3.6e-03 error: ArgumentError: WY requires 0 < cfl <= 0.5

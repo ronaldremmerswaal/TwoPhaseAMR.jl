@@ -56,7 +56,7 @@ function run_case(design, match, shape, density, U, cfl; n = 32, steps = 30, cap
     return (; after_transport, after_step, fmin, rel, status)
 end
 
-open(joinpath(OUT, isempty(ARGS) ? "freestream.txt" : "freestream_extra.txt"), "w") do io
+open(joinpath(OUT, (isempty(ARGS) ? "freestream" : "freestream_extra") * SUFFIX * ".txt"), "w") do io
     for shape in (:drop, :band), density in ((1.0, 1.0), (1.0, 1.0e-3)), U in ((1.0, 0.37), (0.0, 1.0)),
             cfl in FS_CFLS, floor in (sqrt(eps()), 1.0e-12)
         shape === :band && floor != sqrt(eps()) && continue

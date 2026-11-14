@@ -80,3 +80,100 @@ E = 𝓜 − W (band only), Z the per-phase constant fields, ū the extended sta
 - AMR: MimeticProjection is uniform-mesh only; DI needs nothing beyond 𝓜 on the composite mesh; mass matching is a 3×3 solve per band component.
 - Implementation: replace the sparse rebuilds by `_mimetic_metric_product!`/`_mimetic_metric_solve!`, gather the extended sources directly,
   keep serial (fixed-order) reductions for thread-count bitwise reproducibility; tests for constants per sweep, the θ identities, the bound.
+
+---
+
+# Aperture activity (revived study item)
+
+Switch `_PHASE_ACTIVITY[] = :aperture` (env `MM_ACTIVITY=aperture` in the drivers): a phase value is active iff its phase
+aperture is > 0 (instead of staggered phase volume > 0). Applied consistently to the velocity marking
+(`_mark_inactive_phase_velocities!`, `_phase_face_is_active`), the metric assembly (projection, capillary force and viscous
+step act on its dofs), the transport preparation (aperture-inactive values are extended like absent ones) and the WY velocity
+check. Staggered masses of values without a dof (volume, no wetted face) and the excess above κ𝓜_ff of small values are
+merged into the same-axis, same-phase ring donor with the largest aperture (`_mimetic_merged_masses`, κ = 1).
+`_MIMETIC_SMALL_TIES[]` switches the (1−2a)·m ties of values with a < ½ (default on). `_APERTURE_PLAIN[]`
+(`MM_APERTURE=plain`) uses the plain ½–½ average of the two cell traces without snaps. All default off; default path unchanged.
+New design DGP = DG + momentum restoration; the restoration (DP, DGP) now uses the momentum of the actual update
+(Zᵀ(𝓜⁺ū + rhs)), so it stays exact under the merge.
+
+## Results
+
+Free stream (max |u−U|/|U| after the step; 𝓜-momentum change of the constant field over 30 steps):
+
+| design | volume activity (drop, floor 1e-12) | aperture activity (drop, floor 1e-12) | ΔP/(ρV|U|) aperture |
+|---|---|---|---|
+| D0, DI | 0 | 5e-17 | 2.2e-4 (obstruction) |
+| DP+mm | 1.4e-16 | 5e-17 (2.4e-14 plain) | 2.4e-14 |
+| DG+mm | **310** | **1.4e-14** | 2.4e-14 |
+| DS / DF | 1.6e7 / 1.2e5 | 2.6e5 / 4.3e6 | 2e-2 |
+
+One-step identities (drop, ρ_g = 1e-3, vortex): DG+mm largest correction 0.16 (volume activity 4e3–6e4); DI/DP 0.03; DS/DF 18–23.
+
+Small-cell sweep (drop + vortex across the box, CFL 0.1/0.25/0.5 of the full-cell bound, floors √ε and 1e-12; completed runs of
+6, worst wet max|u|/u0):
+
+| design | volume ρ_g=1 / 1e-3 | aperture + small ties | aperture, no small ties |
+|---|---|---|---|
+| D0 | 6/6 1.01 / 5/6 6.33 | 6/6 1.03 / 6/6 3.35 | 0/6 / 1/6 |
+| DI | 6/6 1.03 / 6/6 3.35 | 6/6 1.03 / 6/6 2.28 | 0/6 / 0/6 |
+| DP+mm | 6/6 1.03 / 6/6 5.31 | 6/6 1.03 / 6/6 1.89 | 0/6 / 0/6 |
+| DG+mm | 0/6 (stops at step 1–21) | 1/6 / 0/6 (stops at 46–761) | 0/6 |
+| DS, DF | 0/6 | 0/6 | 0/6 |
+
+Without the small ties every design fails, the current transport included: newborn values with Gram inertia O(b) get O(1/b)
+increments from the projection. The small ties are needed by the projection and bring an O(m_f) jump at each birth.
+
+Static/translating drop (n = 32): D0/DI/DP+mm keep the static energy growth (DR 1: 2.18–2.22) and DR 1 currents; at DR 1000
+the viscous static gas current doubles (2.9e-2 → 5.8e-2, Ca 7.4e-4 < 5e-3) and the translating drop is 20–60 % worse.
+DG+mm stops (non-finite) in the DR 1000 translating drop at n = 16.
+
+Drop impact (pool + drop at −2, DR 1000, σ = 0.05, n = 32, t ≤ 0.25, package CGFM):
+
+| run | steps | max E/E0 | max |u| | where |
+|---|---|---|---|---|
+| D0 volume | 779 | **186** | 4.6e4 | slaved gas value (a = 0, α = 1.1e-8) |
+| D0 aperture | 3092 | 1.12 | 1.2e4 | gas, a = 5e-5, α = 7e-9 |
+| DI aperture | — | 1e14 | 5e8 | blew up at t = 0.207 |
+| DP+mm aperture | 586 | 1.19 | 1.2e4 | gas, a = 1.3e-4, α = 4e-8 |
+| DG+mm aperture | — | ∞ | — | non-finite at t = 0.065 |
+
+Time continuity of the apertures (translating drop/band, 60 steps, CFL 0.45): births ≈ deaths ≈ 18/step (drop), 73/step
+(band), equal to the births/deaths of staggered volume; aperture at birth median 0.20 (min 2e-4); surviving values jump by up
+to 0.997 in one step; ~30 (drop) / 136 (band) small-tie switches per step. A value is born with a finite aperture, not a→0.
+
+Plain ½–½ aperture: the current definition already is the ½–½ mean of the two PLIC traces; the only clip exceptions are the
+64ε round-off snap (`_snap_phase_apertures`), the pure-phase shortcut (identical to the mean), the VOF fraction floor (cells
+within √ε of 0/1 snapped, indirect) and, in the metric only, the grid-line identification (and the same snap on boundary
+faces). No pure-neighbour rule exists on this branch. Removing the snap changed nothing measurable: identical transitions
+(one death on a 1e-16 opening), free stream, small-cell sweep (identical step counts) and impact (same run).
+
+Energy as dt → 0: LW without the CTU switch is unstable on the vortex drop for every design (current included) within 2–60
+steps at ρ_g = 1e-3; completed runs at ρ_g = 1: DI ΣΔE_transport/E0 = 5.5e-5, 1.8e-4, 1.9e-4 for dt, dt/2, dt/4 (not
+decreasing); DGP 2.2e-3, 3.2e-3. The same runs: |ΣΔP|/S ≤ 6e-11 for DP+mm and DGP+mm vs 1e-4–1e-3 for D0, DI.
+
+Derivation check (Python, 379 checks, `mimetic-projection-audit/proof_review/mimetic-momentum-transport-aperture/`):
+rows O(b) only for closed data; metric not continuous at cut→uncut, lumping, non-closed data; birth/death changes O(b), not
+O(𝓜_ff); the merge does not bound λmax(W̃,𝓜) without small ties (~1e-3/b); θ-family momentum/energy and DG lose exactness by
+the merge term μ (constants stay exact); corrections incorporated in the note.
+
+## What works, what does not
+
+- Works: aperture activity + small ties keeps D0/DI/DP bounded at every CFL ≤ ½ with cut volumes to 1e-12, removes the slaved
+  outliers and the 186·E0 energy excursion of the current method in the impact; DG becomes exact for constants to round-off;
+  DP/DGP with mass matching give exact 𝓜-momentum under the merge.
+- Does not: a time-continuous metric (births at a ≈ 0.2, aperture jumps ~1/step, cut→uncut jumps); boundedness of DG/DS/DF;
+  semi-discrete energy; the small-aperture (1e-5–1e-4) gas outliers of 1e4 in the impact; DI is not robust in the impact.
+
+## Recommendation (owner decides)
+
+Aperture activity is worth keeping only as a fix of the current method's slaved-value pathology (with small ties). It does not
+make an 𝓜-native transport with explicit metric-change terms viable. For a metric-consistent transport DP + mass matching
+remains the candidate. A time-continuous metric would need geometry that moves continuously (e.g. advected reconstruction
+normals or blocks from the VOF donating regions).
+
+## Open risks
+
+- Small-aperture gas values (a ~ 1e-5–1e-4, α ~ 1e-8) reach 1e4 in the impact with every design.
+- The merge has uncovered cases (no donor, identified donor) and adds the momentum/energy term μ.
+- DR 1000 static/translating drop currents are 1.2–2× worse under aperture activity.
+- Not run: KH, RT, waves, combined, cost.
