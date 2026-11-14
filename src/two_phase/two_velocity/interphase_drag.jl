@@ -32,11 +32,16 @@ removed (no slip); one with `Re_j >> 1` is an unresolved vortex sheet
 the drag leaves alone (free slip); in between the slip length is
 `delta_f Re_j`. With the staggered phase masses `m_liquid`, `m_gas` the jump
 obeys `dj/dt = -lambda j / (1 + a|j|)`, `lambda = W (1/m_liquid + 1/m_gas)`,
-`a = h / nu`, and the step applies its exact solution
+`a = h / nu`. With `CMDGFMProjection` the step applies its exact solution
 `a|j| exp(a|j|) = a|j0| exp(a|j0|) exp(-lambda dt)` at fixed mixture momentum
 after the mixture solve. It conserves the mixture momentum of every face,
 never increases `|j|` or the kinetic energy, and does nothing at rest, on
-faces where a phase has no volume, and when both viscosities are zero.
+faces where a phase has no volume, and when both viscosities are zero. With
+`MimeticProjection` the stress `W j / (1 + Re_j)`, with `Re_j` of the jump at
+the start of the step, enters the implicit-midpoint viscous system in the
+projection's metric (`_interphase_drag_matrix`), so that the stress and the
+drag together never increase the kinetic energy of that metric, for every
+time step.
 
 `component = :tangential` (the default) takes the component weight
 `w_f = t_k^2 / (t_1^4 + t_2^4)` with the interface tangent `t` and the face
@@ -273,6 +278,20 @@ only if the volume holds one phase.
     return chord_length, distance, component_weight, liquid[1] / total[1]
 end
 
+"""No-slip conductance `W = mu_Gamma |Gamma_f| w_f / delta_f` of the
+interface in the staggered control volume of `face` with staggered liquid
+fraction `fraction`, or zero if the face is not mixed (see
+[`InterphaseDrag`](@ref))."""
+@inline function _interphase_conductance(
+        field::InterfaceField{T}, face, fraction, viscosity, averaging, tangential,
+    ) where {T}
+    zero(T) < fraction < one(T) || return zero(T)
+    chord_length, distance, weight, _ = _interphase_contact(field, face, tangential)
+    chord_length > zero(T) && weight > zero(T) || return zero(T)
+    mu = T(_phase_dynamic_viscosity(fraction, viscosity, averaging))
+    return mu * chord_length * weight / distance
+end
+
 """Decay rate `lambda = W (1/m_liquid + 1/m_gas)` of the phase-velocity jump
 on `face` with staggered liquid fraction `fraction`, or zero if the face is not
 mixed (see [`InterphaseDrag`](@ref))."""
@@ -280,15 +299,26 @@ mixed (see [`InterphaseDrag`](@ref))."""
         field::InterfaceField{T}, face, fraction, volume, density, viscosity,
         averaging, tangential,
     ) where {T}
-    volume > zero(T) && zero(T) < fraction < one(T) || return zero(T)
-    chord_length, distance, weight, _ = _interphase_contact(field, face, tangential)
-    chord_length > zero(T) && weight > zero(T) || return zero(T)
-    mu = T(_phase_dynamic_viscosity(fraction, viscosity, averaging))
-    conductance = mu * chord_length * weight / distance
+    volume > zero(T) || return zero(T)
+    conductance = _interphase_conductance(
+        field, face, fraction, viscosity, averaging, tangential,
+    )
+    conductance > zero(T) || return zero(T)
     return conductance / volume * (
         inv(density[1] * fraction) + inv(density[2] * (one(T) - fraction))
     )
 end
+
+"""Interface kinematic viscosity of `Re_j` from the phase properties only: a
+layer counts as resolved only if it is resolved in both phases."""
+_interphase_viscosity(::Type{T}, density, viscosity) where {T} =
+    T(min(viscosity[1] / density[1], viscosity[2] / density[2]))
+
+"""Mean cell width of the two cells of `face` along its normal (`h` of `Re_j`)."""
+@inline _interphase_width(blocks, face) = (
+    blocks[face.minus.block].spacing[face.axis] +
+        blocks[face.plus.block].spacing[face.axis]
+) / 2
 
 _interphase_drag!(velocity, ::Nothing, model, operator, dt) = velocity
 
@@ -347,9 +377,7 @@ function _interphase_drag!(
     faces = interface.mesh.faces
     blocks = interface.mesh.blocks
     rho_liquid, rho_gas = density
-    # Interface kinematic viscosity of Re_j from the phase properties only: a
-    # layer counts as resolved only if it is resolved in both phases.
-    nu = T(min(viscosity[1] / rho_liquid, viscosity[2] / rho_gas))
+    nu = _interphase_viscosity(T, density, viscosity)
     @_parallel for index in 1:length(faces)
         @inbounds begin
             liquid_value = liquid[index]
@@ -367,12 +395,8 @@ function _interphase_drag!(
             liquid_mass = rho_liquid * fraction
             gas_mass = rho_gas * (one(T) - fraction)
             total_mass = liquid_mass + gas_mass
-            width = (
-                blocks[face.minus.block].spacing[face.axis] +
-                    blocks[face.plus.block].spacing[face.axis]
-            ) / 2
             # Re_j = a |j| with a = h / nu.
-            new_jump = _slip_jump(jump, rate * dt, T(width) / nu)
+            new_jump = _slip_jump(jump, rate * dt, T(_interphase_width(blocks, face)) / nu)
             # Equal and opposite momentum changes.
             change = (jump - new_jump) / total_mass
             liquid[index] = muladd(gas_mass, change, liquid_value)
@@ -380,4 +404,44 @@ function _interphase_drag!(
         end
     end
     return liquid, gas
+end
+
+"""Drag matrix of `MimeticProjection` on the phase values of `assembly`.
+
+`A = Σ_f c_f d_f d_fᵀ` over the faces with a liquid and a gas value
+(`d_f = e_gas - e_liquid`), `c_f = W_f / (1 + Re_f)` with the no-slip
+conductance `W_f` and `Re_f = |j_f| h / nu` of the jump `j_f` of `values`
+(the start of the step: the nonlinear factor is lagged, so the midpoint
+system stays linear and symmetric positive definite). `uᵀAu = Σ_f c_f j_f²`
+is the dissipation rate of the Navier-slip interface stress (see
+[`InterphaseDrag`](@ref)); `A` annihilates every field with equal phase values.
+Returns `nothing` without viscosity."""
+function _interphase_drag_matrix(
+        assembly, values::AbstractVector{T}, drag::InterphaseDrag, model, averaging,
+    ) where {T}
+    all(iszero, model.dynamic_viscosity) && return nothing
+    interface = model.interface
+    reconstruct!(interface)
+    faces = interface.mesh.faces
+    blocks = interface.mesh.blocks
+    nu = _interphase_viscosity(T, model.density, model.dynamic_viscosity)
+    tangential = drag.component === :tangential
+    rows, columns, entries = Int[], Int[], T[]
+    for (index, face) in pairs(faces)
+        liquid = assembly.liquid_dof[index]
+        gas = assembly.gas_dof[index]
+        liquid > 0 && gas > 0 && liquid != gas || continue
+        fraction = _staggered_liquid_fraction(interface, interface.geometry, face)
+        conductance = _interphase_conductance(
+            interface, face, fraction, model.dynamic_viscosity, averaging, tangential,
+        )
+        conductance > zero(T) || continue
+        reynolds = T(_interphase_width(blocks, face)) / nu * abs(values[gas] - values[liquid])
+        coefficient = conductance / (one(T) + reynolds)
+        append!(rows, (liquid, gas, liquid, gas))
+        append!(columns, (liquid, gas, gas, liquid))
+        append!(entries, (coefficient, coefficient, -coefficient, -coefficient))
+    end
+    dofs = length(assembly.dof_face)
+    return sparse(rows, columns, entries, dofs, dofs)
 end

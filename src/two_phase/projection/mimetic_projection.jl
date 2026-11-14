@@ -838,23 +838,27 @@ end
 """Implicit-midpoint viscous step of the phase values in the metric `𝓜`.
 
 With the mixture map `R = B⁻¹PᵀW` (the staggered-mass mean `ū = Ru` of the
-values of a face, `B = PᵀWP`) and the symmetric positive semi-definite stress
-matrix `K` of the mixture solve, `A = RᵀKR` and
+values of a face, `B = PᵀWP`), the symmetric positive semi-definite stress
+matrix `K` of the mixture solve and the interphase drag matrix `A_drag` of
+`drag` (`_interphase_drag_matrix`, zero for `drag = nothing`),
+`A = RᵀKR + A_drag` and
 
     (𝓜 + dt/2 A) u⁺ = (𝓜 - dt/2 A) u.
 
 The amplification factors `(1 - dtλ/2)/(1 + dtλ/2)` of the pencil `(A, 𝓜)` lie
 in `(-1, 1]` for every `dt`: the step does not increase `uᵀ𝓜u`, the energy of
-the projection, for any time step. For `𝓜 = W` it is the common increment of
-the Crank--Nicolson mixture solve, `u⁺ = u + Pδ`. The values of `source` are
-gathered as for the projection (an identified grid-line value is the
-mass-weighted mean of the two phase values) and the result is written to
-`destination`; absent (`NaN`) values stay absent. The system is solved
-directly (sparse Cholesky); returns its relative residual and size."""
+the projection, for any time step. For `𝓜 = W` and no drag it is the common
+increment of the Crank--Nicolson mixture solve, `u⁺ = u + Pδ`. The values of
+`source` are gathered as for the projection (an identified grid-line value is
+the mass-weighted mean of the two phase values) and the result is written to
+`destination`; absent (`NaN`) values stay absent. `model` and `averaging` (the
+stress operator's viscosity averaging) give the drag its conductances. The
+system is solved directly (sparse Cholesky); returns its relative residual
+and size."""
 function _mimetic_viscous_step!(
         destination::TwoPhaseVelocity, source::TwoPhaseVelocity,
         solver::MimeticProjectionSolver{T}, workspace::MimeticProjectionWorkspace{T},
-        stiffness::AbstractMatrix{T}, dt,
+        stiffness::AbstractMatrix{T}, dt, drag, model, averaging,
     ) where {T}
     assembly = _mimetic_assemble!(solver, workspace)
     dofs = length(assembly.dof_face)
@@ -869,6 +873,10 @@ function _mimetic_viscous_step!(
     weights = [assembly.dof_mass[dof] / mass[assembly.dof_face[dof]] for dof in 1:dofs]
     mixture = sparse(assembly.dof_face, 1:dofs, weights, faces, dofs)
     viscous = mixture' * (stiffness * mixture)
+    if !isnothing(drag)
+        coupling = _interphase_drag_matrix(assembly, values, drag, model, averaging)
+        isnothing(coupling) || (viscous = viscous + coupling)
+    end
     metric = _mimetic_metric_matrix(workspace)
     half = T(dt) / 2
     matrix = metric + half * viscous

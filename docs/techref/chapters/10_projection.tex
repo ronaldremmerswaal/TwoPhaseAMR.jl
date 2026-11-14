@@ -965,8 +965,46 @@ zero where the stress annihilates the uniform field (a periodic direction
 with free-slip walls); in the band the transported momentum
 $e_i^{\transpose}\mathsf Wu$ and the velocity jump are no longer those of the
 common increment. An identified grid-line value enters with the
-mass-weighted mean of its two phase values, as in the projection. The system
-has one unknown per phase value, is symmetric positive definite and is
+mass-weighted mean of its two phase values, as in the projection.
+
+\emph{Interphase drag in the metric.} The interphase drag
+(\cref{eq:viscosity:drag}) enters the same system. With
+$d_f=e^{\gas}_f-e^{\liq}_f$ on every face with a liquid and a gas value
+and the Navier-slip coefficient $c_f=\dragcond_f/(1+\mathrm{Re}_f)\ge0$,
+whose $\mathrm{Re}_f=\abs{\jumpvelo_f}h_f/\nu_{\interface}$ is evaluated
+with the jump of $u^{\stage{1}}$ (lagged, so that the system stays linear),
+$\mathsf A_{\mathrm d}=\sum_fc_fd_fd_f^{\transpose}$ and
+$\mathcal A=\mathsf R^{\transpose}\mathsf K\mathsf R+\mathsf A_{\mathrm d}$,
+\begin{equation}\label{eq:projection:mimetic-viscous-drag}
+  \bigl(\mathcal M+\tfrac{\dt}2\mathcal A\bigr)u^{\stage{2}}
+  =\bigl(\mathcal M-\tfrac{\dt}2\mathcal A\bigr)u^{\stage{1}} .
+\end{equation}
+\emph{Dissipation for every $\dt$.} $\mathcal A$ is symmetric positive
+semi-definite (a sum of two such matrices) and $\mathcal M$ symmetric positive
+definite, so the system has a unique solution. Writing it as
+$\mathcal M(u^{\stage{2}}-u^{\stage{1}})=-\tfrac{\dt}2\mathcal A(u^{\stage{2}}+u^{\stage{1}})$
+and multiplying by $\tfrac12(u^{\stage{2}}+u^{\stage{1}})^{\transpose}$ gives,
+with $\mathsf R(u^{\stage{2}}+u^{\stage{1}})=\onevelo^{\stage{2}}+\onevelo^{\stage{1}}$ and
+$d_f^{\transpose}u=\jumpvelo_f$,
+\[
+  E_{\mathcal M}(u^{\stage{2}})-E_{\mathcal M}(u^{\stage{1}})
+  =-\tfrac{\dt}4\Bigl[(\onevelo^{\stage{2}}+\onevelo^{\stage{1}})^{\transpose}\mathsf K(\onevelo^{\stage{2}}+\onevelo^{\stage{1}})
+  +\sum_fc_f\bigl(\jumpvelo^{\stage{2}}_f+\jumpvelo^{\stage{1}}_f\bigr)^2\Bigr]\le0 .
+\]
+No property of the step size enters: the stress and the drag together are
+non-expansive in the norm of the projection for every $\dt$, and the drag
+never does positive work in $\mathcal M$ (the exact update
+of~\cref{eq:viscosity:drag} in the staggered masses after the step, as with
+CMDGFM, did so in 97\,\% of the steps of the viscous Kelvin--Helmholtz case
+\code{r10_thick} with the earlier common viscous increment). Since
+$\mathsf A_{\mathrm d}$ annihilates equal phase values, the first-moment
+momentum changes by the stress term above only. The amplification factor of
+a stiff slip mode, $(1-\dt\lambda/2)/(1+\dt\lambda/2)$, tends to $-1$ rather
+than to $0$ (the implicit midpoint is A- but not L-stable): a slip with
+$\lambda_f\dt\gg1$ alternates in sign and decays slowly, where the exact
+update of~\cref{eq:viscosity:drag} removes it in one step.
+
+The system has one unknown per phase value, is symmetric positive definite and is
 solved directly (sparse Cholesky factorisation, rebuilt every step since
 $\mathcal M$ follows the interface).
 
@@ -1026,7 +1064,8 @@ preconditioner \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_
 forces \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_capillary_force!}~\cref{eq:projection:mimetic-capillary}
 with \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_cell_curvature!},
 \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_uniform_acceleration!};
-viscous step \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_viscous_step!}~\cref{eq:projection:mimetic-viscous}.
+viscous step \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_viscous_step!}~\cref{eq:projection:mimetic-viscous}
+with the drag of \srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_interphase_drag_matrix}~\cref{eq:projection:mimetic-viscous-drag}.
 Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric: symmetry, definiteness, diagonal masses and consistency},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic Gram blocks: the polygon block where the polygon exists, degenerate data},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric on averaged apertures that close no region},
@@ -1037,6 +1076,7 @@ Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mi
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic per-phase surface tension drives the liquid only},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic viscous step in the metric},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Two-value model of the viscous step and the projection},
+\testsym{test/two_phase/two_velocity/interphase_drag.jl}{Interphase drag in the mimetic viscous step},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection rejects cut cells at walls},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection with an interface on a grid line}.
 \end{implnote}

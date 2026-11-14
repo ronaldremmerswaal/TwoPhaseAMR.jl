@@ -864,7 +864,11 @@ the exact solution of
 $\facemass{\liq}{f}\stagvol{f}\,\dot\velo^{\liq}_f=\dragcond_f\jumpvelo_f/(1+\mathrm{Re}_f)=-\facemass{\gas}{f}\stagvol{f}\,\dot\velo^{\gas}_f$
 over the step (the Lambert-$W$ relation, solved by Newton's method from below,
 where the iterates of the concave $w+\log w$ increase monotonically), applied
-to the result of~\cref{eq:viscosity:two-velocity}; $h_f$ is the mean cell
+to the result of~\cref{eq:viscosity:two-velocity} with CMDGFM (with
+\apitype{MimeticProjection} the same stress, with $\mathrm{Re}_f$ of the jump
+at the start of the step, enters the implicit midpoint in the metric of that
+projection,~\cref{eq:projection:mimetic-viscous-drag}, which keeps the
+combined step non-expansive in that metric); $h_f$ is the mean cell
 width along $\fnormal{f}$; $\nu_{\interface}$ depends on the phase properties
 only (no volume fraction), and the layer counts as resolved only if it is
 resolved in both phases (the effusivity-weighted diffusivity
@@ -928,7 +932,7 @@ improves from $17\,\%$ to $0.9\,\%$). With CMDGFM the drag changes the results
 by less than $10^{-4}$, because that projection recreates the tangential jump
 of the cut faces in every step.
 
-The update changes $\facemass{\liq}{f}\velo^{\liq}_f+\facemass{\gas}{f}\velo^{\gas}_f$
+The exact update (CMDGFM) changes $\facemass{\liq}{f}\velo^{\liq}_f+\facemass{\gas}{f}\velo^{\gas}_f$
 only by round-off, so the mixture momentum and the mixture
 $\onevelo^{\stage{2}}$ are those of~\cref{eq:viscosity:two-velocity}; it
 never increases $\abs{\jumpvelo_f}$, so it decreases the jump energy
@@ -995,7 +999,10 @@ the drag~\cref{eq:viscosity:drag} \apitype{InterphaseDrag} in
 \srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_interphase_drag_rate},
 \srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_interphase_contact},
 \srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_cell_phase_geometry} and
-\srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_clip_convex}.
+\srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_clip_convex}; with the
+mimetic projection
+\srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_interphase_conductance} and
+\srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_interphase_drag_matrix}.
 Tests: \testsym{test/operators/staggered_diffusion.jl}{implicit midpoint staggered elliptic solve},
 \testsym{test/operators/staggered_diffusion.jl}{dimensionless diffusion tolerance and failure report},
 \testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Two-phase diffusion uses the thesis split state}
@@ -1012,5 +1019,6 @@ the transported state),
 \testsym{test/two_phase/two_velocity/interphase_drag.jl}{Interphase drag semigroup and zero step},
 \testsym{test/two_phase/two_velocity/interphase_drag.jl}{Interphase drag slip law},
 \testsym{test/two_phase/two_velocity/interphase_drag.jl}{Two-velocity viscous step without drag is bitwise the mixture step},
+\testsym{test/two_phase/two_velocity/interphase_drag.jl}{Interphase drag in the mimetic viscous step},
 \testsym{test/navier_stokes/navier_stokes.jl}{single-phase material scaling}.
 \end{implnote}

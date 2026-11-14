@@ -1264,8 +1264,10 @@ sources = [
   { file = "src/two_phase/two_velocity/interphase_drag.jl", symbol = "_interphase_contact" },
   { file = "src/two_phase/two_velocity/interphase_drag.jl", symbol = "_cell_phase_geometry" },
   { file = "src/two_phase/two_velocity/interphase_drag.jl", symbol = "_slip_jump" },
+  { file = "src/two_phase/two_velocity/interphase_drag.jl", symbol = "_interphase_conductance" },
   { file = "src/two_phase/two_velocity/interphase_drag.jl", symbol = "_interphase_drag_rate" },
-  { file = "src/two_phase/two_velocity/interphase_drag.jl", symbol = "_interphase_drag!" }
+  { file = "src/two_phase/two_velocity/interphase_drag.jl", symbol = "_interphase_drag!" },
+  { file = "src/two_phase/two_velocity/interphase_drag.jl", symbol = "_interphase_drag_matrix" }
 ]
 tests = [
   { file = "test/two_phase/two_velocity/interphase_drag.jl", testset = "Interphase drag geometry" },
@@ -1275,7 +1277,8 @@ tests = [
   { file = "test/two_phase/two_velocity/interphase_drag.jl", testset = "Interphase drag control volume on transitions, cut cells and small bubbles" },
   { file = "test/two_phase/two_velocity/interphase_drag.jl", testset = "Interphase drag semigroup and zero step" },
   { file = "test/two_phase/two_velocity/interphase_drag.jl", testset = "Interphase drag slip law" },
-  { file = "test/two_phase/two_velocity/interphase_drag.jl", testset = "Two-velocity viscous step without drag is bitwise the mixture step" }
+  { file = "test/two_phase/two_velocity/interphase_drag.jl", testset = "Two-velocity viscous step without drag is bitwise the mixture step" },
+  { file = "test/two_phase/two_velocity/interphase_drag.jl", testset = "Interphase drag in the mimetic viscous step" }
 ]
 [[claims]]
 label = "eq:projection:one-system"

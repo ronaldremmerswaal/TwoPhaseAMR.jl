@@ -189,10 +189,12 @@ function _diffusion_substep!(
     )
     if state.projection_solver isa MimeticProjectionSolver
         # Implicit midpoint of the phase values in the metric of the
-        # projection, unconditionally non-increasing in that metric.
+        # projection with the stress and the interphase drag in one system,
+        # unconditionally non-increasing in that metric.
         result = _mimetic_viscous_step!(
             velocity, state.convected, state.projection_solver,
             state.projection_workspace, diffusion.stiffness, dt,
+            model.interphase_drag, model, diffusion.averaging,
         )
         _record_mimetic_viscous_solve!(
             workspace.two_phase.diffusion_solver.stats, result.residual, tolerance,
@@ -215,10 +217,11 @@ function _diffusion_substep!(
             state.diffused_mixture, state.mixture_velocity;
             dirichlet_faces = diffusion.dirichlet_faces,
         )
+        # The common increment leaves the jump unchanged and the drag the
+        # mixture, so the two updates commute and the full drag step needs no
+        # splitting.
+        _interphase_drag!(velocity, model.interphase_drag, model, diffusion, dt)
     end
-    # The common increment leaves the jump unchanged and the drag the mixture,
-    # so the two updates commute and the full drag step needs no splitting.
-    _interphase_drag!(velocity, model.interphase_drag, model, diffusion, dt)
     _mark_inactive_phase_velocities!(
         velocity, model.interface, workspace.two_phase.inactive_failures,
     )
@@ -371,7 +374,8 @@ common increment is applied to both phases. With `MimeticProjection` the
 phase values instead take the implicit-midpoint step of the same stress in
 the projection's metric (see `_mimetic_viscous_step!`), which is that common
 increment where the metric is the staggered phase mass. The interphase drag
-of the model then relaxes the phase-velocity jump of the mixed faces.
+of the model then relaxes the phase-velocity jump of the mixed faces (with
+`MimeticProjection`: inside the same implicit-midpoint system).
 
 The two-velocity projection keeps a Neumann pressure boundary and cannot
 correct open normal velocities. Boundary preparation extrapolates each phase;
