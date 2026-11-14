@@ -62,6 +62,21 @@ the cut-cell block, so it is more expensive than the CMDGFM.
 See the technical reference, section
 [Mimetic cut-cell projection](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:projection:mimetic).
 
+The viscous step diffuses the phase-mass weighted mixture velocity and gives
+both phases the same increment, which leaves their difference untouched.
+`TwoVelocityModel(interphase_drag=InterphaseDrag())`, the default for both
+projections, adds the viscous shear between the phases across the interface:
+on every face whose staggered volume holds both phases the velocity jump
+decays at the rate `lambda = W (1/m_liquid + 1/m_gas)`, with the conductance
+`W` the interface viscosity times the PLIC interface length in the face's
+control volume over the distance of the two phase centroids, exactly
+(`exp(-lambda dt)`) and at fixed mixture momentum. Without viscosity, at rest
+or for equal phase velocities it does nothing. `interphase_drag=nothing`
+restores free slip between the phases. By default only the share of each face
+component tangential to the interface is coupled;
+`InterphaseDrag(component=:full)` couples the whole component.
+See [Interphase drag](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=eq:viscosity:drag).
+
 ## Option matrix
 
 | Decision | Choices | Default | Applies to |
@@ -69,6 +84,7 @@ See the technical reference, section
 | velocity formulation | `OneVelocityModel()`, `TwoVelocityModel(...)` | one velocity | two-phase flow |
 | surface-tension force | `CGFM()`, `CSF()` | CGFM | either two-phase velocity model |
 | pressure projection | `CMDGFMProjection()`, `MimeticProjection()` | CMDGFM | two velocity only |
+| interphase drag | `InterphaseDrag()`, `InterphaseDrag(component=:full)`, `nothing` | `InterphaseDrag()` | two velocity only |
 
 Surface tension is configured by [`SurfaceTension`](@ref), while the
 projection is a field of [`TwoVelocityModel`](@ref). This ownership makes

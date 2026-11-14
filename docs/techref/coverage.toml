@@ -1258,6 +1258,20 @@ tests = [
 ]
 check = "two_velocity_viscosity_check"
 [[claims]]
+label = "eq:viscosity:drag"
+sources = [
+  { file = "src/two_phase/two_velocity/interphase_drag.jl", symbol = "InterphaseDrag" },
+  { file = "src/two_phase/two_velocity/interphase_drag.jl", symbol = "_interphase_contact" },
+  { file = "src/two_phase/two_velocity/interphase_drag.jl", symbol = "_interphase_drag_rate" },
+  { file = "src/two_phase/two_velocity/interphase_drag.jl", symbol = "_interphase_drag!" }
+]
+tests = [
+  { file = "test/two_phase/two_velocity/interphase_drag.jl", testset = "Interphase drag geometry" },
+  { file = "test/two_phase/two_velocity/interphase_drag.jl", testset = "Interphase drag relaxes the jump at fixed mixture momentum" },
+  { file = "test/two_phase/two_velocity/interphase_drag.jl", testset = "Interphase drag is inactive at rest, for equal phases and without viscosity" },
+  { file = "test/two_phase/two_velocity/interphase_drag.jl", testset = "Interphase drag locks the phases as lambda dt grows" }
+]
+[[claims]]
 label = "eq:projection:one-system"
 sources = [
   { file = "src/navier_stokes/projection.jl", symbol = "project!" },
@@ -2465,6 +2479,7 @@ check = "solv_cmdgfm_cases"
 "src/two_phase/projection/common.jl" = { class = "equation", chapters = ["ch:forces", "ch:projection"] }
 "src/two_phase/projection/mimetic_metric.jl" = { class = "equation", chapters = ["ch:projection"] }
 "src/two_phase/projection/mimetic_projection.jl" = { class = "equation", chapters = ["ch:projection"] }
+"src/two_phase/two_velocity/interphase_drag.jl" = { class = "equation", chapters = ["ch:viscosity"] }
 "src/two_phase/two_velocity/model.jl" = { class = "equation", chapters = ["ch:overview"] }
 "src/two_phase/two_velocity/flow_workspace.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:projection", "ch:amr-criteria-transfer"] }
 "src/two_phase/two_velocity/interface_transport.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:stability-accuracy"] }

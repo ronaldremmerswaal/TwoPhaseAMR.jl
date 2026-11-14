@@ -14,12 +14,14 @@ cells, shear rows at the cell corners and wall rows, with a mixture of the
 phase viscosities that is harmonic (series) by default and geometric as an
 option; the two-velocity model diffuses the mass-weighted mixture velocity with
 the same operator and gives both phases the same increment, so the rule applies
-to both velocity models. This chapter
+to both velocity models, and then relaxes the phase-velocity jump of the mixed
+faces by an implicit interphase drag. This chapter
 states the continuous model, the semi-discrete operators with their walls,
 the fully discrete midpoint solves with their stopping criteria, and the
 exact identities that hold for them: dissipation of the mass-weighted
-kinetic energy, conservation of momentum on periodic meshes and the
-unchanged velocity jump of two velocities. Derivations are in the
+kinetic energy, conservation of momentum on periodic meshes, the
+unchanged velocity jump of the two-velocity mixture step and the momentum
+conservation and dissipation of the drag. Derivations are in the
 thesis~\thesis{\S7.5}; the linear solvers and their multigrid
 preconditioners are in \cref{ch:solvers}.
 
@@ -820,6 +822,79 @@ solid as in~\cref{eq:viscosity:momentum}, and a continuous velocity,
 $\velo^{\liq}=\velo^{\gas}$, is diffused exactly as in the one-velocity
 model.
 
+\emph{Interphase drag.} The common increment leaves the jump
+$\jumpvelo_f=\velo^{\gas}_f-\velo^{\liq}_f$ of a face whose staggered volume
+holds both phases undamped, although viscosity couples the phases across the
+interface: a thin layer of one phase slips freely through the other (with a
+per-phase surface-tension force the capillary wave at density ratio one has
+the error $0.009$--$0.011$ instead of $0.0022$, audit note on small apertures,
+\S5). With \apitype{InterphaseDrag}, the default of
+\apitype{TwoVelocityModel} for both projections, every face with two finite
+phase values, $0<\clampfrac{f}<1$ and an interface in its control volume adds
+the interface shear $\pm\dragcond_f\jumpvelo_f$ to the two phase momenta.
+With the staggered phase masses per volume
+$\facemass{\liq}{f}=\dens^{\liq}\clampfrac{f}$,
+$\facemass{\gas}{f}=\dens^{\gas}(1-\clampfrac{f})$ and
+$\stagdens_f=\facemass{\liq}{f}+\facemass{\gas}{f}$,
+\begin{equation}\label{eq:viscosity:drag}
+  \begin{gathered}
+  \dragcond_f=\frac{\visc_{\interface}(\clampfrac{f})\,\abs{\interface_f}\,w_f}{\delta_f},
+  \qquad
+  \lambda_f=\frac{\dragcond_f}{\stagvol{f}}\roundpar{\frac{1}{\facemass{\liq}{f}}+\frac{1}{\facemass{\gas}{f}}},\\
+  \velo^{\liq}_f\leftarrow\velo^{\liq}_f+\frac{\facemass{\gas}{f}}{\stagdens_f}\roundpar{1-e^{-\lambda_f\dt}}\jumpvelo_f,
+  \qquad
+  \velo^{\gas}_f\leftarrow\velo^{\gas}_f-\frac{\facemass{\liq}{f}}{\stagdens_f}\roundpar{1-e^{-\lambda_f\dt}}\jumpvelo_f,
+  \end{gathered}
+\end{equation}
+the exact solution of
+$\facemass{\liq}{f}\stagvol{f}\,\dot\velo^{\liq}_f=\dragcond_f\jumpvelo_f=-\facemass{\gas}{f}\stagvol{f}\,\dot\velo^{\gas}_f$
+over the step, applied to the result of~\cref{eq:viscosity:two-velocity}.
+Here $\visc_{\interface}$ is the cell viscosity mixture of
+\cref{sec:viscosity:stress} at the staggered fraction (for a flat interface
+the series mean of the phases at the distances of their centroids from it)
+and $\stagvol{f}$ the volume of the mixture solve. The geometry is that of
+the staggered fraction: half of each adjacent cell over the tangential strip
+of the face. Each mixed cell's PLIC plane is clipped to its strip;
+$\abs{\interface_f}$ is half the sum of the two chord lengths, the interface
+normal $\inormal$ their length-weighted mean normal, and $\delta_f$ the
+distance of the liquid and gas centroids of the volume along $\inormal$, at
+least a quarter of the mean cell width along $\fnormal{f}$. A flat interface
+parallel to the face gives $\abs{\interface_f}=h$, $\delta_f=h/2$, so
+$\lambda_f=2\nu/(h^2\clampfrac{f}(1-\clampfrac{f}))$ at equal kinematic
+viscosities and densities; one normal to the face gives half the chord at
+$\delta_f=h$, and between a pure liquid and a pure gas cell the face itself
+is the interface. An embedded solid is ignored in this geometry. The
+component weight is $w_f=\abs{\fnormal{f}\cdot\itangent}$, the share of the
+component tangential to the interface (the default
+\code{component=:tangential}); \code{component=:full} takes $w_f=1$. Both
+reduce the capillary-wave error with a per-phase surface-tension force at
+density ratio one from $0.0112$ to $0.0019$ (tangential) and $0.0023$ (full)
+at $n=16$ and a quarter-period step factor $1/8$, and otherwise differ by a
+few percent; the normal velocity jump is the projection's. The drag does not
+change the CMDGFM results measurably, because that projection recreates the
+tangential jump of the cut faces in every step, and with the mimetic
+projection it removes the vortex sheet that represents an unresolved shear
+layer: the viscous Kelvin--Helmholtz case \code{r1_thin} at
+$\lambda/h=64$ decays (growth-rate error $3.3\,\%$ without, $182\,\%$
+with the drag; $3.3\,\%$ and $11.5\,\%$ at $\lambda/h=128$).
+
+The update changes $\facemass{\liq}{f}\velo^{\liq}_f+\facemass{\gas}{f}\velo^{\gas}_f$
+only by round-off, so the mixture momentum and the mixture
+$\onevelo^{\stage{2}}$ are those of~\cref{eq:viscosity:two-velocity}; it
+multiplies the jump energy
+$\half\stagvol{f}\redmass{f}\jumpvelo_f^2$
+by $e^{-2\lambda_f\dt}\le1$ and leaves the mixture energy unchanged, so it is
+dissipative; it vanishes for a zero jump (rest, a continuous velocity, the
+static drop), on faces with one phase and for zero viscosities, and locks the
+phases at fixed mixture momentum as $\lambda_f\dt\to\infty$. Since the common
+increment leaves the jump unchanged and the drag leaves the mixture
+unchanged, the two updates commute: a Strang split (half drag, mixture
+solve, half drag) gives the same result as this sequence, and the scheme has
+no splitting error between them. It is not the coupled solve of per-phase
+stress operators with the interface rows $\dragcond_f$ added to
+$\strainmat^{\transpose}\stressw\strainmat$, which the code does not
+implement.
+
 \begin{sloppypar}
 \emph{Checks} (\code{midpoint_check}, \code{two_velocity_viscosity_check},
 \code{single_phase_midpoint_check}). On the composite, cut and periodic
@@ -864,7 +939,12 @@ stages \srcsym{src/single_phase/stepping.jl}{_diffusion_substep!},
 \srcsym{src/two_phase/stepping.jl}{_diffusion_substep!} and
 \srcsym{src/two_phase/two_velocity/stepping.jl}{_diffusion_substep!} with
 \srcsym{src/two_phase/two_velocity/stepping.jl}{_mass_weighted_one_velocity!}
-and \srcsym{src/two_phase/two_velocity/stepping.jl}{_apply_two_velocity_diffusion_update!}~\cref{eq:viscosity:two-velocity}.
+and \srcsym{src/two_phase/two_velocity/stepping.jl}{_apply_two_velocity_diffusion_update!}~\cref{eq:viscosity:two-velocity};
+the drag~\cref{eq:viscosity:drag} \apitype{InterphaseDrag} in
+\srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_interphase_drag!} with
+\srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_interphase_drag_rate},
+\srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_interphase_contact} and
+\srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_plic_rectangle_clip}.
 Tests: \testsym{test/operators/staggered_diffusion.jl}{implicit midpoint staggered elliptic solve},
 \testsym{test/operators/staggered_diffusion.jl}{dimensionless diffusion tolerance and failure report},
 \testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Two-phase diffusion uses the thesis split state}
@@ -873,5 +953,9 @@ the transported state),
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable stress shifted solve on fixed and adapted trees},
 \testsym{test/two_phase/two_velocity/diffusion.jl}{Two-velocity implicit diffusion identities},
 \testsym{test/two_phase/two_velocity/diffusion.jl}{Two-velocity diffusion recovers the continuous-velocity limit},
+\testsym{test/two_phase/two_velocity/interphase_drag.jl}{Interphase drag geometry},
+\testsym{test/two_phase/two_velocity/interphase_drag.jl}{Interphase drag relaxes the jump at fixed mixture momentum},
+\testsym{test/two_phase/two_velocity/interphase_drag.jl}{Interphase drag is inactive at rest, for equal phases and without viscosity},
+\testsym{test/two_phase/two_velocity/interphase_drag.jl}{Interphase drag locks the phases as lambda dt grows},
 \testsym{test/navier_stokes/navier_stokes.jl}{single-phase material scaling}.
 \end{implnote}
