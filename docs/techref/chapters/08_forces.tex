@@ -717,6 +717,110 @@ the former map in the derivation audit
 \code{proof_review/eq-forces-two-velocity/}.
 \end{implnote}
 
+\section{Curvature of the mimetic projection}\label{sec:forces:mimetic-curvature}
+The per-phase capillary force of \apitype{MimeticProjection}
+(\cref{eq:projection:mimetic-capillary}) needs a cell curvature $\curv_c$ on every
+cell that carries values of both phases. Its default is the height-function
+curvature of \cref{ch:interface} on the cut cells, extended to the other
+cells as described in \cref{sec:projection:mimetic}. Two internal switches,
+read when the projection is configured and not part of the API, select the
+variants that were compared for the mimetic-surface-tension audit note:
+the conservative height-function curvature below, and the dual aperture of
+\cref{sec:projection:mimetic}.
+
+\emph{Conservative height functions (CHF).} On the uniform mesh of the
+projection each cut cell $c$ gets the orientation of its PLIC normal
+$\inormal_c$: heights along $y$ if $\abs{\eta_{c,y}}\ge\abs{\eta_{c,x}}$,
+else along $x$, and the gas side by the sign of that component. With $a$ the
+index of its column (the lattice line across which the heights are taken) and
+$r$ its position along the column, the window of a column $q\in\{a-1,a,a+1\}$ is
+$r-3,\dots,r+3$ (wrapped across a periodic seam); it is \emph{valid} if it lies
+in the domain, its liquid end is full and its gas end empty. If all three
+windows are valid, with the heights $H_q=\sum_{k=-3}^{3}\condfrac{\liq}{q,r+k}$ in
+cells,
+\begin{equation}\label{eq:forces:chf}
+  \curv_c=-\frac{S(H_{a+1}-H_a)-S(H_a-H_{a-1})}{h},\qquad S(D)=\frac{D}{\sqrt{1+D^2}},
+\end{equation}
+the divergence form of the height-function curvature
+$-H''/(1+H'^2)^{3/2}$ (the same centred differences, second order). Otherwise
+the cell keeps its height-function curvature. Within a patch of valid
+columns of one orientation the shifted windows of a column differ by full or
+empty rows only, so all cut cells of a column get the same value, and
+\cref{eq:forces:chf} is the exact derivative with respect to the cell volumes
+$V=h^2\condfrac{\liq}{}$ of the height-polyline length
+\begin{equation}\label{eq:forces:chf-length}
+  L_P=\sum_{a}h\sqrt{1+(H_{a+1}-H_a)^2},\qquad \frac{\partial L_P}{\partial V_c}=\curv_c ,
+\end{equation}
+so that the per-phase force does the work $-\surftens\sum_c\curv_c\dot V_c=-\surftens\dot L_P$
+there (the audit note's proposition on CHF). The identity breaks where the
+orientation switches (four to eight places on a closed curve) and where the
+height-function fallback is used.
+
+\emph{Bound.} The CHF value~\cref{eq:forces:chf} satisfies
+$\abs{\curv_c}<2/h$ without a clip, since $\abs{S}<1$: $h\abs{\curv_c}\le\abs{S(H_{a+1}-H_a)}+\abs{S(H_a-H_{a-1})}<2$.
+The height-function fallback keeps the clip
+$\abs{\curv_c}\le1/(2h)$ of~\cref{eq:interface:clip}, and the extension to the
+other cells is a convex combination of cut-cell values, so every cell
+curvature of the mimetic force satisfies $\abs{\curv_c}<2/h$ with the CHF
+switch and $\abs{\curv_c}\le1/(2h)$ without it. A randomised search over
+lattices of full, empty and cut cells with arbitrary orientations (600 fields
+of $16\times16$ cells, periodic and walled) reaches $h\abs{\curv}$ close to
+$2$ but never $2$ (unit test below).
+
+\emph{Energy-consistent curvatures (not adopted).} The audit note proposes a
+curvature that is the exact gradient $\curv=\partial E/\partial V$ of one convex,
+positively 1-homogeneous energy per step: CHF height segments
+$w\,h\sqrt{D^2+B^2}$ on fixed seven-cell windows (one window per column pair and
+connected run of proposing cut cells, weight $1$, or $\tfrac12$ at a patch end), with
+the total variation $h^2\abs{g_c}$ of the Youngs gradient where no valid segment
+covers a cut cell. It was implemented and measured, and is not used:
+at the orientation switches each patch ends in a free polyline end, whose
+derivative (the unit tangent, $O(1/h)$ per unit volume) acts on the cells of
+one orientation while the other orientation's half-weight segments act on
+other cells, so the switch cells get $O(1/h)$ curvatures: on a circle,
+$\max\abs{\curv R-1}$ over the switch cells is $5.2$, $9.3$, $18$, $35$ for
+$n=16,32,64,128$ (interior cells at most $5.1\times10^{-3}$ for $n\ge32$), and the static
+drop of \cref{ch:verification} (integration configuration, $n=16$) reaches
+currents of $6$--$76$ against at most $0.18$ with height functions, with
+$h\abs{\curv}$ up to $4.8$; at density ratio $1000$ the drop reaches the wall. A
+closed-curve member of the same class, which keeps only segments that both
+columns propose and joins the end vertex of each chain to the start vertex
+of the next by a chord $h\abs{P_{\mathrm{tail}}-P_{\mathrm{head}}}$ (the column
+jump frozen at one), removes the free ends: its energy converges to the
+length ($E/L=0.9999$ at $n=128$), $\curv=\partial E/\partial V$ to the
+finite-difference level, and the switch-cell error is $O(1)$ instead of
+$O(1/h)$ (at most $0.97$ for circles and ellipses, $n=16$ to $128$). It is still
+not consistent there, and the static drop is not stable with it (currents of
+order one within $0.1$ time units at $n=32$): a vertex of a column moves only
+along the column, so its curvature is the turning of the polyline divided by
+its dual length along the columns, which at a junction is $(h+\Delta x)/2$
+with the chord's projection $\Delta x\in(0,h)$ instead of $h$; pure cells
+inside windows of both orientations near a switch receive the sum of two
+column curvatures, about $2\curv$; and the per-step energy jumps when the
+stencils change, which together with the explicit pairing (its Bregman
+remainder is non-negative for a convex energy) feeds energy into the
+oscillation. An energy-consistent switch treatment would need vertices that
+move in both directions at the junctions; it is an open question.
+
+\begin{implnote}
+Switches \srcsym{src/two_phase/projection/mimetic_projection.jl}{_MIMETIC_CHF_CURVATURE}
+and \srcsym{src/two_phase/projection/mimetic_projection.jl}{_MIMETIC_DUAL_APERTURE}
+(copied into the solver at construction); cell curvature
+\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_cell_curvature!};
+CHF \srcsym{src/two_phase/projection/mimetic_curvature.jl}{_mimetic_chf_curvature!}~\cref{eq:forces:chf}
+with the lattice of the uniform mesh
+\srcsym{src/two_phase/projection/mimetic_curvature.jl}{_mimetic_curvature_lattice!}.
+Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_curvature.jl}{Mimetic CHF curvature: height functions in divergence form, bound 2/h}
+(an independent evaluation of~\cref{eq:forces:chf} on circles, an ellipse and a
+drop across both periodic seams, the bound on adversarial lattices),
+\testsym{test/two_phase/two_velocity/projection/mimetic_curvature.jl}{Mimetic CHF curvature is the derivative of the height-polyline length in a patch}
+(\cref{eq:forces:chf-length} by central differences to $10^{-6}$),
+\testsym{test/two_phase/two_velocity/projection/mimetic_curvature.jl}{Mimetic capillary force variants: Galilean invariance and the dual aperture},
+\testsym{test/two_phase/two_velocity/projection/mimetic_curvature.jl}{Mimetic CHF curvature allocates nothing after warm-up}.
+The comparison of the variants is in the mimetic-surface-tension audit's
+battery (\code{mm-runs/mm\_chf/report.md}).
+\end{implnote}
+
 \section{Fully discrete update and time-step limits}\label{sec:forces:time}
 The forces are explicit increments at two places of the split step of
 \apifun{step!}, for one and two velocities:

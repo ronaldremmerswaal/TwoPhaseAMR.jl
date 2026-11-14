@@ -905,7 +905,16 @@ stability}). An identified grid-line value (both cells pure) gets the common
 jump $\sigma\kappa_f\jump{I}_f\meas{f}$ with the face curvature
 of~\cref{ch:forces}. A face whose force needs a curvature that is not
 available gets no force and is counted in \code{unresolved_curvature_faces},
-as for the other projections. The projection has no options of its own.
+as for the other projections. The projection has no options of its own. Two
+internal switches, for the comparison of variants only
+(\cref{sec:forces:mimetic-curvature}), replace the cut-cell curvature by the
+conservative height-function curvature where its window is valid, and give
+the liquid value $\phaseaperture{\liq}{f}J^{\gas}_f+\tilde a_f(J^{\liq}_f-J^{\gas}_f)$
+with the geometric aperture $\tilde a_f=F^{\liq}_f/(\dt\meas{f}\velo^{\liq}_f)$ of the
+step's VOF transport (liquid volume $F^{\liq}_f$ through the face in its sweep,
+$\phaseaperture{\liq}{f}$ where the liquid value moves less than $10^{-10}\meas{f}$):
+the force that is dual to the geometric transport. The dual force depends on
+the velocity, so it is not Galilean invariant.
 
 \emph{Gravity} is the uniform acceleration
 $\velo^{\phase}_f\mathrel{+}=\dt\,g\cdot\fnormal{f}$ of every present phase value:
