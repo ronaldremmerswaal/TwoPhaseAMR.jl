@@ -659,9 +659,9 @@ results are unchanged. It follows the mimetic-projection audit's note
 the kinetic-energy-orthogonal projection of the two phase velocities onto
 vanishing mixture divergence~\cref{eq:projection:mixture-divergence} in a
 non-diagonal kinetic metric~$\mathcal M$, without jump rows. It is defined
-for uniform meshes of square cells $h\times h$ without solid; adaptive
-meshes, solids, non-square cells and cut cells that touch a domain boundary
-throw \code{ArgumentError}.
+for uniform meshes of square cells $h\times h$ without solid, cut cells at
+the domain walls included (paragraph \emph{Walls} below); adaptive meshes,
+solids and non-square cells throw \code{ArgumentError}.
 
 \emph{Projection.} Let $\mathsf B$ be the cell-outflow matrix
 of~\cref{eq:projection:mixture-divergence} on the vector $u$ of all present
@@ -860,6 +860,75 @@ differs from it by $1.8\times10^{-3}$, against $2.2\times10^{-4}$ with the
 identification, and a normal jump of $8.7\times10^{-3}$ remains on the face.
 The identification is therefore kept.
 
+\emph{Walls.} A cut cell with a side on the domain boundary keeps that side
+among its data. The phase apertures of a boundary face are the PLIC trace of
+its one cell, and its wet end is decided by the tangential normal component of
+that cell's PLIC line; the side enters the pressure point, $\mathsf G^{\phase}_c$,
+$\eta_c$, $\tau_c$, the stabilisation and the closing
+flux~\cref{eq:projection:mimetic-slave} as an interior side does, so the
+block~\cref{eq:projection:mimetic-local} of a cell at a wall is that of the
+same data in the interior. Where the interface meets the wall (a contact line)
+the wall side is partially wetted and carries the contact point, and for a
+simple cut the pressure point is the midpoint of the chord from it. The flux
+of a wall side is prescribed by the boundary condition (zero for
+\apitype{FreeSlip} and \apitype{NoSlip}; the tangential condition enters only
+the viscous step), not a phase value. With the sides split into interior
+(i) and wall (w) sides the energy of the cell is
+\begin{equation}\label{eq:projection:mimetic-wall}
+  \tfrac12v^{\transpose}\mathcal M^{\phase}_cv
+  =\tfrac12v_{\mathrm i}^{\transpose}\mathcal M^{\phase}_{c,\mathrm{ii}}v_{\mathrm i}
+  +v_{\mathrm i}^{\transpose}\mathcal M^{\phase}_{c,\mathrm{iw}}v_{\mathrm w}
+  +\tfrac12v_{\mathrm w}^{\transpose}\mathcal M^{\phase}_{c,\mathrm{ww}}v_{\mathrm w},
+\end{equation}
+and the predictor and every state of the constraint share $v_{\mathrm w}$, so
+the objective of~\cref{eq:projection:mimetic}, a form in $u-u^{*}$, contains
+$\mathcal M^{\phase}_{c,\mathrm{ii}}$ only: $\mathcal M$ assembles the block
+restricted to the interior sides, the metric on the subspace of prescribed
+wall flux. A principal submatrix of a symmetric positive (semi-)definite block
+is one, so the projection remains $\mathcal M$-orthogonal with its energy
+identity, the mixture divergence stays exact (the wall flux is part of $b$),
+and the viscous step~\cref{eq:projection:mimetic-viscous-drag} stays
+non-expansive for every $\dt$. The interior rows of $\mathcal M^{\phase}_c\mathsf N=\mathsf R^{\phase}_c$
+give, for a constant field $w$,
+\begin{equation}\label{eq:projection:mimetic-wall-moment}
+  \mathcal M^{\phase}_{c,\mathrm{ii}}\mathsf N_{\mathrm i}w+\mathsf C^{\phase}_cw
+  =\mathsf R^{\phase}_{c,\mathrm i}w,\qquad
+  \mathsf C^{\phase}_c=\mathcal M^{\phase}_{c,\mathrm{iw}}\mathsf N_{\mathrm w}.
+\end{equation}
+A field along the walls of the cell ($\mathsf N_{\mathrm w}w=0$) is reproduced
+by the restricted block, $\mathcal M^{\phase}_{c,\mathrm{ii}}\mathsf N_{\mathrm i}w=\mathsf R^{\phase}_{c,\mathrm i}w$,
+with the Gram mass $(\mathsf N_{\mathrm i}w)^{\transpose}\mathcal M^{\phase}_{c,\mathrm{ii}}\mathsf N_{\mathrm i}w=w^{\transpose}\mathsf G^{\phase}_cw$
+($\meas{P}\abs{w}^2$ where the polygon exists). A component normal to a wall
+has no counterpart of zero wall flux; the coupling $\mathsf C^{\phase}_c$ to its
+wall flux density closes the identity. Assembled, with $\mathsf C$ the sum of
+the $\dens^{\phase}\mathsf C^{\phase}_c$,
+$(\mathcal M\chi^{\phase}_k+\mathsf Ce_k)_{(f,\phase)}=\dens^{\phase}\phaseaperture{\phase}{f}\meas{f}(x^{*}_{\cplus{f}}-x^{*}_{\cminus{f}})_k$
+on every value (the property below, walls included). Checked on 15 interfaces
+at the walls at $h=1/32$ (a pool between the side walls, drops on the floor
+and in a corner, twelve random circles cut by a wall), densities $(1,1)$ and
+$(1000,1)$: no defective cell, every restricted wall block symmetric positive
+definite, \cref{eq:projection:mimetic-wall-moment} and the Gram mass to
+$4\times10^{-16}$, and the assembled identity to $6\times10^{-14}$ (relative)
+wherever no value is lumped (one case has one lumped value), against relative
+defects $0.16$--$1$ without $\mathsf C$. The contact angle enters as with the
+CMDGFM, through the height-function curvature with the wall
+condition~(\cref{sec:interface:contact}); the capillary jumps live on interior
+faces, so a constant curvature on a drop at a wall is balanced exactly.
+Measured: a pool between the side walls at densities $(1000,1)$ and a drop on
+the floor at equal densities under gravity stay at rest to $10^{-12}$; sessile
+drops at $60^\circ$, $90^\circ$ and $120^\circ$ with the exact constant
+curvature stay at rest to $3\times10^{-10}$ for a capillary time at densities
+$(1,1)$ and $(1000,1)$ ($h=1/32$, full steps with the no-slip viscous step).
+With the height-function curvature (the sessile drop of the integration
+suite, densities $(1,10^{-3})$, $h=1/48$) the mimetic drop matches the CMDGFM
+at $90^\circ$ without gravity, but its currents are $2.5$ to $16$ times those of
+the CMDGFM at $60^\circ$ and $120^\circ$ and with gravity (Bond number $1.21$),
+where its shape converges at first order only: the cell curvature of the
+per-phase force, not the wall blocks (recorded as broken there). A dam break
+at densities $(1000,1)$ runs through the impact on the wall at $h=1/32$ and
+$1/64$ with the liquid at the physical velocity scale; near-empty phase values
+reach $10^3$--$10^4$ and shorten single steps, as away from walls.
+
 \emph{Surface tension.} The surface tension is a per-phase force through the
 same map (the mimetic-projection audit's note \emph{Small apertures},
 section~3). Each phase has its own capillary potential on the cells,
@@ -907,10 +976,19 @@ of~\cref{ch:forces}. A face whose force needs a curvature that is not
 available gets no force and is counted in \code{unresolved_curvature_faces},
 as for the other projections. The projection has no options of its own.
 
-\emph{Gravity} is the uniform acceleration
-$\velo^{\phase}_f\mathrel{+}=\dt\,g\cdot\fnormal{f}$ of every present phase value:
-$\dens^{\phase}g$ is $\mathcal M$ times the constant field, which the metric
-reproduces. (A density-weighted jump force $\mathcal M^{-1}(\phaseaperture{\phase}{f}\stagdens_fJ_f)$
+\emph{Gravity} is the Gram moment $\mathsf R g$ of the constant field $g$, the
+work $\dens^{\phase}g\cdot u$ of the blocks: by~\cref{eq:projection:mimetic-wall-moment}
+$\mathsf Rg=\mathcal Mg+\mathsf Cg$, and every present phase value gets
+\begin{equation}\label{eq:projection:mimetic-gravity}
+  \velo^{\phase}_f\mathrel{+}=\dt\,g\cdot\fnormal{f}+\dt\,\bigl(\mathcal M^{-1}\mathsf Cg\bigr)_{(f,\phase)} ,
+\end{equation}
+the uniform acceleration away from the walls and wherever the walls of a cell
+are parallel to $g$ ($\mathsf N_{\mathrm w}g=0$, the side walls of a pool). On
+every value $\mathsf Rg$ is the face difference
+$\dens^{\phase}\phaseaperture{\phase}{f}\meas{f}\,g\cdot(x^{*}_{\cplus{f}}-x^{*}_{\cminus{f}})$,
+so a fluid whose cut-cell pressure points lie on one level line is at rest,
+at the floor too. Without the coupling a drop on the floor at equal
+densities is not at rest ($\max\abs{u}=0.29\,\dt\abs{g}$ after one projection, $h=1/32$). (A density-weighted jump force $\mathcal M^{-1}(\phaseaperture{\phase}{f}\stagdens_fJ_f)$
 would give the gas value of a mixed face the weight of the mixture: about
 $500\,\dt g$ after one step at densities $(1000,1)$.)
 
@@ -1073,14 +1151,15 @@ $\mathcal P$ alone.
 and on the assembly). $\mathcal M$ is symmetric positive definite (under the
 condition of the degenerate-data paragraph) and couples only the
 values of one phase on the faces of one cell and a value with its donor.
-Without defective cells or lumped values, and away from walls (a face with
-one cell does not cancel), it is consistent for any shared apertures:
-for the fields $\chi^{\phase}_k$ that are one on the values of phase $\phase$
-on the faces of axis $k$ and zero elsewhere,
-$(\mathcal M\chi^{\phase}_k)_{(f,\phase)}=\dens^{\phase}\phaseaperture{\phase}{f}\meas{f}\,(x^{*}_{\cplus{f}}-x^{*}_{\cminus{f}})_k$
+Without defective cells or lumped values it is consistent for any shared
+apertures: for the fields $\chi^{\phase}_k$ that are one on the values of
+phase $\phase$ on the faces of axis $k$ and zero elsewhere,
+$(\mathcal M\chi^{\phase}_k+\mathsf Ce_k)_{(f,\phase)}=\dens^{\phase}\phaseaperture{\phase}{f}\meas{f}\,(x^{*}_{\cplus{f}}-x^{*}_{\cminus{f}})_k$
 and zero on the other phase, because the two cells of a face see the same
-wetted length and midpoint with opposite orientation. Hence a uniform
-acceleration with equal densities is projected to rest for any apertures,
+wetted length and midpoint with opposite orientation; the wall coupling
+$\mathsf C$ of~\cref{eq:projection:mimetic-wall-moment} vanishes away from
+the walls. Hence a uniform acceleration with equal densities, applied
+as~\cref{eq:projection:mimetic-gravity}, is projected to rest for any apertures,
 and at a density contrast a pressure field is reproduced where the pressure
 points of the cut cells lie on the interface (a flat interface stays
 hydrostatic). Measured on averaged apertures that close no region (a cosine
@@ -1143,7 +1222,9 @@ Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mi
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic viscous step in the metric},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Two-value model of the viscous step and the projection},
 \testsym{test/two_phase/two_velocity/interphase_drag.jl}{Interphase drag in the mimetic viscous step},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection rejects cut cells at walls},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric at walls: restricted blocks and the Gram moment},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic rest states at walls},
+\testsym{test/integration/two_phase_sessile_droplet.jl}{Sessile droplet with the two-velocity projections},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection with an interface on a grid line}.
 \end{implnote}
 

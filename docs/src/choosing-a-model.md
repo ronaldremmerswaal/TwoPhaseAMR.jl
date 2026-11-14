@@ -59,15 +59,15 @@ polygon is needed). Surface tension goes through the same gradient map as a
 per-phase force: each phase has its own capillary potential, so a drop of
 constant curvature is exactly at rest and a varying curvature drives the
 liquid, not a thin gas layer next to it. Gravity is the uniform acceleration
-of both phases, and the viscous step is an implicit midpoint in the same
+of both phases (with the Gram-moment correction in cut cells at a wall), and the viscous step is an implicit midpoint in the same
 metric, stable for every time step (the common increment of both phases away
 from the interface). It
 takes no options and works with either surface-tension formulation; it
 builds its own pressure
 solver, so non-default `pressure_*` solver settings of the system throw
 `ArgumentError`. It runs on uniform meshes of
-square cells without solids and throws for adaptive meshes, solids and cut
-cells at a wall. A cut cell whose Gram tensor admits no consistent block gets
+square cells without solids, cut cells at the domain walls (contact lines
+included) among them, and throws for adaptive meshes and solids. A cut cell whose Gram tensor admits no consistent block gets
 a least-squares fallback and is counted in
 `MimeticProjectionStats.defective_cells`; the run summary prints the totals of
 a `simulate!` call. Each projection solves a conjugate-gradient system with a
