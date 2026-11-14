@@ -147,8 +147,10 @@ end
 of the metric `𝓜`; on grid-line interface faces `E(u*)` and `E(u* - u⁺)`
 include the energy of the phase-velocity jump that identifying the two phase
 values removes. `momentum_change` is the change of the first-moment
-momentum `e_iᵀ𝓜u` and `momentum_wall_force` the wall term `dt (D e_i)ᵀ p` it
-must equal; `transported_momentum_change` is the change of the transported
+momentum `(𝓜e_i + Ce_i)ᵀu` (`C` the wall coupling of the metric, zero away
+from walls) and `momentum_wall_force` the term `dt (D e_i)ᵀ p` of the interior
+faces; without values coupled to a wall the two are equal, with them they
+differ by `(Ce_i)ᵀ(u⁺ - u*)`, the momentum the walls take up; `transported_momentum_change` is the change of the transported
 momentum `e_iᵀWu` with the diagonal phase masses `W`, which this projection
 does not conserve, and `transported_momentum` its value before projection.
 `wall_cells` counts the cut cells with a side on the domain boundary.
@@ -691,6 +693,10 @@ function _mimetic_solve!(
         face = assembly.dof_face[dof]
         axis = topology.sides[2, topology.face_cells[1, face]] == face ? 1 : 2
         momentum[axis] += mv[dof] - mp[dof]
+        # Wall coupling: the first moment of the constant field is 𝓜e_i + Ce_i.
+        change = projected[dof] - predictor[dof]
+        momentum[1] += _mimetic_wall_coupling(assembly, 1, dof) * change
+        momentum[2] += _mimetic_wall_coupling(assembly, 2, dof) * change
         mass = assembly.dof_mass[dof]
         transported[axis] += mass * (projected[dof] - predictor[dof])
         transported_before[axis] += mass * predictor[dof]
@@ -1230,7 +1236,7 @@ end
 
 """Add the gravity increment to every active interior phase value: the uniform
 acceleration `dt g` of both phases, plus `dt 𝓜⁻¹(C g)` in the cut cells at a
-wall (`C` = `wall_coupling` of the assembly).
+wall and on values tied to a wall (`C`, see `_mimetic_wall_coupling`).
 
 The body force is the Gram moment `R g` of the constant field `g`, the work
 `ρ_π g ⋅ u` of the cut-cell blocks. Away from walls the metric reproduces it,
@@ -1258,11 +1264,11 @@ function _mimetic_uniform_acceleration!(
         end
     end
     assembly = _mimetic_assemble!(solver, workspace)
-    assembly.wall_cells > 0 || return velocity
-    coupling = assembly.wall_coupling
+    any(!iszero, assembly.wall_coupling) || return velocity
     rhs = resize!(workspace.force_rhs, length(assembly.dof_face))
     for dof in eachindex(rhs)
-        rhs[dof] = coupling[1, dof] * T(gravity[1]) + coupling[2, dof] * T(gravity[2])
+        rhs[dof] = _mimetic_wall_coupling(assembly, 1, dof) * T(gravity[1]) +
+            _mimetic_wall_coupling(assembly, 2, dof) * T(gravity[2])
     end
     count = length(assembly.band)
     resize!(workspace.band_scratch, count)

@@ -965,7 +965,7 @@ end
 
 @testset "Mimetic metric at walls: restricted blocks and the Gram moment" begin
     TP = TwoPhaseAMR
-    consistent_cases = wall_blocks = 0
+    wall_blocks = 0
     for levelset in _mimetic_wall_levelsets(), density in ((1.0, 1.0), (1000.0, 1.0))
         case = _mimetic_case(32, levelset; density, periodic = (false, false))
         work = case.workspace
@@ -1007,9 +1007,10 @@ end
         end
         # Assembled (prop. assembly, at walls): 𝓜 χ^π_k + C e_k = R^π_k with the
         # wall coupling C of the assembly, R^π_k = ρ^π a |f| (x*₊ - x*₋)_k on
-        # every value of phase π. A lumped value is not consistent.
-        assembly.lumped_values == 0 || continue
-        consistent_cases += 1
+        # every value of phase π. A value that its phase does not reach and
+        # that has no donor ties to the wall across its cell instead of being
+        # lumped, so the identity holds on every value.
+        @test assembly.lumped_values == 0
         point = (assembly.pressure_x, assembly.pressure_y)
         dofs = eachindex(assembly.dof_face)
         axis(r) = case.mesh.faces[assembly.dof_face[r]].axis
@@ -1022,11 +1023,10 @@ end
                 difference = point[k][topology.face_cells[2, face]] - point[k][topology.face_cells[1, face]]
                 density[phase] * case.mesh.faces[face].area * assembly.dof_aperture[r] * difference
             end
-            coupled = [image[r] + (assembly.dof_phase[r] == phase ? assembly.wall_coupling[k, r] : 0.0) for r in dofs]
+            coupled = [image[r] + (assembly.dof_phase[r] == phase ? TP._mimetic_wall_coupling(assembly, k, r) : 0.0) for r in dofs]
             @test maximum(abs, coupled .- target) <= 1.0e-12 * maximum(abs, coupled)
         end
     end
-    @test consistent_cases == 28
     println("mimetic metric at walls: restricted wall blocks checked: ", wall_blocks)
 end
 
@@ -1067,15 +1067,41 @@ end
         end
         @test _mimetic_maximum(flow.velocity) <= 1.0e-11
     end
+    # Thin films along each wall (thickness θh) and a sliver in a corner. Their
+    # zero-aperture values next to the wall have no donor of their phase; they
+    # tie to the wall flux and gravity gives them no increment (lumped, they
+    # fell freely: 3 dt g after three steps). Films on the floor and under the
+    # ceiling are hydrostatic at both density ratios; a film along a side wall
+    # and a corner sliver are an equilibrium only at equal densities.
+    h = 1 / 32
+    for theta in (0.05, 0.3, 0.6, 0.95)
+        for (levelset, densities) in (
+                    ((x, y) -> y - theta * h, ((1.0, 1.0), (1000.0, 1.0))),
+                    ((x, y) -> 1 - theta * h - y, ((1.0, 1.0), (1000.0, 1.0))),
+                    ((x, y) -> x - theta * h, ((1.0, 1.0),)),
+                    ((x, y) -> 1 - theta * h - x, ((1.0, 1.0),)),
+                    ((x, y) -> x + y - 2theta * h, ((1.0, 1.0),)),
+                ), density in densities
+            flow = flow_at_walls(levelset, density)
+            for _ in 1:3
+                stats = step!(
+                    flow.velocity, flow.pressure, flow.system, 1.0e-3, flow.workspace;
+                    tolerance = 1.0e-12, max_cycles = 2000,
+                )
+                @test stats.converged && stats.lumped_values == 0
+            end
+            @test _mimetic_maximum(flow.velocity) <= 1.0e-11
+        end
+    end
     # Without the wall coupling (the uniform increment dt g alone) the drop on
-    # the floor is not at rest after one projection.
+    # the floor is not at rest after one projection (measured 0.29 dt g).
     case = _mimetic_case(32, floor_drop; periodic = (false, false))
     velocity = _mimetic_velocity(case, (phase, face) -> face.axis == 2 ? -9.81e-3 : 0.0)
     stats = project!(velocity, CellField(case.mesh), case.solver, 1.0e-3, case.workspace; tolerance = 1.0e-12)
     @test stats.converged
     uncoupled = _mimetic_maximum(velocity)
     println("mimetic floor drop, equal densities, dt g without the wall coupling: max |u| = ", uncoupled)
-    @test uncoupled >= 1.0e-4
+    @test uncoupled >= 0.25 * 9.81e-3
     # A constant curvature on a drop on the floor (contact angle about 66°) at
     # densities (1000, 1): the per-phase capillary force is a gradient on the
     # interior faces and the projection removes it exactly.

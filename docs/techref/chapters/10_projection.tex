@@ -910,7 +910,14 @@ $(1000,1)$: no defective cell, every restricted wall block symmetric positive
 definite, \cref{eq:projection:mimetic-wall-moment} and the Gram mass to
 $4\times10^{-16}$, and the assembled identity to $6\times10^{-14}$ (relative)
 wherever no value is lumped (one case has one lumped value), against relative
-defects $0.16$--$1$ without $\mathsf C$. The contact angle enters as with the
+defects $0.16$--$1$ without $\mathsf C$. A value that its phase does not
+reach and that has no donor (a film or sliver along a wall) is tied to the
+same-axis wall face across its cell, whose value is prescribed: the tie
+$\dualvol{f}\facemass{\phase}{f}(\velo^{\phase}_f-\velo_{\mathrm w})^2$ adds the
+staggered mass to the diagonal, as lumping would, and its negative to
+$\mathsf C$ on the value's axis, so the identity holds on it and gravity gives
+it no increment (lumped, such a value fell freely: $3\,\dt g$ after three
+steps of a floor film at densities $(1000,1)$). The contact angle enters as with the
 CMDGFM, through the height-function curvature with the wall
 condition~(\cref{sec:interface:contact}); the capillary jumps live on interior
 faces, so a constant curvature on a drop at a wall is balanced exactly.
@@ -1170,7 +1177,9 @@ cell, and the identity above to $10^{-12}$ at densities $(1,1)$ and
 $(1000,1)$. The step satisfies the energy identity
 $E(u^{*})=E(u^{+})+E(u^{*}-u^{+})$, $E(u)=u^{\transpose}\mathcal Mu$, and
 conserves the first-moment momentum $e_i^{\transpose}\mathcal Mu$ up to the
-wall force $\dt(\mathsf Be_i)^{\transpose}\pres$. It does not conserve the
+wall force $\dt(\mathsf Be_i)^{\transpose}\pres$; with values coupled to a
+wall the reported momentum is $(\mathcal Me_i+\mathsf Ce_i)^{\transpose}u$,
+whose change differs from that force by $(\mathsf Ce_i)^{\transpose}(u^{+}-u^{*})$. It does not conserve the
 transported momentum $e_i^{\transpose}\mathsf Wu$, because $\mathcal Me_i\ne\mathsf We_i$
 in the cut cells; \code{transported_momentum_change} reports the change.
 
