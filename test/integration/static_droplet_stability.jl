@@ -425,27 +425,19 @@ end
                         fine.energy_early * (1 + STATIC_DROP_ENERGY_GROWTH_TOLERANCE)
                 end
             else
+                # With the interphase drag (default; with the mimetic
+                # projection inside the metric viscous step) the mimetic n = 32
+                # currents decay in the second half of the run. Measured
+                # max|u|, first half -> second half at t = 0.4: liquid 3.8e-3
+                # -> 6.2e-4 (DR 1), 4.7e-3 -> 3.4e-4 (DR 3), 7.6e-3 -> 1.6e-3
+                # (DR 1000); gas 3.4e-3 -> 5.5e-4, 4.2e-3 -> 5.5e-4, 8.6e-3 ->
+                # 8.4e-3. Without the drag the gas grew (4.1e-3 -> 7.3e-3,
+                # 5.5e-3 -> 1.0e-2, 1.7e-2 -> 2.9e-2) and the DR 1 liquid too
+                # (7.8e-3 -> 9.7e-3).
                 @test coarse.liquid_late <= coarse.liquid_early
                 @test coarse.gas_late <= coarse.gas_early
-                if model === :mimetic
-                    # NUMERICS CONCERN: at n = 32 the mimetic currents still
-                    # grow in the second half of the run, at the 1e-2 level.
-                    # Measured max|u|, first half -> second half at t = 0.4:
-                    # gas 4.1e-3 -> 7.3e-3 (DR 1), 5.5e-3 -> 1.0e-2 (DR 3),
-                    # 1.7e-2 -> 2.9e-2 (DR 1000; decayed with the common
-                    # jump); liquid 7.8e-3 -> 9.7e-3 (DR 1). The n = 16
-                    # currents decay at every ratio. Cause and candidate fix
-                    # as for the inviscid energy above (sec:zero).
-                    if ratio == 1.0
-                        @test_broken fine.liquid_late <= fine.liquid_early
-                    else
-                        @test fine.liquid_late <= fine.liquid_early
-                    end
-                    @test_broken fine.gas_late <= fine.gas_early
-                else
-                    @test fine.liquid_late <= fine.liquid_early
-                    @test fine.gas_late <= fine.gas_early
-                end
+                @test fine.liquid_late <= fine.liquid_early
+                @test fine.gas_late <= fine.gas_early
                 @test coarse.last_peak <=
                     STATIC_DROP_ENERGY_DECAY_RATIO * coarse.first_peak
                 @test fine.last_peak <=
