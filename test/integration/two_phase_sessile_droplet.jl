@@ -93,15 +93,21 @@ function _sessile_polygon(profile, centre_x)
     return PolygonIndicator(vertices)
 end
 
+# Largest velocity: the face velocity, or the largest present phase value.
+_sessile_maximum_velocity(velocity) = maximum(abs, velocity.interior)
+_sessile_maximum_velocity(velocity::Tuple) = maximum(
+    maximum(abs, filter(isfinite, phase.interior); init = 0.0) for phase in velocity
+)
+
 function sessile_droplet_case(
-        resolution; contact_angle = pi / 2, kind = :uniform
+        resolution; contact_angle = pi / 2, kind = :uniform,
+        velocity_model = OneVelocityModel(), bond = 1.21,
     )
     kind in (:uniform, :mixed, :amr) ||
         throw(ArgumentError("unknown mesh kind $kind"))
     initial_radius = 0.2
     density = (1.0, 1.0e-3)
     sigma = 1.0
-    bond = 1.21
     gravity_magnitude = bond * sigma /
         ((density[1] - density[2]) * initial_radius^2)
     laplace = 5.5e2
@@ -153,7 +159,7 @@ function sessile_droplet_case(
             surface_tension = SurfaceTension(sigma; method = CGFM()),
             gravity = (0.0, -gravity_magnitude)
         );
-        boundary = NoSlip(),
+        boundary = NoSlip(), velocity_model,
         adaptivity = Adaptivity(
             criteria = kind == :amr ?
                 (indicator, curvature_indicator) : ()
@@ -173,7 +179,7 @@ function sessile_droplet_case(
         ) for ref in TwoPhaseAMR._cell_references(mesh)
     )
     return (;
-        shape_error, maximum_velocity = maximum(abs, flow.velocity.interior),
+        shape_error, maximum_velocity = _sessile_maximum_velocity(flow.velocity),
         volume_error = abs(integrate(interface) - initial_volume),
         initialization_error = abs(initial_volume - profile.area),
         reference_area = profile.area,
@@ -211,5 +217,72 @@ end
         @test isfinite(result.maximum_velocity)
         @test result.initialization_error <= 4096eps()
         @test result.volume_error <= 4096eps()
+    end
+end
+
+@testset "Sessile droplet with the two-velocity projections" begin
+    # The equilibrium of the convergence study with both two-velocity
+    # projections. The mimetic projection keeps the wall side of the floor
+    # cells (contact cells included) in their Gram tensors and restricts the
+    # metric to the interior sides (techref ch. 10, Walls).
+    resolutions = (12, 24, 48)
+    models = (
+        ("CMDGFM", TwoVelocityModel()),
+        ("MM", TwoVelocityModel(pressure_projection = MimeticProjection())),
+    )
+    results = Dict(
+        name => [
+            sessile_droplet_case(resolution; velocity_model = model)
+                for resolution in resolutions
+        ] for (name, model) in models
+    )
+    rates = Dict{String, Vector{Float64}}()
+    for (name, _) in models
+        errors = getproperty.(results[name], :shape_error)
+        rates[name] = log2.(errors[1:(end - 1)] ./ errors[2:end])
+        println(
+            "sessile $name n=$resolutions errors=$errors rates=$(rates[name]) ",
+            "max|u|=$(getproperty.(results[name], :maximum_velocity))",
+        )
+        @test all(diff(errors) .< 0)
+        @test all(isfinite, getproperty.(results[name], :maximum_velocity))
+        @test maximum(getproperty.(results[name], :volume_error)) <= 4096eps()
+    end
+    @test all(rates["CMDGFM"] .>= 1.2)
+    # NUMERICS CONCERN: with gravity at the density ratio 1000 (Bo = 1.21) the
+    # mimetic shape converges at about first order (rates 0.91, 0.79) and its
+    # largest phase value stays near 1 (1.04 at n = 48 against 0.064 for the
+    # CMDGFM). Those values are gas values of small aperture near the top of
+    # the drop, seven cells above the floor; the wall coupling of gravity
+    # changes nothing there, and without gravity (below) the two projections
+    # agree. The per-phase capillary potentials with the height-function
+    # curvature do not balance the gravity of a curved interface at a density
+    # contrast (inference; the curvature model is outside the wall treatment).
+    @test_broken all(rates["MM"] .>= 1.2)
+    @test_broken last(results["MM"]).maximum_velocity <=
+        2last(results["CMDGFM"]).maximum_velocity
+
+    # Without gravity (a circular cap) at n = 48: at 90° the mimetic drop
+    # matches the CMDGFM (shape error 1.08e-5 against 1.03e-5, largest phase
+    # value 2.0e-3 against 1.8e-3).
+    cap(angle) = Dict(
+        name => sessile_droplet_case(48; contact_angle = angle, velocity_model = model, bond = 0.0)
+            for (name, model) in models
+    )
+    right = cap(pi / 2)
+    @test right["MM"].shape_error <= 1.25right["CMDGFM"].shape_error
+    @test right["MM"].maximum_velocity <= 1.25right["CMDGFM"].maximum_velocity
+    # NUMERICS CONCERN: at 60° and 120° the mimetic currents are 9 and 2.5
+    # times those of the CMDGFM (0.23 against 0.025, 0.11 against 0.044) and
+    # the shape errors 2.5 and 1.8 times. With the exact constant curvature
+    # the same drops stay at rest to 1e-10 for a capillary time (the wall
+    # blocks are consistent); the contact cells' height-function curvatures
+    # (at n = 32: 4 to 8 % off at 60°, 34 % in a corner sliver at 120°) drive
+    # the liquid alone through the per-phase force (inference).
+    for angle in (pi / 3, 2pi / 3)
+        inclined = cap(angle)
+        @test isfinite(inclined["MM"].maximum_velocity)
+        @test_broken inclined["MM"].maximum_velocity <= 2inclined["CMDGFM"].maximum_velocity
+        @test_broken inclined["MM"].shape_error <= 1.25inclined["CMDGFM"].shape_error
     end
 end
