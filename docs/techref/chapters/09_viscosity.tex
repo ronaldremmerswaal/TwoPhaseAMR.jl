@@ -14,8 +14,8 @@ cells, shear rows at the cell corners and wall rows, with a mixture of the
 phase viscosities that is harmonic (series) by default and geometric as an
 option; the two-velocity model diffuses the mass-weighted mixture velocity with
 the same operator and gives both phases the same increment, so the rule applies
-to both velocity models, and then relaxes the phase-velocity jump of the mixed
-faces by an implicit interphase drag. This chapter
+to both velocity models, and optionally relaxes the phase-velocity jump of the
+mixed faces by an implicit interphase drag. This chapter
 states the continuous model, the semi-discrete operators with their walls,
 the fully discrete midpoint solves with their stopping criteria, and the
 exact identities that hold for them: dissipation of the mass-weighted
@@ -828,8 +828,8 @@ holds both phases undamped, although viscosity couples the phases across the
 interface: a thin layer of one phase slips freely through the other (with a
 per-phase surface-tension force the capillary wave at density ratio one has
 the error $0.009$--$0.011$ instead of $0.0022$, audit note on small apertures,
-\S5). With \apitype{InterphaseDrag}, the default of
-\apitype{TwoVelocityModel} for both projections, every face with two finite
+\S5). With the opt-in \apitype{InterphaseDrag} of
+\apitype{TwoVelocityModel} (for both projections; off by default), every face with two finite
 phase values, $0<\clampfrac{f}<1$ and an interface in its control volume adds
 the interface shear $\pm\dragcond_f\jumpvelo_f$ to the two phase momenta.
 With the staggered phase masses per volume
@@ -876,7 +876,8 @@ tangential jump of the cut faces in every step, and with the mimetic
 projection it removes the vortex sheet that represents an unresolved shear
 layer: the viscous Kelvin--Helmholtz case \code{r1_thin} at
 $\lambda/h=64$ decays (growth-rate error $3.3\,\%$ without, $182\,\%$
-with the drag; $3.3\,\%$ and $11.5\,\%$ at $\lambda/h=128$).
+with the drag; $3.3\,\%$ and $11.5\,\%$ at $\lambda/h=128$), which is why
+the drag is off by default.
 
 The update changes $\facemass{\liq}{f}\velo^{\liq}_f+\facemass{\gas}{f}\velo^{\gas}_f$
 only by round-off, so the mixture momentum and the mixture

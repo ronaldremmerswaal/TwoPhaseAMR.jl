@@ -101,7 +101,8 @@ end
     end
     @test_throws ArgumentError InterphaseDrag(; component = :normal)
     @test_throws ArgumentError TwoVelocityModel(; interphase_drag = :on)
-    @test TwoVelocityModel().interphase_drag == InterphaseDrag()
+    @test isnothing(TwoVelocityModel().interphase_drag)
+    @test TwoVelocityModel(; interphase_drag = InterphaseDrag()).interphase_drag == InterphaseDrag(; component = :tangential)
     @test isnothing(TwoVelocityModel(; interphase_drag = nothing).interphase_drag)
 end
 

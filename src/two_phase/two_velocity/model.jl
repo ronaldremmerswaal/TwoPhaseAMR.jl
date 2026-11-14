@@ -1,11 +1,11 @@
 """
     TwoVelocityModel(; pressure_projection=CMDGFMProjection(),
-                     interphase_drag=InterphaseDrag())
+                     interphase_drag=nothing)
 
 Select separate intrinsic phase velocities and configure their
 pressure-projection method and their viscous coupling across the interface
-([`InterphaseDrag`](@ref), or `nothing` for none). The drag is independent of
-the projection and acts only with nonzero viscosities.
+(`nothing`, the default: none; or [`InterphaseDrag`](@ref)). The drag is
+independent of the projection and acts only with nonzero viscosities.
 """
 struct TwoVelocityModel{
         P <: AbstractTwoVelocityProjection, D <: Union{Nothing, InterphaseDrag},
@@ -13,7 +13,7 @@ struct TwoVelocityModel{
     pressure_projection::P
     interphase_drag::D
 
-    function TwoVelocityModel(pressure_projection, interphase_drag = InterphaseDrag())
+    function TwoVelocityModel(pressure_projection, interphase_drag = nothing)
         pressure_projection isa AbstractTwoVelocityProjection || throw(
             ArgumentError(
                 "pressure_projection must be a CMDGFMProjection()",
@@ -28,7 +28,7 @@ end
 
 function TwoVelocityModel(;
         pressure_projection = CMDGFMProjection(),
-        interphase_drag = InterphaseDrag(),
+        interphase_drag = nothing,
     )
     return TwoVelocityModel(pressure_projection, interphase_drag)
 end

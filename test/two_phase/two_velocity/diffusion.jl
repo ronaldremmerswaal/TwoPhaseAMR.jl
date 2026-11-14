@@ -33,9 +33,7 @@ function _two_velocity_diffusion_case(kind)
             interface; density = (5.0, 1.0),
             dynamic_viscosity = (0.03, 0.002),
         );
-        # The identities are those of the mixture step alone; the drag that
-        # follows it is tested in interphase_drag.jl.
-        velocity_model = TwoVelocityModel(; interphase_drag = nothing),
+        velocity_model = TwoVelocityModel(),
         geometry, velocity = (liquid, gas), boundary = FreeSlip(),
         numerics = NavierStokesOptions(
             diffusion = LinearSolverOptions(preconditioner = nothing),

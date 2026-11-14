@@ -89,7 +89,7 @@ function wave_case(
         formulation = CSF(), periods = 0.25,
         velocity_model = :one_velocity,
         two_velocity_projection = CMDGFMProjection(),
-        interphase_drag = InterphaseDrag(),
+        interphase_drag = nothing,
         timestep_factor = 1.0,
         solver_tolerance = 1.0e-9,
     )

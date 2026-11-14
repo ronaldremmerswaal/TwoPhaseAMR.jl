@@ -2,8 +2,12 @@
     InterphaseDrag(; component = :tangential)
 
 Viscous coupling of the two intrinsic phase velocities of `TwoVelocityModel`
-across the interface (the default of that model; pass `interphase_drag =
-nothing` to disable it).
+across the interface, opt-in through `TwoVelocityModel(; interphase_drag =
+InterphaseDrag())` (the default `nothing` couples nothing). It is off by
+default because it smears the vortex sheet with which the two-velocity model
+represents an unresolved shear layer into a grid-scale layer: the viscous
+Kelvin--Helmholtz case with a shear layer of half a cell decays with the
+drag (growth-rate error 3.3 % without, 182 % with it, `MimeticProjection`).
 
 The phase-mass weighted mixture viscous step gives both phases the same
 increment, so on its own it never damps the jump `u_gas - u_liquid` of a face

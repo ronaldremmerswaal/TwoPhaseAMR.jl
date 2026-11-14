@@ -51,7 +51,7 @@ explicit:
 ```julia
 velocity_model = TwoVelocityModel(
     pressure_projection=CMDGFMProjection(),
-    interphase_drag=InterphaseDrag(),
+    interphase_drag=nothing,
 )
 flow = FlowSimulation(mesh, physics; velocity_model)
 ```

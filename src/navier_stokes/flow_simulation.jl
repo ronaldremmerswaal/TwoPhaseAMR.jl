@@ -381,7 +381,7 @@ function FlowSimulation(
         _one_velocity_initializer(velocity)
     pressure_projection, drag = velocity_model isa TwoVelocityModel ?
         (velocity_model.pressure_projection, velocity_model.interphase_drag) :
-        (CMDGFMProjection(), InterphaseDrag())
+        (CMDGFMProjection(), nothing)
     return _flow_simulation(
         mesh, physics; numerics, adaptivity,
         two_velocity_projection = pressure_projection,
