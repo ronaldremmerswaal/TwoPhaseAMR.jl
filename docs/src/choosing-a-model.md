@@ -57,7 +57,9 @@ non-diagonal metric built, per cut cell and phase, on the Gram tensor of the
 wetted face parts (the shared face apertures and their midpoints; no phase
 polygon is needed), with surface tension through the same gradient map and
 gravity as the uniform acceleration of both phases. It takes no options and
-works with either surface-tension formulation. It runs on uniform meshes of
+works with either surface-tension formulation; it builds its own pressure
+solver, so non-default `pressure_*` solver settings of the system throw
+`ArgumentError`. It runs on uniform meshes of
 square cells without solids and throws for adaptive meshes, solids and cut
 cells at a wall. A cut cell whose Gram tensor admits no consistent block gets
 a least-squares fallback and is counted in

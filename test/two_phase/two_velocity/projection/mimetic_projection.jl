@@ -85,6 +85,39 @@ _mimetic_circle(n; x = 0.5, y = 0.5, radius = 0.25) =
         velocity_model = model, boundary = FreeSlip(),
     )
     @test flow.system.two_phase.pressure_projection === projection
+    # The mimetic projection builds its own pressure solver: pressure-solver
+    # settings it would ignore are rejected at construction, naming the option.
+    for (keyword, pressure) in (
+            ("pressure_preconditioner", LinearSolverOptions(preconditioner = :amg)),
+            ("pressure_preconditioner_options", LinearSolverOptions(preconditioner_options = (; pre_sweeps = 2))),
+            ("pressure_krylov", LinearSolverOptions(krylov = TwoPhaseAMR.Krylov.CgWorkspace)),
+            ("pressure_krylov_options", LinearSolverOptions(krylov_options = (; atol = 0.0))),
+        )
+        error = try
+            FlowSimulation(
+                uniform, physics(InterfaceField(uniform, circle; lipschitz = 1));
+                velocity_model = model, boundary = FreeSlip(),
+                numerics = NavierStokesOptions(; pressure),
+            )
+            nothing
+        catch caught
+            caught
+        end
+        @test error isa ArgumentError
+        @test occursin(keyword, sprint(showerror, error))
+        @test occursin("builds its own pressure solver", sprint(showerror, error))
+    end
+    @test_throws ArgumentError NavierStokesSystem(
+        uniform; density = (2.0, 1.0), dynamic_viscosity = (1.0e-3, 1.0e-3),
+        interface = InterfaceField(uniform, circle; lipschitz = 1),
+        two_velocity_projection = projection, pressure_preconditioner = :amg,
+    )
+    # The same settings remain valid for the CMDGFM.
+    @test FlowSimulation(
+        uniform, physics(InterfaceField(uniform, circle; lipschitz = 1));
+        velocity_model = TwoVelocityModel(), boundary = FreeSlip(),
+        numerics = NavierStokesOptions(; pressure = LinearSolverOptions(preconditioner = :ilu)),
+    ) isa FlowSimulation
     # `simulate!` accounts the mimetic solves and reports them in the summary.
     dt = 1.0e-3  # the flow starts at rest without surface tension: no CFL limit
     result = simulate!(flow, 2dt; dt)
