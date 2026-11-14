@@ -39,7 +39,7 @@ never increases `|j|` or the kinetic energy, and does nothing at rest, on
 faces where a phase has no volume, and when both viscosities are zero. With
 `MimeticProjection` the stress `W j / (1 + Re_j)`, with `Re_j` of the jump at
 the start of the step, enters the implicit-midpoint viscous system in the
-projection's metric (`_interphase_drag_matrix`), so that the stress and the
+projection's metric (`_interphase_drag_coefficients!`), so that the stress and the
 drag together never increase the kinetic energy of that metric, for every
 time step.
 
@@ -406,42 +406,42 @@ function _interphase_drag!(
     return liquid, gas
 end
 
-"""Drag matrix of `MimeticProjection` on the phase values of `assembly`.
+"""Face coefficients `c_f` of the drag of `MimeticProjection`, `A_drag =
+Σ_f c_f d_f d_fᵀ` on the phase values of `assembly` (`d_f = e_gas - e_liquid`).
 
-`A = Σ_f c_f d_f d_fᵀ` over the faces with a liquid and a gas value
-(`d_f = e_gas - e_liquid`), `c_f = W_f / (1 + Re_f)` with the no-slip
-conductance `W_f` and `Re_f = |j_f| h / nu` of the jump `j_f` of `values`
-(the start of the step: the nonlinear factor is lagged, so the midpoint
-system stays linear and symmetric positive definite). `uᵀAu = Σ_f c_f j_f²`
-is the dissipation rate of the Navier-slip interface stress (see
-[`InterphaseDrag`](@ref)); `A` annihilates every field with equal phase values.
-Returns `nothing` without viscosity."""
-function _interphase_drag_matrix(
-        assembly, values::AbstractVector{T}, drag::InterphaseDrag, model, averaging,
+`c_f = W_f / (1 + Re_f)` on every face with a liquid and a gas value, with the
+no-slip conductance `W_f` and `Re_f = |j_f| h / nu` of the jump `j_f` of
+`values` (the start of the step: the nonlinear factor is lagged, so the
+midpoint system stays linear and symmetric positive definite), and zero
+elsewhere, for `drag = nothing` and without viscosity. `uᵀA_drag u =
+Σ_f c_f j_f²` is the dissipation rate of the Navier-slip interface stress (see
+[`InterphaseDrag`](@ref)); `A_drag` annihilates every field with equal phase
+values."""
+function _interphase_drag_coefficients!(
+        coefficients::AbstractVector{T}, assembly, values, drag, model, averaging,
     ) where {T}
-    all(iszero, model.dynamic_viscosity) && return nothing
+    fill!(coefficients, zero(T))
+    (isnothing(drag) || all(iszero, model.dynamic_viscosity)) && return coefficients
     interface = model.interface
     reconstruct!(interface)
     faces = interface.mesh.faces
     blocks = interface.mesh.blocks
     nu = _interphase_viscosity(T, model.density, model.dynamic_viscosity)
     tangential = drag.component === :tangential
-    rows, columns, entries = Int[], Int[], T[]
-    for (index, face) in pairs(faces)
-        liquid = assembly.liquid_dof[index]
-        gas = assembly.gas_dof[index]
-        liquid > 0 && gas > 0 && liquid != gas || continue
-        fraction = _staggered_liquid_fraction(interface, interface.geometry, face)
-        conductance = _interphase_conductance(
-            interface, face, fraction, model.dynamic_viscosity, averaging, tangential,
-        )
-        conductance > zero(T) || continue
-        reynolds = T(_interphase_width(blocks, face)) / nu * abs(values[gas] - values[liquid])
-        coefficient = conductance / (one(T) + reynolds)
-        append!(rows, (liquid, gas, liquid, gas))
-        append!(columns, (liquid, gas, gas, liquid))
-        append!(entries, (coefficient, coefficient, -coefficient, -coefficient))
+    @_parallel for index in 1:length(faces)
+        @inbounds begin
+            liquid = assembly.liquid_dof[index]
+            gas = assembly.gas_dof[index]
+            liquid > 0 && gas > 0 && liquid != gas || continue
+            face = faces[index]
+            fraction = _staggered_liquid_fraction(interface, interface.geometry, face)
+            conductance = _interphase_conductance(
+                interface, face, fraction, model.dynamic_viscosity, averaging, tangential,
+            )
+            reynolds = T(_interphase_width(blocks, face)) / nu *
+                abs(values[gas] - values[liquid])
+            coefficients[index] = conductance / (one(T) + reynolds)
+        end
     end
-    dofs = length(assembly.dof_face)
-    return sparse(rows, columns, entries, dofs, dofs)
+    return coefficients
 end

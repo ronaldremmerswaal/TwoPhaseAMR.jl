@@ -410,7 +410,10 @@ end
     end
 end
 
-function _mimetic_drag_flow(density; interphase_drag = InterphaseDrag(), viscosity = (0.03, 0.002))
+function _mimetic_drag_flow(
+        density; interphase_drag = InterphaseDrag(), viscosity = (0.03, 0.002),
+        numerics = NavierStokesOptions(),
+    )
     mesh = BlockTreeMesh(block_size = (16, 16), periodic = (true, true))
     interface = InterfaceField(
         mesh, (x, y) -> (x - 0.5)^2 + (y - 0.55)^2 - 0.3^2; lipschitz = 2,
@@ -422,7 +425,7 @@ function _mimetic_drag_flow(density; interphase_drag = InterphaseDrag(), viscosi
             (x, y, time, axis) -> sinpi(2x + y + axis / 3) + 0.1axis,
             (x, y, time, axis) -> 0.4 + cospi(x - 2y + axis / 5),
         ),
-        boundary = FreeSlip(),
+        boundary = FreeSlip(), numerics,
     )
     state = TID._two_velocity_flow_workspace!(flow.workspace.two_phase, flow.system.two_phase)
     TID._copy_velocity!(state.convected, flow.velocity)
@@ -445,6 +448,23 @@ function _mimetic_drag_values(velocity, state)
     return values, mixture, copy(TID._mimetic_metric_product!(zeros(0), work, values))
 end
 
+# A_drag = Σ_f c_f d_f d_fᵀ on the phase values from the face coefficients.
+function _mimetic_drag_matrix(state, values, model, averaging)
+    work = state.projection_workspace
+    assembly = work.assembly
+    coefficients = zeros(length(assembly.liquid_dof))
+    TID._interphase_drag_coefficients!(coefficients, assembly, values, model.interphase_drag, model, averaging)
+    rows, columns, entries = Int[], Int[], Float64[]
+    for (face, c) in pairs(coefficients)
+        iszero(c) && continue
+        liquid, gas = assembly.liquid_dof[face], assembly.gas_dof[face]
+        append!(rows, (liquid, gas, liquid, gas))
+        append!(columns, (liquid, gas, gas, liquid))
+        append!(entries, (c, c, -c, -c))
+    end
+    return sparse(rows, columns, entries, length(values), length(values)), coefficients
+end
+
 @testset "Interphase drag in the mimetic viscous step" begin
     # With MimeticProjection the drag A_drag = Σ c_f d_f d_fᵀ (d_f = e_gas - e_liquid,
     # c_f = W_f/(1 + Re_f) at the start-of-step jump) enters the implicit midpoint
@@ -459,10 +479,7 @@ end
         )
         TID._mimetic_assemble!(state.projection_solver, state.projection_workspace)
         old, old_mixture, old_metric = _mimetic_drag_values(state.convected, state)
-        drag = TID._interphase_drag_matrix(
-            state.projection_workspace.assembly, old, model.interphase_drag, model,
-            diffusion.averaging,
-        )
+        drag, _ = _mimetic_drag_matrix(state, old, model, diffusion.averaging)
         _drag_viscous_step!(flow, dt)
         @test _phase_storage_contract(flow.velocity, model.interface)
         new, new_mixture, new_metric = _mimetic_drag_values(flow.velocity, state)
@@ -495,7 +512,7 @@ end
     )
     assembly = TID._mimetic_assemble!(state.projection_solver, state.projection_workspace)
     values, _, _ = _mimetic_drag_values(state.convected, state)
-    drag = TID._interphase_drag_matrix(assembly, values, model.interphase_drag, model, diffusion.averaging)
+    drag, coefficients = _mimetic_drag_matrix(state, values, model, diffusion.averaging)
     @test issymmetric(drag)
     nu = min(0.03 / 5.0, 0.002 / 1.0)
     coupled = 0
@@ -513,15 +530,37 @@ end
     end
     @test coupled > 0
     @test nnz(drag) == 4coupled
-    # Without viscosity there is no drag; drag = nothing is the step without it.
+    @test count(!iszero, coefficients) == coupled
+    # Without viscosity or with drag = nothing every coefficient is zero; the
+    # drag changes the step.
     inviscid, inviscid_state = _mimetic_drag_flow((5.0, 1.0); viscosity = (0.0, 0.0))
-    @test isnothing(
-        TID._interphase_drag_matrix(
-            TID._mimetic_assemble!(inviscid_state.projection_solver, inviscid_state.projection_workspace),
-            values, InterphaseDrag(), inviscid.system.two_phase, diffusion.averaging,
-        ),
-    )
+    inviscid_assembly = TID._mimetic_assemble!(inviscid_state.projection_solver, inviscid_state.projection_workspace)
+    for (drag_model, case) in ((InterphaseDrag(), inviscid.system.two_phase), (nothing, model))
+        @test all(
+            iszero,
+            TID._interphase_drag_coefficients!(
+                ones(length(coefficients)), case === model ? assembly : inviscid_assembly,
+                values, drag_model, case, diffusion.averaging,
+            ),
+        )
+    end
     on, _ = _mimetic_drag_flow((5.0, 1.0))
     off, _ = _mimetic_drag_flow((5.0, 1.0); interphase_drag = nothing)
-    @test !isequal(_drag_viscous_step!(on, 0.01), _drag_viscous_step!(off, 0.01))
+    on_result = _drag_viscous_step!(on, 0.01)
+    @test !isequal(on_result, _drag_viscous_step!(off, 0.01))
+    # Without a mixture preconditioner the lifted preconditioner takes the
+    # inverse diagonal of the mixture matrix: the same step to the tolerance.
+    jacobi, _ = _mimetic_drag_flow(
+        (5.0, 1.0); numerics = NavierStokesOptions(
+            diffusion = LinearSolverOptions(preconditioner = nothing),
+        ),
+    )
+    jacobi_result = _drag_viscous_step!(jacobi, 0.01)
+    @test jacobi.workspace.two_phase.diffusion_solver.stats.converged
+    for phase in 1:2
+        @test isequal(isnan.(jacobi_result[phase]), isnan.(on_result[phase]))
+        @test maximum(
+            abs(a - b) for (a, b) in zip(jacobi_result[phase], on_result[phase]) if isfinite(a)
+        ) <= 1.0e-9
+    end
 end

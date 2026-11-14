@@ -158,16 +158,22 @@ function _prescribe_two_velocity_diffusion_values!(destination, source, dirichle
     return destination
 end
 
-"""Record the direct metric viscous solve of `MimeticProjection` in the
-statistics of the diffusion solver: one cycle with the relative residual."""
-function _record_mimetic_viscous_solve!(stats::LinearSolverStats{T}, residual, tolerance) where {T}
-    stats.cycles = 1
-    stats.converged = residual <= _dimensionless_tolerance(T, tolerance)
-    stats.final_l2 = stats.final_linf = T(residual)
-    stats.method = :cholesky
-    stats.preconditioner = :none
+"""Record the metric viscous solve of `MimeticProjection` (conjugate gradients
+with the lifted mixture preconditioner) in the statistics of the diffusion
+solver."""
+function _record_mimetic_viscous_solve!(
+        stats::LinearSolverStats{T}, result, tolerance, max_cycles,
+    ) where {T}
+    stats.cycles = result.iterations
+    stats.converged = result.residual <= _dimensionless_tolerance(T, tolerance)
+    stats.final_l2 = stats.final_linf = T(result.residual)
+    stats.method = :cg
+    stats.preconditioner = :mimetic_lifted_mixture
     stats.converged || throw(
-        ErrorException("mimetic viscous solve: relative residual $residual above the tolerance $tolerance"),
+        ErrorException(
+            "mimetic viscous solve: relative residual $(result.residual) above the " *
+                "tolerance $tolerance after $(result.iterations) of $max_cycles iterations",
+        ),
     )
     return stats
 end
@@ -193,11 +199,12 @@ function _diffusion_substep!(
         # unconditionally non-increasing in that metric.
         result = _mimetic_viscous_step!(
             velocity, state.convected, state.projection_solver,
-            state.projection_workspace, diffusion.stiffness, dt,
-            model.interphase_drag, model, diffusion.averaging,
+            state.projection_workspace, diffusion,
+            workspace.two_phase.diffusion_solver, dt, model.interphase_drag, model;
+            tolerance, max_cycles,
         )
         _record_mimetic_viscous_solve!(
-            workspace.two_phase.diffusion_solver.stats, result.residual, tolerance,
+            workspace.two_phase.diffusion_solver.stats, result, tolerance, max_cycles,
         )
         _prescribe_two_velocity_diffusion_values!(
             velocity, state.convected, diffusion.dirichlet_faces,

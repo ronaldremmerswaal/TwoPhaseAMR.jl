@@ -1004,9 +1004,35 @@ than to $0$ (the implicit midpoint is A- but not L-stable): a slip with
 $\lambda_f\dt\gg1$ alternates in sign and decays slowly, where the exact
 update of~\cref{eq:viscosity:drag} removes it in one step.
 
-The system has one unknown per phase value, is symmetric positive definite and is
-solved directly (sparse Cholesky factorisation, rebuilt every step since
-$\mathcal M$ follows the interface).
+\emph{Solver.} The system has one unknown per phase value and is symmetric
+positive definite. It is solved matrix-free by preconditioned conjugate
+gradients ($\mathcal M$ through its diagonal and band, $\mathsf R$ and
+$\mathsf R^{\transpose}$ face by face, $\mathsf K$ in the factorised form of
+the mixture solve, $\mathsf A_{\mathrm d}$ face by face), from
+$u^{\stage{1}}$, to the max-norm residual of the mixture solve's tolerance
+relative to the right-hand side, with the lifted mixture preconditioner
+\[
+  \mathcal P=\bigl(\mathsf G^{-1}-\mathsf P\mathsf B_{\mathsf W}^{-1}\mathsf P^{\transpose}\bigr)
+  +\mathsf P\,\mathcal V\,\mathsf P^{\transpose},
+  \qquad \mathsf G=\mathsf W+\tfrac{\dt}2\mathsf A_{\mathrm d},
+\]
+where $\mathcal V\approx(\mathsf B_{\mathsf W}+\tfrac{\dt}2\mathsf K)^{-1}$ is
+one cycle of the mixture solve's multigrid hierarchy, refreshed with the
+mixture masses $\mathsf B_{\mathsf W}$ of the metric, and $\mathsf G$ is
+$2\times2$ per face. Because $\mathsf A_{\mathrm d}$ annihilates equal phase
+values, $\mathsf G\mathsf P=\mathsf W\mathsf P$ and
+$\mathsf P^{\transpose}\mathsf G\mathsf P=\mathsf B_{\mathsf W}$, and the
+Woodbury identity gives
+$(\mathsf G+\tfrac{\dt}2\mathsf R^{\transpose}\mathsf K\mathsf R)^{-1}
+=\mathsf G^{-1}-\mathsf P\mathsf B_{\mathsf W}^{-1}\mathsf P^{\transpose}
++\mathsf P(\mathsf B_{\mathsf W}+\tfrac{\dt}2\mathsf K)^{-1}\mathsf P^{\transpose}$:
+where $\mathcal M=\mathsf W$ and the cycle is exact, $\mathcal P$ is the
+inverse of the system. Its first term is
+$\mathsf G^{-1/2}(\mathsf I-\Pi)\mathsf G^{-1/2}$ with the
+$\mathsf G$-orthogonal projector $\Pi$ onto the face fields, positive
+semi-definite, so $\mathcal P$ is symmetric positive definite whenever the
+cycle is (equal pre- and post-smoothing). Without a mixture preconditioner
+the cycle is the inverse diagonal of the mixture matrix.
 
 \emph{Properties} (the note's propositions on the meaning of consistency
 and on the assembly). $\mathcal M$ is symmetric positive definite (under the
@@ -1065,7 +1091,10 @@ forces \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_capillar
 with \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_cell_curvature!},
 \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_uniform_acceleration!};
 viscous step \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_viscous_step!}~\cref{eq:projection:mimetic-viscous}
-with the drag of \srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_interphase_drag_matrix}~\cref{eq:projection:mimetic-viscous-drag}.
+with the drag of \srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_interphase_drag_coefficients!}~\cref{eq:projection:mimetic-viscous-drag},
+solved by \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_viscous_cg!}
+with \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_viscous_apply!} and
+\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_viscous_precondition!}.
 Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric: symmetry, definiteness, diagonal masses and consistency},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic Gram blocks: the polygon block where the polygon exists, degenerate data},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric on averaged apertures that close no region},

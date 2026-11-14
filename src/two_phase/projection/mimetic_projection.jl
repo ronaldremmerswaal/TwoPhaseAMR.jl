@@ -51,6 +51,29 @@ Base.size(op::_MimeticSchurOperator) = (op.size, op.size)
 Base.size(op::_MimeticSchurOperator, dimension::Integer) = op.size
 Base.eltype(::_MimeticSchurOperator{T}) where {T} = T
 
+"""Storage of the mimetic viscous step (`_mimetic_viscous_step!`): conjugate
+gradient vectors on the phase values and face fields of the mixture."""
+struct _MimeticViscousWork{T}
+    values::Vector{T}
+    solution::Vector{T}
+    rhs::Vector{T}
+    residual::Vector{T}
+    direction::Vector{T}
+    preconditioned::Vector{T}
+    product::Vector{T}
+    face_mass::Vector{T}
+    face_density::Vector{T}
+    face_sum::Vector{T}
+    face_stress::Vector{T}
+    face_correction::Vector{T}
+    face_diagonal::Vector{T}
+    drag::Vector{T}
+    stress_work::Vector{T}
+end
+
+_MimeticViscousWork(::Type{T}) where {T} =
+    _MimeticViscousWork{T}((T[] for _ in 1:fieldcount(_MimeticViscousWork))...)
+
 """Reusable fields and the most recently assembled mimetic system."""
 mutable struct MimeticProjectionWorkspace{T, M <: BlockTreeMesh}
     liquid_fraction_x::FaceField{1, T, M}
@@ -87,8 +110,7 @@ mutable struct MimeticProjectionWorkspace{T, M <: BlockTreeMesh}
     force_solution::Vector{T}
     cell_curvature::Vector{T}
     curvature_weight::Vector{T}
-    viscous_values::Vector{T}
-    viscous_face_mass::Vector{T}
+    viscous::_MimeticViscousWork{T}
 end
 
 """
@@ -102,7 +124,8 @@ function MimeticProjectionWorkspace(solver::MimeticProjectionSolver{T}) where {T
         FaceField{1}(mesh, T), FaceField{2}(mesh, T), nothing, nothing,
         CellRef[], _MimeticAssembly(T), nothing, spzeros(T, 0, 0), spzeros(T, 0, 0),
         spzeros(T, 0, 0), T[], T[], Bool[], Int8[], T[], nothing, nothing, nothing,
-        T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], nothing, T[], T[], T[], T[], T[], T[],
+        T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], nothing, T[], T[], T[], T[],
+        _MimeticViscousWork(T),
     )
 end
 
@@ -816,32 +839,153 @@ function _mimetic_capillary_force!(
     return velocity
 end
 
-"""Sparse matrix of the assembled metric `𝓜` on all degrees of freedom."""
-function _mimetic_metric_matrix(workspace::MimeticProjectionWorkspace{T}) where {T}
+"""`y = (𝓜 + half (RᵀKR + A_drag)) x`, matrix-free (`half < 0` gives the
+right-hand side). `R x` is the staggered-mass mean of the values of a face,
+`Rᵀ` hands a face value back to the phase values with the weights `m_d / B_f`,
+`K` is applied in its factorized form `EᵀW_μE` and `A_drag` face by face with
+the coefficients `work.drag`."""
+function _mimetic_viscous_apply!(y, workspace, operator, half, x)
+    work = workspace.viscous
     assembly = workspace.assembly
-    dofs = length(assembly.dof_face)
-    band = assembly.band
-    rows, columns, values = findnz(assembly.band_matrix)
-    for index in eachindex(rows)
-        rows[index] = band[rows[index]]
-        columns[index] = band[columns[index]]
+    _mimetic_metric_product!(y, workspace, x)
+    mean = work.face_sum
+    mass = work.face_mass
+    for face in eachindex(mean)
+        liquid = assembly.liquid_dof[face]
+        gas = assembly.gas_dof[face]
+        mean[face] = if liquid == gas || gas == 0
+            x[liquid]
+        elseif liquid == 0
+            x[gas]
+        else
+            muladd(
+                assembly.dof_mass[liquid], x[liquid], assembly.dof_mass[gas] * x[gas],
+            ) / mass[face]
+        end
     end
-    for dof in 1:dofs
-        assembly.band_position[dof] > 0 && continue
-        push!(rows, dof)
-        push!(columns, dof)
-        push!(values, assembly.diagonal[dof])
+    stress = work.face_stress
+    _factorized_variable_stiffness_mul!(stress, operator, mean, work.stress_work)
+    for dof in eachindex(y)
+        face = assembly.dof_face[dof]
+        y[dof] = muladd(half * assembly.dof_mass[dof] / mass[face], stress[face], y[dof])
     end
-    return sparse(rows, columns, values, dofs, dofs)
+    drag = work.drag
+    for face in eachindex(drag)
+        coefficient = drag[face]
+        iszero(coefficient) && continue
+        liquid = assembly.liquid_dof[face]
+        gas = assembly.gas_dof[face]
+        force = half * coefficient * (x[liquid] - x[gas])
+        y[liquid] += force
+        y[gas] -= force
+    end
+    return y
+end
+
+"""`y ≈ (B + half K)⁻¹ x` on the faces: one cycle of the mixture solve's
+preconditioner (refreshed for the staggered masses `B` of the metric), or the
+inverse diagonal of its matrix if it has none."""
+function _mimetic_mixture_cycle!(y, work, mixture_solver, x)
+    preconditioner = mixture_solver.preconditioner
+    isnothing(preconditioner) || return ldiv!(y, preconditioner, x)
+    y .= x ./ work.face_diagonal
+    return y
+end
+
+"""Lifted mixture preconditioner of the viscous step,
+
+    z = (G⁻¹ - P B⁻¹ Pᵀ) r + P 𝒱 Pᵀ r,
+
+with the face-local `G = W + half A_drag` (the staggered phase masses `W` and
+the drag of the face), `P` the copy of a face value to its phase values,
+`B = PᵀWP` and `𝒱 ≈ (B + half K)⁻¹` (`_mimetic_mixture_cycle!`). Since
+`GP = WP`, Woodbury gives `(G + RᵀKR)⁻¹ = G⁻¹ - PB⁻¹Pᵀ + P(B + half K)⁻¹Pᵀ`
+(`R = B⁻¹PᵀW`): for `𝓜 = W` and an exact `𝒱` this is the inverse of the
+system. `G⁻¹ - PB⁻¹Pᵀ = G^{-1/2}(I - Π)G^{-1/2}` with the `G`-orthogonal
+projector `Π` onto the face fields is positive semi-definite, so `z` is
+symmetric positive definite with `𝒱`."""
+function _mimetic_viscous_precondition!(z, workspace, mixture_solver, half, r)
+    work = workspace.viscous
+    assembly = workspace.assembly
+    sum = work.face_sum
+    for face in eachindex(sum)
+        liquid = assembly.liquid_dof[face]
+        gas = assembly.gas_dof[face]
+        sum[face] = liquid == gas || gas == 0 ? r[liquid] :
+            liquid == 0 ? r[gas] : r[liquid] + r[gas]
+    end
+    correction = _mimetic_mixture_cycle!(work.face_correction, work, mixture_solver, sum)
+    mass = work.face_mass
+    drag = work.drag
+    for face in eachindex(sum)
+        liquid = assembly.liquid_dof[face]
+        gas = assembly.gas_dof[face]
+        if liquid == gas || gas == 0
+            z[liquid] = correction[face]
+        elseif liquid == 0
+            z[gas] = correction[face]
+        else
+            liquid_mass = assembly.dof_mass[liquid]
+            gas_mass = assembly.dof_mass[gas]
+            coupling = half * drag[face]
+            determinant = muladd(coupling, liquid_mass + gas_mass, liquid_mass * gas_mass)
+            shift = correction[face] - sum[face] / mass[face]
+            z[liquid] = muladd(gas_mass + coupling, r[liquid], coupling * r[gas]) /
+                determinant + shift
+            z[gas] = muladd(liquid_mass + coupling, r[gas], coupling * r[liquid]) /
+                determinant + shift
+        end
+    end
+    return z
+end
+
+"""Preconditioned conjugate gradients for the viscous system from
+`x = work.values`, stopped when the max-norm residual is at most `ratio`
+times that of the right-hand side; restarted from the true residual if the
+recursive one drifted below the target. Returns the iterations and the
+relative true residual."""
+function _mimetic_viscous_cg!(workspace, operator, mixture_solver, half, ratio, max_cycles)
+    work = workspace.viscous
+    x, b, r = work.solution, work.rhs, work.residual
+    z, p, q = work.preconditioned, work.direction, work.product
+    T = eltype(x)
+    copyto!(x, work.values)
+    scale = max(norm(b, Inf), floatmin(T))
+    target = ratio * scale
+    _mimetic_viscous_apply!(q, workspace, operator, half, x)
+    r .= b .- q
+    residual = norm(r, Inf)
+    iterations = 0
+    while residual > target && iterations < max_cycles
+        _mimetic_viscous_precondition!(z, workspace, mixture_solver, half, r)
+        rz = dot(r, z)
+        copyto!(p, z)
+        while iterations < max_cycles
+            _mimetic_viscous_apply!(q, workspace, operator, half, p)
+            alpha = rz / dot(p, q)
+            x .+= alpha .* p
+            r .-= alpha .* q
+            iterations += 1
+            norm(r, Inf) <= target && break
+            _mimetic_viscous_precondition!(z, workspace, mixture_solver, half, r)
+            next = dot(r, z)
+            p .= z .+ (next / rz) .* p
+            rz = next
+        end
+        _mimetic_viscous_apply!(q, workspace, operator, half, x)
+        r .= b .- q
+        residual = norm(r, Inf)
+    end
+    return iterations, residual / scale
 end
 
 """Implicit-midpoint viscous step of the phase values in the metric `𝓜`.
 
 With the mixture map `R = B⁻¹PᵀW` (the staggered-mass mean `ū = Ru` of the
 values of a face, `B = PᵀWP`), the symmetric positive semi-definite stress
-matrix `K` of the mixture solve and the interphase drag matrix `A_drag` of
-`drag` (`_interphase_drag_matrix`, zero for `drag = nothing`),
-`A = RᵀKR + A_drag` and
+operator `K` of the mixture solve (`operator`) and the interphase drag
+`A_drag` of `drag` (`_interphase_drag_coefficients!`, zero for
+`drag = nothing`), `A = RᵀKR + A_drag` and
 
     (𝓜 + dt/2 A) u⁺ = (𝓜 - dt/2 A) u.
 
@@ -851,43 +995,67 @@ the projection, for any time step. For `𝓜 = W` and no drag it is the common
 increment of the Crank--Nicolson mixture solve, `u⁺ = u + Pδ`. The values of
 `source` are gathered as for the projection (an identified grid-line value is
 the mass-weighted mean of the two phase values) and the result is written to
-`destination`; absent (`NaN`) values stay absent. `model` and `averaging` (the
-stress operator's viscosity averaging) give the drag its conductances. The
-system is solved directly (sparse Cholesky); returns its relative residual
-and size."""
+`destination`; absent (`NaN`) values stay absent. The system is solved
+matrix-free by conjugate gradients (`_mimetic_viscous_cg!`) with the lifted
+mixture preconditioner `_mimetic_viscous_precondition!`, whose cycle is the
+mixture solve's own (`mixture_solver`, refreshed here for the masses `B`), to
+the relative max-norm residual `tolerance`; returns that residual, the
+iterations and the number of unknowns."""
 function _mimetic_viscous_step!(
         destination::TwoPhaseVelocity, source::TwoPhaseVelocity,
         solver::MimeticProjectionSolver{T}, workspace::MimeticProjectionWorkspace{T},
-        stiffness::AbstractMatrix{T}, dt, drag, model, averaging,
+        operator, mixture_solver, dt, drag, model;
+        tolerance, max_cycles,
     ) where {T}
     assembly = _mimetic_assemble!(solver, workspace)
+    work = workspace.viscous
     dofs = length(assembly.dof_face)
-    faces = size(stiffness, 1)
-    values = workspace.viscous_values
-    _mimetic_gather!(values, assembly, source)
-    mass = resize!(workspace.viscous_face_mass, faces)
-    fill!(mass, zero(T))
-    for dof in 1:dofs
-        mass[assembly.dof_face[dof]] += assembly.dof_mass[dof]
+    faces = length(operator.volumes)
+    _mimetic_gather!(work.values, assembly, source)
+    for vector in (
+            work.solution, work.rhs, work.residual, work.direction,
+            work.preconditioned, work.product,
+        )
+        resize!(vector, dofs)
     end
-    weights = [assembly.dof_mass[dof] / mass[assembly.dof_face[dof]] for dof in 1:dofs]
-    mixture = sparse(assembly.dof_face, 1:dofs, weights, faces, dofs)
-    viscous = mixture' * (stiffness * mixture)
-    if !isnothing(drag)
-        coupling = _interphase_drag_matrix(assembly, values, drag, model, averaging)
-        isnothing(coupling) || (viscous = viscous + coupling)
+    for vector in (
+            work.face_mass, work.face_density, work.face_sum, work.face_stress,
+            work.face_correction, work.face_diagonal, work.drag,
+        )
+        resize!(vector, faces)
     end
-    metric = _mimetic_metric_matrix(workspace)
+    resize!(work.stress_work, length(operator.stress_weights))
+    for face in 1:faces
+        liquid = assembly.liquid_dof[face]
+        gas = assembly.gas_dof[face]
+        mass = liquid == gas || gas == 0 ? assembly.dof_mass[liquid] :
+            liquid == 0 ? assembly.dof_mass[gas] :
+            assembly.dof_mass[liquid] + assembly.dof_mass[gas]
+        work.face_mass[face] = mass
+        work.face_density[face] = mass / operator.volumes[face]
+    end
+    _interphase_drag_coefficients!(
+        work.drag, assembly, work.values, drag, model, operator.averaging,
+    )
     half = T(dt) / 2
-    matrix = metric + half * viscous
-    rhs = metric * values - half * (viscous * values)
-    solution = cholesky(Symmetric(matrix)) \ rhs
-    residual = norm(matrix * solution - rhs, Inf) / max(norm(rhs, Inf), floatmin(T))
+    _update_variable_diffusion_solver!(mixture_solver, operator, work.face_density, T(dt))
+    if isnothing(mixture_solver.preconditioner)
+        matrix = mixture_solver.matrix
+        rows = rowvals(matrix)
+        for face in 1:faces, pointer in nzrange(matrix, face)
+            rows[pointer] == face && (work.face_diagonal[face] = nonzeros(matrix)[pointer])
+        end
+    end
+    _mimetic_viscous_apply!(work.rhs, workspace, operator, -half, work.values)
+    iterations, residual = _mimetic_viscous_cg!(
+        workspace, operator, mixture_solver, half,
+        _dimensionless_tolerance(T, tolerance), max_cycles,
+    )
     _copy_velocity!(destination, source)
     for dof in 1:dofs
-        _mimetic_scatter!(destination, assembly, dof, solution[dof], false)
+        _mimetic_scatter!(destination, assembly, dof, work.solution[dof], false)
     end
-    return (; residual, unknowns = dofs)
+    return (; residual, iterations, unknowns = dofs)
 end
 
 """Add `dt g` to every active interior phase value: gravity as the uniform

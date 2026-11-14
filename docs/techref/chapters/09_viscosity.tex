@@ -1002,7 +1002,7 @@ the drag~\cref{eq:viscosity:drag} \apitype{InterphaseDrag} in
 \srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_clip_convex}; with the
 mimetic projection
 \srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_interphase_conductance} and
-\srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_interphase_drag_matrix}.
+\srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_interphase_drag_coefficients!}.
 Tests: \testsym{test/operators/staggered_diffusion.jl}{implicit midpoint staggered elliptic solve},
 \testsym{test/operators/staggered_diffusion.jl}{dimensionless diffusion tolerance and failure report},
 \testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Two-phase diffusion uses the thesis split state}

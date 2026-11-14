@@ -1267,7 +1267,7 @@ sources = [
   { file = "src/two_phase/two_velocity/interphase_drag.jl", symbol = "_interphase_conductance" },
   { file = "src/two_phase/two_velocity/interphase_drag.jl", symbol = "_interphase_drag_rate" },
   { file = "src/two_phase/two_velocity/interphase_drag.jl", symbol = "_interphase_drag!" },
-  { file = "src/two_phase/two_velocity/interphase_drag.jl", symbol = "_interphase_drag_matrix" }
+  { file = "src/two_phase/two_velocity/interphase_drag.jl", symbol = "_interphase_drag_coefficients!" }
 ]
 tests = [
   { file = "test/two_phase/two_velocity/interphase_drag.jl", testset = "Interphase drag geometry" },
