@@ -24,6 +24,7 @@ const TEST_GROUPS = [
     "integration/two_velocity_instabilities" => ["integration/interfacial_instability_problem.jl", "integration/two_velocity_instabilities.jl"],
     "integration/two_phase_waves" => ["integration/two_phase_waves.jl"],
     "integration/two_phase_droplet" => ["integration/two_phase_droplet.jl"],
+    "integration/static_droplet_stability" => ["integration/static_droplet_stability.jl"],
     "integration/two_phase_sessile_droplet" => ["integration/two_phase_sessile_droplet.jl"],
     "integration/anisotropic_cells" => ["integration/anisotropic_cells.jl"],
     "integration/single_phase_cylinder" => ["integration/cylinder_reference_problem.jl", "integration/single_phase_cylinder.jl"],

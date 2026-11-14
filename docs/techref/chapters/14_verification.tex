@@ -134,7 +134,7 @@ missing, and when a default group is not in exactly one unit shard. The
 default suite (\code{Pkg.test()}) is \code{registry} and the eleven groups
 that are neither integration groups nor one of the separate groups
 \code{performance} and \code{threading_equivalence}, which have their own
-jobs. Arguments select groups by name, \code{integration} selects the thirteen
+jobs. Arguments select groups by name, \code{integration} selects the fourteen
 integration groups and \code{shard:A}, \code{shard:B}, \code{shard:C} the unit
 shards. The unit groups check contracts, exact identities and short
 manufactured-solution studies; the integration groups run refinement studies
@@ -574,6 +574,7 @@ instability studies refine the step with the mesh through the bounds of
   \quad two velocities & as above & as above & DR $1$: end $1.98$; DR $1000$: $1.67$ & as one velocity\\
   \quad flat interface at rest & amplitude and speed & rest & $1.1\times10^{-14}$ & $\le10^{-9}$\\
   Floating droplet, mode 4, DR $1000$ (16, 32) & period of the kinetic energy; largest kinetic energy & Lamb period & -- & period error and energy fall by more than $4$; viscous peaks decay\\
+  Static droplet, La $1200$ and $\infty$, DR $1$, $3$, $1000$ (16, 32) & largest phase speed on mixed faces (aperture floor $0.05$); kinetic-energy envelope; rest with prescribed $\kappa$ & rest; thesis floating droplet & prescribed $\le1.5\times10^{-11}$; DR $1000$ late $0.86$ (gas; liquid $1.8\times10^{-3}$) & prescribed $\le10^{-9}\sigma/\mu$; finite La: each phase's second half $\le$ first half and peaks decay; La $\infty$: last-third peaks $\le1.25$ first third; $n=32\le n=16$; Ca $=\max|u|\mu_l/\sigma\le5\times10^{-3}$ (mimetic DR $1$, $3$ and the DR $1000$ gas are recorded as broken)\\
   Sessile droplet, $90^\circ$, Bo $1.21$, La $550$ (12, 24, 48) & $L^1$ fraction at a quarter capillary time & Laplace--Young profile & $2.23$, $2.72$ & all $\ge1.2$, decreasing\\
   Kelvin--Helmholtz, two velocities (8, 16, 32) & amplitude error & dispersion relation~\thesis{App.~7.B} & DR $1$, We $0.5$: end $1.56$; DR $1000$: $0.91$; DR $1$, We $5$: $1.02$ & end $\ge0.8$; decreasing\\
   Rayleigh--Taylor, frozen (8, 16, 32) & amplitude error & as above & DR $3$, Bo $0.5$: end $3.05$; DR $1000$: $1.78$; DR $3$, Bo $2$: $1.36$ & end $\ge1.7$; $\ge1.3$ (Bo $2$); decreasing\\
@@ -616,6 +617,7 @@ Tests in the order of \cref{tab:verif:benchmarks}:
 \srcsym{examples/06_capillary_wave/prosperetti_amplitude.jl}{prosperetti_amplitude}),
 \testsym{test/integration/two_phase_droplet.jl}{Floating droplet: equilibrium and Lamb frequency}
 (\srcsym{test/integration/two_phase_droplet.jl}{floating_droplet_case}),
+\testsym{test/integration/static_droplet_stability.jl}{Static-droplet stability at prescribed and estimated curvature},
 \testsym{test/integration/two_phase_sessile_droplet.jl}{Sessile droplet equilibrium convergence},
 \testsym{test/integration/two_velocity_instabilities.jl}{Two-velocity Kelvin--Helmholtz dispersion convergence},
 \testsym{test/integration/two_velocity_instabilities.jl}{Two-velocity Rayleigh--Taylor dispersion convergence},
