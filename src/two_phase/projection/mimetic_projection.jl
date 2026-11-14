@@ -3,7 +3,7 @@
 # solids only. See docs/techref/chapters/10_projection.tex, "Mimetic cut-cell
 # projection".
 
-import SparseArrays: UMFPACK
+import SparseArrays: CHOLMOD, UMFPACK
 
 """
     MimeticProjectionSolver(interface; density=(1, 1))
@@ -52,8 +52,10 @@ Base.size(op::_MimeticSchurOperator, dimension::Integer) = op.size
 Base.eltype(::_MimeticSchurOperator{T}) where {T} = T
 
 """Storage of the mimetic viscous step (`_mimetic_viscous_step!`): conjugate
-gradient vectors on the phase values and face fields of the mixture."""
-struct _MimeticViscousWork{T}
+gradient vectors on the phase values, face fields of the mixture, the band
+block of the operator with its factorisation, and the number of conjugate
+gradient restarts with the lifted preconditioner alone (`restarts`)."""
+mutable struct _MimeticViscousWork{T}
     values::Vector{T}
     solution::Vector{T}
     rhs::Vector{T}
@@ -69,13 +71,22 @@ struct _MimeticViscousWork{T}
     face_diagonal::Vector{T}
     band_product::Vector{T}
     band_residual::Vector{T}
-    band_update::Vector{T}
     drag::Vector{T}
     stress_work::Vector{T}
+    band_rows::Vector{Int}
+    band_columns::Vector{Int}
+    band_values::Vector{T}
+    band_rhs::Vector{T}
+    band_colptr::Vector{Int}
+    band_rowval::Vector{Int}
+    band_factor::Union{Nothing, CHOLMOD.Factor{T, Int}}
+    restarts::Int
 end
 
-_MimeticViscousWork(::Type{T}) where {T} =
-    _MimeticViscousWork{T}((T[] for _ in 1:fieldcount(_MimeticViscousWork))...)
+_MimeticViscousWork(::Type{T}) where {T} = _MimeticViscousWork{T}(
+    T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[],
+    Int[], Int[], T[], T[], Int[], Int[], nothing, 0,
+)
 
 """Reusable fields and the most recently assembled mimetic system."""
 mutable struct MimeticProjectionWorkspace{T, M <: BlockTreeMesh}
@@ -942,72 +953,197 @@ function _mimetic_lifted_mixture!(z, workspace, mixture_solver, half, r)
     return z
 end
 
-"""Preconditioner of the viscous step: the lifted mixture preconditioner `L`
-(`_mimetic_lifted_mixture!`, exact for `𝓜 = W`) with a symmetric
-multiplicative correction on the band, where `𝓜 ≠ W`,
-
-    z₁ = L r,   z₂ = z₁ + E 𝓜_bb⁻¹ Eᵀ (r - A z₁),   z = z₂ + L (r - A z₂),
-
-`E` the injection of the band values and `𝓜_bb` the band block of the metric
-(its factorisation of the projection). Without a band it is `L`."""
-function _mimetic_viscous_precondition!(z, workspace, operator, mixture_solver, half, r)
-    _mimetic_lifted_mixture!(z, workspace, mixture_solver, half, r)
-    band = workspace.assembly.band
-    isempty(band) && return z
+"""Assemble the band block `A_bb = 𝓜_bb + half (R_bᵀKR_b + A_drag,bb)` of the
+viscous operator on the band values (upper triangle; `K` assembled, the drag
+from `work.drag`) and factorise it (sparse LDLᵀ, simplicial: no BLAS, so the
+bits do not depend on the BLAS threads). The symbolic analysis is reused while
+the sparsity pattern is unchanged."""
+function _mimetic_viscous_band_factor!(workspace, operator, half)
     work = workspace.viscous
-    product, residual, update = work.band_product, work.band_residual, work.band_update
-    _mimetic_viscous_apply!(product, workspace, operator, half, z)
-    residual .= r .- product
-    for (position, dof) in pairs(band)
-        workspace.band_scratch[position] = residual[dof]
+    assembly = workspace.assembly
+    band = assembly.band
+    position = assembly.band_position
+    T = eltype(work.band_values)
+    rows, columns, values = work.band_rows, work.band_columns, work.band_values
+    empty!(rows)
+    empty!(columns)
+    empty!(values)
+    metric = assembly.band_matrix
+    for column in axes(metric, 2), pointer in nzrange(metric, column)
+        row = rowvals(metric)[pointer]
+        row <= column || continue
+        push!(rows, row)
+        push!(columns, column)
+        push!(values, nonzeros(metric)[pointer])
     end
-    ldiv!(workspace.band_solution, workspace.factor, workspace.band_scratch)
-    for (position, dof) in pairs(band)
-        z[dof] += workspace.band_solution[position]
+    stiffness = operator.stiffness
+    mass = work.face_mass
+    for (column, dof) in pairs(band)
+        face = assembly.dof_face[dof]
+        weight = half * assembly.dof_mass[dof] / mass[face]
+        for pointer in nzrange(stiffness, face)
+            other = rowvals(stiffness)[pointer]
+            liquid = assembly.liquid_dof[other]
+            gas = assembly.gas_dof[other]
+            for target in (liquid == gas ? (liquid, 0) : (liquid, gas))
+                target > 0 || continue
+                row = position[target]
+                0 < row <= column || continue
+                push!(rows, row)
+                push!(columns, column)
+                push!(values, weight * nonzeros(stiffness)[pointer] * assembly.dof_mass[target] / mass[other])
+            end
+        end
     end
-    _mimetic_viscous_apply!(product, workspace, operator, half, z)
-    residual .= r .- product
-    _mimetic_lifted_mixture!(update, workspace, mixture_solver, half, residual)
-    z .+= update
+    for face in eachindex(work.drag)
+        coefficient = half * work.drag[face]
+        iszero(coefficient) && continue
+        liquid = position[assembly.liquid_dof[face]]
+        gas = position[assembly.gas_dof[face]]
+        for row in (liquid, gas)
+            row > 0 || continue
+            push!(rows, row)
+            push!(columns, row)
+            push!(values, coefficient)
+        end
+        if liquid > 0 && gas > 0
+            push!(rows, min(liquid, gas))
+            push!(columns, max(liquid, gas))
+            push!(values, -coefficient)
+        end
+    end
+    count = length(band)
+    matrix = Symmetric(sparse(rows, columns, values, count, count), :U)
+    data = parent(matrix)
+    if isnothing(work.band_factor) || work.band_colptr != data.colptr ||
+            work.band_rowval != rowvals(data)
+        work.band_factor = CHOLMOD.ldlt(matrix)
+        copy!(work.band_colptr, data.colptr)
+        copy!(work.band_rowval, rowvals(data))
+    else
+        CHOLMOD.ldlt!(work.band_factor, matrix)
+    end
+    resize!(work.band_rhs, count)
+    return work.band_factor
+end
+
+"""`z = E A_bb⁻¹ Eᵀ r` (`add = false`, zero off the band) or `z += E A_bb⁻¹ Eᵀ r`."""
+function _mimetic_band_correction!(z, workspace, r, add)
+    work = workspace.viscous
+    band = workspace.assembly.band
+    add || fill!(z, zero(eltype(z)))
+    for (position, dof) in pairs(band)
+        work.band_rhs[position] = r[dof]
+    end
+    solution = work.band_factor \ work.band_rhs
+    for (position, dof) in pairs(band)
+        z[dof] += solution[position]
+    end
     return z
+end
+
+"""Preconditioner of the viscous step: the lifted mixture preconditioner `L`
+(`_mimetic_lifted_mixture!`, exact for `𝓜 = W`) inside a symmetric
+multiplicative correction with the exact band block `C = E A_bb⁻¹ Eᵀ`
+(`_mimetic_viscous_band_factor!`), where `𝓜 ≠ W`,
+
+    z₁ = C r,   z₂ = z₁ + L (r - A z₁),   z = z₂ + C (r - A z₂).
+
+`I - CA` is the `A`-orthogonal projector `Q` onto the complement of the band
+values, the error propagation is `Q(I - LA)Q`, and `rᵀz = |(I - Q)A⁻¹r|²_A +
+(AQA⁻¹r)ᵀL(AQA⁻¹r) > 0`: symmetric positive definite for every symmetric
+positive definite `L`, independent of the time step. Without a band, or with
+`lifted_only`, it is `L`."""
+function _mimetic_viscous_precondition!(
+        z, workspace, operator, mixture_solver, half, r; lifted_only = false,
+    )
+    band = workspace.assembly.band
+    if lifted_only || isempty(band)
+        return _mimetic_lifted_mixture!(z, workspace, mixture_solver, half, r)
+    end
+    work = workspace.viscous
+    product, residual = work.band_product, work.band_residual
+    _mimetic_band_correction!(z, workspace, r, false)
+    _mimetic_viscous_apply!(product, workspace, operator, half, z)
+    residual .= r .- product
+    _mimetic_lifted_mixture!(product, workspace, mixture_solver, half, residual)
+    z .+= product
+    _mimetic_viscous_apply!(product, workspace, operator, half, z)
+    residual .= r .- product
+    return _mimetic_band_correction!(z, workspace, residual, true)
+end
+
+"""Serial (thread- and BLAS-independent) dot product."""
+function _mimetic_dot(a::AbstractVector{T}, b::AbstractVector{T}) where {T}
+    sum = zero(T)
+    for index in eachindex(a, b)
+        sum = muladd(a[index], b[index], sum)
+    end
+    return sum
+end
+
+"""Serial maximum norm."""
+function _mimetic_max_norm(a::AbstractVector{T}) where {T}
+    result = zero(T)
+    for value in a
+        result = max(result, abs(value))
+    end
+    return result
 end
 
 """Preconditioned conjugate gradients for the viscous system from
 `x = work.values`, stopped when the max-norm residual is at most `ratio`
 times that of the right-hand side; restarted from the true residual if the
-recursive one drifted below the target. Returns the iterations and the
-relative true residual."""
+recursive one drifted below the target. Reductions are serial, so the bits
+do not depend on the thread counts. If round-off makes `rᵀz` or `pᵀAp`
+non-positive, the iteration restarts from the true residual with the lifted
+preconditioner alone (counted in `work.restarts`). Returns the iterations and
+the relative true residual."""
 function _mimetic_viscous_cg!(workspace, operator, mixture_solver, half, ratio, max_cycles)
     work = workspace.viscous
     x, b, r = work.solution, work.rhs, work.residual
     z, p, q = work.preconditioned, work.direction, work.product
     T = eltype(x)
     copyto!(x, work.values)
-    scale = max(norm(b, Inf), floatmin(T))
+    scale = max(_mimetic_max_norm(b), floatmin(T))
     target = ratio * scale
     _mimetic_viscous_apply!(q, workspace, operator, half, x)
     r .= b .- q
-    residual = norm(r, Inf)
+    residual = _mimetic_max_norm(r)
     iterations = 0
+    lifted_only = false
     while residual > target && iterations < max_cycles
-        _mimetic_viscous_precondition!(z, workspace, operator, mixture_solver, half, r)
-        rz = dot(r, z)
+        _mimetic_viscous_precondition!(z, workspace, operator, mixture_solver, half, r; lifted_only)
+        rz = _mimetic_dot(r, z)
         copyto!(p, z)
-        while iterations < max_cycles
+        breakdown = !(rz > zero(T))
+        while !breakdown && iterations < max_cycles
             _mimetic_viscous_apply!(q, workspace, operator, half, p)
-            alpha = rz / dot(p, q)
+            curvature = _mimetic_dot(p, q)
+            breakdown = !(curvature > zero(T))
+            breakdown && break
+            alpha = rz / curvature
             x .+= alpha .* p
             r .-= alpha .* q
             iterations += 1
-            norm(r, Inf) <= target && break
-            _mimetic_viscous_precondition!(z, workspace, operator, mixture_solver, half, r)
-            next = dot(r, z)
+            _mimetic_max_norm(r) <= target && break
+            _mimetic_viscous_precondition!(z, workspace, operator, mixture_solver, half, r; lifted_only)
+            next = _mimetic_dot(r, z)
+            breakdown = !(next > zero(T))
+            breakdown && break
             p .= z .+ (next / rz) .* p
             rz = next
         end
+        if breakdown
+            lifted_only && throw(
+                ErrorException("mimetic viscous solve: conjugate gradients broke down with the lifted preconditioner"),
+            )
+            lifted_only = true
+            work.restarts += 1
+        end
         _mimetic_viscous_apply!(q, workspace, operator, half, x)
         r .= b .- q
-        residual = norm(r, Inf)
+        residual = _mimetic_max_norm(r)
     end
     return iterations, residual / scale
 end
@@ -1029,11 +1165,12 @@ increment of the Crank--Nicolson mixture solve, `u⁺ = u + Pδ`. The values of
 `source` are gathered as for the projection (an identified grid-line value is
 the mass-weighted mean of the two phase values) and the result is written to
 `destination`; absent (`NaN`) values stay absent. The system is solved
-matrix-free by conjugate gradients (`_mimetic_viscous_cg!`) with the lifted
-mixture preconditioner `_mimetic_viscous_precondition!`, whose cycle is the
-mixture solve's own (`mixture_solver`, refreshed here for the masses `B`), to
-the relative max-norm residual `tolerance`; returns that residual, the
-iterations and the number of unknowns."""
+matrix-free by conjugate gradients (`_mimetic_viscous_cg!`) with the
+preconditioner `_mimetic_viscous_precondition!` (the lifted mixture
+preconditioner, whose cycle is the mixture solve's own, refreshed here for the
+masses `B` and required to be symmetric, inside an exact band-block
+correction), to the relative max-norm residual `tolerance`; returns that
+residual, the iterations and the number of unknowns."""
 function _mimetic_viscous_step!(
         destination::TwoPhaseVelocity, source::TwoPhaseVelocity,
         solver::MimeticProjectionSolver{T}, workspace::MimeticProjectionWorkspace{T},
@@ -1048,7 +1185,6 @@ function _mimetic_viscous_step!(
     for vector in (
             work.solution, work.rhs, work.residual, work.direction,
             work.preconditioned, work.product, work.band_product, work.band_residual,
-            work.band_update,
         )
         resize!(vector, dofs)
     end
@@ -1073,6 +1209,9 @@ function _mimetic_viscous_step!(
     )
     half = T(dt) / 2
     _update_variable_diffusion_solver!(mixture_solver, operator, work.face_density, T(dt))
+    # The lifted preconditioner is symmetric only for a symmetric cycle.
+    _validate_cg_preconditioner(mixture_solver.preconditioner)
+    isempty(assembly.band) || _mimetic_viscous_band_factor!(workspace, operator, half)
     if isnothing(mixture_solver.preconditioner)
         matrix = mixture_solver.matrix
         rows = rowvals(matrix)
