@@ -59,7 +59,7 @@ export AbstractViscosityAveraging, HarmonicViscosityAveraging, GeometricViscosit
 export LinearSolverOptions, MultigridOptions
 export AdvectionOptions, NavierStokesOptions, Adaptivity
 export SinglePhase, TwoPhase, SurfaceTension
-export AbstractVelocityModel, OneVelocityModel, TwoVelocityModel
+export AbstractVelocityModel, OneVelocityModel, TwoVelocityModel, InterphaseDrag
 export NavierStokesSystem
 export NavierStokesWorkspace, step!, simulate!
 export FlowSimulation
@@ -205,6 +205,7 @@ include("single_phase/physics.jl")
 include("two_phase/physics.jl")
 include("two_phase/one_velocity.jl")
 # two_phase/two_velocity
+include("two_phase/two_velocity/interphase_drag.jl")
 include("two_phase/two_velocity/model.jl")
 # two_phase/diffusion
 include("two_phase/diffusion/variable_diffusion_geometry.jl")

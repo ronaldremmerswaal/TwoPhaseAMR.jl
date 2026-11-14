@@ -182,6 +182,9 @@ function _diffusion_substep!(
         state.diffused_mixture, state.mixture_velocity;
         dirichlet_faces = diffusion.dirichlet_faces,
     )
+    # The common increment leaves the jump unchanged and the drag the mixture,
+    # so the two updates commute and the full drag step needs no splitting.
+    _interphase_drag!(velocity, model.interphase_drag, model, diffusion, dt)
     _mark_inactive_phase_velocities!(
         velocity, model.interface, workspace.two_phase.inactive_failures,
     )
@@ -333,7 +336,8 @@ increment that is added to the physical pressure.
 For a shortened CMDGFM step, the old-aperture mixture flux is scaled by
 the reference step, which must be at least `dt`.
 Viscosity acts implicitly on the phase-mass weighted one-velocity state; its
-common increment is applied to both phases.
+common increment is applied to both phases, and the interphase drag of the
+model then relaxes the phase-velocity jump of the mixed faces.
 
 The two-velocity projection keeps a Neumann pressure boundary and cannot
 correct open normal velocities. Boundary preparation extrapolates each phase;
