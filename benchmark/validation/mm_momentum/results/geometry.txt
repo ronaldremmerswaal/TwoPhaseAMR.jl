@@ -1,0 +1,16 @@
+# (1) Gram mass minus VOF mass, drop R=0.2 sliding by x0 + s h (s in [0,1]), density (1, 1e-3)
+n= 16 match=false liquid (G-V)/V xx: mean=-3.510e-03 range=6.433e-03  xy/V max=7.085e-04  max shift=-
+n= 16 match=true  liquid (G-V)/V xx: mean=+1.174e-32 range=6.626e-16  xy/V max=2.998e-17  max shift=3.05e-02 h
+n= 32 match=false liquid (G-V)/V xx: mean=-4.237e-04 range=6.922e-04  xy/V max=3.585e-05  max shift=-
+n= 32 match=true  liquid (G-V)/V xx: mean=+7.043e-33 range=8.835e-16  xy/V max=8.196e-18  max shift=7.72e-03 h
+n= 64 match=false liquid (G-V)/V xx: mean=-1.052e-04 range=8.334e-05  xy/V max=3.307e-06  max shift=-
+n= 64 match=true  liquid (G-V)/V xx: mean=+4.207e-17 range=6.626e-16  xy/V max=4.476e-18  max shift=2.45e-03 h
+# (2) increment bound λmax(W,𝓜), ‖𝓜⁻¹W‖∞, min entry of 𝓜⁻¹W, max |(𝓜-W)Z|/max(m,𝓜ff) over the band
+drop n=16 floor=1e-08  λmax=2.632  ‖𝓜⁻¹W‖∞=4.979  min(𝓜⁻¹W)=-7.959e-01  max|EZ|/m=1.000e+00  minC=9.5e-08
+drop n=32 floor=1e-08  λmax=2.541  ‖𝓜⁻¹W‖∞=4.971  min(𝓜⁻¹W)=-8.105e-01  max|EZ|/m=1.000e+00  minC=5.3e-08
+drop n=16 floor=1e-12  λmax=2.630  ‖𝓜⁻¹W‖∞=4.951  min(𝓜⁻¹W)=-7.653e-01  max|EZ|/m=1.000e+00  minC=3.0e-12
+drop n=32 floor=1e-12  λmax=2.410  ‖𝓜⁻¹W‖∞=4.533  min(𝓜⁻¹W)=-6.793e-01  max|EZ|/m=1.000e+00  minC=4.3e-12
+line n=16 floor=1e-08  λmax=2.223  ‖𝓜⁻¹W‖∞=4.278  min(𝓜⁻¹W)=-2.500e-01  max|EZ|/m=1.000e+00  minC=1.0e-06
+line n=32 floor=1e-08  λmax=2.180  ‖𝓜⁻¹W‖∞=3.995  min(𝓜⁻¹W)=-2.500e-01  max|EZ|/m=1.000e+00  minC=1.7e-08
+line n=16 floor=1e-12  λmax=2.223  ‖𝓜⁻¹W‖∞=4.279  min(𝓜⁻¹W)=-2.500e-01  max|EZ|/m=1.000e+00  minC=1.3e-12
+line n=32 floor=1e-12  λmax=2.055  ‖𝓜⁻¹W‖∞=3.772  min(𝓜⁻¹W)=-2.500e-01  max|EZ|/m=1.000e+00  minC=1.0e-12

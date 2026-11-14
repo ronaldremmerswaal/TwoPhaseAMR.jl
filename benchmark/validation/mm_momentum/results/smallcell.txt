@@ -1,0 +1,60 @@
+rho_g=1e+00 floor=1e-08 cfl=0.10 D0     max|u|/u0 all=    1.012 wet= 1.0113 Emax/E0=   1.0010 minC=2.2e-08 steps=538 wall/step=2.34e+01ms ok
+rho_g=1e+00 floor=1e-08 cfl=0.10 DI     max|u|/u0 all=    2.428 wet= 1.0254 Emax/E0=   1.0024 minC=2.2e-08 steps=542 wall/step=1.39e+01ms ok
+rho_g=1e+00 floor=1e-08 cfl=0.10 DP +mm max|u|/u0 all=    1.144 wet= 1.0238 Emax/E0=   1.0000 minC=3.3e-08 steps=541 wall/step=9.72e+00ms ok
+rho_g=1e+00 floor=1e-08 cfl=0.10 DG +mm max|u|/u0 all=1660636.462 wet= 3.7775 Emax/E0=5449.4286 minC=2.0e-06 steps=3 wall/step=1.26e+01ms blow-up
+rho_g=1e+00 floor=1e-08 cfl=0.10 DF     max|u|/u0 all=18752.945 wet= 4.5140 Emax/E0=   1.4127 minC=1.5e-08 steps=126 wall/step=9.05e+00ms blow-up
+rho_g=1e+00 floor=1e-08 cfl=0.25 D0     max|u|/u0 all=    1.008 wet= 1.0080 Emax/E0=   1.0005 minC=1.5e-08 steps=215 wall/step=9.46e+00ms ok
+rho_g=1e+00 floor=1e-08 cfl=0.25 DI     max|u|/u0 all=    1.050 wet= 1.0231 Emax/E0=   1.0017 minC=1.8e-08 steps=216 wall/step=9.68e+00ms ok
+rho_g=1e+00 floor=1e-08 cfl=0.25 DP +mm max|u|/u0 all=    1.047 wet= 1.0259 Emax/E0=   1.0000 minC=3.7e-08 steps=216 wall/step=8.87e+00ms ok
+rho_g=1e+00 floor=1e-08 cfl=0.25 DG +mm max|u|/u0 all=57053.463 wet= 1.0046 Emax/E0=   1.0923 minC=3.7e-08 steps=1 wall/step=1.24e+01ms blow-up
+rho_g=1e+00 floor=1e-08 cfl=0.25 DF     max|u|/u0 all=553620.560 wet= 2.2423 Emax/E0=   5.1954 minC=1.6e-08 steps=24 wall/step=1.58e+01ms blow-up
+rho_g=1e+00 floor=1e-08 cfl=0.50 D0     max|u|/u0 all=    1.005 wet= 1.0055 Emax/E0=   1.0001 minC=6.9e-08 steps=108 wall/step=7.97e+00ms ok
+rho_g=1e+00 floor=1e-08 cfl=0.50 DI     max|u|/u0 all=    1.045 wet= 1.0186 Emax/E0=   1.0008 minC=2.6e-08 steps=108 wall/step=8.61e+00ms ok
+rho_g=1e+00 floor=1e-08 cfl=0.50 DP +mm max|u|/u0 all=    1.048 wet= 1.0175 Emax/E0=   1.0000 minC=5.2e-08 steps=108 wall/step=1.04e+01ms ok
+rho_g=1e+00 floor=1e-08 cfl=0.50 DG +mm max|u|/u0 all=18535.630 wet=89.2344 Emax/E0=  34.8283 minC=8.7e-07 steps=21 wall/step=1.14e+01ms blow-up
+rho_g=1e+00 floor=1e-08 cfl=0.50 DF     max|u|/u0 all=96828.653 wet= 6.0093 Emax/E0=   2.0062 minC=2.1e-08 steps=42 wall/step=1.19e+01ms blow-up
+rho_g=1e+00 floor=1e-12 cfl=0.10 D0     max|u|/u0 all=    1.011 wet= 1.0113 Emax/E0=   1.0010 minC=2.5e-10 steps=538 wall/step=8.63e+00ms ok
+rho_g=1e+00 floor=1e-12 cfl=0.10 DI     max|u|/u0 all=    2.427 wet= 1.0254 Emax/E0=   1.0024 minC=9.9e-11 steps=542 wall/step=9.59e+00ms ok
+rho_g=1e+00 floor=1e-12 cfl=0.10 DP +mm max|u|/u0 all=    1.147 wet= 1.0237 Emax/E0=   1.0000 minC=1.4e-09 steps=541 wall/step=9.62e+00ms ok
+rho_g=1e+00 floor=1e-12 cfl=0.10 DG +mm max|u|/u0 all=1660636.462 wet= 3.7775 Emax/E0=5449.4286 minC=2.0e-06 steps=3 wall/step=1.23e+01ms blow-up
+rho_g=1e+00 floor=1e-12 cfl=0.10 DF     max|u|/u0 all=341770.694 wet= 3.0351 Emax/E0=   2.3509 minC=1.1e-12 steps=54 wall/step=8.58e+00ms blow-up
+rho_g=1e+00 floor=1e-12 cfl=0.25 D0     max|u|/u0 all=    1.008 wet= 1.0080 Emax/E0=   1.0005 minC=1.0e-09 steps=215 wall/step=9.25e+00ms ok
+rho_g=1e+00 floor=1e-12 cfl=0.25 DI     max|u|/u0 all=    1.050 wet= 1.0231 Emax/E0=   1.0017 minC=1.4e-09 steps=216 wall/step=8.97e+00ms ok
+rho_g=1e+00 floor=1e-12 cfl=0.25 DP +mm max|u|/u0 all=    1.047 wet= 1.0259 Emax/E0=   1.0000 minC=1.8e-10 steps=216 wall/step=8.78e+00ms ok
+rho_g=1e+00 floor=1e-12 cfl=0.25 DG +mm max|u|/u0 all=57053.463 wet= 1.0046 Emax/E0=   1.0923 minC=3.7e-08 steps=1 wall/step=1.38e+01ms blow-up
+rho_g=1e+00 floor=1e-12 cfl=0.25 DF     max|u|/u0 all=11699.969 wet= 2.2423 Emax/E0=   1.1039 minC=1.3e-12 steps=43 wall/step=1.35e+01ms blow-up
+rho_g=1e+00 floor=1e-12 cfl=0.50 D0     max|u|/u0 all=    1.005 wet= 1.0055 Emax/E0=   1.0001 minC=3.7e-11 steps=108 wall/step=7.96e+00ms ok
+rho_g=1e+00 floor=1e-12 cfl=0.50 DI     max|u|/u0 all=    1.045 wet= 1.0186 Emax/E0=   1.0008 minC=2.6e-08 steps=108 wall/step=8.81e+00ms ok
+rho_g=1e+00 floor=1e-12 cfl=0.50 DP +mm max|u|/u0 all=    1.048 wet= 1.0175 Emax/E0=   1.0000 minC=5.2e-08 steps=108 wall/step=1.08e+01ms ok
+rho_g=1e+00 floor=1e-12 cfl=0.50 DG +mm max|u|/u0 all=6933556.939 wet= 1.7768 Emax/E0=   7.1821 minC=1.1e-10 steps=7 wall/step=1.19e+01ms blow-up
+rho_g=1e+00 floor=1e-12 cfl=0.50 DF     max|u|/u0 all=11363.442 wet= 6.0093 Emax/E0=   1.3279 minC=5.7e-12 steps=55 wall/step=1.24e+01ms blow-up
+rho_g=1e-03 floor=1e-08 cfl=0.10 D0     max|u|/u0 all=  204.369 wet= 6.1349 Emax/E0=   1.0070 minC=1.5e-08 steps=735 wall/step=9.23e+00ms ok
+rho_g=1e-03 floor=1e-08 cfl=0.10 DI     max|u|/u0 all=  199.901 wet= 1.6888 Emax/E0=   1.0096 minC=1.5e-08 steps=1228 wall/step=9.87e+00ms ok
+rho_g=1e-03 floor=1e-08 cfl=0.10 DP +mm max|u|/u0 all=  159.288 wet= 1.7927 Emax/E0=   1.0000 minC=1.5e-08 steps=1177 wall/step=9.89e+00ms ok
+rho_g=1e-03 floor=1e-08 cfl=0.10 DG +mm max|u|/u0 all=15021.893 wet= 5.0868 Emax/E0= 258.2693 minC=1.9e-06 steps=5 wall/step=1.17e+01ms blow-up
+rho_g=1e-03 floor=1e-08 cfl=0.10 DF     max|u|/u0 all=10096.116 wet=16.4477 Emax/E0=   2.1178 minC=1.5e-08 steps=944 wall/step=9.86e+00ms blow-up
+rho_g=1e-03 floor=1e-08 cfl=0.25 D0     max|u|/u0 all= 1001.219 wet= 3.7414 Emax/E0=   1.0053 minC=2.0e-08 steps=271 wall/step=9.23e+00ms ok
+rho_g=1e-03 floor=1e-08 cfl=0.25 DI     max|u|/u0 all=  171.460 wet= 1.7612 Emax/E0=   1.0040 minC=1.5e-08 steps=708 wall/step=9.89e+00ms ok
+rho_g=1e-03 floor=1e-08 cfl=0.25 DP +mm max|u|/u0 all=  162.225 wet= 2.1913 Emax/E0=   1.0000 minC=1.5e-08 steps=610 wall/step=1.08e+01ms ok
+rho_g=1e-03 floor=1e-08 cfl=0.25 DG +mm max|u|/u0 all=57053.465 wet= 1.0047 Emax/E0=   1.7144 minC=3.7e-08 steps=1 wall/step=1.25e+01ms blow-up
+rho_g=1e-03 floor=1e-08 cfl=0.25 DF     max|u|/u0 all=24026.286 wet= 2.9233 Emax/E0=   1.0515 minC=3.7e-08 steps=5 wall/step=1.01e+01ms blow-up
+rho_g=1e-03 floor=1e-08 cfl=0.50 D0     max|u|/u0 all=  609.687 wet= 5.8438 Emax/E0=   1.0052 minC=1.6e-08 steps=124 wall/step=8.44e+00ms ok
+rho_g=1e-03 floor=1e-08 cfl=0.50 DI     max|u|/u0 all=  262.853 wet= 3.3451 Emax/E0=   1.0064 minC=1.5e-08 steps=363 wall/step=1.03e+01ms ok
+rho_g=1e-03 floor=1e-08 cfl=0.50 DP +mm max|u|/u0 all=  109.874 wet= 2.0294 Emax/E0=   1.0000 minC=1.5e-08 steps=402 wall/step=1.12e+01ms ok
+rho_g=1e-03 floor=1e-08 cfl=0.50 DG +mm max|u|/u0 all=191045.475 wet=150.0576 Emax/E0=  89.4505 minC=3.3e-06 steps=6 wall/step=1.28e+01ms blow-up
+rho_g=1e-03 floor=1e-08 cfl=0.50 DF     max|u|/u0 all=110262.422 wet= 6.2446 Emax/E0=  39.1951 minC=3.8e-07 steps=2 wall/step=1.05e+01ms blow-up
+rho_g=1e-03 floor=1e-12 cfl=0.10 D0     max|u|/u0 all=  637.019 wet= 5.3045 Emax/E0=   1.0080 minC=1.0e-12 steps=827 wall/step=9.39e+00ms ok
+rho_g=1e-03 floor=1e-12 cfl=0.10 DI     max|u|/u0 all=  369.823 wet= 1.8809 Emax/E0=   1.0065 minC=1.0e-12 steps=1440 wall/step=1.01e+01ms ok
+rho_g=1e-03 floor=1e-12 cfl=0.10 DP +mm max|u|/u0 all= 5249.721 wet= 1.7067 Emax/E0=   1.0000 minC=1.0e-12 steps=1500 wall/step=1.02e+01ms ok
+rho_g=1e-03 floor=1e-12 cfl=0.10 DG +mm max|u|/u0 all=15021.893 wet= 5.0868 Emax/E0= 258.2693 minC=1.9e-06 steps=5 wall/step=1.25e+01ms blow-up
+rho_g=1e-03 floor=1e-12 cfl=0.10 DF     max|u|/u0 all=10861.513 wet= 9.8886 Emax/E0=   1.5636 minC=1.3e-12 steps=120 wall/step=1.05e+01ms blow-up
+rho_g=1e-03 floor=1e-12 cfl=0.25 D0     max|u|/u0 all=  359.509 wet= 6.3338 Emax/E0=   1.0070 minC=1.4e-12 steps=336 wall/step=8.47e+00ms ok
+rho_g=1e-03 floor=1e-12 cfl=0.25 DI     max|u|/u0 all= 1305.888 wet= 2.6050 Emax/E0=   1.0074 minC=1.0e-12 steps=950 wall/step=1.03e+01ms ok
+rho_g=1e-03 floor=1e-12 cfl=0.25 DP +mm max|u|/u0 all=  372.759 wet= 2.1056 Emax/E0=   1.0000 minC=1.0e-12 steps=822 wall/step=1.05e+01ms ok
+rho_g=1e-03 floor=1e-12 cfl=0.25 DG +mm max|u|/u0 all=57053.465 wet= 1.0047 Emax/E0=   1.7144 minC=3.7e-08 steps=1 wall/step=1.24e+01ms blow-up
+rho_g=1e-03 floor=1e-12 cfl=0.25 DF     max|u|/u0 all=24026.286 wet= 2.9233 Emax/E0=   1.0515 minC=3.7e-08 steps=5 wall/step=8.74e+00ms blow-up
+rho_g=1e-03 floor=1e-12 cfl=0.50 D0     max|u|/u0 all=10314.332 wet= 6.1262 Emax/E0=   1.0055 minC=2.3e-12 steps=145 wall/step=8.35e+00ms blow-up
+rho_g=1e-03 floor=1e-12 cfl=0.50 DI     max|u|/u0 all= 1857.948 wet= 1.8060 Emax/E0=   1.0057 minC=1.1e-12 steps=491 wall/step=1.04e+01ms ok
+rho_g=1e-03 floor=1e-12 cfl=0.50 DP +mm max|u|/u0 all=  352.254 wet= 5.3116 Emax/E0=   1.0000 minC=1.0e-12 steps=622 wall/step=1.12e+01ms ok
+rho_g=1e-03 floor=1e-12 cfl=0.50 DG +mm max|u|/u0 all=191045.475 wet=150.0576 Emax/E0=  89.4505 minC=3.3e-06 steps=6 wall/step=1.22e+01ms blow-up
+rho_g=1e-03 floor=1e-12 cfl=0.50 DF     max|u|/u0 all=110262.422 wet= 6.2446 Emax/E0=  39.1951 minC=3.8e-07 steps=2 wall/step=1.03e+01ms blow-up

@@ -1,0 +1,137 @@
+All runs: uniform periodic meshes, \code{MimeticProjection}, the default Lax--Wendroff
+transport with the CTU switch, drivers in \code{mm-runs/mm\_momentum/} (\code{freestream.jl},
+\code{smallcell.jl}, \code{drop.jl}, \code{geometry.jl}, \code{smoke.jl}; outputs \code{*.txt}).
+CFL is the fraction of the full-cell VOF bound of \code{stable\_timestep} (the WY bound admits
+$0<\mathrm{CFL}\le\tfrac12$).
+
+\subsection{Free stream}\label{sec:freestream}
+\meas\ Uniform $U\in\{(1,0.37),(0,1)\}$ in both phases, a drop ($R=0.2$, cap $10^{-6}$ of a
+cell entering a new row) or a band between the lines $x+2y=c\pm0.17$ (one line $10^{-6}h$
+from a grid vertex), $n=32$, 30 steps, $\rho_\gas\in\{1,10^{-3}\}$, CFL $0.1$ and $0.45$, cell
+fraction floor $\sqrt\epsilon$ and $10^{-12}$; maximum over the runs:
+\begin{center}\footnotesize
+\setlength\tabcolsep{4pt}
+\begin{tabular}{@{}llrrrr@{}}
+\toprule
+case & design & $\frac{\max|u-U|}{|U|}$, transport & after the step & $\frac{\max|\Delta P_{\mathrm{mix}}|}{\rho V|U|}$ & min $\min(\alpha,1-\alpha)$\\
+\midrule
+drop, $\sqrt\epsilon$ & D0, DI & \g 0 & \g 0 & $2.1\times10^{-4}$ & $1.0\times10^{-7}$\\
+ & DP+mm & \g $1.4\times10^{-16}$ & \g $1.4\times10^{-16}$ & \g $3.0\times10^{-12}$ & \\
+ & DG+mm & $5.5\times10^{-5}$ & $5.5\times10^{-5}$ & $1.0\times10^{-11}$ & \\
+ & DS / DF & \rd $4.6\times10^{3}$ / $8.6\times10^{4}$ & \rd & $1.1$ / $2.2\times10^{-3}$ & \\
+drop, $10^{-12}$ & D0, DI & \g 0 & \g 0 & $2.1\times10^{-4}$ & $5.3\times10^{-10}$\\
+ & DP+mm & \g $1.4\times10^{-16}$ & \g $1.4\times10^{-16}$ & \g $2.4\times10^{-14}$ & \\
+ & DG+mm & \rd 310 & \rd 310 & $2.4\times10^{-5}$ & \\
+ & DS / DF & \rd $1.6\times10^{7}$ / $1.2\times10^{5}$ & \rd & $1.9$ / $2.2\times10^{-3}$ & \\
+band, $\sqrt\epsilon$ & D0, DI & \g 0 & \g 0 & $3.7\times10^{-8}$ & $1.3\times10^{-7}$\\
+ & DP+mm & \g $2.6\times10^{-16}$ & \g $2.6\times10^{-16}$ & $2.4\times10^{-8}$ & \\
+ & DG+mm & $1.8\times10^{-3}$ & $1.8\times10^{-3}$ & $2.4\times10^{-8}$ & \\
+ & DS / DF & \rd $6.0\times10^{3}$ / $4.7\times10^{5}$ & \rd & $0.23$ / $1.4\times10^{-2}$ & \\
+\bottomrule
+\end{tabular}
+\end{center}
+D0 and DI keep constants bitwise (the $\W$ sweeps are in fluctuation form and the DI right
+side is exactly zero), through every sweep and every step, at all CFL numbers and cut volumes
+tried; DP to round-off.  Their $\MM$-momentum of the constant field drifts by the obstruction
+of \cref{prop:obstruction} ($2\times10^{-4}$ in 30 steps for the drop) unless the pressure
+points are mass-matched, after which it is round-off; the band case keeps $2.4\times10^{-8}$,
+\infr\ the VOF's own volume change by fraction snapping (an $O(\text{floor})$ effect, the same
+for every design).  DG preserves constants only up to round-off amplified by the inverse
+inertia of slaved values (the cancellation in \cref{prop:redistribution} is exact in
+arithmetic, not in floating point); DS and DF do not preserve constants
+(\cref{prop:flux,prop:theta}).  The CFL $0.9$ runs of \code{freestream.txt} are rejected by the
+WY bound check, not by the designs.
+
+\subsection{Small cut volumes and the time step}\label{sec:smallcell}
+\meas\ A drop carried by $U=(1,0.37)$ plus a solenoidal vortex of amplitude $0.3$ crosses
+the box once ($t=1$, $n=32$), so the interface sweeps through near-empty faces.  Steps to
+$t=1$, maximum phase speed over the run relative to the initial maximum on values whose phase
+aperture is at least $0.05$ (``wet'', the floor of the static-drop test) and over all values
+(``all''); a run stops ($\dagger$) when $E>100E_0$ or a value exceeds $10^4u_0$:
+\input{tab_smallcell.tex}
+$\MM$-energy maximum over the run relative to its initial value: D0 $1.0001$--$1.008$, DI
+$1.0008$--$1.0096$, DP+mm $\le1.0000$ (to the four printed digits in every run).
+\begin{itemize}[leftmargin=*,itemsep=1pt]
+\item DI and DP run at every CFL up to the WY maximum $\tfrac12$ with cut volumes down to
+  $10^{-12}$: no small-cell restriction, as \cref{prop:increment} predicts.  DG and DF fail
+  in 1--126 steps at every CFL (\cref{rem:unbounded}); smaller steps do not help, because the
+  metric jumps do not scale with $\dt$.
+\item At $\rho_\gas=1$ the values stay bounded for all three (wet $\le1.03$); DI adds new
+  extrema on small-aperture values (all $\le2.43$), the non-monotone $\MM^{-1}\W$ of
+  \cref{prop:increment}.
+\item At $\rho_\gas=10^{-3}$ the current method already has gas values of $10^2$--$10^4u_0$ on
+  faces with aperture below $0.05$ (the known light-phase velocities on small apertures of
+  the projection, \code{report\_mmd.md}); D0 stopped on one at CFL $0.5$, floor $10^{-12}$.
+  DI and DP lower the wet maxima (1.7--3.4 and 1.7--5.3 against 3.7--6.3 for D0) but do not
+  bound the small-aperture values: DP reached $5.2\times10^3u_0$ at CFL $0.1$, floor $10^{-12}$
+  (\textbf{open}).
+\item At $\rho_\gas=10^{-3}$ DI and DP take 1.6--3.4 times more steps than D0 for the same
+  CFL fraction: the bound of \code{stable\_timestep} is the full-cell VOF bound evaluated with
+  the phase velocities, and larger gas values on partially wet faces lower it \infr.  At
+  $\rho_\gas=1$ the step counts agree to 1\%.
+\end{itemize}
+
+\subsection{Static and translating drop}\label{sec:drop}
+\meas\ \code{static\_droplet\_case(:mimetic, ...)} of the test, $t=0.4$; and the same drop in
+a periodic box, at rest or translating with $U=(1,0.37)$, $\max|u-U|$ on mixed faces with
+phase aperture above $0.05$, first half $\to$ second half of the run ($n=32$):
+\begin{center}\footnotesize
+\setlength\tabcolsep{4pt}
+\begin{tabular}{@{}lllll@{}}
+\toprule
+ & D0 & D0+mm & DI & DP+mm\\
+\midrule
+static DR 1, La $\infty$: $E_{\text{late}}/E_{\text{early}}$ & 2.18 & 2.18 & 2.21 & 2.21\\
+static DR 1000, La $\infty$: $E_{\text{late}}/E_{\text{early}}$ & 1.68 & 1.64 & 1.71 & 1.67\\
+static DR 1, La 1200: gas & $4.11\to7.27\,(10^{-3})$ & $4.11\to7.26$ & $4.11\to7.26$ & $4.11\to7.28$\\
+static DR 1000, La 1200: gas & $1.71\to2.86\,(10^{-2})$ & $1.70\to2.86$ & $1.70\to2.88$ & $1.70\to2.89$\\
+periodic DR 1, $U=0$ & $7.8\to9.6\,(10^{-3})$ & $7.8\to9.6$ & $7.8\to9.6$ & $7.8\to9.6$\\
+periodic DR 1, $U=(1,0.37)$ & $0.191\to0.178$ & $0.191\to0.178$ & $0.179\to0.174$ & $0.179\to0.174$\\
+periodic DR 1000, $U=0$ & $1.7\to2.8\,(10^{-2})$ & $1.7\to2.8$ & $1.7\to2.9$ & $1.7\to2.8$\\
+periodic DR 1000, $U=(1,0.37)$ & $0.49\to1.78$ & $0.49\to1.78$ & $0.76\to1.32$ & $0.74\to1.56$\\
+\bottomrule
+\end{tabular}
+\end{center}
+No design changes the static drop materially (its growth at $n=32$ is the capillary
+instability of \code{static\_drop\_stability}, sec.~zero).  Translation raises the spurious
+currents 20-fold (DR~1) and 60-fold (DR~1000) for \emph{every} design, the current one
+included: the loss of Galilean invariance does not come from the metric of the transport
+\infr\ (constants are transported exactly, \cref{sec:freestream}); it is open.
+
+\subsection{Cost}\label{sec:cost}
+\meas\ ($n=32$, drop, \code{smoke.jl} and \code{smallcell.jl}): the band has 324--354 values;
+one solve with the existing band factorisation takes 6--10\,$\mu$s, the snapshot and the
+products of the prototype (which rebuilds the sparse metric each step) 0.6\,ms; the LSQR of
+DG 2--3.5\,ms.  Wall time per step with the diagnostics of the drivers: D0 8.0--9.5\,ms, DI
+8.6--10.3\,ms, DP 8.8--11.2\,ms.  In production the extra cost is one back-substitution and
+two metric products per step (the factorisation is shared with the viscous step and the
+projection).
+
+\subsection{Not measured (stopped by the owner)}\label{sec:missing}
+The KH (inviscid, momentum and energy drift, energy versus $\dt$), RT DR3/DR1000 $n=32$,
+capillary waves DR1/DR1000 $n=16/32/64$, combined case and the per-case timing runs were
+prepared (\code{cases.jl}, \code{queue.sh}) but not run: the study was parked.  The energy
+statement of R3 is therefore only analysed (\cref{prop:theta,rem:unbounded}), not measured
+as $\dt\to0$.
+
+\subsection{Answers}\label{sec:answers}
+\begin{enumerate}[leftmargin=*,itemsep=2pt]
+\item \emph{R1 and R2 together} are impossible for the Gram metric as assembled
+  (\cref{prop:obstruction}): its mass differs from the VOF mass by $O(h^2)$ and moves with
+  the interface.  Mass matching of the pressure points ($O(h^3)$ slides, one $3\times3$
+  solve) removes the obstruction; the static drop is unchanged by it to 3\%.
+\item \emph{Flux forms} with the VOF fluxes cannot preserve constants (\cref{prop:flux}):
+  per value the Gram metric and the VOF masses differ by $O(1)$.
+\item \emph{Bounded designs.} Any design that adds the metric change $\E^+-\E$ to the momentum
+  (DF, DS, DG) is unbounded at slaved values and fails R4 for every $\dt$.  The increment
+  form DI is bounded independently of the cut volume ($\lambda_{\max}(\W,\MM)\le2.7$), exact
+  for constants in every sweep, and costs one back-substitution; DP adds exact $\MM$-momentum
+  with mass matching.
+\item \emph{R3} (exact semi-discrete energy) needs $\theta=\tfrac12$ or the skew
+  redistribution, i.e.\ explicit $\E$ terms: not reachable with a bounded design for the
+  present metric, whose assembly changes discretely in time (status changes of values).
+  \textbf{Open}: a metric that is continuous in time at the level of single values (no donor
+  switches, continuous slaving) is the prerequisite for DS/DG.
+\item \emph{Open:} gas values on faces with aperture below $0.05$ at density ratio 1000 are
+  unbounded with D0, DI and DP alike; Galilean invariance of the capillary drop.
+\end{enumerate}

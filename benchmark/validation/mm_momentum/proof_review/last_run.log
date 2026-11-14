@@ -1,0 +1,29 @@
+
+##### step01_prop_constant.py
+  [PASS] FINDING (d): (b) fails with an identified value, phase 0 (needs 'no identified value' or a split Z)  
+  [PASS] FINDING (d): (b) fails with an identified value, phase 1 (needs 'no identified value' or a split Z)  
+== step01 prop:constant: 31/31 checks passed
+
+##### step02_mass_match.py
+  [PASS] (4) FINDING: only two normal directions (x and y): rank 2, singular although not parallel  
+== step02 eq:match: 24/24 checks passed
+
+##### step03_obstruction_flux.py
+== step03 prop:obstruction / prop:flux: 90/90 checks passed
+
+##### step04_theta.py
+== step04 prop:theta: 225/225 checks passed
+
+##### step05_redistribution.py
+== step05 prop:redistribution: 55/55 checks passed
+
+##### step06_kernel_local_Y.py
+  [PASS] 2x1 block (cell-only): FINDING kernel strictly larger than {Z S_C}  
+  [PASS] L-shape (cell-only): FINDING kernel strictly larger than {Z S_C}  
+  [PASS] block + far cell (cell-only): FINDING kernel strictly larger than {Z S_C}  
+== step06 kernel / local Y: 40/40 checks passed
+
+##### step07_increment_dimomentum_dp.py
+== step07 prop:increment / prop:di-momentum: 188/188 checks passed
+
+ALL CHECKS PASSED

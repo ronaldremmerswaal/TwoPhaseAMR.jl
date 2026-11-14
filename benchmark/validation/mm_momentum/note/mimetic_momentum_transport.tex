@@ -1,0 +1,359 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{colortbl}
+\usepackage{enumitem}
+\usepackage[colorlinks,linkcolor=blue!50!black,citecolor=blue!50!black]{hyperref}
+\usepackage[nameinlink,noabbrev]{cleveref}
+\colorlet{cgood}{green!22}
+\colorlet{cmid}{orange!30}
+\colorlet{cbad}{red!22}
+\newtheorem{proposition}{Proposition}
+\newtheorem{lemma}[proposition]{Lemma}
+\newtheorem{remark}[proposition]{Remark}
+\newcommand{\meas}{\textsf{[M]}}
+\newcommand{\infr}{\textsf{[I]}}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\dt}{\Delta t}
+\newcommand{\liq}{\ell}
+\newcommand{\gas}{g}
+\newcommand{\MM}{\mathcal M}
+\newcommand{\W}{\mathsf W}
+\newcommand{\E}{\mathsf E}
+\newcommand{\Z}{\mathsf Z}
+\newcommand{\R}{\mathsf R}
+\newcommand{\C}{\mathsf C}
+\newcommand{\Y}{\mathsf Y}
+\newcommand{\G}{\mathsf G}
+\newcommand{\ubar}{\bar u}
+\newcommand{\g}{\cellcolor{cgood}}
+\newcommand{\m}{\cellcolor{cmid}}
+\newcommand{\rd}{\cellcolor{cbad}}
+\title{Momentum transport in the Gram metric of the mimetic projection:\\
+designs, identities and measurements}
+\author{audit note, TwoPhaseAMR.jl}
+\date{}
+\begin{document}
+\maketitle
+\begin{abstract}
+The mimetic projection (\code{MimeticProjection}, metric MMd) measures the phase velocities
+in the Gram metric $\MM$; the momentum transport still lives in the lumped metric $\W$ of
+the staggered phase masses.  This note asks for a transport that is consistent with $\MM$:
+exact $\MM$-momentum, exact free-stream preservation with the volume-of-fluid (VOF) fluxes,
+semi-discrete energy conservation, and no small-cell restriction of the time step.  The
+answer has three parts.  (i)~These requirements are \emph{incompatible} for the Gram metric
+as assembled: $\MM$ applied to a constant field gives the Gram tensors of the cells, whose
+sum differs from the VOF volume by $O(h^2)$ and changes as the interface moves; exact
+momentum and exact free stream together force that sum to be invariant
+(\cref{prop:obstruction}), and a flux form with the VOF fluxes alone cannot preserve
+constants at all (\cref{prop:flux}).  (ii)~Sliding the pressure points of the cut cells
+along their symmetry lines by $O(h^3)$ (``mass matching'') makes the Gram mass equal to the
+VOF mass and removes the obstruction.  (iii)~Within the remaining freedom, every design that
+adds the change of the metric $\E=\MM-\W$ explicitly to the momentum (flux form, skew form,
+skew redistribution) divides metric jumps by the inertia of slaved values and is unbounded
+near small cut cells; the bounded design is the \emph{increment form}
+$\MM^+\delta=\W^+\Delta u_\W$, which maps the momentum increment of the existing $\W$
+transport through $\MM^{-1}$ like a force.  It preserves constants exactly in every sweep,
+needs one solve with the band factorisation that the projection computes anyway, and its
+increment is bounded by $\lambda_{\max}(\W,\MM)\le2.7$ \meas\ independently of the cut
+volumes; a mass-proportional momentum restoration (DP) makes its $\MM$-momentum exact with
+mass matching.  Exact semi-discrete energy is not reachable with a bounded design for the
+present, piecewise-in-time, metric.  \textbf{Open items}: R3 (energy) with a bounded design;
+gas values on faces of aperture below $0.05$ at density ratio 1000 stay unbounded with DP
+(as with the current transport); DP's momentum restoration is verified for constant fields
+only; the KH, RT, capillary-wave, combined-case and cost measurements were not run (study
+parked by the owner).  \meas\ marks a measurement, \infr\ an inference.
+Prototype: worktree \code{wt-mm-momentum}, branch \code{study/mm-momentum-transport};
+runs and report in \code{mm-runs/mm\_momentum/}.
+\end{abstract}
+
+\tableofcontents
+
+%======================================================================
+\section{Setting and requirements}\label{sec:setting}
+\emph{Unknowns.} The phase values $u\in\mathbb R^N$ are the degrees of freedom of the
+assembly of the projection: one value per face and phase with positive staggered phase
+volume, one identified value on a grid-line interface face.  At a time level the geometry
+(PLIC reconstruction, shared apertures, pressure points) gives
+\begin{itemize}[leftmargin=*,itemsep=1pt]
+\item the Gram metric $\MM$: per cut cell and phase the block
+  $\rho^\pi h^2(\R\G^{+}\R^\top+\mathsf S)$ on the wetted sides, $\tfrac12\rho^\pi h^2$ per
+  side of an uncut cell, ties of slaved and small-aperture values to donors, lumped masses
+  where no block gives inertia (\code{\_assemble\_cut\_cell\_metric!});
+\item the lumped metric $\W=\operatorname{diag}(m)$ with the staggered phase masses
+  $m_{(f,\pi)}=\rho^\pi|V_f|\,\bar\alpha^\pi_f$, $\bar\alpha^\pi$ the interpolated VOF
+  fractions; the code calls them \code{dof\_mass};
+\item the excess $\E=\MM-\W$, which vanishes outside the band of cut cells (an uncut face
+  between two pure cells of one phase has $\MM_{ff}=\rho h^2=m_f$);
+\item the constant fields $\Z=[\Z^\liq_x,\Z^\liq_y,\Z^\gas_x,\Z^\gas_y]$, $(\Z^\pi_k)_{(f,\pi')}=1$
+  if $f$ is normal to $e_k$ and $\pi'\in\{\pi,\text{identified}\}$, else $0$.
+\end{itemize}
+The $\MM$-momentum is $P=\Z^\top\MM u$ (per phase and component; the mixture momentum sums
+the phases), the $\MM$-energy $\tfrac12u^\top\MM u$.  The projection conserves the mixture
+$P$ up to the wall force and does not increase the $\MM$-energy.
+
+\emph{The current transport} (techref ch.~6, \S6.8) advances each phase value in two
+directional Lax--Wendroff sweeps with the dual phase volume fluxes interpolated from the VOF
+fluxes, in fluctuation form with the predicted staggered fractions.  For this note it is the
+map $u\mapsto u_\W$ with the properties used below \infr\ (techref eqs.\ momentum:conservative,
+momentum:mass-identity, momentum:skew):
+\begin{equation}\label{eq:w-transport}
+  \W^+u_\W=\W u-\dt\,\C_\W(u),\qquad \Z^\top\C_\W(u)=0,\qquad
+  \dt\,\C_\W(\Z)=-(\W^+-\W)\Z ,
+\end{equation}
+the last two per sweep (conservation and the mass identity), and for the all-centred
+states in the semi-discrete limit $\C_\W+\C_\W^\top=-\dot\W$.  The CTU switch, the drain
+limiter and the fraction floor modify the states near small fractions; constants are
+preserved by all of them (fluctuation form).
+
+\emph{Requirements} (the owner's, in the order of the assignment).
+\begin{description}[leftmargin=1.1cm,style=nextline,itemsep=2pt]
+\item[R1] $\MM$-momentum: $\Z^\top\MM^+u^+=\Z^\top\MM u$ on periodic or no-flux domains.
+\item[R2] Free stream with the VOF fluxes: the momentum fluxes are built from the VOF
+  volume fluxes (mapped to the dual control volumes as now); a constant field stays
+  constant to round-off through every sweep; the momentum of a constant field is
+  $\rho^\pi\times$ VOF volume $\times\,u$.
+\item[R3] Energy: $\frac{\mathrm d}{\mathrm dt}\tfrac12u^\top\MM u=0$ for the centred states,
+  so that Lax--Wendroff dissipates $O(\dt)$ only.
+\item[R4] No small-cell restriction: the full-cell CFL bound of the current transport
+  suffices for any cut volume; bounded phase values near tiny cut volumes.
+\end{description}
+
+%======================================================================
+\section{What the Gram metric does to a constant field}\label{sec:constant}
+\begin{proposition}[Constant fields]\label{prop:constant}
+Let every cut cell have a consistent block, $m\mathsf N=\R$ (Prop.~2 of the note
+\code{metric\_options}), and let no value be lumped.  Then
+\begin{enumerate}[leftmargin=*,itemsep=1pt,label=(\alph*)]
+\item $(\MM\Z^\pi_k)_{(f,\pi)}=\rho^\pi a^\pi_f h\,(x^*_{c_+(f)}-x^*_{c_-(f)})_k$, for faces of
+  both orientations (``targets'' $\R$; on a face normal to $e_t$, $t\ne k$, the entry is the
+  tangential offset of the two pressure points);
+\item $\Z^{\pi\top}\MM\Z^\pi=\rho^\pi\sum_c\G^\pi_c$ ($2\times2$ per phase), with $\G^\pi_c=h^2\mathsf I$
+  or $0$ in an uncut cell and the Gram tensor at the pressure point in a cut cell, if no
+  value is identified (an identified grid-line value adds the diagonal entry of the other
+  phase to both columns);
+\item $\Z^{\pi\top}\W\Z^\pi=\rho^\pi V^\pi\,\mathsf I$ on a uniform periodic mesh ($|V_f|=h^2$,
+  face fractions the means of the two cell fractions), $V^\pi$ the VOF volume of the phase.
+\end{enumerate}
+\end{proposition}
+\begin{proof}
+(a) is \code{metric\_options} Prop.~3; ties vanish on constants because a value and its
+donor are parallel faces (the face ring).  (b) Sum (a) against $\Z^\pi$: the side terms of
+a cell sum to its Gram tensor (\code{metric\_options} Prop.~4).  (c) The interpolated
+fractions of the faces normal to $e_k$ sum to the cell fractions, each cell contributing
+half of its volume to each of its two faces.
+\end{proof}
+So the $\MM$-mass of a phase is $\rho^\pi\sum_c\G^\pi_c$, not $\rho^\pi V^\pi$.  For a
+closed aperture polygon with the pressure point at the chord midpoint
+$\G^\liq_c=|P_c|\,\mathsf I$, the polygon area; with apertures averaged from two traces
+$|P_c|\neq\alpha_ch^2$, and the pressure point is moved within its admissible interval.
+Per value the two metrics differ by $O(1)$: a slaved value (aperture $0$) has
+$(\MM\Z)_f=0$ and $(\W\Z)_f=m_f$, and the cross entries of (a) have no counterpart in $\W$.
+\meas\ (\code{geometry.jl}, drop $R=0.2$, $\rho=(1,10^{-3})$, sliding through one cell):
+\input{tab_mass.tex}
+The mismatch is $O(h^2)$ relative and moves by $O(h^3)$ as the drop slides.
+
+\emph{Mass matching.} Moving $x^*$ along the symmetry line by $s\hat\eta$ changes
+$\G^\liq$ by $-s|\eta|\hat\eta\hat\eta^\top$ and $\G^\gas$ by the opposite
+(\code{metric\_options} Prop.~2(c)).  The slides of least $\sum_cs_c^2$ with
+$\sum_c\G^\liq_c(s_c)=\sum_c\alpha_ch^2\,\mathsf I$ are
+\begin{equation}\label{eq:match}
+  s_c=|\eta_c|\,\langle\hat\eta_c\hat\eta_c^\top,\Lambda\rangle,\qquad
+  \sum_c|\eta_c|^2\langle\hat\eta_c\hat\eta_c^\top,\Lambda\rangle\,\hat\eta_c\hat\eta_c^\top
+  =\sum_c\bigl(\G^\liq_c(0)-\alpha_ch^2\mathsf I\bigr),
+\end{equation}
+a $3\times3$ symmetric system for $\Lambda$.  Its rank is the number of distinct normal
+directions $\pm\hat\eta_c$ (at most three): with two or fewer (a straight interface, or normals
+only along the axes) only the part of the right side in $\operatorname{span}\{\hat\eta_c\hat\eta_c^\top\}$
+can be matched, and the remainder stays (it vanishes for a straight interface with exact
+apertures, not in general for averaged traces).  When it is solvable, $\Z^\top\MM\Z=\Z^\top\W\Z$
+exactly (both phases, since
+$\G^\liq+\G^\gas=h^2\mathsf I$ and $\alpha^\liq+\alpha^\gas=1$).  The slides are $O(h^3)$
+\meas\ (table above, ``max slide'').  This is the statement R2 asks for, in total: \emph{with
+mass matching, $\MM$ applied to a constant field carries $\rho^\pi$ times the VOF volume of
+the phase}; per value it cannot hold (\cref{prop:flux}).  It costs one global $3\times3$
+solve per assembly (serial sums: bitwise reproducible) and touches the projection through
+the pressure points (accuracy in \cref{sec:results}).
+
+%======================================================================
+\section{Obstructions}\label{sec:obstruction}
+Consider any update of the form
+\begin{equation}\label{eq:general}
+  \MM^+u^+=\MM u-L(u),\qquad L\ \text{linear}.
+\end{equation}
+\begin{proposition}[Momentum and free stream need an invariant Gram mass]\label{prop:obstruction}
+\eqref{eq:general} conserves $\Z^\top\MM u$ for every $u$ iff $\Z^\top L=0$, and preserves
+every constant field $u=\Z U$ iff $L\Z=-(\MM^+-\MM)\Z$.  Both together imply
+$\Z^\top(\MM^+-\MM)\Z=0$, i.e.\ $\sum_c\G^\pi_c$ is the same at both time levels.  With the
+VOF mass conserved this is $\Z^\top(\E^+-\E)\Z=0$.
+\end{proposition}
+\begin{proof}
+The first two statements are \eqref{eq:general} multiplied by $\Z^\top$ and evaluated at
+$\Z U$.  Then $0=\Z^\top L\Z=-\Z^\top(\MM^+-\MM)\Z$; \cref{prop:constant}(b),(c).
+\end{proof}
+By \cref{sec:constant} the obstruction is nonzero for the Gram metric as assembled
+\meas: no transport can satisfy R1 and R2 exactly.  With mass matching it vanishes.  The
+condition is sharp: if $\Z^\top(\MM^+-\MM)\Z=0$, the dense $L=DP^\top$ with $D=-\Delta\MM\Z$,
+$P=\Z(\Z^\top\Z)^{-1}$ satisfies both (locality is the issue, \cref{prop:redistribution}).
+
+\begin{proposition}[A flux form with the VOF fluxes cannot preserve constants]\label{prop:flux}
+Let $L=\dt\,\C_\W$, the momentum fluxes of the VOF volume fluxes \eqref{eq:w-transport}.
+Then \eqref{eq:general} preserves constants iff $(\MM^+-\W^+)\Z=(\MM-\W)\Z$ per value, i.e.\
+$\E\Z$ is invariant.  A value that enters or leaves the band (where $\E\Z=0$) must then have
+$(\E\Z)_f=0$ already; for a moving interface every band value does so in turn, which
+requires $\MM\Z=\W\Z$ on the band and fails by $O(1)$ per value (\cref{sec:constant}).  (For
+a static geometry the condition is trivially met.)
+\end{proposition}
+\begin{proof}
+$\MM^+\Z U=\MM\Z U-\dt\C_\W(\Z U)=\MM\Z U+(\W^+-\W)\Z U$ by \eqref{eq:w-transport}.
+\end{proof}
+Hence any $\MM$-consistent design with exact free stream must add terms built from the
+change of the metric, $\E^+-\E$, to the VOF fluxes; and the fluxes of R2 transport $\W$-mass,
+so the question is only how the band term $\E$ enters.
+
+%======================================================================
+\section{Designs}\label{sec:designs}
+All designs keep the existing $\W$ sweeps (VOF fluxes, Lax--Wendroff, CTU switch, drain
+limiter, floor) unchanged and add one solve with $\MM^+$ at the end of the step; $\ubar$
+denotes the extended start values on the new degrees of freedom (the frozen sources of the
+sweeps), $u_\W$ the values after the sweeps, and $c=\E u$ the old excess covector mapped
+to the new values (an identified value split by its mass weight; values that disappear are
+``orphans'').
+\begin{description}[leftmargin=1.1cm,style=nextline,itemsep=2pt]
+\item[D0] current: $u^+=u_\W$.
+\item[D$\theta$] $\MM^+u^+=\MM^+\ubar+\W^+(u_\W-\ubar)+(1-\theta)\,(c-\E^+\ubar)$;
+  \textbf{DI} $\theta=1$ (increment form), \textbf{DS} $\theta=\tfrac12$ (skew form),
+  \textbf{DF} $\theta=0$ (flux form: $\MM^+u^+=\MM u-\dt\C_\W(u)$).
+\item[DG] DS plus a skew band coupling $\Y$, $\Y\Z=\tfrac12(\E^+\Z-(\E\Z)_{\text{mapped}})$
+  (least squares, minimal norm, on the graph of same-phase pairs of a cell, of the metric
+  and of the face ring), plus the remainder $\Psi(\ubar)=\sum_k r_k\langle\ubar\rangle_k$ that
+  keeps constants exact ($r=\tfrac12\Delta\E\Z-\Y\Z$, $\langle\cdot\rangle_k$ the mass mean of
+  column $k$ over the ring).
+\item[DP] DI plus a mass-proportional momentum restoration: the $\MM$-momentum change of
+  DI less its constant part, $d_k=\Z_k^\top(\E^+\ubar-\E u)-\sum_j\Z_k^\top\Delta\E\Z_j\langle\ubar\rangle_j$,
+  is removed by the force $-\W\Z_k\,d_k/\Z_k^\top\W\Z_k$ (identified values excluded).
+\end{description}
+Each needs the excess of the old level (one product with the cached $\MM$ before the
+sweeps) and one solve with the band factorisation of $\MM^+$ (\code{\_mimetic\_metric\_solve!}),
+which the viscous step and the projection of the same step reuse; DG adds an LSQR solve on
+the band graph.
+
+\begin{proposition}[The $\theta$ family]\label{prop:theta}
+Let \eqref{eq:w-transport} hold and let no value disappear.  Then for D$\theta$
+\begin{enumerate}[leftmargin=*,itemsep=1pt,label=(\alph*)]
+\item constants: $\MM^+(u^+-\Z U)=-(1-\theta)(\E^+-\E)\Z U$: exact iff $\theta=1$;
+\item momentum: $\Z^\top\MM^+u^+-\Z^\top\MM u=\theta\,\Z^\top(\E^+-\E)u$: exact iff
+  $\theta=0$;
+\item energy, semi-discrete with centred states:
+  $\frac{\mathrm d}{\mathrm dt}\tfrac12u^\top\MM u=(\theta-\tfrac12)\,u^\top\dot\E u$:
+  exact iff $\theta=\tfrac12$.
+\end{enumerate}
+The three properties are governed by three different defects, $\Delta\E\Z$ (a), $\Z^\top\Delta\E u$
+(b) and $u^\top\dot\E u$ (c); when all three are nonzero (generic in the band, measured) no
+$\theta$ satisfies two of R1--R3.  When the degrees of freedom change, (b) reads exactly
+$\theta(\Z^{+\top}\E^+\ubar-\Z^\top\E u)-(1-\theta)\,\mathrm{orph}$ with the excess of the
+values that disappear.
+\end{proposition}
+\begin{proof}
+Write the update as $\MM^+u^+-\MM u=\W^+u_\W-\W u+\theta(\E^+-\E)u$ (expand
+$\MM^+\ubar=\W^+\ubar+\E^+\ubar$).  (a) For $u=\Z U$, $u_\W=\Z U$, so the right side is
+$(\W^+-\W)\Z U+\theta\Delta\E\Z U=\Delta\MM\Z U-(1-\theta)\Delta\E\Z U$.  (b) Multiply by
+$\Z^\top$ and use $\Z^\top\W^+u_\W=\Z^\top\W u$.  (c) In the limit,
+$\frac{\mathrm d}{\mathrm dt}(\MM u)=-\C_\W u+\theta\dot\E u$, so
+$\frac{\mathrm d}{\mathrm dt}\tfrac12u^\top\MM u=u^\top\frac{\mathrm d}{\mathrm dt}(\MM u)-\tfrac12u^\top\dot\MM u
+=-u^\top\C_\W u+\theta u^\top\dot\E u-\tfrac12u^\top\dot\W u-\tfrac12u^\top\dot\E u$ and
+$u^\top\C_\W u=-\tfrac12u^\top\dot\W u$.
+\end{proof}
+\meas\ (\code{smoke.jl}): one step of each design on a drop, $\rho=(1,10^{-3})$, $n=32$,
+reproduces (b) to $2\times10^{-17}$ absolute (momentum $\approx0.13$), orphans included.
+
+\begin{proposition}[Skew redistribution]\label{prop:redistribution}
+If $\Z^\top(\E^+-\E)\Z=0$, there is a skew $\Y$ with $\Y\Z=\tfrac12(\E^+-\E)\Z$, and DG
+with $\Psi=0$ satisfies (a), (b) and (c) of \cref{prop:theta} exactly.  On a graph whose
+edges join the values of a phase in the cut cells, the kernel of the edge-to-value map
+$\Y\mapsto\Y\Z$ (transposed) contains the symmetric $2\times2$ fields
+$\{\Z\mathsf S\}$ per connected component (it equals them only if the $x$- and the $y$-values
+of a component are each connected through same-axis edges), so a local $\Y$ needs the
+condition per component: one global mass match does not suffice when the band has several
+components (checked counterexample in \code{proof\_review/mimetic-momentum-transport}).
+\end{proposition}
+\begin{proof}
+Existence: with $D=\tfrac12\Delta\E\Z$ and $P=\Z(\Z^\top\Z)^{-1}$, $\Y=DP^\top-PD^\top$ is
+skew and $\Y\Z=D-P(\Z^\top D)^\top=D$ because $\Z^\top D=0$.  (a)
+$-\tfrac12\Delta\E\Z+\Y\Z=0$.  (b) $\Z^\top(\tfrac12\Delta\E u+\Y u)=\tfrac12(\Delta\E\Z)^\top u-(\Y\Z)^\top u=0$
+($\Delta\E$ symmetric, $\Y$ skew).  (c) $u^\top\Y u=0$ and the $\dot\E$ terms of
+\cref{prop:theta}(c) cancel at $\theta=\tfrac12$.  Kernel: an edge $(f,g)$ maps $y$ to $+y$
+in row $(f,\mathrm{axis}(g))$ and $-y$ in row $(g,\mathrm{axis}(f))$; $r_{(f,k)}=\mathsf S_{\mathrm{axis}(f),k}$
+with $\mathsf S$ symmetric is annihilated.
+\end{proof}
+
+\begin{proposition}[Increment form: bounded, no small-cell restriction]\label{prop:increment}
+The DI increment $\delta=u^+-\ubar=(\MM^+)^{-1}\W^+(u_\W-\ubar)$ satisfies
+\[
+  \|\delta\|_{\MM^+}^2\le\lambda_{\max}(\W^+,\MM^+)\,\|u_\W-\ubar\|_{\W^+}^2,\qquad
+  \|\delta\|_\infty\le\|(\MM^+)^{-1}\W^+\|_\infty\,\|u_\W-\ubar\|_\infty ,
+\]
+and preserves constants exactly in every sweep.  The time step enters only through the
+$\W$ sweeps, which are bounded under the full-cell CFL of the current transport.
+\end{proposition}
+\begin{proof}
+$\|\delta\|_\MM^2=v^\top\W\MM^{-1}\W v\le\lambda_{\max}(\MM^{-1/2}\W\MM^{-1/2})\,v^\top\W v$
+with $v=u_\W-\ubar$.  Constants: $u_\W=\ubar=\Z U$.
+\end{proof}
+\meas\ over random drops and lines with cut volumes down to $10^{-12}$ (\code{geometry.jl}):
+\input{tab_bound.tex}
+The algebra alone gives no cut-volume independence ($\lambda_{\max}\ge\max_f m_f/\MM_{ff}$); it
+comes from the assembly: the tie of a slaved value carries its own staggered mass, so the row
+of $\MM$ scales with the row of $\W$ (measured, no analytic bound).  The entries of
+$\MM^{-1}\W$ are not all non-negative (min $\approx-0.8$): the map is bounded but not
+monotone, and DI can create small new extrema near the interface.
+
+\begin{remark}[Why the designs with $\E$ terms are unbounded]\label{rem:unbounded}
+DF, DS and DG add $(\MM^+)^{-1}(c-\E^+\ubar)$ (and $\Y\ubar$).  The row of a slaved value
+(aperture $0$) of $\MM^+$ is its tie, of weight equal to its staggered mass, as small as
+$10^{-14}$ \meas; the same row of $c-\E^+\ubar$ carries the excess of the old level, which
+belonged to a value with a Gram block or another donor.  $\E$ changes by $O(1)$, not
+$O(\dt)$, when a value changes its status (wetted~$\leftrightarrow$~slaved, donor switch,
+lumping, grid-line identification, cut~$\leftrightarrow$~uncut), so the quotient is not
+small for small $\dt$.  For constants these terms cancel exactly
+(\cref{prop:theta}(a), \cref{prop:redistribution}); for any other field they do not.
+\meas: one to five steps with a vortex perturbation gave corrections $|u^+-u_\W|$ of $64$
+(DS), $1.2\times10^{3}$ (DF), $4\times10^{3}$--$6\times10^4$ (DG), all on slaved values,
+against $0.13$ for DI (\code{smoke.jl}).
+\end{remark}
+
+\begin{proposition}[Momentum of the increment form]\label{prop:di-momentum}
+For DI, $P^{N}-P^{0}=\Z^\top\E^{N}u^{N-1}-\Z^\top\E^{0}u^{0}-\sum_{n=1}^{N-1}\Z^\top\E^{n}(u^{n}-u^{n-1})$
+(plus the $\W$-momentum defects of the sweeps): the drift is bounded by $\|\E\|$ times the
+variation of $u$ in time and does not grow for a steady field.  With mass matching the
+constant part vanishes, and DP removes the rest: $\Z^\top\MM^+u^+=\Z^\top\MM u$ exactly,
+constants exact.
+\end{proposition}
+\begin{proof}
+Sum \cref{prop:theta}(b) at $\theta=1$ by parts.  DP: the restoration force has
+$\Z_k^\top$-moment $-d_k$, and $d_k$ equals the DI change less
+$\sum_j\Z_k^\top\Delta\E\Z_j\langle\ubar\rangle_j$, which is zero with mass matching; for a
+constant field $d_k=0$ (\cref{prop:theta}(a)).  The force is mass-proportional, so
+\cref{prop:increment} bounds its effect by $\|\MM^{-1}\W\|_\infty|d_k|/\Z_k^\top\W\Z_k$, a
+uniform velocity of the size of the momentum defect over the phase mass.  Exactly, DP
+changes the momentum by $\sum_j\Z^\top\Delta\E\Z_j\langle\ubar\rangle_j$, provided the sweeps
+conserve the $\W$-momentum (no clamped or snapped fractions).
+\end{proof}
+
+\emph{Derivation check.} An independent check of the propositions of
+\cref{sec:constant,sec:obstruction,sec:designs} and of \eqref{eq:match} (randomised NumPy
+checks, 653 passing) is archived with the proof reviews of the audit, folder
+\code{mimetic-momentum-transport}; its corrections
+(identified values in \cref{prop:constant}(b), the rank of \eqref{eq:match}, the wording of
+\cref{prop:flux} and of the trilemma, the per-component condition for a local $\Y$, the
+measured, not analytic, cut-volume independence of the increment bound) are incorporated.
+
+%======================================================================
+\section{Results}\label{sec:results}
+\input{results.tex}
+
+\end{document}

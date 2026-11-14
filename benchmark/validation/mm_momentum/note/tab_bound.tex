@@ -1,0 +1,21 @@
+\begin{center}\footnotesize
+\setlength\tabcolsep{4pt}
+\begin{tabular}{@{}lrlccccc@{}}
+\toprule
+geometry & $n$ & floor & min $\min(\alpha,1-\alpha)$ & $\lambda_{\max}(\W,\MM)$ &
+$\|\MM^{-1}\W\|_\infty$ & $\min(\MM^{-1}\W)$ & $\max_f\mu_f$\\
+\midrule
+drop & 16 & $\sqrt{\epsilon}$ & $9.5\times10^{-8}$ & 2.63 & 4.98 & $-0.80$ & 1.00\\
+drop & 32 & $\sqrt{\epsilon}$ & $5.3\times10^{-8}$ & 2.54 & 4.97 & $-0.81$ & 1.00\\
+drop & 16 & $10^{-12}$ & $3.0\times10^{-12}$ & 2.63 & 4.95 & $-0.77$ & 1.00\\
+drop & 32 & $10^{-12}$ & $4.3\times10^{-12}$ & 2.41 & 4.53 & $-0.68$ & 1.00\\
+lines & 16 & $\sqrt{\epsilon}$ & $1.0\times10^{-6}$ & 2.22 & 4.28 & $-0.25$ & 1.00\\
+lines & 32 & $\sqrt{\epsilon}$ & $1.7\times10^{-8}$ & 2.18 & 4.00 & $-0.25$ & 1.00\\
+lines & 16 & $10^{-12}$ & $1.3\times10^{-12}$ & 2.22 & 4.28 & $-0.25$ & 1.00\\
+lines & 32 & $10^{-12}$ & $1.0\times10^{-12}$ & 2.06 & 3.77 & $-0.25$ & 1.00\\
+\bottomrule
+\end{tabular}
+\end{center}
+40 random configurations per row (radius, sliver depth $10^{-1}$--$10^{-9}h$, line
+direction), worst value over the row, $\rho=(1,10^{-3})$;
+$\mu_f=|((\MM-\W)\Z)_f|/\max(m_f,\MM_{ff})$ is the per-value mismatch of the constant fields.
