@@ -838,9 +838,10 @@ does not reach ($\phaseaperture{\phase}{f}=0<\facemass{\phase}{f}$, a
 ring (then the second ring) with the largest aperture of the phase, and a
 value with $0<\phaseaperture{\phase}{f}<\tfrac12$ on a mixed (or partially
 closed) face to such a donor with $a_{d(f)}>a_f$ (small-cell stabilisation);
-a small value without such a donor (a \emph{small-untied} value, e.g.\ in a
-drop of radius $\lesssim h$) is tied with the same weight to the value of its
-phase of largest aperture in the rings, a slaved or small value without any
+a small value without such a donor (a \emph{small-untied} value, rare: one in
+a drop of radius $0.3h$, none in drops of radius $0.9h$ and $1.2h$) is tied
+with the same weight to the best other value of its phase that its phase
+reaches in the rings (whatever its aperture), a slaved or small value without any
 donor to the prescribed wall or solid value if it is next to one (below), and
 a slaved value without either gets that weight as a lumped diagonal term.
 Every slaved or small value thus has at most one floor (no lumped term on top
@@ -909,15 +910,21 @@ multigrid of $\mathsf B\mathsf W^{-1}\mathsf B^{\transpose}$ with the staggered
 phase masses (\emph{Solver and price} below), which does not use $\Lambda$.
 
 \emph{The equivalence lemma.} Fix a phase, a threshold $a_G\in(0,\tfrac12]$,
-and call the values with $a_f<a_G$ that have a donor the tied set; all others
-(uncut and Gram values with $a\ge a_G$, small values without a donor, wall-tied
-and lumped values) are roots. Assume: (A1) every tied value has a donor of
+and call the values with $a_f<a_G$ that have a donor of larger aperture the
+tied set; all others (uncut and Gram values with $a\ge a_G$, wall-tied and
+lumped values) are roots. Assume: (A1) every tied value has a donor of
 the same phase with larger aperture, so the donor graph is a forest with roots
 as roots; (A2) $w_f\ge\beta_*\Lambda_f$ on the tied and wall-tied values;
 (A3) root coercivity,
 $u^{\transpose}(\mathcal M_G+\sum_{\mathcal L}\beta\Lambda_fe_fe_f^{\transpose})u\ge\gamma\sum_{\text{anchors}}\Lambda_fu_f^2$;
 (A4) the load $\mu=\max_d\sum_{f:d(f)=d}\dualvol{f}/\dualvol{d}$ is finite; (A5)
-every donor chain reaches a root in at most $L$ links. With
+every donor chain reaches a root in at most $L$ links. The small-untied ties
+of the package are outside (A1) and (A5): their donor need not have a larger
+aperture and can have the small-untied value as its own donor (a 2-cycle,
+found in the drop of radius $0.3h$: a small value tied to the small-untied
+value of larger aperture, which is tied back to it), so the chain reaches no
+root; the lemma covers such values only as roots, through (A3) for their
+$O(a^2)$ blocks. With
 $\gamma_0=\min(\gamma,\beta_*)$ and $\Gamma_L(q)=\sum_{k=0}^Lq^k$,
 \begin{equation}\label{eq:projection:mimetic-equivalence}
   \mathcal M\succeq c\,\Lambda,\qquad
@@ -948,10 +955,12 @@ metric on laboratory bands) with an independent derivation check pending;
 $a\ge\tfrac12$ in a straight-cut model, where thin films and wedges along a
 side are held only by the margin $0.01h$ of the pressure point
 (\code{_MIMETIC_POINT_MARGIN}), about $0.05$ away from thin phases, and
-$\tfrac12$ from an uncut neighbour. Small-untied values keep the floor
-$w_f$ (measured $c_{\min}\ge0.03$ on drops of radius $0.9h$ and $1.2h$, where
-their $O(a^2)$ block alone gave $c\approx0.0075$); defective cells (eigenvalues
-floored at $0.02h^2$) are not covered.
+$\tfrac12$ from an uncut neighbour. The small-untied ties are measured, not
+covered: in the drop of radius $0.3h$ (one small-untied value, one 2-cycle)
+$c_{\min}=0.0316$ with the tie, $0.0319$ with the value lumped instead and
+$0.0316$ with its $O(a^2)$ block alone, so the minimum lies elsewhere and the
+tie does not raise it (an earlier claim of $c\approx0.0075$ without it was not
+reproduced); defective cells (eigenvalues floored at $0.02h^2$) are not covered.
 
 \emph{Continuity in time.} The weight $\max(0,1-2a)\beta\Lambda_f$ is continuous
 at $a=\tfrac12$ (the plain weight jumps by $\beta\Lambda_f$ there) and tends to
@@ -968,8 +977,11 @@ Rayleigh--Taylor (DR 3, 1000) and Kelvin--Helmholtz (DR 1), against
 $c_{\min}\approx10^{-8}$ and $\chi\approx10^8$ on slaved values with the former
 weights; the worst value is always a slaved value at the end of a donor chain;
 for small $\beta$, $c\approx\beta/4$. On the fixtures of the test (drops, a wall
-film, a corner drop, a solid sliver, a solid slab, two adaptive meshes; DR 1,
-1000, 1/1000) $c_{\min}=0.111$--$0.257$ and $\max\chi\le4.97$. Equivalence alone is
+film, a flat film $10^{-7}h$ above a grid line, a corner drop, a solid sliver,
+a solid slab, two adaptive meshes; DR 1, 1000, 1/1000) $c_{\min}=0.111$--$0.257$
+and $\max\chi\le4.97$, on the drop of radius $0.3h$ $c_{\min}=0.0316$ and
+$\max\chi=7.07$; the flat film's values of aperture $10^{-7}$ carry one floor
+each (diagonal $\le1.01\,\dens^{\phase}\dualvol{f}$). Equivalence alone is
 \emph{not} energy stability: with the former capillary carrier the inviscid
 static drop at $n=64$ still grew $\times2.4$/$\times5.4$/$\times2.0$ (DR 1/3/1000)
 by $t=0.4$, the force's unpaid work equal to the energy gained; the booked

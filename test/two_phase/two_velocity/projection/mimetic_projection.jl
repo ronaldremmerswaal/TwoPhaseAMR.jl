@@ -1956,13 +1956,31 @@ function _mimetic_equivalence(case)
     return (; c_min, chi, slaved = count(iszero, assembly.dof_aperture), assembly)
 end
 
+# Small values (0 < a < 1/2 on a face with a staggered fraction strictly
+# between 0 and 1) without a value of their phase of larger aperture in the
+# rings of the metric's donor search (small-untied).
+function _mimetic_small_untied(case, assembly)
+    TP = TwoPhaseAMR
+    topology, mesh = case.workspace.topology, case.mesh
+    fraction = case.workspace.face_data.liquid_fraction
+    return count(eachindex(assembly.dof_face)) do dof
+        phase, face, aperture = assembly.dof_phase[dof], assembly.dof_face[dof], assembly.dof_aperture[dof]
+        (phase != 3 && 0 < aperture < 0.5 && 0 < fraction[face] < 1) || return false
+        dof_at(g) = g == 0 ? 0 : (phase == 1 ? assembly.liquid_dof[g] : assembly.gas_dof[g])
+        larger(g) = (d = dof_at(g); d > 0 && assembly.dof_aperture[d] > aperture + 1.0e-12)
+        ring = TP._mimetic_face_ring(topology, face, mesh.faces[face].axis)
+        return TP._mimetic_donor(topology, mesh, ring, dof_at, larger, assembly.dof_aperture) == 0
+    end
+end
+
 @testset "Mimetic metric: uniform equivalence with the aperture-independent mass" begin
     # The ties and lumped fallbacks weigh β ρ_π V_f, continuous in the
     # aperture (techref ch. 10, uniform ties), so 𝓜 ⪰ c diag(ρ_π V_f) with c
     # independent of the apertures and fractions, also on the values a phase
-    # does not reach (slaved, aperture 0). Measured: c_min 0.112 – 0.183 and
-    # max χ 2.7 – 4.6 on these fixtures for every density ratio (with the
-    # former weights (1 - 2a) m_f, m_f: c_min ~1e-8, χ ~1e8).
+    # does not reach (slaved, aperture 0). Measured: c_min 0.111 – 0.257 and
+    # max χ 2.5 – 5.0 on these fixtures for every density ratio, 0.0316 and
+    # 7.1 on the drop of radius 0.3h (with the former weights (1 - 2a) m_f,
+    # m_f: c_min ~1e-8, χ ~1e8).
     h = 1 / 32
     sliver(x, y) = y - 10.03h - 0.02h * x
     fixtures = (
@@ -1970,6 +1988,8 @@ end
         ("small drop", d -> _mimetic_case(32, _mimetic_circle(32; radius = 0.07); density = d, periodic = (false, false))),
         ("tiny drop 1.2h", d -> _mimetic_case(32, _mimetic_circle(32; radius = 1.2h); density = d, periodic = (false, false))),
         ("tiny drop 0.9h", d -> _mimetic_case(32, (x, y) -> hypot(x - 0.5 - 0.43h, y - 0.5 - 0.29h) - 0.9h; density = d, periodic = (false, false))),
+        ("tiny drop 0.3h", d -> _mimetic_case(32, (x, y) -> hypot(x - 0.5 - 0.13h, y - 0.5 + 0.21h) - 0.3h; density = d, periodic = (false, false))),
+        ("flat film", d -> _mimetic_case(32, (x, y) -> y - 0.5 - 1.0e-7h; density = d)),
         ("wall film", d -> _mimetic_case(32, (x, y) -> y - 0.23h - 0.05h * sin(2pi * x); density = d, periodic = (false, false))),
         ("corner drop", d -> _mimetic_case(32, (x, y) -> hypot(x - 0.03, y - 0.05) - 0.3; density = d, periodic = (false, false))),
         ("solid sliver", d -> _mimetic_solid_case(32, sliver, (x, y) -> hypot(x - 0.47, y - 0.42) - 0.24; density = d)),
@@ -1985,17 +2005,24 @@ end
         @test result.slaved > 0
         name == "wall film" && @test result.assembly.wall_cells > 0
         startswith(name, "solid") && @test result.assembly.solid_cells > 0
-        # Tiny drops (R ≤ 1.2h) have small values without a donor of larger
-        # aperture: they keep the floor (1 - 2a) β ρ_π V_f (tie to the wall or
-        # solid, else lumped) instead of their O(a²) block alone.
+        # A small value (0 < a < 1/2 on a mixed face) without a donor of
+        # larger aperture (small-untied) is tied with the floor
+        # (1 - 2a) β ρ_π V_f to the best other value of its phase; the drop of
+        # radius 0.3h has one (in a 2-cycle with the small value it is the
+        # donor of), the drops of radius 0.9h and 1.2h have none. Measured
+        # there: c_min 0.0316 with the tie, 0.0319 lumped, 0.0316 with its
+        # O(a²) block alone.
         tiny = startswith(name, "tiny")
+        name == "tiny drop 0.3h" && @test _mimetic_small_untied(case, result.assembly) > 0
         @test result.c_min >= (tiny ? 0.03 : 0.1)
         @test result.chi <= (tiny ? 1 / 0.03 : 5.0)
         # One floor per value: a value of vanishing aperture has the slaved
-        # weight, not the floor twice (continuity as a → 0⁺).
+        # weight, not the floor twice (continuity as a → 0⁺); the flat film
+        # 1e-7 h above a grid line has such values.
         assembly = result.assembly
-        for dof in eachindex(assembly.dof_face)
-            0 < assembly.dof_aperture[dof] < 1.0e-6 || continue
+        vanishing = filter(dof -> 0 < assembly.dof_aperture[dof] < 1.0e-6, eachindex(assembly.dof_face))
+        name == "flat film" && @test !isempty(vanishing)
+        for dof in vanishing
             iszero(assembly.band_position[dof]) && continue
             band = assembly.band_position[dof]
             floor = case.solver.density[assembly.dof_phase[dof]] * case.mesh.face_dual_volumes[assembly.dof_face[dof]]
