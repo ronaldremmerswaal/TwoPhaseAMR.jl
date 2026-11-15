@@ -4,7 +4,10 @@ using Test, TwoPhaseAMR
     example = load_example(:stokes3_wave)
     initial = call_example(example, :stokes3_initial_condition)
     @test initial.levelset(0.0, initial.elevation(0.0)) ≈ 0.0 atol = eps()
-    @test initial.liquid_velocity(0.0, 0.49, 0.0, 1) == 0.0
+    # Every active liquid value takes the potential flow, also on faces whose
+    # centre lies above η.
+    crest = initial.elevation(0.0)
+    @test initial.liquid_velocity(0.0, crest + 0.01, 0.0, 1) > 0
 end
 
 @testset "Stokes-wave refinement window" begin
