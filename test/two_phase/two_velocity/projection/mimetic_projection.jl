@@ -1947,9 +1947,12 @@ end
         )
         @test rest!(_mimetic_solid_flow(n, solid, levelset, (1000.0, 1.0))) <= 1.0e-11
     end
-    # A pool whose surface crosses the cylinder: the contact cells' pressure
-    # points lie off the level line by the mismatch of the averaged open
-    # traces of the curved solid (measured 6.1e-7 at densities (1000, 1)).
+    # A pool whose surface crosses the cylinder: rest at the contact lines is
+    # limited by the PLIC accuracy of the contact cells times (ρ_l - ρ_g) g
+    # (a tilted liquid plane next to the solid puts their pressure points off
+    # the level line); on random pool-crossing solids MM rests to 1e-13 ... 1e-1
+    # and CMDGFM to 1e-17 ... 6e-2 at densities (1000, 1). This configuration
+    # is one of the mild ones.
     flow = _mimetic_solid_flow(32, _mimetic_cylinder(0.513, 0.42, 0.2), (x, y) -> y - 0.5116, (1000.0, 1.0))
     @test rest!(flow) <= 2.0e-6
     # Films of thickness θh on a flat solid off and on a grid line and on a

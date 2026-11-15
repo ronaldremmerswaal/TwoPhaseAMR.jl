@@ -1148,9 +1148,20 @@ one); 5 of the 7 were defective with the first edge too. A uniform acceleration 
 with drops on a slanted solid and on a cylinder, hydrostatic pools over
 slanted solids and a submerged cylinder at densities $(1000,1)$, and films of
 $0.05h$ to $0.95h$ on flat solids on and off a grid line stay at rest to
-$3\times10^{-12}$ through three steps; a pool whose surface crosses the
-cylinder to $6\times10^{-7}$ (the averaged open traces of the curved solid
-put the contact cells' pressure points off the level line); a drop on a
+$3\times10^{-12}$ through three steps. Where the pool surface crosses the
+solid, rest at densities $(1000,1)$ is limited by the PLIC accuracy of the
+contact cells times $(\dens^{\liq}-\dens^{\gas})g$: a liquid plane tilted by a
+few degrees next to the solid (a flat surface reconstructed with
+$n=(-0.05,0.95)$) puts the contact cells' pressure points off the level line
+by $10^{-3}h$ to $10^{-2}h$, where the far cells are within $10^{-8}h$. On 25
+random pool-crossing configurations (slanted lines, cylinders, wedges,
+$h=1/32$, three steps) the mimetic projection rests to $10^{-13}$ in 7 and to
+$5\times10^{-7}$--$9.5\times10^{-2}$ in the others, CMDGFM to $10^{-12}$ in 14
+and to $4.6\times10^{-4}$--$5.8\times10^{-2}$ in the others (worse than the
+mimetic projection in 9); at densities $(1,1)$ the mimetic projection rests to $5\times10^{-13}$ in all.
+The mimetic projection is sensitive because it uses one point per cell,
+CMDGFM only self-consistent apertures; a PLIC reconstruction of contact cells
+consistent with the solid is a separate task. A drop on a
 slanted solid at $60^\circ$, $90^\circ$ and $120^\circ$ with the exact
 constant curvature is balanced to $2\times10^{-13}$ of forces of order one,
 and a constant field along a slanted solid is kept to $2\times10^{-11}$
