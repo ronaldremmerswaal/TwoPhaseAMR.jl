@@ -80,7 +80,7 @@ jobs:
       statuses: write
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: TwoPhaseAMR-techref.pdf
           path: docs/src/assets/techref
