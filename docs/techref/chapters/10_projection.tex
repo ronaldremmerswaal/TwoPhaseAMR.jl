@@ -1520,9 +1520,17 @@ $1$--$16$ (CMDGFM at most $2.4$) and decays once it settles. (v)~The chord of
 row-averaged heights and the interior height function have different
 second-order biases (on the exact $90^\circ$ cap at $h=1/48$: $+0.27\,\%$ and
 $+0.42\,\%$, the row-1 curvature $5.0138$ against $5.021$--$5.022$ in rows~2
-and~3), which raises the $90^\circ$ shape error of the integration suite's
-drop from $1.07\times10^{-5}$ to $1.18\times10^{-5}$ (CMDGFM
-$1.03\times10^{-5}$). (vi)~A run of cut cells without valid columns keeps the
+and~3). At $90^\circ$ this makes the integration suite's drop (densities
+$(1,10^{-3})$, a quarter capillary time) worse than with the height-function
+curvature in the contact-line cells: without gravity the shape error rises
+from $1.07\times10^{-5}$ to $1.18\times10^{-5}$ (CMDGFM $1.03\times10^{-5}$); at
+Bond number $1.21$ the largest phase value doubles from $0.018$ to $0.034$
+(CMDGFM $0.064$), the shape error at $h=1/48$ rises from $2.34\times10^{-5}$
+to $2.45\times10^{-5}$ (CMDGFM $2.82\times10^{-5}$) and the rate from $h=1/12$
+to $1/24$ falls from $1.84$ to $1.64$ (the gravity part is attributed to the
+same mismatch, not isolated). Making rows~2 and~3 consistent with the row-1
+chord (a conservative form of their curvature) is the open follow-up.
+(vi)~A run of cut cells without valid columns keeps the
 height-function curvature: a thin cap, whose row-2 transition is wider than
 the columns (area $\pi\,0.1^2/2$ at $h=1/48$, 10 shifts: 54 of 70 row-1 cut
 cells at $25^\circ$, 34 of 46 at $155^\circ$, all 50 at $160^\circ$, none at
