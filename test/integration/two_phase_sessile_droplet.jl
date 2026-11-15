@@ -183,6 +183,7 @@ function sessile_droplet_case(
         volume_error = abs(integrate(interface) - initial_volume),
         initialization_error = abs(initial_volume - profile.area),
         reference_area = profile.area,
+        levels = length(unique(block.key.level for block in mesh.blocks)),
     )
 end
 
@@ -285,5 +286,41 @@ end
         @test isfinite(inclined["MM"].maximum_velocity)
         @test_broken inclined["MM"].maximum_velocity <= 2inclined["CMDGFM"].maximum_velocity
         @test_broken inclined["MM"].shape_error <= 1.25inclined["CMDGFM"].shape_error
+    end
+end
+
+@testset "Sessile droplet with the two-velocity projections on adaptive meshes" begin
+    # The convergence study's drop on a fixed nonconforming tree and on the
+    # interface/curvature-adapted tree (finest level n = 48), both
+    # projections. Without gravity the mimetic drop matches the CMDGFM as on
+    # the uniform mesh (measured on both trees: shape error 1.077e-5 against
+    # 1.026e-5, largest phase value 1.99e-3 against 1.80e-3).
+    models = (
+        ("CMDGFM", TwoVelocityModel()),
+        ("MM", TwoVelocityModel(pressure_projection = MimeticProjection())),
+    )
+    for kind in (:mixed, :amr)
+        cap = Dict(
+            name => sessile_droplet_case(12; kind, velocity_model = model, bond = 0.0)
+                for (name, model) in models
+        )
+        for (name, _) in models
+            @test cap[name].levels > 1
+            @test cap[name].volume_error <= 4096eps()
+        end
+        @test cap["MM"].shape_error <= 1.1cap["CMDGFM"].shape_error
+        @test cap["MM"].maximum_velocity <= 1.25cap["CMDGFM"].maximum_velocity
+        # NUMERICS CONCERN: with gravity (Bo = 1.21) the mimetic drop has the
+        # deficit of the uniform mesh (testset above: the cell-to-cell scatter
+        # of the height-function curvature in the per-phase force), unchanged
+        # by the adaptive tree: largest phase value 1.04 against 0.064 for the
+        # CMDGFM, shape error 3.15e-4 against 2.82e-5 on both trees.
+        gravity = Dict(
+            name => sessile_droplet_case(12; kind, velocity_model = model)
+                for (name, model) in models
+        )
+        @test all(isfinite, (gravity["MM"].maximum_velocity, gravity["MM"].shape_error))
+        @test gravity["MM"].volume_error <= 4096eps()
+        @test_broken gravity["MM"].maximum_velocity <= 2gravity["CMDGFM"].maximum_velocity
     end
 end

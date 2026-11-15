@@ -425,7 +425,10 @@ indicators. After the physical step passes its projection test (otherwise
 step; the indicators therefore see the end-of-step state. If the leaf set
 changed, \apifun{step!} rebuilds the topology-dependent operators and
 workspaces (pressure operator and solver, viscous operators, transport
-workspaces, reusing multigrid levels whose meshes are unchanged), associates
+workspaces, reusing multigrid levels whose meshes are unchanged; the
+mimetic projection rebuilds its cell sides, metric, factorisations and
+preconditioner for the new topology generation,
+\cref{sec:projection:mimetic}), associates
 the divergence that the transfer leaves with the untruncated proposed step
 (the supplied step for a direct call; \cref{sec:projection:pressure-update}),
 and, with two velocities, projects

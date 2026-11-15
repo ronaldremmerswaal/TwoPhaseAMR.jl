@@ -139,10 +139,12 @@ integration groups and \code{shard:A}, \code{shard:B}, \code{shard:C} the unit
 shards. The unit groups check contracts, exact identities and short
 manufactured-solution studies; the integration groups run refinement studies
 and benchmark flows; \code{performance} holds allocation contracts;
-\code{threading_equivalence} repeats five short flows (Taylor--Green vortices on
+\code{threading_equivalence} repeats seven short flows (Taylor--Green vortices on
 an adaptively refined mesh, two-phase CMDGFM on an embedded sloped wall, a
-capillary wave with interface refinement, the two-velocity Stokes-3 wave, which
-must regrid during the run, and the cylinder) in fresh processes with one, two
+capillary wave with interface refinement, the same wave with the mimetic
+projection, a drop translating through an adapting interface band with the
+mimetic projection and the two-velocity Stokes-3 wave, both of which must
+regrid during the run, and the cylinder) in fresh processes with one, two
 and four Julia threads and the threading grain at one, so that every loop
 takes its threaded branch. It requires bitwise equal SHA-256 hashes of every
 state field (velocity components per phase, pressure, liquid fraction) and of

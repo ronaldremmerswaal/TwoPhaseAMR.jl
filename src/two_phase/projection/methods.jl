@@ -54,15 +54,18 @@ and the block is the classical MFD block of the polygon. A cell without a
 consistent block (no admissible pressure point) gets least-squares consistent
 blocks (eigenvalues raised to `0.02h²`) and is counted in
 [`MimeticProjectionStats`](@ref) `.defective_cells`. Away from the interface
-the metric is the diagonal phase mass. A phase value on a face that the phase
-does not reach follows a donor, and a value with aperture `0 < a < 1/2` on a
-mixed face is tied to a donor with weight `(1 - 2a)` times its mass
-(small-cell stabilisation).
+the metric is the diagonal phase mass, except in a cell next to two finer
+cells on an adaptive mesh: its side of two faces makes it a polygon of five
+to eight edges, whose Gram block (`G = h² I`, centre `x*`) reproduces constant
+fields, so a hydrostatic or translating state stays at rest across a level
+transition. A phase value on a face that the phase does not reach follows a
+donor, and a value with aperture `0 < a < 1/2` on a mixed face is tied to a
+donor with weight `(1 - 2a)` times its mass (small-cell stabilisation).
 
 A cut cell at a domain wall keeps its wall side as a side of the Gram tensor;
 the prescribed wall flux is not a value of the metric, so the block is
-restricted to the interior sides. Supported on uniform square-cell meshes
-without embedded solids; other configurations throw `ArgumentError`.
-[`CMDGFMProjection`](@ref) remains the default.
+restricted to the interior sides. Supported on uniform and adaptive (2:1
+graded) meshes of square cells without embedded solids; other configurations
+throw `ArgumentError`. [`CMDGFMProjection`](@ref) remains the default.
 """
 struct MimeticProjection <: AbstractTwoVelocityProjection end

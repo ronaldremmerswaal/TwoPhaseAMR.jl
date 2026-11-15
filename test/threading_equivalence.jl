@@ -10,13 +10,15 @@
 # `1,2,4`) lists the thread counts, the first being the serial reference.
 const EQUIVALENCE_THREADS = "1,2,4"
 
-"""Case whose run must adapt the mesh, so that the comparison covers the
-transfer and rebuild paths. One regrid is part of the case: a run that stops
-adapting would silently stop covering them."""
-const ADAPTED_CASE = "stokes3_two"
+"""Cases whose run must adapt the mesh, so that the comparison covers the
+transfer and rebuild paths (of the CMDGFM and of the mimetic projection). One
+regrid is part of each case: a run that stops adapting would silently stop
+covering them."""
+const ADAPTED_CASES = ("stokes3_two", "mimetic_amr")
 
 const EQUIVALENCE_CASES = (
-    "taylor_green", "droplet", "capillary", "capillary_mimetic", "stokes3_two", "cylinder",
+    "taylor_green", "droplet", "capillary", "capillary_mimetic", "mimetic_amr",
+    "stokes3_two", "cylinder",
 )
 
 """
@@ -159,9 +161,11 @@ end
             @test bytes <= warm_step_budget(name, threads)
         end
     end
-    # Only this case is required to adapt; a run that stops adapting would
+    # Only these cases are required to adapt; a run that stops adapting would
     # silently stop covering the transfer and rebuild paths.
-    @test runs[1][1][ADAPTED_CASE].mesh_updates > 0
+    for name in ADAPTED_CASES
+        @test runs[1][1][name].mesh_updates > 0
+    end
     # Four cases record diagnostics, whose reductions run in the threaded
     # kernels; a case that stops recording would weaken the comparison.
     for name in ("capillary", "droplet", "stokes3_two", "cylinder")
