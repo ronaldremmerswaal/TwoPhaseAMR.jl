@@ -1184,40 +1184,48 @@ function _assemble_cut_cell_metric!(
         )
         dof_at(g) = g == 0 ? 0 : (phase == 1 ? assembly.liquid_dof[g] : assembly.gas_dof[g])
         axis = mesh.faces[face].axis
-        if aperture > zero(T)
+        fraction = data.liquid_fraction[face]
+        small = iszero(aperture) || (
+            aperture < T(0.5) &&
+                (zero(T) < fraction < one(T) || (!isnothing(solid) && solid.open[face] < one(T)))
+        )
+        if !small
             # A block that gives the value no inertia beyond round-off (a phase
             # of vanishing area) does not count: lump the tie weight.
             if !(block_diagonal[dof] > T(1.0e-12) * density[phase == 2 ? 2 : 1] * topology.area[face]^2)
                 _mimetic_add!(assembly, dof, dof, weight)
                 lumped_values += 1
             end
-            fraction = data.liquid_fraction[face]
-            (zero(T) < fraction < one(T) || (!isnothing(solid) && solid.open[face] < one(T))) &&
-                aperture < T(0.5) || continue
-            larger(g) = (
-                d = dof_at(g); reaches(d) &&
-                    assembly.dof_aperture[d] > aperture + T(1.0e-12)
-            )
-            ring = _mimetic_face_ring(topology, face, axis)
-            donor = _mimetic_donor(topology, mesh, ring, dof_at, larger, assembly.dof_aperture)
-            donor == 0 && continue
-            _mimetic_add_tie!(assembly, dof, donor, (one(T) - 2aperture) * weight)
-            stabilised += 1
             continue
         end
+        # A slaved (a = 0) or small value: one tie of weight (1 - 2a) w_f, to
+        # the donor of largest aperture larger than its own; a small value
+        # without one (small-untied) to the best other value of its phase that
+        # its phase reaches; else to the wall or solid; else a slaved value, or
+        # one whose blocks give it no inertia, is lumped. The weight does not
+        # depend on the donor, and as a → 0⁺ it is
+        # the slaved weight (the block entries are O(a²)): one floor per value.
+        tie = (one(T) - 2aperture) * weight
+        admissible(g) = (
+            d = dof_at(g); reaches(d) && assembly.dof_aperture[d] > aperture + T(1.0e-12)
+        )
         ring = _mimetic_face_ring(topology, face, axis)
-        donor = _mimetic_donor(topology, mesh, ring, dof_at, g -> reaches(dof_at(g)), assembly.dof_aperture)
-        if donor == 0
-            _mimetic_add!(assembly, dof, dof, weight)
-            if _mimetic_wall_donor(topology, face, axis) || at_solid(face, axis)
-                assembly.wall_coupling[2dof - 2 + axis] -= weight
-                slaved += 1
-            else
-                lumped_values += 1
-            end
-        else
-            _mimetic_add_tie!(assembly, dof, donor, weight)
+        donor = _mimetic_donor(topology, mesh, ring, dof_at, admissible, assembly.dof_aperture)
+        if donor == 0 && aperture > zero(T)
+            other(g) = (d = dof_at(g); d != dof && reaches(d))
+            donor = _mimetic_donor(topology, mesh, ring, dof_at, other, assembly.dof_aperture)
+        end
+        if donor > 0
+            _mimetic_add_tie!(assembly, dof, donor, tie)
+            iszero(aperture) ? (slaved += 1) : (stabilised += 1)
+        elseif _mimetic_wall_donor(topology, face, axis) || at_solid(face, axis)
+            _mimetic_add!(assembly, dof, dof, tie)
+            assembly.wall_coupling[2dof - 2 + axis] -= tie
             slaved += 1
+        elseif iszero(aperture) ||
+                !(block_diagonal[dof] > T(1.0e-12) * density[phase == 2 ? 2 : 1] * topology.area[face]^2)
+            _mimetic_add!(assembly, dof, dof, tie)
+            lumped_values += 1
         end
     end
     # Band: every value with a non-diagonal or non-uncut contribution.

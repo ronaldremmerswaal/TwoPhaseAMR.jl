@@ -247,7 +247,7 @@ end
     # former mass-proportional ties, tab. mm-tests: 0.0702, 0.0385, 0.0789,
     # 0.0435).
     laboratory = Dict(
-        (10.0, 32) => 0.0810, (10.0, 64) => 0.0434,
+        (10.0, 32) => 0.081, (10.0, 64) => 0.0434,
         (1000.0, 32) => 0.0914, (1000.0, 64) => 0.0497,
     )
     @test first(MimeticLab.t3_error(32, (1.0, 1.0))) <= 1.0e-9
@@ -1958,6 +1958,8 @@ end
     fixtures = (
         ("drop", d -> _mimetic_case(32, _mimetic_circle(32); density = d, periodic = (false, false))),
         ("small drop", d -> _mimetic_case(32, _mimetic_circle(32; radius = 0.07); density = d, periodic = (false, false))),
+        ("tiny drop 1.2h", d -> _mimetic_case(32, _mimetic_circle(32; radius = 1.2h); density = d, periodic = (false, false))),
+        ("tiny drop 0.9h", d -> _mimetic_case(32, (x, y) -> hypot(x - 0.5 - 0.43h, y - 0.5 - 0.29h) - 0.9h; density = d, periodic = (false, false))),
         ("wall film", d -> _mimetic_case(32, (x, y) -> y - 0.23h - 0.05h * sin(2pi * x); density = d, periodic = (false, false))),
         ("corner drop", d -> _mimetic_case(32, (x, y) -> hypot(x - 0.03, y - 0.05) - 0.3; density = d, periodic = (false, false))),
         ("solid sliver", d -> _mimetic_solid_case(32, sliver, (x, y) -> hypot(x - 0.47, y - 0.42) - 0.24; density = d)),
@@ -1973,11 +1975,25 @@ end
         @test result.slaved > 0
         name == "wall film" && @test result.assembly.wall_cells > 0
         startswith(name, "solid") && @test result.assembly.solid_cells > 0
-        @test result.c_min >= 0.1
-        @test result.chi <= 5.0
+        # Tiny drops (R ≤ 1.2h) have small values without a donor of larger
+        # aperture: they keep the floor (1 - 2a) β ρ_π V_f (tie to the wall or
+        # solid, else lumped) instead of their O(a²) block alone.
+        tiny = startswith(name, "tiny")
+        @test result.c_min >= (tiny ? 0.03 : 0.1)
+        @test result.chi <= (tiny ? 1 / 0.03 : 5.0)
+        # One floor per value: a value of vanishing aperture has the slaved
+        # weight, not the floor twice (continuity as a → 0⁺).
+        assembly = result.assembly
+        for dof in eachindex(assembly.dof_face)
+            0 < assembly.dof_aperture[dof] < 1.0e-6 || continue
+            iszero(assembly.band_position[dof]) && continue
+            band = assembly.band_position[dof]
+            floor = case.solver.density[assembly.dof_phase[dof]] * case.mesh.face_dual_volumes[assembly.dof_face[dof]]
+            @test assembly.band_matrix[band, band] <= 1.01 * floor
+        end
         density == (1.0, 1.0) && println(
             "mimetic uniform equivalence ($name): c_min = ", round(result.c_min; digits = 4),
-            ", max chi = ", round(result.chi; digits = 3),
+            ", max chi = ", round(result.chi; digits = 3), ", lumped values = ", assembly.lumped_values,
         )
     end
 end
