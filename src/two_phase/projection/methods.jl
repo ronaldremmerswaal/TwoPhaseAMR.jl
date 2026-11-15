@@ -34,8 +34,8 @@ velocity jump). The pressure gradient uses the map `𝓜⁻¹Dᵀ`; surface tens
 is a per-phase force through the same map, with the capillary potentials
 `σκH` (gas) and `σκH - σκ` (liquid) of a cell curvature `κ` that is defined on
 every cell carrying both phases, so that a constant curvature is exactly
-balanced and a varying one drives the liquid only. Gravity is the uniform
-acceleration of both phases, and the viscous step of the mixture stress is
+balanced and a varying one drives the liquid only. Gravity is the Gram moment
+of the uniform acceleration of both phases, and the viscous step of the mixture stress is
 an implicit midpoint in the metric (non-increasing in `𝓜` for every time step).
 An interior face between a pure liquid and a pure gas cell carries one
 shared phase value.
@@ -59,9 +59,10 @@ does not reach follows a donor, and a value with aperture `0 < a < 1/2` on a
 mixed face is tied to a donor with weight `(1 - 2a)` times its mass
 (small-cell stabilisation).
 
-Supported on uniform square-cell meshes without embedded solids, for
-interfaces whose cut cells do not touch a domain boundary; other
-configurations throw `ArgumentError`. [`CMDGFMProjection`](@ref) remains
-the default.
+A cut cell at a domain wall keeps its wall side as a side of the Gram tensor;
+the prescribed wall flux is not a value of the metric, so the block is
+restricted to the interior sides. Supported on uniform square-cell meshes
+without embedded solids; other configurations throw `ArgumentError`.
+[`CMDGFMProjection`](@ref) remains the default.
 """
 struct MimeticProjection <: AbstractTwoVelocityProjection end

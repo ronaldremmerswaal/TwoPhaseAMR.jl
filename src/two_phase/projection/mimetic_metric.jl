@@ -493,6 +493,8 @@ mutable struct _MimeticAssembly{T}
     factor::Any
     pressure_x::Vector{T}
     pressure_y::Vector{T}
+    wall_coupling::Vector{T}
+    wall_cells::Int
     cut_cells::Int
     slaved_values::Int
     stabilised_values::Int
@@ -513,7 +515,7 @@ end
 function _MimeticAssembly(::Type{T}) where {T}
     return _MimeticAssembly{T}(
         typemax(UInt), Int[], Int[], Int[], Int8[], T[], T[], T[], 0, Int[], Int[], T[],
-        spzeros(T, 0, 0), nothing, T[], T[], 0, 0, 0, 0, 0, T[], Int[], Int[], T[],
+        spzeros(T, 0, 0), nothing, T[], T[], T[], 0, 0, 0, 0, 0, 0, T[], Int[], Int[], T[],
         falses(0), Int8[], zeros(T, 4, 4), zeros(Int, 4), zeros(T, 4), zeros(T, 4, 2),
     )
 end
@@ -553,6 +555,21 @@ apertures and masses of the interior faces), the wet-end `flags` of the
 interior faces and the liquid apertures and wet ends (`true`: low end) of
 the boundary faces.
 
+A side on the domain boundary (a wall) is a side of the cut cell like any
+other: its phase apertures, wet end and midpoint enter the pressure point and
+the Gram blocks. Its flux is prescribed, not a value: the block is restricted
+to the interior sides (the prescribed flux drops out of `u - u*`), and
+`wall_coupling[2r - 2 + k]` (`_mimetic_wall_coupling`) collects the coupling
+`Σ ρ h² m_{q,w} (n_w)_k` of value `r` to the wall sides `w`, so that
+`𝓜 w + C w` is the Gram moment `R w` of a constant field `w` on every value
+(`_mimetic_uniform_acceleration!`). A value that its phase does not reach and
+that has no donor ties to a same-axis wall face across one of its cells if
+there is one (`_mimetic_wall_donor`): the tie `m (u_r - u_w)²` to the
+prescribed wall value adds its mass `m` to the diagonal, as a lumped value
+would, and `-m` to the coupling of its axis, so the constant field of that
+axis is reproduced (the tie vanishes on it) and gravity gives it no
+increment.
+
 `gridline[f]` marks an interior face between a pure liquid and a pure gas cell
 (`1`: liquid minus cell, `-1`: liquid plus cell, `0`: neither): the interface
 lies on the face, no cell is cut. Both cells are treated as uncut and the two
@@ -563,7 +580,7 @@ value carries the summed staggered mass and the full aperture.
 function _assemble_cut_cell_metric!(
         assembly::_MimeticAssembly{T}, mesh,
         topology, data, flags, boundary_aperture, boundary_low, density;
-        allow_wall_cuts = false, gridline = nothing,
+        gridline = nothing,
     ) where {T}
     h = topology.spacing
     faces = length(mesh.faces)
@@ -621,8 +638,9 @@ function _assemble_cut_cell_metric!(
     fill!(assembly.touched, false)
     resize!(assembly.pressure_x, cells)
     resize!(assembly.pressure_y, cells)
+    fill!(resize!(assembly.wall_coupling, 2dofs), zero(T))
     nx, ny = mesh.block_size
-    cut_cells = defective_cells = 0
+    cut_cells = defective_cells = wall_cells = 0
     for cell in 1:cells
         block_index = div(cell - 1, nx * ny) + 1
         local_index = rem(cell - 1, nx * ny)
@@ -653,15 +671,6 @@ function _assemble_cut_cell_metric!(
             end
             continue
         end
-        if !allow_wall_cuts && any(k -> topology.sides[k, cell] < 0, 1:4)
-            throw(
-                ArgumentError(
-                    "MimeticProjection: cut cell $cell touches a domain boundary; " *
-                        "the mimetic metric is consistent only for cut cells away " *
-                        "from walls",
-                ),
-            )
-        end
         starts = ntuple(Val(4)) do k
             zero(T) < apertures[k] < one(T) || return false
             face = topology.sides[k, cell]
@@ -672,6 +681,7 @@ function _assemble_cut_cell_metric!(
         assembly.pressure_x[cell] = center[1] + h * xs
         assembly.pressure_y[cell] = center[2] + h * ys
         cut_cells += 1
+        wall_cells += any(k -> topology.sides[k, cell] < 0, 1:4)
         defective = false
         for phase in 1:2
             m, consistent = _mimetic_gram_block!(
@@ -690,11 +700,15 @@ function _assemble_cut_cell_metric!(
                 for r in 1:m
                     kr = assembly.sides[r]
                     rr = dof_of(kr, phase)
-                    rr > 0 || continue
-                    _mimetic_add!(
-                        assembly, rq, rr,
-                        _MIMETIC_OUTWARD[kq] * _MIMETIC_OUTWARD[kr] * scale * assembly.block[q, r],
-                    )
+                    value = _MIMETIC_OUTWARD[kq] * scale * assembly.block[q, r]
+                    if rr > 0
+                        _mimetic_add!(assembly, rq, rr, _MIMETIC_OUTWARD[kr] * value)
+                    elseif topology.sides[kr, cell] < 0
+                        # Wall side: coupling to its prescribed flux density n_w ⋅ w.
+                        wx, wy = _mimetic_normal(T, kr)
+                        assembly.wall_coupling[2rq - 1] += value * wx
+                        assembly.wall_coupling[2rq] += value * wy
+                    end
                 end
             end
         end
@@ -740,7 +754,12 @@ function _assemble_cut_cell_metric!(
         donor = _mimetic_donor(topology, mesh, ring, dof_at, g -> reaches(dof_at(g)), assembly.dof_aperture)
         if donor == 0
             _mimetic_add!(assembly, dof, dof, mass)
-            lumped_values += 1
+            if _mimetic_wall_donor(topology, face, axis)
+                assembly.wall_coupling[2dof - 2 + axis] -= mass
+                slaved += 1
+            else
+                lumped_values += 1
+            end
         else
             _mimetic_add_tie!(assembly, dof, donor, mass)
             slaved += 1
@@ -779,11 +798,25 @@ function _assemble_cut_cell_metric!(
     end
     assembly.band_matrix = sparse(assembly.rows, assembly.columns, assembly.values, count, count)
     assembly.cut_cells = cut_cells
+    assembly.wall_cells = wall_cells
     assembly.slaved_values = slaved
     assembly.stabilised_values = stabilised
     assembly.lumped_values = lumped_values
     assembly.defective_cells = defective_cells
     return assembly
+end
+
+"""Coupling `C[k, r]` of value `r` to the wall flux density of a constant
+field along axis `k` (see `_assemble_cut_cell_metric!`)."""
+@inline _mimetic_wall_coupling(assembly, k, r) = assembly.wall_coupling[2r - 2 + k]
+
+"""Whether a same-axis face across one of the two cells of interior face
+`face` is a domain-boundary face (the wall donor of a value without one)."""
+function _mimetic_wall_donor(topology, face, axis)
+    minus = topology.face_cells[1, face]
+    plus = topology.face_cells[2, face]
+    low, high = axis == 1 ? (4, 2) : (1, 3)
+    return topology.sides[low, minus] < 0 || topology.sides[high, plus] < 0
 end
 
 """Donor of a tie: the neighbour of the ring (then of the second ring) whose
