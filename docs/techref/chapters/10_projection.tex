@@ -1804,15 +1804,25 @@ $EY(\mathcal S_{cc}+2\epsilon\Delta)YE^{\transpose}\succeq0$, positive off the
 kernel of $E^{\transpose}$, and on that kernel the second part is
 $r^{\transpose}\mathcal Pr>0$. The band values of the saddle-point solve are
 $\mathcal M_{bb}^{-1}\mathsf B_{bc}^{\transpose}y$, so $\mathcal SEy$ costs two
-sparse products, and conjugate gradients take $\mathcal Sp$ from the
-recurrence of the directions: an iteration costs one V-cycle, one Schur
-product and two band-cell solves, about $1.4$ times an iteration with
-$\mathcal P$ alone (Stokes wave of the gallery: $1.14$ against $0.81$\,ms). The
+sparse products. Conjugate gradients form $\mathcal Sp$ by a Schur product,
+not from the recurrence of the directions with the products $\mathcal Sz$ of
+the preconditioner: the band-cell part of those comes out of the
+quasi-definite factorisation, exact to only round-off times its conditioning
+(up to $6\cdot10^{-12}$ relative measured),
+and the recursive residual drifts from $b-\mathcal Sx$ by as much (a film of
+thickness $0.95h$ on a solid along a grid line, at rest at densities
+$(1000,1)$, then moved its gas at $3\cdot10^{-15}$ instead of $3\cdot10^{-16}$
+and was set in motion within two steps). An iteration costs one V-cycle, two
+Schur products and two band-cell solves, about $1.5$ times an iteration with
+$\mathcal P$ alone (Stokes wave of the gallery: $1.21$ against $0.82$\,ms; the
+Schur product takes $0.11$\,ms of it). The
 stopping rule is that of the Krylov driver (\cref{sec:solvers:krylov}): the
 preconditioned residual norm $(r^{\transpose}\mathcal Br)^{1/2}$ relative to
 its initial value, inside the defect loop of \cref{sec:projection:defects}.
-The dot products are serial and the factorisations simplicial without BLAS,
-so the result does not depend on the Julia or BLAS thread counts. Mean (max)
+The dot products are serial and the $LDL^{\transpose}$ factorisations
+simplicial, so the result does not depend on the Julia thread count; it does
+depend on the BLAS thread count through the UMFPACK $LU$ factorisation of the
+coarsest multigrid level, as in the CMDGFM projection. Mean (max)
 iterations per projection over 20 steps at densities $(1000,1)$ unless noted,
 with $\mathcal P$ alone and with the band-cell correction: static drop
 $n=32/64/128$: $14.8/18.8/20.6\ (42)\to5.5/6.5/7.7\ (8)$; capillary wave

@@ -2039,9 +2039,9 @@ end
     # The Schur complement S = D𝓜⁻¹Dᵀ differs from the preconditioning operator
     # D W⁻¹ Dᵀ only on the band cells (the cells next to a band value); the
     # preconditioner solves S there through the band-cell saddle-point matrix
-    # around one V-cycle (techref ch. 10, solver). It returns S z with z,
-    # is symmetric positive definite, and its factorisations are simplicial
-    # LDLᵀ solved in serial loops.
+    # around one V-cycle (techref ch. 10, solver). It is symmetric positive
+    # definite, and its factorisations are simplicial LDLᵀ solved in serial
+    # loops.
     TP = TwoPhaseAMR
     h = 1 / 32
     sliver(x, y) = y - 10.03h - 0.02h * x
@@ -2091,13 +2091,11 @@ end
         epsilon = TP._MIMETIC_SADDLE_REGULARIZATION
         residual = S[cells, cells] * z[cells] .+ epsilon .* delta .* z[cells] .- g[cells]
         @test norm(residual) <= 1.0e-8 * norm(g[cells])
-        # The preconditioner: w = S z, symmetric positive definite.
-        apply(r) = (z = zeros(n); w = zeros(n); TP._mimetic_pressure_precondition!(z, w, work, preconditioner, r); (z, w))
-        B = reduce(hcat, (first(apply(unit(j))) for j in 1:n))
+        # The preconditioner: symmetric positive definite.
+        apply(r) = TP._mimetic_pressure_precondition!(zeros(n), work, preconditioner, r)
+        B = reduce(hcat, (apply(unit(j)) for j in 1:n))
         @test B ≈ B' rtol = 1.0e-8
         @test eigmin(Symmetric((B + B') / 2)) > 0
-        z, w = apply(g)
-        @test norm(w - S * z) <= 1.0e-10 * norm(w)
         # Conjugate gradients: fewer iterations than with the V-cycle alone.
         copyto!(work.reduced_rhs, g)
         corrected = TP._mimetic_pressure_cg!(work, preconditioner, 1.0e-10, 500)
