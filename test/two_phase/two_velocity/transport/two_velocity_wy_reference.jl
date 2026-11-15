@@ -518,6 +518,40 @@ end
     end
 end
 
+@testset "Frozen open interval at the donor's open end (#187)" begin
+    # The shared open aperture averages the two cells' traces: next to a
+    # nearly covered donor whose own trace is closed, the end chosen by the
+    # averaged solid normal has no open area in the donor, and a flux through
+    # the face stopped the run with the empty cut-donor strip error. The open
+    # interval then lies at the end the donor's own plane leaves open.
+    function run_flow(solid, levelset, projection)
+        mesh = BlockTreeMesh(; block_size = (32, 32), periodic = (false, false))
+        geometry = GeometryField(mesh, solid; lipschitz = 1, atol = 1.0e-7, maxdepth = 24)
+        interface = InterfaceField(mesh, levelset; geometry, lipschitz = 1, atol = 1.0e-7, maxdepth = 24)
+        physics = TwoPhase(interface; density = (1000.0, 1.0), dynamic_viscosity = (0.0, 0.0), gravity = (0.0, -9.81))
+        flow = FlowSimulation(
+            mesh, physics; geometry, boundary = FreeSlip(),
+            velocity_model = TwoVelocityModel(pressure_projection = projection),
+        )
+        volume = integrate(interface.fraction)
+        for _ in 1:3
+            step!(flow.velocity, flow.pressure, flow.system, 1.0e-3, flow.workspace; tolerance = 1.0e-12, max_cycles = 2000)
+        end
+        @test abs(integrate(interface.fraction) - volume) <= 1.0e-12 * volume
+        frozen_reference_bounded(interface)
+        return flow
+    end
+    line(angle, point) = (x, y) -> -sin(angle) * (x - point[1]) + cos(angle) * (y - point[2])
+    slab = let l = line(0.5166247756053712, (0.5, 0.6158450878575514))
+        (x, y) -> abs(l(x, y)) - 0.013396762615676803
+    end
+    for projection in (CMDGFMProjection(), MimeticProjection())
+        # Liquid at rest over a thin slab: the projection's round-off flux
+        # through such a face stopped both projections in the second step.
+        run_flow(slab, (x, y) -> -1.0, projection)
+    end
+end
+
 @testset "Frozen empty apertures and uncut CFL" begin
     for T in (Float32, Float64)
         mesh = BlockTreeMesh(;
