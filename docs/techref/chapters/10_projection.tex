@@ -659,10 +659,10 @@ results are unchanged. It follows the mimetic-projection audit's note
 the kinetic-energy-orthogonal projection of the two phase velocities onto
 vanishing mixture divergence~\cref{eq:projection:mixture-divergence} in a
 non-diagonal kinetic metric~$\mathcal M$, without jump rows. It is defined
-for meshes of square cells without solid, uniform or adaptive (2:1 graded,
-paragraph \emph{Adaptive meshes} below), cut cells at the domain walls
-included (paragraph \emph{Walls} below); solids and non-square cells throw
-\code{ArgumentError}.
+for meshes of square cells, uniform or adaptive (2:1 graded, paragraph
+\emph{Adaptive meshes} below), cut cells at the domain walls (paragraph
+\emph{Walls} below) and at embedded solids (paragraph \emph{Embedded solids}
+below) included; non-square cells throw \code{ArgumentError}.
 
 \emph{Projection.} Let $\mathsf B$ be the cell-outflow matrix
 of~\cref{eq:projection:mixture-divergence} on the vector $u$ of all present
@@ -1034,6 +1034,110 @@ over three steps, a drop of constant curvature to $4\times10^{-16}$ of its
 force, and a drop translating at constant velocity (densities $(10,1)$, with
 viscosity) through $10$ regrids keeps the constant field exactly.
 
+\emph{Embedded solids.} With a solid (\cref{ch:cutcells}) a face is open over
+its shared open aperture $o_f$~\cref{eq:cutcells:trace}, the phase
+apertures are fractions of the whole face with
+$\phaseaperture{\liq}{f}+\phaseaperture{\gas}{f}=o_f$, $\mathsf B$ is the
+package's cut-cell divergence~\cref{eq:setting:open-divergence}, the
+staggered masses use the open dual volumes~\cref{eq:cutcells:dual}, and a
+face without open dual volume has no value. A segment $s$ of a cell side is
+open over $o_s\ell_s$; which end the solid closes is decided once per face,
+by the sign of the summed tangential components of the solid normals of the
+adjacent cells (as the wet end, from the phase planes). Within the open part
+the phase parts are placed as before, so both cells of a face see the same
+wetted lengths and midpoints. A cell with a partially closed segment has one
+more side, its \emph{solid edge} $S$. The shared open apertures are means of
+the two cells' traces and need not close the cell's own solid plane, so the
+edge is not taken from that plane but closes the open parts: with
+$P=\sum_so_s\ell_s\,n_s m_s^{\transpose}$ ($m_s$ the midpoints of the open
+parts) and the open fraction $A$ of the cell,
+\begin{equation}\label{eq:projection:mimetic-solid-edge}
+  \abs{S}\,n_S=u:=-\sum_so_s\ell_s\,n_s,\qquad
+  u\times x_S=P_{21}-P_{12},\quad u\cdot x_S=2A-\operatorname{tr}P,\qquad
+  \mathsf F_c=P+u\,x_S^{\transpose},
+\end{equation}
+in units of $h$: the edge has the closing length and the outward normal
+$u/\abs{u}$ (into the solid), and its midpoint $x_S$ makes the Gram tensor
+$\mathsf F_c$ of the open cell symmetric with trace $2A$. For data that bound
+the open polygon $x_S$ is the midpoint of its solid edge and
+$\mathsf F_c=A\,I$ (a chord along a grid line: the closed side itself, as at
+a grid-aligned solid whose covered faces have $o_f=0$). The liquid part of
+the edge lies on the liquid side of the cell's PLIC line: the contact point
+is where that line crosses the edge, at which end the liquid lies follows
+from the line, and a pure cell wets the edge with its phase. The contact
+angle enters only through the PLIC planes and the height-function curvature
+with the solid's contact condition (\cref{sec:interface:contact}). The edge
+is a side like a wall side: it enters the pressure point,
+$\mathsf G^{\phase}_c$, $\eta_c$, $\tau_c$, the stabilisation and the closing
+flux~\cref{eq:projection:mimetic-slave} of each phase with its wetted part,
+its flux is prescribed (zero), the block is restricted to the fluxed sides,
+and its coupling enters $\mathsf C$ with the normal $n_S$, so
+\cref{eq:projection:mimetic-wall,eq:projection:mimetic-wall-moment} hold
+verbatim and the projection stays $\mathcal M$-orthogonal with exact cut-cell
+divergence. The segments and the edge close each cell, so
+$\mathsf G^{\liq}_c+\mathsf G^{\gas}_c=\mathsf F_c$ for every $x^{*}_c$, both
+tensors are symmetric on the same line $\eta_c\times x^{*}_c=\tau_c$, and the
+admissible interval~\cref{eq:projection:mimetic-interval} becomes
+$0\preceq\mathsf G^{\liq}_c\preceq\mathsf F_c$: with
+$\mathsf F_c=\mathsf L\mathsf L^{\transpose}$ it is the unit interval of
+$\mathsf Q=\mathsf L^{-1}\mathsf G^{\liq}_c\mathsf L^{-\transpose}$, which moves
+along the line by $-s\abs{\eta_c}\,\mathsf L^{-1}\hat\eta\hat\eta^{\transpose}\mathsf L^{-\transpose}$,
+a rank-one change as before (no admissible point without a positive definite
+$\mathsf F_c$; the kernel rule for $\eta_c=0$ uses the eigenvectors of
+$\mathsf G^{\liq}_c$ and of $\mathsf F_c-\mathsf G^{\liq}_c$). A pure cell cut
+by the solid gets the Gram block of its phase, $\mathsf G_c=\mathsf F_c$
+(independent of $x^{*}_c$, $\eta_c=0$), with the pressure point at the
+centroid of its open polygon. Small open apertures: a block entry scales with
+the square of the open length over the open area, so a value on a face with a
+small open aperture would get a small inertia and a large velocity for a
+bounded flux; such a value ($\phaseaperture{\phase}{f}<\frac12$ on a face with
+$o_f<1$) gets the tie of weight $1-2\phaseaperture{\phase}{f}$ of the mixed
+faces, which vanishes on constant fields. A value without aperture and donor
+next to the solid (its face partially closed, a partially solid cell, or a
+partially closed same-axis face across one of its cells) is tied to the
+solid, whose velocity is prescribed, as a wall value is: no free fall of a
+film on a solid. A cell without open volume has no pressure; the cells with
+open volume form components connected by open faces, each with its smallest
+cell as pressure anchor, and the defects of
+\cref{sec:projection:defects} divide by the open cell volume. The
+preconditioner is the cut-cell pressure operator of the open cells with the
+same face coefficient. Without a solid nothing changes (bitwise).
+Measured on 56 static configurations at $h=1/32$ (slanted-line and circular
+solids, a grid-aligned floor and step, four random solids; no interface, a
+pool, two drops; densities $(1,1)$ and $(1000,1)$) and on 8 configurations
+of a two-level mesh with the solid across the transitions: no defective cell
+or lumped value, the band symmetric positive definite (smallest eigenvalue
+$10^{-8}h^2$, contact slivers), \cref{eq:projection:mimetic-transition} with
+the solid coupling to $3\times10^{-15}$ (relative), the energy identity to
+$10^{-15}$; on exact data the edge is the chord and
+$\mathsf F_c=A\,I$ to $10^{-14}$. A uniform acceleration at equal densities
+with drops on a slanted solid and on a cylinder, hydrostatic pools over
+slanted solids and a submerged cylinder at densities $(1000,1)$, and films of
+$0.05h$ to $0.95h$ on flat solids on and off a grid line stay at rest to
+$3\times10^{-12}$ through three steps; a pool whose surface crosses the
+cylinder to $6\times10^{-7}$ (the averaged open traces of the curved solid
+put the contact cells' pressure points off the level line); a drop on a
+slanted solid at $60^\circ$, $90^\circ$ and $120^\circ$ with the exact
+constant curvature is balanced to $2\times10^{-13}$ of forces of order one,
+and a constant field along a slanted solid is kept to $2\times10^{-11}$
+(densities $(1,1)$) and $8\times10^{-10}$ (densities $(1000,1)$): its outflow is
+the closure defect of the averaged open traces of the reconstructed solid,
+which the projection removes through the small apertures of sliver cells.
+With the height-function curvature the contact lines on an embedded solid
+drive much larger currents than on a domain wall, for both projections: a
+drop at $90^\circ$ ($R=0.2$, densities $(1,10^{-3})$, $h=1/32$, no gravity)
+after $40$ steps of $2\times10^{-4}$ has $\max\abs u=0.017$ (CMDGFM) and
+$0.08$ (mimetic) on the domain floor, but $1.24$ and $5.2$ on an embedded
+floor along a grid line and $0.12$ and $3.7$ on one $0.3h$ off it; with the
+exact curvature $1/R$ in place of the cell curvature the mimetic drop rests
+on all three floors at $60^\circ$, $90^\circ$ and $120^\circ$ to the
+projection tolerance. The metric balances; the excess is the curvature field
+at embedded contact lines, which the per-phase force passes to the gas values
+of small aperture in liquid-dominated staggered volumes of the contact cells.
+In example~09 (slanted solid, Bond number $1.21$) such values grow from $1.2$
+to $26$ within five steps of the mimetic run and its step collapses near
+$t=0.012$, while the CMDGFM run continues with currents of $3$--$6$.
+
 \emph{Surface tension.} The surface tension is a per-phase force through the
 same map (the mimetic-projection audit's note \emph{Small apertures},
 section~3). Each phase has its own capillary potential on the cells,
@@ -1307,6 +1411,12 @@ assembly with~\cref{eq:projection:mimetic-slave}, ties and grid-line values
 cell sides and their faces on adaptive meshes \srcsym{src/two_phase/projection/mimetic_metric.jl}{_mimetic_topology},
 segments~\cref{eq:projection:mimetic-segments} \srcsym{src/two_phase/projection/mimetic_metric.jl}{_MimeticSegment}
 and \srcsym{src/two_phase/projection/mimetic_metric.jl}{_mimetic_segment};
+embedded solids: data \srcsym{src/two_phase/projection/mimetic_metric.jl}{_MimeticSolidData}
+filled by \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_solid_data!},
+solid edge~\cref{eq:projection:mimetic-solid-edge} \srcsym{src/two_phase/projection/mimetic_metric.jl}{_mimetic_add_solid_edge!}
+with \srcsym{src/two_phase/projection/mimetic_metric.jl}{_mimetic_solid_wetting},
+ties to the solid \srcsym{src/two_phase/projection/mimetic_metric.jl}{_mimetic_solid_donor},
+pressure gauge per open component \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_gauge!};
 grid-line faces \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_gridline_faces!},
 predictor and removed jump energy \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_gather!};
 solve \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_solve!}~\cref{eq:projection:mimetic},
@@ -1339,7 +1449,11 @@ Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mi
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric on adaptive meshes: Gram moment, definiteness, level transitions},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection on adaptive meshes: composite divergence, energy identity, rest},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic rest states on adaptive meshes},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic viscous step on adaptive meshes}.
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic viscous step on adaptive meshes},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic solid edge on exact data},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric with embedded solids: definiteness, consistency and the Gram moment},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic rest states with embedded solids},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic viscous step with embedded solids}.
 \end{implnote}
 
 \section{Fully discrete projection stage}\label{sec:projection:time}
