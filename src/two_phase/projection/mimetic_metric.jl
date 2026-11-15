@@ -753,6 +753,12 @@ end
     return nothing
 end
 
+"""Factor `β` of the aperture-independent tie weight `β ρ_π V_f` of the metric
+(`_assemble_cut_cell_metric!`). With `β = 1` the measured equivalence constant
+`λ_min(𝓜, diag(ρ_π V_f))` stays above `0.085` (static drop, RT, KH); the
+static-drop energy is flat between `β = 1/2` and `2`."""
+const _MIMETIC_TIE_BETA = 1.0
+
 """Embedded-solid data of the metric (see `_assemble_cut_cell_metric!`): the
 shared open apertures of the interior and boundary faces, whether the solid
 closes the low tangential end of a partially open face (`low`,
@@ -927,10 +933,16 @@ in which a block is only least-squares consistent counts as defective. Uncut
 cells with one face per side give their face values `ρh²/2`, the Gram block
 of the square; an uncut cell with a side of two faces (next to two finer
 cells) gets the Gram block of its phase on its five to eight segments, with
-the pressure point at its centre. A phase value on a face that the phase
-does not reach is tied to a donor with its staggered mass, and every value
-with aperture below one half on a mixed face is tied to a donor with weight
-`(1 - 2a)` times its mass (small-cell stabilisation).
+the pressure point at its centre. The stability parts of the metric use the
+aperture-independent mass `w_f = β ρ_π V_f` of a value (`β =
+_MIMETIC_TIE_BETA`, `V_f` the staggered dual volume of its face, the open dual
+volume with a solid): a phase value on a face that the phase does not reach
+is tied to a donor with weight `w_f`, and every value with aperture `a < 1/2`
+on a mixed face to a donor with weight `(1 - 2a) w_f` (small-cell
+stabilisation). The ties vanish on constant fields and are continuous in
+`a`; their floor `w_f` as `a → 0` makes `𝓜` uniformly equivalent to
+`diag(ρ_π V_f)` (`𝓜 ⪰ c diag(ρ_π V_f)` with `c` independent of the apertures
+and fractions).
 
 The geometry enters only through `data` (staggered liquid fractions, phase
 apertures and masses of the interior faces), the wet-end `flags` of the
@@ -947,9 +959,9 @@ to the interior sides (the prescribed flux drops out of `u - u*`), and
 `𝓜 w + C w` is the Gram moment `R w` of a constant field `w` on every value
 (`_mimetic_uniform_acceleration!`). A value that its phase does not reach and
 that has no donor ties to a same-axis wall face across one of its cells if
-there is one (`_mimetic_wall_donor`): the tie `m (u_r - u_w)²` to the
-prescribed wall value adds its mass `m` to the diagonal, as a lumped value
-would, and `-m` to the coupling of its axis, so the constant field of that
+there is one (`_mimetic_wall_donor`): the tie `w_f (u_r - u_w)²` to the
+prescribed wall value adds its weight `w_f` to the diagonal, as a lumped value
+would, and `-w_f` to the coupling of its axis, so the constant field of that
 axis is reproduced (the tie vanishes on it) and gravity gives it no
 increment.
 
@@ -1164,13 +1176,19 @@ function _assemble_cut_cell_metric!(
         phase = assembly.dof_phase[dof]
         aperture = assembly.dof_aperture[dof]
         mass = assembly.dof_mass[dof]
+        # Weight of the ties and lumped fallbacks: β ρ_π V_f (the summed
+        # staggered mass, times β, for an identified grid-line value).
+        weight = T(_MIMETIC_TIE_BETA) * (
+            phase == 3 ? mass :
+                density[phase] * (isnothing(solid) ? mesh.face_dual_volumes[face] : solid.face_volume[face])
+        )
         dof_at(g) = g == 0 ? 0 : (phase == 1 ? assembly.liquid_dof[g] : assembly.gas_dof[g])
         axis = mesh.faces[face].axis
         if aperture > zero(T)
             # A block that gives the value no inertia beyond round-off (a phase
-            # of vanishing area) does not count: lump the staggered mass.
+            # of vanishing area) does not count: lump the tie weight.
             if !(block_diagonal[dof] > T(1.0e-12) * density[phase == 2 ? 2 : 1] * topology.area[face]^2)
-                _mimetic_add!(assembly, dof, dof, mass)
+                _mimetic_add!(assembly, dof, dof, weight)
                 lumped_values += 1
             end
             fraction = data.liquid_fraction[face]
@@ -1183,22 +1201,22 @@ function _assemble_cut_cell_metric!(
             ring = _mimetic_face_ring(topology, face, axis)
             donor = _mimetic_donor(topology, mesh, ring, dof_at, larger, assembly.dof_aperture)
             donor == 0 && continue
-            _mimetic_add_tie!(assembly, dof, donor, (one(T) - 2aperture) * mass)
+            _mimetic_add_tie!(assembly, dof, donor, (one(T) - 2aperture) * weight)
             stabilised += 1
             continue
         end
         ring = _mimetic_face_ring(topology, face, axis)
         donor = _mimetic_donor(topology, mesh, ring, dof_at, g -> reaches(dof_at(g)), assembly.dof_aperture)
         if donor == 0
-            _mimetic_add!(assembly, dof, dof, mass)
+            _mimetic_add!(assembly, dof, dof, weight)
             if _mimetic_wall_donor(topology, face, axis) || at_solid(face, axis)
-                assembly.wall_coupling[2dof - 2 + axis] -= mass
+                assembly.wall_coupling[2dof - 2 + axis] -= weight
                 slaved += 1
             else
                 lumped_values += 1
             end
         else
-            _mimetic_add_tie!(assembly, dof, donor, mass)
+            _mimetic_add_tie!(assembly, dof, donor, weight)
             slaved += 1
         end
     end

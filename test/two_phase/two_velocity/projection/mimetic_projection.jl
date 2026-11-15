@@ -242,11 +242,13 @@ end
 
 @testset "Mimetic projection under a uniform acceleration (T3)" begin
     # Laboratory geometry (exact apertures and staggered fractions): equal
-    # densities are at rest to round-off, contrasts converge at first order
-    # with the audit's numbers (tab. mm-tests).
+    # densities are at rest to round-off, contrasts converge at first order.
+    # Measured with the uniform ties β ρ_π V_f (the audit's numbers with the
+    # former mass-proportional ties, tab. mm-tests: 0.0702, 0.0385, 0.0789,
+    # 0.0435).
     laboratory = Dict(
-        (10.0, 32) => 0.0702, (10.0, 64) => 0.0385,
-        (1000.0, 32) => 0.0789, (1000.0, 64) => 0.0435,
+        (10.0, 32) => 0.0810, (10.0, 64) => 0.0434,
+        (1000.0, 32) => 0.0914, (1000.0, 64) => 0.0497,
     )
     @test first(MimeticLab.t3_error(32, (1.0, 1.0))) <= 1.0e-9
     for ratio in (10.0, 1000.0)
@@ -1103,14 +1105,15 @@ end
         end
     end
     # Without the wall coupling (the uniform increment dt g alone) the drop on
-    # the floor is not at rest after one projection (measured 0.29 dt g).
+    # the floor is not at rest after one projection (measured 0.14 dt g with
+    # the uniform ties, 0.29 dt g with the former mass-proportional ties).
     case = _mimetic_case(32, floor_drop; periodic = (false, false))
     velocity = _mimetic_velocity(case, (phase, face) -> face.axis == 2 ? -9.81e-3 : 0.0)
     stats = project!(velocity, CellField(case.mesh), case.solver, 1.0e-3, case.workspace; tolerance = 1.0e-12)
     @test stats.converged
     uncoupled = _mimetic_maximum(velocity)
     println("mimetic floor drop, equal densities, dt g without the wall coupling: max |u| = ", uncoupled)
-    @test uncoupled >= 0.25 * 9.81e-3
+    @test uncoupled >= 0.1 * 9.81e-3
     # A constant curvature on a drop on the floor (contact angle about 66°) at
     # densities (1000, 1): the per-phase capillary force is a gradient on the
     # interior faces and the projection removes it exactly.
@@ -1905,6 +1908,67 @@ end
     # in 7 of 1500 random fixtures (216 with the first solid edge).
     @test_broken defective == 0
     @test defective <= 1
+end
+
+# Uniform equivalence of the metric with D = diag(ρ_π V_f) (V_f the open dual
+# volume): c_min = λ_min(𝓜, D) and the largest compliance χ_f = D_f (𝓜⁻¹)_ff
+# (one for a value of an uncut face), on the whole metric (dense).
+function _mimetic_equivalence(case)
+    TP = TwoPhaseAMR
+    assembly = TP._mimetic_assemble!(case.solver, case.workspace)
+    dofs = length(assembly.dof_face)
+    metric = zeros(dofs, dofs)
+    for dof in 1:dofs
+        iszero(assembly.band_position[dof]) && (metric[dof, dof] = assembly.diagonal[dof])
+    end
+    metric[assembly.band, assembly.band] .= Matrix(assembly.band_matrix)
+    solid = hasproperty(case, :geometry)
+    mass = map(1:dofs) do dof
+        face = assembly.dof_face[dof]
+        volume = solid ? case.workspace.solid.face_volume[face] : case.mesh.face_dual_volumes[face]
+        phase = assembly.dof_phase[dof]
+        phase == 3 ? assembly.dof_mass[dof] : case.solver.density[phase] * volume
+    end
+    scale = inv.(sqrt.(mass))
+    c_min = eigmin(Symmetric(scale .* metric .* scale'))
+    chi = maximum(mass .* diag(inv(Symmetric(metric))))
+    return (; c_min, chi, slaved = count(iszero, assembly.dof_aperture), assembly)
+end
+
+@testset "Mimetic metric: uniform equivalence with the aperture-independent mass" begin
+    # The ties and lumped fallbacks weigh β ρ_π V_f, continuous in the
+    # aperture (techref ch. 10, uniform ties), so 𝓜 ⪰ c diag(ρ_π V_f) with c
+    # independent of the apertures and fractions, also on the values a phase
+    # does not reach (slaved, aperture 0). Measured: c_min 0.112 – 0.183 and
+    # max χ 2.7 – 4.6 on these fixtures for every density ratio (with the
+    # former weights (1 - 2a) m_f, m_f: c_min ~1e-8, χ ~1e8).
+    h = 1 / 32
+    sliver(x, y) = y - 10.03h - 0.02h * x
+    fixtures = (
+        ("drop", d -> _mimetic_case(32, _mimetic_circle(32); density = d, periodic = (false, false))),
+        ("small drop", d -> _mimetic_case(32, _mimetic_circle(32; radius = 0.07); density = d, periodic = (false, false))),
+        ("wall film", d -> _mimetic_case(32, (x, y) -> y - 0.23h - 0.05h * sin(2pi * x); density = d, periodic = (false, false))),
+        ("corner drop", d -> _mimetic_case(32, (x, y) -> hypot(x - 0.03, y - 0.05) - 0.3; density = d, periodic = (false, false))),
+        ("solid sliver", d -> _mimetic_solid_case(32, sliver, (x, y) -> hypot(x - 0.47, y - 0.42) - 0.24; density = d)),
+        ("solid slab film", d -> _mimetic_solid_case(32, _mimetic_slab(0.4, 0.02, (0.5, 0.4)), (x, y) -> y - 0.45; density = d)),
+        ("adaptive drop", d -> _mimetic_composite_case(_MIMETIC_COMPOSITE_REGIONS[2]..., _MIMETIC_COMPOSITE_LEVELSETS[1]; density = d)),
+        ("adaptive wave", d -> _mimetic_composite_case(_MIMETIC_COMPOSITE_REGIONS[1]..., _MIMETIC_COMPOSITE_LEVELSETS[2]; density = d)),
+    )
+    for (name, build) in fixtures, density in ((1.0, 1.0), (1000.0, 1.0), (1.0, 1000.0))
+        case = build(density)
+        result = _mimetic_equivalence(case)
+        # Every fixture has slaved values; the wall film has values tied to the
+        # wall, the solid fixtures cut cells at the solid.
+        @test result.slaved > 0
+        name == "wall film" && @test result.assembly.wall_cells > 0
+        startswith(name, "solid") && @test result.assembly.solid_cells > 0
+        @test result.c_min >= 0.1
+        @test result.chi <= 5.0
+        density == (1.0, 1.0) && println(
+            "mimetic uniform equivalence ($name): c_min = ", round(result.c_min; digits = 4),
+            ", max chi = ", round(result.chi; digits = 3),
+        )
+    end
 end
 
 @testset "Mimetic rest states with embedded solids" begin
