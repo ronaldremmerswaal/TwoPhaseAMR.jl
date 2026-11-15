@@ -852,12 +852,15 @@ full value, $\Lambda_f=\dens^{\phase}\dualvol{f}$ ($\dualvol{f}$ the full, with
 a solid the open, dual volume; on adaptive meshes the composite one),
 \begin{equation}\label{eq:projection:mimetic-ties}
   \mathcal M=\mathcal M_G+\sum_{f\in\mathcal T}w_f\,(e_f-e_{d(f)})(e_f-e_{d(f)})^{\transpose}
-  +\sum_{f\in\mathcal W}w_f\,e_fe_f^{\transpose}+\sum_{f\in\mathcal L}\beta\Lambda_f\,e_fe_f^{\transpose},
+  +\sum_{f\in\mathcal W}w_f\,e_fe_f^{\transpose}+\sum_{f\in\mathcal L}w_f\,e_fe_f^{\transpose},
   \qquad w_f=\max\bigl(0,1-2\phaseaperture{\phase}{f}\bigr)\,\beta\,\Lambda_f,\quad\beta=1,
 \end{equation}
 with $\mathcal M_G$ the Gram blocks, $\mathcal T$ the tied, $\mathcal W$ the
 wall- or solid-tied and $\mathcal L$ the lumped values (\code{_MIMETIC_TIE_BETA};
-a slaved value has $a_f=0$, so $w_f=\beta\Lambda_f$). Before, the weights were
+a slaved value has $a_f=0$, so $w_f=\beta\Lambda_f$; a lumped value that is
+neither slaved nor small, $a_f\ge\tfrac12$ or on a face that is neither mixed
+nor partially closed, whose blocks give it no inertia, gets $\beta\Lambda_f$ in
+place of $w_f$). Before, the weights were
 $(1-2a_f)\dualvol{f}\facemass{\phase}{f}$ and $\dualvol{f}\facemass{\phase}{f}$,
 proportional to the staggered phase fraction $\alpha_f$, so a nearly empty value
 had almost no inertia. The ties vanish on the four per-phase constant fields
@@ -916,7 +919,8 @@ lumped values) are roots. Assume: (A1) every tied value has a donor of
 the same phase with larger aperture, so the donor graph is a forest with roots
 as roots; (A2) $w_f\ge\beta_*\Lambda_f$ on the tied and wall-tied values;
 (A3) root coercivity,
-$u^{\transpose}(\mathcal M_G+\sum_{\mathcal L}\beta\Lambda_fe_fe_f^{\transpose})u\ge\gamma\sum_{\text{anchors}}\Lambda_fu_f^2$;
+$u^{\transpose}(\mathcal M_G+\sum_{\mathcal L}w_fe_fe_f^{\transpose})u\ge\gamma\sum_{\text{anchors}}\Lambda_fu_f^2$
+(the lumped weights of~\cref{eq:projection:mimetic-ties});
 (A4) the load $\mu=\max_d\sum_{f:d(f)=d}\dualvol{f}/\dualvol{d}$ is finite; (A5)
 every donor chain reaches a root in at most $L$ links. The small-untied ties
 of the package are outside (A1) and (A5): their donor need not have a larger
@@ -1394,7 +1398,9 @@ PLIC normal, \cref{eq:vof:subface}), $T^{\mp}_f$ the liquid traces of the PLIC
 lines of the two cells on the face (on a split side on the face's segment, at
 a solid of the open part), $d(\velo)$ the upstream cell of the value,
 $o_f=\phaseaperture{\liq}{f}+\phaseaperture{\gas}{f}$ the open aperture, and
-$c_f=c^{\liq}_f$ for $\abs{\velo^{\liq}_f}\le10^{-10}$. Where the trace of the
+$c_f=c^{\liq}_f$ for $\abs{\velo^{\liq}_f}\le10^{-10}\abs{\velo^{\gas}_f}$ (a
+relative threshold, so that $c_f$ is homogeneous of degree zero in the two
+values; also for two zero values). Where the trace of the
 upstream cell starts at the end of the liquid subface (resolved interfaces),
 $c^{\liq}_f=\min(\phaseaperture{\liq}{f},t^{d}_f)$ and
 $c^{\gas}_f=\max(t^{d}_f-\phaseaperture{\liq}{f},0)$ with the trace width
@@ -1780,6 +1786,18 @@ solve \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_solve!}~\
 preconditioner \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_preconditioner!};
 forces \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_capillary_force!}~\cref{eq:projection:mimetic-capillary}
 with \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_cell_curvature!},
+the potential difference~\cref{eq:projection:mimetic-hydrostatic}
+\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_cell_potential!} with
+\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_curvature_point},
+\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_height_point},
+\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_hydrostatic} and
+\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_hydrostatic_potential},
+the right-hand side~\cref{eq:projection:mimetic-booked}
+\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_capillary_rhs!} with the booked carrier
+\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_booked_carrier} and
+\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_carried_liquid}
+(subfaces \srcsym{src/two_phase/two_velocity/interface_transport.jl}{_phase_subface_interval},
+traces \srcsym{src/two_phase/forces.jl}{_face_liquid_trace}),
 \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_uniform_acceleration!};
 viscous step \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_viscous_step!}~\cref{eq:projection:mimetic-viscous}
 with the drag of \srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_interphase_drag_coefficients!}~\cref{eq:projection:mimetic-viscous-drag},
@@ -1810,7 +1828,11 @@ Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mi
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic solid edge on exact data},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric with embedded solids: definiteness, consistency and the Gram moment},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic rest states with embedded solids},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic viscous step with embedded solids}.
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic viscous step with embedded solids},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric: uniform equivalence with the aperture-independent mass},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic capillary force: booked carrier},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic capillary potential under gravity},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic capillary force: hydrostatic part on the aperture}.
 \end{implnote}
 
 \section{Fully discrete projection stage}\label{sec:projection:time}

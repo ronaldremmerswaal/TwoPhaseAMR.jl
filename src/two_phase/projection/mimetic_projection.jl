@@ -998,9 +998,11 @@ subfaces of widths `a^l`, `a^g` of the transport in the open part of the face,
 the liquid one at the end of the averaged tangential PLIC normal,
 [`_phase_subface_interval`](@ref)). The booked carrier puts the gas value's
 share on the liquid value, `c = (c^l u^l + c^g u^g)/u^l` clamped to
-`[0, a^l + a^g]` (`c^l` for `|u^l| ≤ 10⁻¹⁰`), so that the work
-`c u^l (J^l - J^g)` of the difference term is the surface-energy release
-`-σ Σ Δκ Φ` of the transport while the clamp is inactive."""
+`[0, a^l + a^g]` (`c^l` for `|u^l| ≤ 10⁻¹⁰ |u^g|`, a liquid value negligible
+against the gas value, and for two zero values), so that the work `c u^l (J^l - J^g)` of the
+difference term is the surface-energy release `-σ Σ Δκ Φ` of the transport
+while the clamp is inactive. The threshold is relative, so `c` is homogeneous
+of degree zero in the two values."""
 @inline function _mimetic_booked_carrier(
         interface, entry, velocity, face, liquid_aperture::T, gas_aperture::T,
     ) where {T}
@@ -1011,7 +1013,7 @@ share on the liquid value, `c = (c^l u^l + c^g u^g)/u^l` clamped to
     liquid = _mimetic_carried_liquid(
         interface, entry, face, ul >= zero(T) ? entry.minus : entry.plus, true, liquid_aperture,
     )
-    abs(ul) > T(1.0e-10) || return liquid
+    abs(ul) > T(1.0e-10) * abs(ug) || return liquid
     gas = _mimetic_carried_liquid(
         interface, entry, face, ug >= zero(T) ? entry.minus : entry.plus, false, gas_aperture,
     )
