@@ -1349,12 +1349,24 @@ liquid value
   f^{\liq}_f=\phaseaperture{\liq}{f}J^{\gas}_f+c_f\,(J^{\liq}_f-J^{\gas}_f-H_f)+\phaseaperture{\liq}{f}H_f,\qquad
   c_f=\operatorname{clamp}\Bigl(\frac{c^{\liq}_f\velo^{\liq}_f+c^{\gas}_f\velo^{\gas}_f}{\velo^{\liq}_f},\,0,\,o_f\Bigr),
 \end{equation}
-the \emph{booked carrier}, with $c^{\liq}_f=\min(\phaseaperture{\liq}{f},t^{d(\velo^{\liq})}_f)$,
-$c^{\gas}_f=\max(t^{d(\velo^{\gas})}_f-\phaseaperture{\liq}{f},0)$, $t^{\mp}_f$ the
-liquid traces of the PLIC lines of the two cells on the face (on a split side
-on the face's segment, at a solid of the open part; $o_f$ the open aperture),
-$d(\velo)$ the upstream cell of the value, and
-$c_f=\min(\phaseaperture{\liq}{f},t^{d(\velo^{\liq})}_f)$ for $\abs{\velo^{\liq}_f}\le10^{-10}$;
+the \emph{booked carrier}, with
+$c^{\phase}_f=\meas{S^{\phase}_f\cap T^{d(\velo^{\phase})}_f}$ (relative to the
+face): $S^{\liq}_f$, $S^{\gas}_f$ the subfaces of widths
+$\phaseaperture{\liq}{f}$, $\phaseaperture{\gas}{f}$ of the VOF transport in the
+open part of the face (the liquid one at the end of the averaged tangential
+PLIC normal, \cref{eq:vof:subface}), $T^{\mp}_f$ the liquid traces of the PLIC
+lines of the two cells on the face (on a split side on the face's segment, at
+a solid of the open part), $d(\velo)$ the upstream cell of the value,
+$o_f=\phaseaperture{\liq}{f}+\phaseaperture{\gas}{f}$ the open aperture, and
+$c_f=c^{\liq}_f$ for $\abs{\velo^{\liq}_f}\le10^{-10}$. Where the trace of the
+upstream cell starts at the end of the liquid subface (resolved interfaces),
+$c^{\liq}_f=\min(\phaseaperture{\liq}{f},t^{d}_f)$ and
+$c^{\gas}_f=\max(t^{d}_f-\phaseaperture{\liq}{f},0)$ with the trace width
+$t^{d}_f=\meas{T^{d}_f}$; in under-resolved geometry (drops of radius
+$\lesssim2h$, films of $\lesssim2h$) the two can lie at opposite ends, where
+these widths missed the transport's liquid flux by up to $0.19\meas{f}$ for
+values of order one (a film of $1.5h$; $0.058\meas{f}$ in a drop of radius
+$0.9h$), the overlaps by $<2\times10^{-7}\meas{f}$ (test, $\dt=10^{-9}$);
 $H_f$ is the hydrostatic part of the difference term under gravity
 (\cref{eq:projection:mimetic-hydrostatic} below, $H_f=0$ without gravity).
 For $\dt\to0$ the VOF transport moves the liquid volume
@@ -1363,7 +1375,8 @@ $c_f\velo^{\liq}_f(J^{\liq}_f-J^{\gas}_f-H_f)$ of the capillary difference term 
 surface-energy release $-\sigma\sum\Delta\kappa\,\Phi$ of the transport while the
 clamp is inactive: the booked carrier closes the duality defect of force
 versus transport in the semi-discrete limit (audit note \emph{Static drop
-energy}). With equal phase values it is the upstream trace; it depends on the
+energy}). With equal phase values it is the upstream trace (at a solid its
+part on the open part of the face, which the transport moves); it depends on the
 signs of the values only and is not Galilean invariant (translating drop at
 densities $(1,1000)$: $\times1.8$ in the kinetic-energy error). With the mean
 aperture $\phaseaperture{\liq}{f}$ as carrier (before) the inviscid static drop

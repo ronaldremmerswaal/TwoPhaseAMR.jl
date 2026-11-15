@@ -985,34 +985,49 @@ function _mimetic_cell_curvature!(
 end
 
 """Booked carrier `c` of the capillary difference term on a face with both
-phase values (liquid aperture `aperture`, open aperture `open`), for the
-current liquid and gas values in `velocity`.
+phase values (liquid aperture `liquid_aperture`, gas aperture `gas_aperture`),
+for the current liquid and gas values in `velocity`.
 
-`t⁻`, `t⁺` are the liquid traces of the PLIC lines of the minus and plus cell
-on the face (on a split side the trace on this face's segment, with a solid
-only its open part), `a` their mean. For `Δt → 0` the VOF transport moves,
-per unit time, the liquid volume `|f|(c^l u^l + c^g u^g)` through the face with
-`c^l = min(a, t^{d(u^l)})` and `c^g = max(t^{d(u^g)} - a, 0)`, where `d(u)` is
-the upstream cell of the value (minus for `u ≥ 0`): the liquid value moves
-liquid through its subface of width `a` where its donor's trace covers it, the
-gas value the donor's liquid on the gas subface. The booked carrier puts the
-gas value's share on the liquid value, `c = (c^l u^l + c^g u^g)/u^l` clamped to
-`[0, open]` (`min(a, t^{d(u^l)})` for `|u^l| ≤ 10⁻¹⁰`), so that the work
+For `Δt → 0` the VOF transport moves, per unit time, the liquid volume
+`|f|(c^l u^l + c^g u^g)` through the face: the value of phase `π` moves the
+liquid of its upstream cell `d(u^π)` (minus for `u ≥ 0`) that lies on its
+subface `S^π`, `c^π = |S^π ∩ T^{d(u^π)}|` ([`_mimetic_carried_liquid`](@ref);
+`T^d` the liquid trace of the PLIC line of `d` on the face, on a split side on
+this face's segment, with a solid only its open part; `S^l`, `S^g` the
+subfaces of widths `a^l`, `a^g` of the transport in the open part of the face,
+the liquid one at the end of the averaged tangential PLIC normal,
+[`_phase_subface_interval`](@ref)). The booked carrier puts the gas value's
+share on the liquid value, `c = (c^l u^l + c^g u^g)/u^l` clamped to
+`[0, a^l + a^g]` (`c^l` for `|u^l| ≤ 10⁻¹⁰`), so that the work
 `c u^l (J^l - J^g)` of the difference term is the surface-energy release
 `-σ Σ Δκ Φ` of the transport while the clamp is inactive."""
 @inline function _mimetic_booked_carrier(
-        interface, entry, velocity, face, aperture::T, open::T,
+        interface, entry, velocity, face, liquid_aperture::T, gas_aperture::T,
     ) where {T}
-    minus_trace = T(_face_aperture(interface, interface.geometry, entry, entry.minus))
-    plus_trace = T(_face_aperture(interface, interface.geometry, entry, entry.plus))
     ul = velocity[1].interior[face]
     ug = velocity[2].interior[face]
     ul = isfinite(ul) ? T(ul) : zero(T)
     ug = isfinite(ug) ? T(ug) : zero(T)
-    liquid = min(aperture, ul >= zero(T) ? minus_trace : plus_trace)
+    liquid = _mimetic_carried_liquid(
+        interface, entry, face, ul >= zero(T) ? entry.minus : entry.plus, true, liquid_aperture,
+    )
     abs(ul) > T(1.0e-10) || return liquid
-    gas = max((ug >= zero(T) ? minus_trace : plus_trace) - aperture, zero(T))
-    return clamp((liquid * ul + gas * ug) / ul, zero(T), open)
+    gas = _mimetic_carried_liquid(
+        interface, entry, face, ug >= zero(T) ? entry.minus : entry.plus, false, gas_aperture,
+    )
+    return clamp((liquid * ul + gas * ug) / ul, zero(T), liquid_aperture + gas_aperture)
+end
+
+"""Liquid of cell `donor` that the value of the liquid (`liquid_carrier`) or
+gas phase of aperture `aperture` moves through `entry` (index `face`) per unit
+velocity for `Δt → 0`: the overlap of its subface in the VOF transport
+([`_phase_subface_interval`](@ref), current PLIC ordering) with the donor's
+liquid trace on the face ([`_face_liquid_trace`](@ref)), relative to the face."""
+@inline function _mimetic_carried_liquid(interface, entry, face, donor, liquid_carrier, aperture::T) where {T}
+    geometry = interface.geometry
+    lo, hi = _phase_subface_interval(interface, entry, face, donor, liquid_carrier, geometry, aperture, nothing)
+    trace_lo, trace_hi, width = _face_liquid_trace(interface, geometry, entry, donor)
+    return max(T(min(hi, trace_hi) - max(lo, trace_lo)), zero(T)) / T(width)
 end
 
 """Interface point (offset from the cell centre in cell units) to which the
@@ -1279,9 +1294,7 @@ function _mimetic_capillary_rhs!(
         if gas_aperture > zero(T)
             # Both values: the capillary part of the difference term rides on
             # the booked carrier, its hydrostatic part on the aperture.
-            carrier = _mimetic_booked_carrier(
-                interface, entry, velocity, face, liquid_aperture, liquid_aperture + gas_aperture,
-            )
+            carrier = _mimetic_booked_carrier(interface, entry, velocity, face, liquid_aperture, gas_aperture)
             hydrostatic_jump = -entry.area * (
                 _mimetic_hydrostatic_potential(assembly, plus, hydrostatic) -
                     _mimetic_hydrostatic_potential(assembly, minus, hydrostatic)

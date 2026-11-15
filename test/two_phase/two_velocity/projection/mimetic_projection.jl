@@ -2001,18 +2001,26 @@ end
 @testset "Mimetic capillary force: booked carrier" begin
     # The difference term -σ|f|Δκ of a face with both values rides on the
     # booked carrier c = (c^l u^l + c^g u^g)/u^l of the Δt → 0 VOF transport
-    # (c^l = min(a, t^{d(u^l)}), c^g = max(t^{d(u^g)} - a, 0), t the PLIC
-    # traces of the upstream cells d(u)). With equal phase values it is the
-    # upstream trace (the geometric flux of the common velocity), on split
-    # sides the trace on the face's segment and at a solid that of the open
-    # part; it depends on the signs of the values only, and a constant
-    # curvature (no difference term) stays the balanced common jump.
+    # (c^π the overlap of the transport's subface of phase π with the PLIC
+    # trace of the upstream cell d(u^π) on the face). With equal phase values it
+    # is the upstream trace (the geometric flux of the common velocity), on split
+    # sides the trace on the face's segment and at a solid its part on the
+    # open interval of the face; it depends on the signs of the values only,
+    # and a constant curvature (no difference term) stays the balanced common
+    # jump.
     TP = TwoPhaseAMR
     rng = Random.Xoshiro(29)
+    h = 1 / 32
     cases = (
         _mimetic_case(32, _mimetic_circle(32); density = (1000.0, 1.0), periodic = (false, false)),
         _mimetic_composite_case(_MIMETIC_COMPOSITE_REGIONS[2]..., _MIMETIC_COMPOSITE_LEVELSETS[1]; density = (1000.0, 1.0)),
         _mimetic_solid_case(32, _mimetic_cylinder(0.513, 0.443, 0.2), (x, y) -> hypot(x - 0.47, y - 0.62) - 0.24; density = (1000.0, 1.0)),
+        # Under-resolved: the donor's liquid trace and the liquid subface of
+        # the transport lie at opposite ends of some faces (the carrier with
+        # the trace anchored at the liquid subface missed the transport's
+        # flux by 0.058 and 0.19 here).
+        _mimetic_case(32, (x, y) -> hypot(x - 0.5 - 0.43h, y - 0.5 - 0.29h) - 0.9h; density = (1000.0, 1.0), periodic = (false, false)),
+        _mimetic_case(32, (x, y) -> abs(y - 0.5 - 0.1h * sin(2pi * x) - 0.05x) - 0.75h; density = (1000.0, 1.0)),
     )
     for case in cases
         mesh, interface, work = case.mesh, case.interface, case.workspace
@@ -2030,15 +2038,41 @@ end
             carriers = map(both) do face
                 liquid, gas = assembly.liquid_dof[face], assembly.gas_dof[face]
                 a, open = assembly.dof_aperture[liquid], assembly.dof_aperture[liquid] + assembly.dof_aperture[gas]
-                c = TP._mimetic_booked_carrier(interface, mesh.faces[face], common, face, a, open)
+                c = TP._mimetic_booked_carrier(interface, mesh.faces[face], common, face, a, assembly.dof_aperture[gas])
                 upstream = sign > 0 ? mesh.faces[face].minus : mesh.faces[face].plus
-                @test c ≈ trace(face, upstream) atol = 1.0e-14
+                # The upstream trace on the open part of the face (both
+                # subfaces): the whole trace without a solid.
+                @test c ≈ TP._mimetic_carried_liquid(interface, mesh.faces[face], face, upstream, true, open) atol = 1.0e-14
+                @test c <= trace(face, upstream) + 1.0e-14
+                isnothing(interface.geometry) && @test c ≈ trace(face, upstream) atol = 1.0e-14
                 @test 0 <= c <= open
                 c
             end
             # The traces differ from the mean aperture on most faces.
             @test count(k -> !isapprox(carriers[k], assembly.dof_aperture[assembly.liquid_dof[both[k]]]; atol = 1.0e-12), eachindex(both)) > 0
         end
+        # c^l u^l + c^g u^g is the liquid flux of the VOF transport per unit
+        # time and face area for Δt → 0 (here Δt = 1e-9 for O(1) values).
+        moving = _mimetic_velocity(
+            case, (phase, face) -> phase == 1 ? 0.3 + sin(7face.center[1] + 3face.center[2]) :
+                -0.2 + cos(5face.center[2] - 2face.center[1]),
+        )
+        transport = WYAdvectionWorkspace(interface, moving)
+        TP._freeze_phase_apertures!(interface, transport)
+        for axis in (1, 2)
+            TP._compute_directional_wy_fluxes!(interface, moving, 1.0e-9, transport, axis)
+        end
+        flux_error = maximum(both) do face
+            entry = mesh.faces[face]
+            liquid, gas = assembly.liquid_dof[face], assembly.gas_dof[face]
+            ul, ug = moving[1].interior[face], moving[2].interior[face]
+            carried(u, liquid_carrier, aperture) = TP._mimetic_carried_liquid(
+                interface, entry, face, u >= 0 ? entry.minus : entry.plus, liquid_carrier, aperture,
+            )
+            booked = carried(ul, true, assembly.dof_aperture[liquid]) * ul + carried(ug, false, assembly.dof_aperture[gas]) * ug
+            abs(booked - transport.liquid_flux[face] / (1.0e-9 * entry.area))
+        end
+        @test flux_error <= 1.0e-6
         values = (randn(rng, length(mesh.faces)), randn(rng, length(mesh.faces)))
         function covector(scale; curvature = nothing)
             velocity = _mimetic_velocity(case, (phase, face) -> 0.0)

@@ -176,7 +176,24 @@ low end), else at its low end."""
 @inline _frozen_open_interval(full_lo, full_hi, width, solid_tangent) =
     solid_tangent > zero(solid_tangent) ? (full_hi - width, full_hi) : (full_lo, full_lo + width)
 
-"""Frozen open/phase subface interval in coordinates of the donor cell.
+"""Frozen open/phase subface interval in coordinates of the donor cell, with
+the frozen phase apertures and subface ordering of `work`
+([`_phase_subface_interval`](@ref))."""
+function _frozen_subface_interval(
+        field::InterfaceField{T}, work::WYAdvectionWorkspace{T},
+        face, face_index, donor, liquid_carrier::Bool, geometry,
+    ) where {T}
+    phase_aperture = liquid_carrier ?
+        @inbounds(work.liquid_aperture[face_index]) :
+        @inbounds(work.gas_aperture[face_index])
+    frozen_lower = isnothing(geometry) ? nothing : @inbounds(work.liquid_subface_lower[face_index])
+    return _phase_subface_interval(
+        field, face, face_index, donor, liquid_carrier, geometry, phase_aperture, frozen_lower,
+    )
+end
+
+"""Open/phase subface interval of the phase aperture `phase_aperture` in
+coordinates of the donor cell.
 
 The open part of a partially open face lies at the end that the averaged
 tangential solid normal of its two cells leaves open. The shared open aperture
@@ -185,10 +202,13 @@ own solid (a closed trace averaged with an open one): if the donor has no
 resolvable open area behind the open part there, the open part lies at the end
 that the donor's own solid plane leaves open, where it has (issue #187). The
 choice depends on the face and the donor only, so the phase subfaces stay
-disjoint."""
-function _frozen_subface_interval(
-        field::InterfaceField{T}, work::WYAdvectionWorkspace{T},
-        face, face_index, donor, liquid_carrier::Bool, geometry,
+disjoint. The liquid subface lies at the low end of the open part if
+`frozen_lower` (the ordering frozen with a solid), or, for
+`frozen_lower === nothing`, if the averaged tangential PLIC normal of the two
+cells is nonnegative (the current ordering)."""
+function _phase_subface_interval(
+        field::InterfaceField{T}, face, face_index, donor, liquid_carrier::Bool, geometry,
+        phase_aperture, frozen_lower,
     ) where {T}
     full_lo, full_hi = _face_local_tangent_interval(
         field.mesh, donor, face,
@@ -210,9 +230,6 @@ function _frozen_subface_interval(
             open_lo, open_hi = _frozen_open_interval(full_lo, full_hi, open_width, own)
         end
     end
-    phase_aperture = liquid_carrier ?
-        @inbounds(work.liquid_aperture[face_index]) :
-        @inbounds(work.gas_aperture[face_index])
     phase_width = clamp(phase_aperture, zero(T), open_aperture) *
         full_width
     phase_width > zero(T) || return open_lo, open_lo
@@ -221,9 +238,8 @@ function _frozen_subface_interval(
     # Without a solid the velocity-based extrusion bound keeps the donating
     # regions disjoint regardless of ordering. Preserve the current PLIC
     # ordering there, and freeze it only where the cut bound depends on it.
-    liquid_is_lower = isnothing(geometry) ?
-        _averaged_tangent_normal(field, face, 3 - face.axis) >= zero(T) :
-        @inbounds(work.liquid_subface_lower[face_index])
+    liquid_is_lower = isnothing(frozen_lower) ?
+        _averaged_tangent_normal(field, face, 3 - face.axis) >= zero(T) : frozen_lower
     phase_is_lower = liquid_carrier == liquid_is_lower
     return phase_is_lower ?
         (open_lo, open_lo + phase_width) :
