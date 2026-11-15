@@ -141,16 +141,35 @@ function _apply_two_velocity_diffusion_update!(
                 source[2].interior[index] + increment
         end
     end
+    return _prescribe_two_velocity_diffusion_values!(destination, source, dirichlet_faces)
+end
+
+function _prescribe_two_velocity_diffusion_values!(destination, source, dirichlet_faces)
+    T = eltype(destination[1])
     for phase in 1:2, index in dirichlet_faces
         @inbounds if !isnan(source[phase].interior[index])
-            destination[phase].interior[index] = zero(eltype(mixture))
+            destination[phase].interior[index] = zero(T)
         end
     end
     for phase in 1:2, index in eachindex(destination[phase].boundary)
         destination[phase].boundary[index] = isnan(source[phase].boundary[index]) ?
-            eltype(mixture)(NaN) : zero(eltype(mixture))
+            T(NaN) : zero(T)
     end
     return destination
+end
+
+"""Record the direct metric viscous solve of `MimeticProjection` in the
+statistics of the diffusion solver: one cycle with the relative residual."""
+function _record_mimetic_viscous_solve!(stats::LinearSolverStats{T}, residual, tolerance) where {T}
+    stats.cycles = 1
+    stats.converged = residual <= _dimensionless_tolerance(T, tolerance)
+    stats.final_l2 = stats.final_linf = T(residual)
+    stats.method = :cholesky
+    stats.preconditioner = :none
+    stats.converged || throw(
+        ErrorException("mimetic viscous solve: relative residual $residual above the tolerance $tolerance"),
+    )
+    return stats
 end
 
 function _diffusion_substep!(
@@ -168,20 +187,35 @@ function _diffusion_substep!(
         workspace.two_phase.diffusion,
         model.interface, model.dynamic_viscosity,
     )
-    density = workspace.two_phase.density
-    _mass_weighted_one_velocity!(
-        state.mixture_velocity, density, state.convected, model,
-    )
-    implicit_midpoint_diffusion!(
-        state.diffused_mixture, state.mixture_velocity, diffusion, dt,
-        workspace.two_phase.diffusion_solver;
-        density, tolerance, max_cycles,
-    )
-    _apply_two_velocity_diffusion_update!(
-        velocity, state.convected,
-        state.diffused_mixture, state.mixture_velocity;
-        dirichlet_faces = diffusion.dirichlet_faces,
-    )
+    if state.projection_solver isa MimeticProjectionSolver
+        # Implicit midpoint of the phase values in the metric of the
+        # projection, unconditionally non-increasing in that metric.
+        result = _mimetic_viscous_step!(
+            velocity, state.convected, state.projection_solver,
+            state.projection_workspace, diffusion.stiffness, dt,
+        )
+        _record_mimetic_viscous_solve!(
+            workspace.two_phase.diffusion_solver.stats, result.residual, tolerance,
+        )
+        _prescribe_two_velocity_diffusion_values!(
+            velocity, state.convected, diffusion.dirichlet_faces,
+        )
+    else
+        density = workspace.two_phase.density
+        _mass_weighted_one_velocity!(
+            state.mixture_velocity, density, state.convected, model,
+        )
+        implicit_midpoint_diffusion!(
+            state.diffused_mixture, state.mixture_velocity, diffusion, dt,
+            workspace.two_phase.diffusion_solver;
+            density, tolerance, max_cycles,
+        )
+        _apply_two_velocity_diffusion_update!(
+            velocity, state.convected,
+            state.diffused_mixture, state.mixture_velocity;
+            dirichlet_faces = diffusion.dirichlet_faces,
+        )
+    end
     _mark_inactive_phase_velocities!(
         velocity, model.interface, workspace.two_phase.inactive_failures,
     )
@@ -204,12 +238,7 @@ end
 """Save the old aperture-weighted mixture cell flux before interface transport."""
 function _capture_two_velocity_inherited_flux!(solver, workspace, state)
     work = state.projection_workspace
-    cache = work isa CMDGFMProjectionWorkspace ?
-        work.pressure_cache : work.cache.pressure
-    data = _projection_face_data(
-        state.projection_solver, work; storage = cache.face_data,
-    )
-    cache.face_data = data
+    data = _two_velocity_projection_face_data!(state.projection_solver, work)
     projection = workspace.projection
     flux = projection.elliptic.input
     _cmdgfm_cell_flux!(
@@ -221,6 +250,19 @@ function _capture_two_velocity_inherited_flux!(solver, workspace, state)
         projection.inherited_divergence, flux,
         solver.pressure_solver.operator.references,
     )
+end
+
+function _two_velocity_projection_face_data!(projection::CMDGFMProjectionSolver, work)
+    cache = work.pressure_cache
+    data = _projection_face_data(projection, work; storage = cache.face_data)
+    cache.face_data = data
+    return data
+end
+
+function _two_velocity_projection_face_data!(projection::MimeticProjectionSolver, work)
+    data = _projection_face_data(projection, work; storage = work.face_data)
+    work.face_data = data
+    return data
 end
 
 function _phase_force_pressure_operator!(projection, work::CMDGFMProjectionWorkspace)
@@ -253,6 +295,63 @@ function _phase_force_substep!(
     return _apply_phase_forces!(velocity, workspace, dt, model, operator)
 end
 
+"""Apply phase forces and subtract the old CMDGFM pressure gradient."""
+function _two_velocity_forces_and_pressure!(
+        velocity, pressure, solver, workspace, state, model::TwoPhaseModel{T},
+        time_step,
+    ) where {T}
+    phase = workspace.two_phase
+    phase_forces = model.sigma > zero(T) || any(!iszero, model.gravity)
+    pressure_operator = _two_velocity_pressure_operator!(
+        solver, workspace, state, model,
+    )
+    if phase_forces
+        _phase_force_substep!(
+            velocity, workspace, time_step, model, pressure_operator,
+        )
+    end
+    _projection_weighted_gradient!(
+        phase.acceleration, pressure, pressure_operator,
+        workspace.projection.elliptic, model.interface.geometry,
+    )
+    _add_common_phase_acceleration!(velocity, phase.acceleration, -time_step)
+    return pressure_operator
+end
+
+"""Apply phase forces for the mimetic projection.
+
+Surface tension is the per-phase capillary force through the mimetic gradient
+map `𝓜⁻¹Dᵀ` (see `_mimetic_capillary_force!`); gravity is the uniform
+acceleration of both phases (see `_mimetic_uniform_acceleration!`). The
+mimetic projection is absolute, so no old pressure gradient is subtracted: an
+`𝓜⁻¹Dᵀ` gradient in the predictor is removed exactly, and the projection
+returns the full pressure.
+"""
+function _two_velocity_forces_and_pressure!(
+        velocity, pressure, solver, workspace,
+        state::TwoVelocityFlowWorkspace{<:Any, <:Any, <:Any, <:Any, <:MimeticProjectionSolver},
+        model::TwoPhaseModel{T}, time_step,
+    ) where {T}
+    isnothing(solver.geometry) || throw(
+        ArgumentError("MimeticProjection does not support embedded solid geometry"),
+    )
+    reconstruct!(model.interface)
+    if model.sigma > zero(T)
+        _mimetic_capillary_force!(
+            velocity, state.projection_solver, state.projection_workspace, time_step;
+            sigma = model.sigma, formulation = model.formulation,
+            unresolved_curvature_faces = workspace.unresolved_curvature_faces,
+        )
+    end
+    if any(!iszero, model.gravity)
+        _mimetic_uniform_acceleration!(
+            velocity, model.interface.mesh, model.gravity, time_step,
+        )
+    end
+    # Only the cell references of this operator are used.
+    return solver.pressure_solver.operator
+end
+
 
 """Advance one two-velocity Navier--Stokes step.
 
@@ -265,7 +364,10 @@ increment that is added to the physical pressure.
 For a shortened CMDGFM step, the old-aperture mixture flux is scaled by
 the reference step, which must be at least `dt`.
 Viscosity acts implicitly on the phase-mass weighted one-velocity state; its
-common increment is applied to both phases.
+common increment is applied to both phases. With `MimeticProjection` the
+phase values instead take the implicit-midpoint step of the same stress in
+the projection's metric (see `_mimetic_viscous_step!`), which is that common
+increment where the metric is the staggered phase mass.
 
 The two-velocity projection keeps a Neumann pressure boundary and cannot
 correct open normal velocities. Boundary preparation extrapolates each phase;
@@ -331,20 +433,9 @@ function step!(
     _enforce_phase_velocity_boundary!(
         velocity, solver, current_time + time_step, phase.inactive_failures,
     )
-    phase_forces = model.sigma > zero(T) || any(!iszero, model.gravity)
-    pressure_operator = _two_velocity_pressure_operator!(
-        solver, workspace, state, model,
+    pressure_operator = _two_velocity_forces_and_pressure!(
+        velocity, pressure, solver, workspace, state, model, time_step,
     )
-    if phase_forces
-        _phase_force_substep!(
-            velocity, workspace, time_step, model, pressure_operator,
-        )
-    end
-    _projection_weighted_gradient!(
-        phase.acceleration, pressure, pressure_operator,
-        workspace.projection.elliptic, model.interface.geometry,
-    )
-    _add_common_phase_acceleration!(velocity, phase.acceleration, -time_step)
     inherited_cell_flux = if isnothing(inherited_flux)
         nothing
     else

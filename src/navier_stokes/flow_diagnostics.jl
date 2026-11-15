@@ -70,8 +70,10 @@ function _summary_property(io::IO, label, value; indent = "  ")
     return println(io)
 end
 
+const _TwoVelocityProjectionStats =
+    Union{CMDGFMProjectionStats, MimeticProjectionStats}
 const _ProjectionSummaryStats =
-    Union{LinearSolverStats, CMDGFMProjectionStats}
+    Union{LinearSolverStats, _TwoVelocityProjectionStats}
 
 """
     converged(stats)
@@ -88,7 +90,7 @@ Return the recorded iteration count, using `cycles` for `LinearSolverStats`
 and `iterations` for the two-velocity projection statistics.
 """
 iterations(stats::LinearSolverStats) = stats.cycles
-iterations(stats::CMDGFMProjectionStats) = stats.iterations
+iterations(stats::_TwoVelocityProjectionStats) = stats.iterations
 
 """
     initial_residual(stats)
@@ -98,7 +100,7 @@ norm for `LinearSolverStats`, and the algebraic 2-norm for the two-velocity
 projection statistics. These norms are not interchangeable across solvers.
 """
 initial_residual(stats::LinearSolverStats) = stats.initial_linf
-initial_residual(stats::CMDGFMProjectionStats) = stats.initial_residual
+initial_residual(stats::_TwoVelocityProjectionStats) = stats.initial_residual
 
 """
     final_residual(stats)
@@ -107,7 +109,7 @@ Return the final residual in the same solver-specific norm as
 [`initial_residual`](@ref).
 """
 final_residual(stats::LinearSolverStats) = stats.final_linf
-final_residual(stats::CMDGFMProjectionStats) = stats.final_residual
+final_residual(stats::_TwoVelocityProjectionStats) = stats.final_residual
 
 _projection_summary_fields(::LinearSolverStats) = (
     :compatible, :method, :preconditioner,
@@ -116,6 +118,10 @@ _projection_summary_fields(::LinearSolverStats) = (
 _projection_summary_fields(::CMDGFMProjectionStats) = (
     :preconditioner, :mixture_divergence, :mixture_volume_defect,
     :normal_velocity_defect, :momentum_identity_error,
+)
+_projection_summary_fields(::MimeticProjectionStats) = (
+    :preconditioner, :mixture_divergence, :mixture_volume_defect,
+    :energy_identity_defect, :gridline_faces,
 )
 function _print_projection_summary(
         io::IO, run::ProjectionRunStats, stats::_ProjectionSummaryStats,
@@ -146,6 +152,16 @@ function _print_projection_summary(
         _summary_property(
             io, replace(string(name), '_' => ' '), getfield(stats, name);
             indent = "    ",
+        )
+    end
+    if stats isa MimeticProjectionStats
+        _summary_property(
+            io, "defective cells this run (total, max per solve)",
+            (run.defective_cells, run.max_defective_cells); indent = "    ",
+        )
+        _summary_property(
+            io, "lumped values this run (total, max per solve)",
+            (run.lumped_values, run.max_lumped_values); indent = "    ",
         )
     end
     return nothing

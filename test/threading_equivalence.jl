@@ -15,8 +15,9 @@ transfer and rebuild paths. One regrid is part of the case: a run that stops
 adapting would silently stop covering them."""
 const ADAPTED_CASE = "stokes3_two"
 
-const EQUIVALENCE_CASES =
-    ("taylor_green", "droplet", "capillary", "stokes3_two", "cylinder")
+const EQUIVALENCE_CASES = (
+    "taylor_green", "droplet", "capillary", "capillary_mimetic", "stokes3_two", "cylinder",
+)
 
 """
 Bytes one warm step may allocate after two warm-up steps, measured on the

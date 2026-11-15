@@ -12,7 +12,7 @@ import LinearAlgebra: issymmetric, ldiv!, mul!
 import SparseArrays: nnz
 using LinearAlgebra: ColumnNorm, Diagonal, I, Symmetric, diag, dot, isposdef,
     cholesky, eigen, lu, norm, nullspace, qr, qr!, rank, tr, svdvals
-using SparseArrays: SparseMatrixCSC, dropzeros!, nonzeros, nzrange, rowvals,
+using SparseArrays: SparseMatrixCSC, dropzeros!, findnz, nonzeros, nzrange, rowvals,
     sparse, spdiagm, spzeros
 using StaticArrays: SVector
 
@@ -90,6 +90,8 @@ export ProjectionWorkspace, project!
 export AbstractTwoVelocityProjection
 export CMDGFMProjection, CMDGFMProjectionSolver, CMDGFMProjectionWorkspace
 export CMDGFMProjectionStats, cmdgfm_gradient!, cmdgfm_jump_interpolant
+export MimeticProjection
+export MimeticProjectionSolver, MimeticProjectionWorkspace, MimeticProjectionStats
 export PhysicalDimension, DiagnosticInfo, diagnostic_info
 export DiagnosticGroup, diagnostic_groups, diagnostic_names
 export AbstractObserver, NoObserver, StepInfo, observe!, stop_requested
@@ -193,6 +195,8 @@ include("two_phase/projection/methods.jl")
 include("two_phase/projection/common.jl")
 include("two_phase/projection/cmdgfm_cache.jl")
 include("two_phase/projection/cmdgfm_projection.jl")
+include("two_phase/projection/mimetic_metric.jl")
+include("two_phase/projection/mimetic_projection.jl")
 # two_phase
 include("two_phase/forces.jl")
 # single_phase

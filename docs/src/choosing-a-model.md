@@ -48,13 +48,41 @@ A shared initializer is copied to both phase fields. To initialize different
 velocities, pass a `(liquid, gas)` tuple of callables or `FaceVelocity`
 objects. The tuple never selects the velocity model implicitly.
 
+The projection decides the pressure and force discretisation; nothing else
+has to be selected. `CMDGFMProjection()` (the default) is the thesis'
+conservative multidimensional ghost-fluid projection.
+`TwoVelocityModel(pressure_projection=MimeticProjection())` selects the
+mimetic projection: the kinetic-energy-orthogonal projection in a
+non-diagonal metric built, per cut cell and phase, on the Gram tensor of the
+wetted face parts (the shared face apertures and their midpoints; no phase
+polygon is needed). Surface tension goes through the same gradient map as a
+per-phase force: each phase has its own capillary potential, so a drop of
+constant curvature is exactly at rest and a varying curvature drives the
+liquid, not a thin gas layer next to it. Gravity is the uniform acceleration
+of both phases, and the viscous step is an implicit midpoint in the same
+metric, stable for every time step (the common increment of both phases away
+from the interface). It
+takes no options and works with either surface-tension formulation; it
+builds its own pressure
+solver, so non-default `pressure_*` solver settings of the system throw
+`ArgumentError`. It runs on uniform meshes of
+square cells without solids and throws for adaptive meshes, solids and cut
+cells at a wall. A cut cell whose Gram tensor admits no consistent block gets
+a least-squares fallback and is counted in
+`MimeticProjectionStats.defective_cells`; the run summary prints the totals of
+a `simulate!` call. Each projection solves a conjugate-gradient system with a
+sparse factorization of the cut-cell block, so it is more expensive than the
+CMDGFM.
+See the technical reference, section
+[Mimetic cut-cell projection](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:projection:mimetic).
+
 ## Option matrix
 
 | Decision | Choices | Default | Applies to |
 | --- | --- | --- | --- |
 | velocity formulation | `OneVelocityModel()`, `TwoVelocityModel(...)` | one velocity | two-phase flow |
 | surface-tension force | `CGFM()`, `CSF()` | CGFM | either two-phase velocity model |
-| pressure projection | `CMDGFMProjection()` | CMDGFM | two velocity only |
+| pressure projection | `CMDGFMProjection()`, `MimeticProjection()` | CMDGFM | two velocity only |
 
 Surface tension is configured by [`SurfaceTension`](@ref), while the
 projection is a field of [`TwoVelocityModel`](@ref). This ownership makes
