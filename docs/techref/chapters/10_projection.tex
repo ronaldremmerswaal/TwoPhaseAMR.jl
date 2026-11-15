@@ -1451,8 +1451,16 @@ $s$ scaled by the tangential over the normal size on rectangular cells). Its
 derivative by the row-2 volume, $-\sigma\cos\theta_{3/2}/h$, is the lower
 flux of the conservative row-2 curvature
 $\sigma(\cos\theta_{5/2}-\cos\theta_{3/2})/h$, which the interior height
-function supplies to $O(h^2)$. A cut cell without a finite curvature or
-without both heights keeps the value of the rule above.
+function supplies to $O(h^2)$. The columns reach four cells to either side
+(the padding of the height values); a cut cell of the row without valid
+columns takes the cosine of the nearest cell with valid columns in its
+contiguous run of cut cells along the wall (the slope $s$ is the same along a
+run), so every cut cell of the run shares $\kappa_c$, also where the line
+spreads over several cells of the row ($\cangle\lesssim45^\circ$ or
+$\gtrsim150^\circ$). On caps of area $\pi\,0.2^2/2$ at $h=1/48$ every run has
+such a cell for $25^\circ\le\cangle\le160^\circ$ (10 sub-cell shifts each; with
+radius three and without the run, up to all cells of a run at $25^\circ$ kept
+the rule above). A run without any (limitation (vi) below) keeps the rule above.
 \emph{Equilibrium.} Row~1 balances the pressure $\sigma\kappa$ of a cap of
 curvature $\kappa$ where $\cos\theta_{3/2}=\cos\cangle+\kappa h$; along the
 cap $\mathrm d\cos\theta/\mathrm dy=\kappa$, so the continuum angle at
@@ -1514,7 +1522,12 @@ second-order biases (on the exact $90^\circ$ cap at $h=1/48$: $+0.27\,\%$ and
 $+0.42\,\%$, the row-1 curvature $5.0138$ against $5.021$--$5.022$ in rows~2
 and~3), which raises the $90^\circ$ shape error of the integration suite's
 drop from $1.07\times10^{-5}$ to $1.18\times10^{-5}$ (CMDGFM
-$1.03\times10^{-5}$).
+$1.03\times10^{-5}$). (vi)~A run of cut cells without valid columns keeps the
+height-function curvature: a thin cap, whose row-2 transition is wider than
+the columns (area $\pi\,0.1^2/2$ at $h=1/48$, 10 shifts: 54 of 70 row-1 cut
+cells at $25^\circ$, 34 of 46 at $155^\circ$, all 50 at $160^\circ$, none at
+$30^\circ$--$45^\circ$), or a run whose columns
+are cut off by a perpendicular wall, a solid or the padding.
 
 \emph{Hydrostatic reference of the potentials.} Under gravity a per-phase
 potential difference $\sigma\kappa_c$ refers the curvature to the pressure

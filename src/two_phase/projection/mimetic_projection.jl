@@ -991,9 +991,9 @@ end
 """Set the energy-consistent curvature of the contact-line cells (techref
 ch. 10, Contact line).
 
-A cut cell (`weight > 0`) whose centre lies in the first row along a domain
-wall with a contact angle `θ_w` (axis not periodic) gets
-`κ = (cos θ - cos θ_w)/h`, `h` the cell size normal to the wall, with
+A cut cell whose centre lies in the first row along a domain wall with a
+contact angle `θ_w` (axis not periodic) gets `κ = (cos θ - cos θ_w)/h` and
+the weight `C(1 - C)`, `h` the cell size normal to the wall, with
 `cos θ = -o s/√(1 + s²)` the angle of the chord between the wall-parallel
 local heights `H₁` of its own column and `H₂` of the column one row inward
 (both relative to the cell's tangential centre), `s` the chord's slope and
@@ -1002,7 +1002,9 @@ With the wetted wall length `H₁` (the liquid volume of the row over `h`) and
 the chord between the two row centres, `σκ` is the derivative `∂E/∂V₁` of the
 contact-line energy `E = σ(|chord| - cos θ_w H₁)` by the liquid volume of the
 row, the same for every cut cell of the row, so that the booked carrier pays
-the change of the surface and wall energy. A cell without both heights (for
+the change of the surface and wall energy. A cell without both heights takes
+the cosine of the nearest cell with both in its contiguous run of cut cells
+of the row ([`_mimetic_wall_run_cosine`](@ref)); a run without any (for
 example next to an embedded solid) keeps its height-function curvature."""
 function _mimetic_contact_line_curvature!(kappa, weight, workspace, interface)
     all(isnothing, interface.contact_angles) && return kappa
@@ -1010,7 +1012,8 @@ function _mimetic_contact_line_curvature!(kappa, weight, workspace, interface)
     mesh = interface.mesh
     T = eltype(kappa)
     for (cell, reference) in pairs(workspace.references)
-        weight[cell] > zero(T) || continue
+        fraction = _conditional_fraction(interface, reference)
+        zero(T) < fraction < one(T) || continue
         b, i, j = reference.block, reference.i, reference.j
         block = mesh.blocks[b]
         center = cellcenter(mesh, b, i, j)
@@ -1023,26 +1026,55 @@ function _mimetic_contact_line_curvature!(kappa, weight, workspace, interface)
             boundary = mesh.origin[axis] + (inward == 1 ? 0 : mesh.extent[axis])
             abs(center[axis] - boundary) <= block.spacing[axis] * (T(0.5) + 64eps(T)) || continue
             aspect = T(block.spacing[3 - axis] / block.spacing[axis])
-            cosine = _mimetic_wall_row_cosine(values[b], i + 4, j + 4, axis, inward, aspect)
+            cosine = _mimetic_wall_run_cosine(values[b], i + 4, j + 4, axis, inward, aspect)
             isnothing(cosine) && continue
             kappa[cell] = (cosine - cos(T(theta))) / T(block.spacing[axis])
+            weight[cell] = fraction * (one(T) - fraction)
             break
         end
     end
     return kappa
 end
 
+"""`cos θ` of the wall row at the padded index `(i, j)` (first row along a
+wall of normal axis `axis`): that of [`_mimetic_wall_row_cosine`](@ref) if its
+columns are valid, else that of the nearest cell with valid columns in the
+contiguous run of cut cells (`0 < C < 1`) of the row through `(i, j)`, the
+mean of the two at equal distance (the slope `s` is the same along a run).
+The run is followed through the padded values of the block; `nothing` if it
+has no cell with valid columns there."""
+function _mimetic_wall_run_cosine(values, i, j, axis, inward, aspect)
+    cosine = _mimetic_wall_row_cosine(values, i, j, axis, inward, aspect)
+    isnothing(cosine) || return cosine
+    T = eltype(values)
+    di, dj = axis == 1 ? (0, 1) : (1, 0)
+    cut(ii, jj) = checkbounds(Bool, values, ii, jj) && zero(T) < values[ii, jj] < one(T)
+    low = high = true
+    step = 1
+    while low || high
+        low = low && cut(i - step * di, j - step * dj)
+        high = high && cut(i + step * di, j + step * dj)
+        below = low ? _mimetic_wall_row_cosine(values, i - step * di, j - step * dj, axis, inward, aspect) : nothing
+        above = high ? _mimetic_wall_row_cosine(values, i + step * di, j + step * dj, axis, inward, aspect) : nothing
+        isnothing(below) || return isnothing(above) ? below : (below + above) / 2
+        isnothing(above) || return above
+        step += 1
+    end
+    return nothing
+end
+
 """`cos θ` of the chord between the wall-parallel local heights of the padded
 height values at `(i, j)` (first row along a wall of normal axis `axis`) and
 one row inward, `aspect` the ratio of the tangential to the normal cell size;
-`nothing` unless both columns are valid with one orientation."""
+`nothing` unless both columns are valid with one orientation. The columns
+reach four cells to either side, the padding of the height values."""
 function _mimetic_wall_row_cosine(values, i, j, axis, inward, aspect)
     tangent = 3 - axis
     ii, jj = axis == 1 ? (i + inward, j) : (i, j + inward)
     for orientation in (-1, 1)
-        first = _local_height(values, i, j, tangent, orientation)
+        first = _local_height(values, i, j, tangent, orientation; radius = 4)
         isnothing(first) && continue
-        second = _local_height(values, ii, jj, tangent, orientation)
+        second = _local_height(values, ii, jj, tangent, orientation; radius = 4)
         isnothing(second) && return nothing
         slope = (second - first) * aspect
         return -orientation * slope / sqrt(1 + slope^2)
