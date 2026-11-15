@@ -4,23 +4,23 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened]
   schedule:
-    - cron: '0 3 * * 1' # Weekly integration
+    - cron: '0 3 * * 1' # Weekly studio browser tests
     - cron: '0 4 1 * *' # Monthly heavy tests
   workflow_dispatch:
     inputs:
       tier:
-        description: Test tier to run (T1 also runs on dispatch; 'scaling' only measures thread scaling)
+        description: Test tier to run (T1 also runs on dispatch; 'scaling' only measures thread scaling; integration runs in Integration.yml)
         type: choice
         required: true
         default: unit
-        options: [unit, integration, heavy, all, scaling]
+        options: [unit, heavy, all, scaling]
 
-# Label events run in their own group and only start the integration tier, so
-# they never cancel (or are cancelled by) the code run that reports ci-ok.
+# Label events do not trigger this workflow (the integration tier has its own,
+# Integration.yml), so the required ci-ok always comes from a code run.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}-${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && 'label' || 'code' }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions: {}
@@ -31,7 +31,7 @@ env:
 
 jobs:
   format:
-    if: (github.event_name == 'pull_request' && github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -47,7 +47,7 @@ jobs:
           version: '1.10.0'
 
   unit:
-    if: (github.event_name == 'pull_request' && github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     permissions:
@@ -102,7 +102,7 @@ jobs:
     # threaded: identical SHA-256 state hashes, step counts and warm-step
     # allocations. The group is not in the default suite because it starts its
     # own Julia processes.
-    if: (github.event_name == 'pull_request' && github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     permissions:
@@ -157,7 +157,7 @@ jobs:
           path: scaling
 
   makie:
-    if: (github.event_name == 'pull_request' && github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
@@ -172,7 +172,7 @@ jobs:
       - run: julia --project=test/makie test/makie_visualization.jl
 
   studio:
-    if: (github.event_name == 'pull_request' && github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     permissions:
@@ -193,7 +193,7 @@ jobs:
       - run: julia --project=lib/TwoPhaseAMRStudio -e 'using Pkg; Pkg.test()'
 
   frontend:
-    if: (github.event_name == 'pull_request' && github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -267,35 +267,6 @@ jobs:
       - run: julia --project=benchmark benchmark/benchmarks.jl
       - run: julia --project=benchmark benchmark/latency.jl
 
-  integration:
-    if: (github.event_name == 'schedule' && github.event.schedule == '0 3 * * 1') || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["integration","all"]'), inputs.tier)) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-integration') && github.event.action != 'unlabeled' && (github.event.action != 'labeled' || github.event.label.name == 'run-integration'))
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Approximate historical totals: 10.2, 11.5, 11.5 minutes.
-          - shard: A
-            groups: integration/two_velocity_vortex integration/two_velocity_transport integration/staggered_wave_equation
-          - shard: B
-            groups: integration/two_phase_waves integration/two_phase_droplet integration/wave_equation integration/amr_manufactured_flow
-          - shard: C
-            groups: integration/two_phase_vortex integration/two_velocity_rotation integration/anisotropic_cells integration/two_phase_sessile_droplet
-    name: Integration / ${{ matrix.shard }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: julia-actions/setup-julia@v3
-        with:
-          version: '1'
-      - uses: julia-actions/cache@v3
-      - name: Run integration groups
-        env:
-          GROUPS: ${{ matrix.groups }}
-        run: julia --project=. -e 'using Pkg; Pkg.test(test_args=String.(split(ENV["GROUPS"])))'
-
   heavy:
     if: (github.event_name == 'schedule' && github.event.schedule == '0 4 1 * *') || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["heavy","all"]'), inputs.tier))
     runs-on: ubuntu-24.04
@@ -322,7 +293,7 @@ jobs:
   ci-ok:
     # A run cancelled by a newer run on the same branch must not report a
     # failing ci-ok for its commit; the newer run reports the result.
-    if: ${{ !cancelled() && ((github.event_name == 'pull_request' && github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))) }}
+    if: ${{ !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))) }}
     needs: [format, unit, threading-equivalence, makie, studio, frontend]
     runs-on: ubuntu-24.04
     timeout-minutes: 5

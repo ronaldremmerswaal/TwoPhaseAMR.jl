@@ -1,0 +1,53 @@
+name: Integration
+
+# The integration tier, in its own workflow: labelling a pull request
+# `run-integration` starts it without a CI run, so the required ci-ok of the
+# code run is never replaced by the skipped jobs of a label run.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  schedule:
+    - cron: '0 3 * * 1' # Weekly integration
+  workflow_dispatch:
+
+concurrency:
+  group: integration-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+env:
+  OPENBLAS_NUM_THREADS: '1'
+  JULIA_NUM_THREADS: '2'
+
+jobs:
+  integration:
+    # Pull requests: only with the run-integration label (a labelled event for
+    # another label does not restart it).
+    if: github.event_name != 'pull_request' || (contains(github.event.pull_request.labels.*.name, 'run-integration') && (github.event.action != 'labeled' || github.event.label.name == 'run-integration'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Approximate historical totals: 10.2, 11.5, 11.5 minutes.
+          - shard: A
+            groups: integration/two_velocity_vortex integration/two_velocity_transport integration/staggered_wave_equation
+          - shard: B
+            groups: integration/two_phase_waves integration/two_phase_droplet integration/wave_equation integration/amr_manufactured_flow
+          - shard: C
+            groups: integration/two_phase_vortex integration/two_velocity_rotation integration/anisotropic_cells integration/two_phase_sessile_droplet
+    name: Integration / ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - name: Run integration groups
+        env:
+          GROUPS: ${{ matrix.groups }}
+        run: julia --project=. -e 'using Pkg; Pkg.test(test_args=String.(split(ENV["GROUPS"])))'
