@@ -63,7 +63,7 @@ jobs:
           fi
       - name: Name the PDF artifact
         run: cp docs/techref/techref.pdf docs/techref/TwoPhaseAMR-techref.pdf
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: TwoPhaseAMR-techref.pdf
           path: docs/techref/TwoPhaseAMR-techref.pdf
