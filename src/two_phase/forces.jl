@@ -370,7 +370,16 @@ end
 
 function _face_aperture(field, geometry, face, ref)
     c = _conditional_fraction(field, ref)
-    c <= 0 && return zero(c)
+    lo, hi, width = _face_liquid_trace(field, geometry, face, ref, c)
+    return clamp((hi - lo) / width, zero(c), one(c))
+end
+
+"""Liquid trace `(lo, hi)` of the PLIC line of cell `ref` (liquid fraction
+`c`) on `face` (with a solid only its open part; `lo == hi` if empty) in the
+normalized tangential coordinates of `ref` ([`_face_local_tangent_interval`](@ref)),
+and the width of the face in these coordinates."""
+function _face_liquid_trace(field, geometry, face, ref, c = _conditional_fraction(field, ref))
+    c <= 0 && return zero(c), zero(c), one(c)
     mesh = field.mesh
     block = mesh.blocks[ref.block]
     center = cellcenter(mesh, ref.block, ref.i, ref.j)
@@ -384,7 +393,7 @@ function _face_aperture(field, geometry, face, ref)
     if !isnothing(geometry)
         solid = geometry.solid
         solid_fraction = _get(solid.fraction, ref)
-        solid_fraction >= one(solid_fraction) && return zero(c)
+        solid_fraction >= one(solid_fraction) && return lo, lo, original_width
         if solid_fraction > zero(solid_fraction)
             sn = axis == 1 ? _get(solid.normal_x, ref) :
                 _get(solid.normal_y, ref)
@@ -395,10 +404,10 @@ function _face_aperture(field, geometry, face, ref)
                 sn * normal_coordinate - _get(solid.intercept, ref);
                 keep_less = false,
             )
-            hi > lo || return zero(c)
+            hi > lo || return lo, lo, original_width
         end
     end
-    c >= 1 && return clamp((hi - lo) / original_width, zero(c), one(c))
+    c >= 1 && return lo, hi, original_width
     pn = axis == 1 ? _get(field.normal_x, ref) :
         _get(field.normal_y, ref)
     pt = tangent == 1 ? _get(field.normal_x, ref) :
@@ -408,7 +417,7 @@ function _face_aperture(field, geometry, face, ref)
         pn * normal_coordinate - _get(field.intercept, ref);
         keep_less = true,
     )
-    return clamp((hi - lo) / original_width, zero(c), one(c))
+    return lo, hi, original_width
 end
 
 function _local_open_polygon(field::InterfaceField{T}, geometry, ref) where {T}

@@ -59,8 +59,11 @@ cells on an adaptive mesh: its side of two faces makes it a polygon of five
 to eight edges, whose Gram block (`G = h² I`, centre `x*`) reproduces constant
 fields, so a hydrostatic or translating state stays at rest across a level
 transition. A phase value on a face that the phase does not reach follows a
-donor, and a value with aperture `0 < a < 1/2` on a mixed face is tied to a
-donor with weight `(1 - 2a)` times its mass (small-cell stabilisation).
+donor with the tie weight `ρ_π V_f` (`V_f` the staggered dual volume), and a
+value with aperture `0 < a < 1/2` on a mixed face is tied to a donor with
+weight `(1 - 2a) ρ_π V_f` (small-cell stabilisation): the ties vanish on
+constants, are continuous in `a` and keep `𝓜 ⪰ c diag(ρ_π V_f)` with `c`
+independent of the apertures.
 
 A cut cell at a domain wall keeps its wall side as a side of the Gram tensor;
 the prescribed wall flux is not a value of the metric, so the block is

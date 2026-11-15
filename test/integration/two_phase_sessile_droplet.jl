@@ -250,16 +250,14 @@ end
         @test maximum(getproperty.(results[name], :volume_error)) <= 4096eps()
     end
     @test all(rates["CMDGFM"] .>= 1.2)
-    # NUMERICS CONCERN: with gravity at the density ratio 1000 (Bo = 1.21) the
-    # mimetic shape converges at about first order (rates 0.91, 0.79) and its
-    # largest phase value stays near 1 (1.04 at n = 48 against 0.064 for the
-    # CMDGFM): gas values of small aperture near the top of the drop, seven
-    # cells above the floor. The wall coupling of gravity changes nothing there;
-    # the cause is the cell-to-cell scatter of the height-function curvature,
-    # which the per-phase force puts on the liquid (with an affine curvature
-    # the drop stays at rest to 1e-8; numerics review, mm_walls/review).
-    @test_broken all(rates["MM"] .>= 1.2)
-    @test_broken last(results["MM"]).maximum_velocity <=
+    # With gravity at the density ratio 1000 (Bo = 1.21) the per-phase
+    # potentials are referred hydrostatically to the curvature's interface
+    # point (techref eq:projection:mimetic-hydrostatic). Measured: shape errors
+    # 8.9e-4, 2.8e-4, 2.3e-5 (rates 1.66, 3.62; CMDGFM 2.19, 2.73), largest
+    # phase value 0.016 at n = 48 against 0.064 for the CMDGFM. Referred to the
+    # pressure points the rates were 0.91, 0.79 and the largest value 1.04.
+    @test all(rates["MM"] .>= 1.2)
+    @test last(results["MM"]).maximum_velocity <=
         2last(results["CMDGFM"]).maximum_velocity
 
     # Without gravity (a circular cap) at n = 48: at 90° the mimetic drop
@@ -272,19 +270,25 @@ end
     right = cap(pi / 2)
     @test right["MM"].shape_error <= 1.25right["CMDGFM"].shape_error
     @test right["MM"].maximum_velocity <= 1.25right["CMDGFM"].maximum_velocity
-    # NUMERICS CONCERN: at 60° and 120° the mimetic currents are 9 and 2.5
-    # times those of the CMDGFM (0.23 against 0.025, 0.11 against 0.044) and
-    # the shape errors 2.5 and 1.8 times. With the exact constant curvature
-    # the same drops stay at rest to 1e-10 for a capillary time (the wall
-    # blocks are consistent). At 60° the height-function contact-angle closure
-    # over the first wall rows drives it (the exact curvature in rows 1 and 2
-    # gives 0.019 against 0.053 for the CMDGFM); at 120° the near-top slivers
-    # with C ≈ 0.015–0.023 and curvatures 6–9 % high (numerics review,
+    # NUMERICS CONCERN: at 60° the mimetic current is 8 times that of the
+    # CMDGFM (0.21 against 0.025, booked carrier and uniform ties) and the
+    # shape error 2.4 times (1.19e-4 against 4.98e-5); at 120° the current is
+    # within the factor 2 (0.072 against 0.044) but the shape error is 1.6
+    # times (9.9e-5 against 6.1e-5). With the exact constant curvature the
+    # same drops stay at rest to 1e-10 for a capillary time (the wall blocks
+    # are consistent). At 60° the height-function contact-angle closure over
+    # the first wall rows drives it (the exact curvature in rows 1 and 2 gave
+    # 0.019 against 0.053 for the CMDGFM); at 120° the near-top slivers with
+    # C ≈ 0.015–0.023 and curvatures 6–9 % high (numerics review,
     # mm_walls/review).
     for angle in (pi / 3, 2pi / 3)
         inclined = cap(angle)
         @test isfinite(inclined["MM"].maximum_velocity)
-        @test_broken inclined["MM"].maximum_velocity <= 2inclined["CMDGFM"].maximum_velocity
+        if angle > pi / 2
+            @test inclined["MM"].maximum_velocity <= 2inclined["CMDGFM"].maximum_velocity
+        else
+            @test_broken inclined["MM"].maximum_velocity <= 2inclined["CMDGFM"].maximum_velocity
+        end
         @test_broken inclined["MM"].shape_error <= 1.25inclined["CMDGFM"].shape_error
     end
 end
@@ -310,17 +314,16 @@ end
         end
         @test cap["MM"].shape_error <= 1.1cap["CMDGFM"].shape_error
         @test cap["MM"].maximum_velocity <= 1.25cap["CMDGFM"].maximum_velocity
-        # NUMERICS CONCERN: with gravity (Bo = 1.21) the mimetic drop has the
-        # deficit of the uniform mesh (testset above: the cell-to-cell scatter
-        # of the height-function curvature in the per-phase force), unchanged
-        # by the adaptive tree: largest phase value 1.04 against 0.064 for the
-        # CMDGFM, shape error 3.15e-4 against 2.82e-5 on both trees.
+        # With gravity (Bo = 1.21) the hydrostatic reference of the potentials
+        # carries over to the adaptive trees: measured on both trees largest
+        # phase value 0.016 against 0.064 for the CMDGFM, shape error 2.27e-5
+        # against 2.82e-5 (1.04 and 3.15e-4 before).
         gravity = Dict(
             name => sessile_droplet_case(12; kind, velocity_model = model)
                 for (name, model) in models
         )
         @test all(isfinite, (gravity["MM"].maximum_velocity, gravity["MM"].shape_error))
         @test gravity["MM"].volume_error <= 4096eps()
-        @test_broken gravity["MM"].maximum_velocity <= 2gravity["CMDGFM"].maximum_velocity
+        @test gravity["MM"].maximum_velocity <= 2gravity["CMDGFM"].maximum_velocity
     end
 end

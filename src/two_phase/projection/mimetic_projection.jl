@@ -135,6 +135,7 @@ mutable struct MimeticProjectionWorkspace{T, M <: BlockTreeMesh}
     force_solution::Vector{T}
     cell_curvature::Vector{T}
     curvature_weight::Vector{T}
+    cell_potential::Vector{T}
     viscous::_MimeticViscousWork{T}
 end
 
@@ -151,7 +152,7 @@ function MimeticProjectionWorkspace(solver::MimeticProjectionSolver{T}) where {T
         spzeros(T, 0, 0), T[], T[], Bool[], Int8[], _MimeticSolidData(T), nothing, UInt(0),
         Int[], Int[], Int[], T[], T[], Int[], spzeros(T, 0, 0), Int[],
         T[], nothing, nothing, nothing, nothing,
-        T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], nothing, T[], T[], T[], T[],
+        T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], nothing, T[], T[], T[], T[], T[],
         _MimeticViscousWork(T),
     )
 end
@@ -983,44 +984,280 @@ function _mimetic_cell_curvature!(
     return kappa
 end
 
-"""Add the per-phase surface-tension increment `dt 𝓜⁻¹(a^π J^π)` to each phase.
+"""Booked carrier `c` of the capillary difference term on a face with both
+phase values (liquid aperture `liquid_aperture`, gas aperture `gas_aperture`),
+for the current liquid and gas values in `velocity`.
 
-Each phase has its own capillary potential, `φ^g = σκI` and
-`φ^l = σκI - σκ` with the cell curvature `κ` of
-[`_mimetic_cell_curvature!`](@ref) and the indicator `I` (Heaviside `[C > ½]`
-for CGFM, the liquid fraction for CSF), and the value of phase `π` on face `f`
-gets the integrated jump `J^π_f = |f| (φ^π_+ - φ^π_-)`. The two potentials
-differ by `σκ`, the capillary pressure jump, so a static drop of constant
-curvature is exactly balanced (both jumps are then the common CGFM/CSF jump
-`σκ [I]_f |f|`, a gradient), while a varying curvature drives only the liquid
-(up to a common gradient the force is `-σ a^l |f| Δ_f κ` on the liquid alone).
-An identified grid-line value (one value for both phases on a face between a
-pure liquid and a pure gas cell) gets the common jump `σ κ_f [I]_f |f|` with
-the face curvature of [`surface_tension!`](@ref). A face whose force needs a
-curvature that is not available gets no force; such faces are counted in
+For `Δt → 0` the VOF transport moves, per unit time, the liquid volume
+`|f|(c^l u^l + c^g u^g)` through the face: the value of phase `π` moves the
+liquid of its upstream cell `d(u^π)` (minus for `u ≥ 0`) that lies on its
+subface `S^π`, `c^π = |S^π ∩ T^{d(u^π)}|` ([`_mimetic_carried_liquid`](@ref);
+`T^d` the liquid trace of the PLIC line of `d` on the face, on a split side on
+this face's segment, with a solid only its open part; `S^l`, `S^g` the
+subfaces of widths `a^l`, `a^g` of the transport in the open part of the face,
+the liquid one at the end of the averaged tangential PLIC normal,
+[`_phase_subface_interval`](@ref)). The booked carrier puts the gas value's
+share on the liquid value, `c = (c^l u^l + c^g u^g)/u^l` clamped to
+`[0, a^l + a^g]` (`c^l` for `|u^l| ≤ 10⁻¹⁰ |u^g|`, a liquid value negligible
+against the gas value, and for two zero values), so that the work `c u^l (J^l - J^g)` of the
+difference term is the surface-energy release `-σ Σ Δκ Φ` of the transport
+while the clamp is inactive. The threshold is relative, so `c` is homogeneous
+of degree zero in the two values."""
+@inline function _mimetic_booked_carrier(
+        interface, entry, velocity, face, liquid_aperture::T, gas_aperture::T,
+    ) where {T}
+    ul = velocity[1].interior[face]
+    ug = velocity[2].interior[face]
+    ul = isfinite(ul) ? T(ul) : zero(T)
+    ug = isfinite(ug) ? T(ug) : zero(T)
+    liquid = _mimetic_carried_liquid(
+        interface, entry, face, ul >= zero(T) ? entry.minus : entry.plus, true, liquid_aperture,
+    )
+    abs(ul) > T(1.0e-10) * abs(ug) || return liquid
+    gas = _mimetic_carried_liquid(
+        interface, entry, face, ug >= zero(T) ? entry.minus : entry.plus, false, gas_aperture,
+    )
+    return clamp((liquid * ul + gas * ug) / ul, zero(T), liquid_aperture + gas_aperture)
+end
+
+"""Liquid of cell `donor` that the value of the liquid (`liquid_carrier`) or
+gas phase of aperture `aperture` moves through `entry` (index `face`) per unit
+velocity for `Δt → 0`: the overlap of its subface in the VOF transport
+([`_phase_subface_interval`](@ref), current PLIC ordering) with the donor's
+liquid trace on the face ([`_face_liquid_trace`](@ref)), relative to the face."""
+@inline function _mimetic_carried_liquid(interface, entry, face, donor, liquid_carrier, aperture::T) where {T}
+    geometry = interface.geometry
+    lo, hi = _phase_subface_interval(interface, entry, face, donor, liquid_carrier, geometry, aperture, nothing)
+    trace_lo, trace_hi, width = _face_liquid_trace(interface, geometry, entry, donor)
+    return max(T(min(hi, trace_hi) - max(lo, trace_lo)), zero(T)) / T(width)
+end
+
+"""Interface point (offset from the cell centre in cell units) to which the
+centred height-function curvature of cell `(i, j)` of the padded height
+values refers: the mean, with the quality weights of `_lhf_geometry`, of the
+column points `h₀ e_axis` of its valid candidates; `nothing` without one."""
+function _mimetic_height_point(values, i, j)
+    T = eltype(values)
+    candidates = ntuple(_ -> (zero(T), zero(T), zero(T)), 4)
+    count = 0
+    for axis in 1:2, orientation in (-1, 1)
+        heights = ntuple(3) do k
+            offset = k - 2
+            ii, jj = axis == 1 ? (i, j + offset) : (i + offset, j)
+            _local_height(values, ii, jj, axis, orientation)
+        end
+        any(isnothing, heights) && continue
+        hm, h0, hp = heights
+        slope = (hp - hm) / 2
+        quality = _height_quality(abs(orientation / sqrt(1 + slope^2)))
+        quality > 0 || continue
+        count += 1
+        point = axis == 1 ? (T(h0), zero(T)) : (zero(T), T(h0))
+        candidates = Base.setindex(candidates, (point..., T(quality)), count)
+    end
+    count == 0 && return nothing
+    x = y = total = zero(T)
+    for index in 1:count
+        w = candidates[index][3]
+        for other in 1:count
+            other == index || (w *= one(T) - candidates[other][3])
+        end
+        x += w * candidates[index][1]
+        y += w * candidates[index][2]
+        total += w
+    end
+    total > zero(T) || return nothing
+    return x / total, y / total
+end
+
+"""Point of the interface to which the curvature of cut cell `reference`
+(size `h`) refers, on the cell's PLIC line: the point of its centred
+height-function columns ([`_mimetic_height_point`](@ref)) projected onto the
+PLIC line, or, where the centred columns are not valid (a generalised
+height-function fit, a cell cut by a solid), the centroid of the PLIC line in
+the cell, the origin of the fit (`_ghf_geometry`)."""
+function _mimetic_curvature_point(interface, values, reference, h::T) where {T}
+    center = cellcenter(interface.mesh, reference.block, reference.i, reference.j)
+    mx, my = T(_get(interface.normal_x, reference)), T(_get(interface.normal_y, reference))
+    intercept = T(_get(interface.intercept, reference))
+    point = _mimetic_height_point(values[reference.block], reference.i + 4, reference.j + 4)
+    norm = hypot(mx, my)
+    if isnothing(point) || iszero(norm)
+        cx, cy = _interface_centroid(mx, my, intercept)
+        return center[1] + h * cx, center[2] + h * cy
+    end
+    nx, ny = mx / norm, my / norm
+    # Distance of the column point from the PLIC line n ⋅ ξ = intercept/|n|.
+    distance = point[1] * nx + point[2] * ny - intercept / norm
+    return center[1] + h * (point[1] - distance * nx), center[2] + h * (point[2] - distance * ny)
+end
+
+"""Gravity components and density contrast `(g_x, g_y, ρ_l - ρ_g)` of the
+hydrostatic part `(ρ_l - ρ_g) g ⋅ x*_c` of the potential difference
+([`_mimetic_cell_potential!`](@ref)); `nothing` without gravity or surface
+tension, where the potential difference has no hydrostatic part."""
+@inline function _mimetic_hydrostatic(gravity, sigma, density, ::Type{T}) where {T}
+    (isnothing(gravity) || all(iszero, gravity) || iszero(sigma)) && return nothing
+    return T(gravity[1]), T(gravity[2]), T(density[1]) - T(density[2])
+end
+
+"""Hydrostatic part `(ρ_l - ρ_g) g ⋅ x*_c` of the potential difference of
+`cell` (zero for `hydrostatic === nothing`, see [`_mimetic_hydrostatic`](@ref))."""
+@inline function _mimetic_hydrostatic_potential(assembly, cell, hydrostatic)
+    T = eltype(assembly.pressure_x)
+    isnothing(hydrostatic) && return zero(T)
+    gx, gy, contrast = hydrostatic
+    return contrast * (gx * assembly.pressure_x[cell] + gy * assembly.pressure_y[cell])
+end
+
+"""Potential difference `ψ_c = φ^g_c - φ^l_c` of the per-phase capillary
+potentials (`workspace.cell_potential`), from the cell curvatures `kappa` of
+[`_mimetic_cell_curvature!`](@ref).
+
+Without gravity (or with `σ = 0`) `ψ = σκ`. With gravity `g` one pressure per
+cell balances the per-phase potentials and the Gram moment of gravity
+(`ρ_π a|f| g ⋅ (x*₊ - x*₋)` on each value) exactly where
+`Ψ_c = ψ_c - (ρ_l - ρ_g) g ⋅ x*_c` is the same on the cells that carry values
+of both phases. In the continuum the jump at a point `x` off the interface is
+the hydrostatic extension `σκ(x_Γ) + (ρ_l - ρ_g) g ⋅ (x - x_Γ)` from the point
+`x_Γ` to which `κ` refers. So a cell with its own curvature (a cut cell with a
+finite curvature; every cut cell for a `prescribed` curvature) has
+`Ψ_c = σκ_c - (ρ_l - ρ_g) g ⋅ x_Γ` with `x_Γ` its curvature point on the PLIC
+line ([`_mimetic_curvature_point`](@ref)), every other cell the
+`C(1 - C)`-weighted mean of the `Ψ` of its cut face neighbours (on a split
+side both faces), and `ψ_c = Ψ_c + (ρ_l - ρ_g) g ⋅ x*_c`. A flat interface
+normal to `g` (`κ = 0`, every `x_Γ` on one level line) stays at rest exactly."""
+function _mimetic_cell_potential!(
+        workspace::MimeticProjectionWorkspace{T}, interface, kappa, sigma, gravity, density;
+        prescribed = false,
+    ) where {T}
+    cells = length(kappa)
+    psi = resize!(workspace.cell_potential, cells)
+    hydrostatic = _mimetic_hydrostatic(gravity, sigma, density, T)
+    if isnothing(hydrostatic)
+        for cell in 1:cells
+            psi[cell] = sigma * kappa[cell]
+        end
+        return psi
+    end
+    values = _fill_height_values!(interface)
+    assembly = workspace.assembly
+    topology = workspace.topology
+    references = workspace.references
+    gx, gy, contrast = hydrostatic
+    # The weights of `_mimetic_cell_curvature!` mark its cells with own curvature.
+    weight = resize!(workspace.curvature_weight, cells)
+    for cell in 1:cells
+        reference = references[cell]
+        fraction = _conditional_fraction(interface, reference)
+        if zero(T) < fraction < one(T) && (prescribed || weight[cell] > zero(T))
+            weight[cell] = fraction * (one(T) - fraction)
+            x, y = _mimetic_curvature_point(interface, values, reference, topology.spacing[cell])
+            psi[cell] = sigma * kappa[cell] - contrast * (gx * x + gy * y)
+        else
+            weight[cell] = zero(T)
+            psi[cell] = T(NaN)
+        end
+    end
+    for cell in 1:cells
+        iszero(weight[cell]) || continue
+        total = weights = zero(T)
+        for k in 1:4, face in (topology.sides[k, cell], topology.second[k, cell])
+            face > 0 || continue
+            minus = topology.face_cells[1, face]
+            neighbour = minus == cell ? topology.face_cells[2, face] : minus
+            w = weight[neighbour]
+            if w > zero(T)
+                total += w * psi[neighbour]
+                weights += w
+            end
+        end
+        psi[cell] = weights > zero(T) ? total / weights : T(NaN)
+    end
+    for cell in 1:cells
+        psi[cell] += _mimetic_hydrostatic_potential(assembly, cell, hydrostatic)
+    end
+    return psi
+end
+
+"""Add the per-phase surface-tension increment `dt 𝓜⁻¹ f^π` to each phase,
+with the right-hand side `f` of [`_mimetic_capillary_rhs!`](@ref) for the
+potential difference `ψ` of [`_mimetic_cell_potential!`](@ref) (`σκ` with the
+cell curvature `κ` of [`_mimetic_cell_curvature!`](@ref); with `gravity`
+hydrostatically referred to the curvature's point). A face whose force needs
+a curvature that is not available gets no force; such faces are counted in
 `unresolved_curvature_faces`. `curvature` prescribes a constant curvature
 (tests of the balance)."""
 function _mimetic_capillary_force!(
         velocity::TwoPhaseVelocity, solver::MimeticProjectionSolver{T},
         workspace::MimeticProjectionWorkspace{T}, dt;
-        sigma, formulation = CGFM(), curvature = nothing,
+        sigma, formulation = CGFM(), curvature = nothing, gravity = nothing,
         unresolved_curvature_faces::Union{Nothing, Base.RefValue{Int}} = nothing,
     ) where {T}
     _validate_surface_tension_formulation(formulation)
     isfinite(sigma) && sigma >= 0 || throw(ArgumentError("sigma must be finite and nonnegative"))
     isnothing(curvature) || isfinite(curvature) || throw(ArgumentError("constant curvature must be finite"))
     interface = solver.interface
-    mesh = interface.mesh
     assembly = _mimetic_assemble!(solver, workspace)
-    topology = workspace.topology
     count = length(assembly.band)
     resize!(workspace.band_scratch, count)
     resize!(workspace.band_solution, count)
     kappa = _mimetic_cell_curvature!(workspace, interface, curvature)
+    sigma = T(sigma)
+    potential = _mimetic_cell_potential!(
+        workspace, interface, kappa, sigma, gravity, solver.density; prescribed = !isnothing(curvature),
+    )
+    rhs, unresolved = _mimetic_capillary_rhs!(
+        workspace, solver, velocity, potential; sigma, formulation, curvature, gravity,
+    )
+    isnothing(unresolved_curvature_faces) || (unresolved_curvature_faces[] = unresolved)
+    acceleration = _mimetic_metric_solve!(workspace.force_solution, workspace, rhs)
+    for dof in eachindex(acceleration)
+        _mimetic_scatter!(velocity, assembly, dof, T(dt) * acceleration[dof], true)
+    end
+    return velocity
+end
+
+"""Right-hand side `f^π` of the per-phase capillary force
+(`workspace.force_rhs`) for the cell potential difference `potential` (`ψ`)
+of the assembled metric, and the number of faces without force.
+
+Each phase has its own capillary potential, `φ^g = ψI` and `φ^l = ψI - ψ`,
+with the indicator `I` (Heaviside `[C > ½]` for CGFM, the liquid fraction for
+CSF), and the value of phase `π` on face `f` gets the integrated jump
+`J^π_f = |f| (φ^π_+ - φ^π_-)`. The two potentials differ by `ψ`, the
+capillary pressure jump, so a static drop of constant curvature is exactly
+balanced (both jumps are then the common CGFM/CSF jump `σκ [I]_f |f|`, a
+gradient), while a varying curvature drives only the liquid (up to a common
+gradient the force is `-|f|Δ_f ψ` on the liquid alone). A value alone on its
+face gets `f^π = a^π J^π`. On a face with both values the gas value gets
+`f^g = a^g J^g` and the liquid value
+`f^l = a^l J^g + c (J^l - J^g - H_f) + a^l H_f`, where
+`J^l - J^g = -|f| Δ_f ψ` and `H_f = -|f| Δ_f ((ρ_l - ρ_g) g ⋅ x*)` is its
+hydrostatic part (zero without gravity or surface tension, see
+[`_mimetic_hydrostatic`](@ref)): the capillary part `-|f| Δ_f Ψ` rides on the
+booked carrier `c` of [`_mimetic_booked_carrier`](@ref), the liquid volume the
+VOF transport moves through the face per unit liquid velocity, so that its
+work is the surface-energy release of the transport; the hydrostatic part
+keeps the aperture, the carrier of gravity's Gram moment, so that a
+hydrostatic potential (`Ψ` constant) is balanced by one pressure per cell at
+any carrier. An identified grid-line value (one value for both phases on a
+face between a pure liquid and a pure gas cell) gets the common jump
+`σ κ_f [I]_f |f|` with the face curvature of [`surface_tension!`](@ref) (or
+the prescribed `curvature`)."""
+function _mimetic_capillary_rhs!(
+        workspace::MimeticProjectionWorkspace{T}, solver::MimeticProjectionSolver{T}, velocity, potential;
+        sigma, formulation, curvature, gravity,
+    ) where {T}
+    interface = solver.interface
+    mesh = interface.mesh
+    assembly = workspace.assembly
+    topology = workspace.topology
     rhs = workspace.force_rhs
     resize!(rhs, length(assembly.dof_face))
     fill!(rhs, zero(T))
     sigma = T(sigma)
+    hydrostatic = _mimetic_hydrostatic(gravity, sigma, solver.density, T)
     unresolved = 0
     for (face, entry) in pairs(mesh.faces)
         liquid, gas = assembly.liquid_dof[face], assembly.gas_dof[face]
@@ -1039,14 +1276,14 @@ function _mimetic_capillary_force!(
             continue
         end
         im, ip = _mimetic_indicator(formulation, cm), _mimetic_indicator(formulation, cp)
-        # Potentials φ^g = σκI and φ^l = -σκ(1 - I); a vanishing factor needs
-        # no curvature.
+        # Potentials φ^g = ψI and φ^l = -ψ(1 - I) (ψ = σκ without gravity); a
+        # vanishing factor needs no curvature.
         gas_aperture = gas > 0 ? assembly.dof_aperture[gas] : zero(T)
         liquid_aperture = liquid > 0 ? assembly.dof_aperture[liquid] : zero(T)
-        gas_minus = iszero(im) ? zero(T) : sigma * kappa[minus] * im
-        gas_plus = iszero(ip) ? zero(T) : sigma * kappa[plus] * ip
-        liquid_minus = isone(im) ? zero(T) : -sigma * kappa[minus] * (one(T) - im)
-        liquid_plus = isone(ip) ? zero(T) : -sigma * kappa[plus] * (one(T) - ip)
+        gas_minus = iszero(im) ? zero(T) : potential[minus] * im
+        gas_plus = iszero(ip) ? zero(T) : potential[plus] * ip
+        liquid_minus = isone(im) ? zero(T) : -potential[minus] * (one(T) - im)
+        liquid_plus = isone(ip) ? zero(T) : -potential[plus] * (one(T) - ip)
         gas_jump = entry.area * (gas_plus - gas_minus)
         liquid_jump = entry.area * (liquid_plus - liquid_minus)
         if (gas_aperture > zero(T) && !isfinite(gas_jump)) ||
@@ -1055,14 +1292,22 @@ function _mimetic_capillary_force!(
             continue
         end
         gas_aperture > zero(T) && (rhs[gas] = gas_aperture * gas_jump)
-        liquid_aperture > zero(T) && (rhs[liquid] = liquid_aperture * liquid_jump)
+        liquid_aperture > zero(T) || continue
+        if gas_aperture > zero(T)
+            # Both values: the capillary part of the difference term rides on
+            # the booked carrier, its hydrostatic part on the aperture.
+            carrier = _mimetic_booked_carrier(interface, entry, velocity, face, liquid_aperture, gas_aperture)
+            hydrostatic_jump = -entry.area * (
+                _mimetic_hydrostatic_potential(assembly, plus, hydrostatic) -
+                    _mimetic_hydrostatic_potential(assembly, minus, hydrostatic)
+            )
+            rhs[liquid] = liquid_aperture * gas_jump + carrier * (liquid_jump - gas_jump - hydrostatic_jump) +
+                liquid_aperture * hydrostatic_jump
+        else
+            rhs[liquid] = liquid_aperture * liquid_jump
+        end
     end
-    isnothing(unresolved_curvature_faces) || (unresolved_curvature_faces[] = unresolved)
-    acceleration = _mimetic_metric_solve!(workspace.force_solution, workspace, rhs)
-    for dof in eachindex(acceleration)
-        _mimetic_scatter!(velocity, assembly, dof, T(dt) * acceleration[dof], true)
-    end
-    return velocity
+    return rhs, unresolved
 end
 
 """`y = (𝓜 + half (RᵀKR + A_drag)) x`, matrix-free (`half < 0` gives the
