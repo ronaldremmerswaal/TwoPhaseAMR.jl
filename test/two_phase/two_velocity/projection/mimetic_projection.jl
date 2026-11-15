@@ -2005,9 +2005,10 @@ end
     # trace of the upstream cell d(u^π) on the face). With equal phase values it
     # is the upstream trace (the geometric flux of the common velocity), on split
     # sides the trace on the face's segment and at a solid its part on the
-    # open interval of the face; it depends on the signs of the values only,
-    # and a constant curvature (no difference term) stays the balanced common
-    # jump.
+    # open interval of the face. It is homogeneous of degree zero in the values
+    # (it depends on their ratio, the force on the common scale of the values
+    # not at all), and a constant curvature (no difference term) stays the
+    # balanced common jump.
     TP = TwoPhaseAMR
     rng = Random.Xoshiro(29)
     h = 1 / 32

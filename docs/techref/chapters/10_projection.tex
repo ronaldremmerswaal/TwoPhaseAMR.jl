@@ -890,16 +890,23 @@ $c^{-1/2}$. Hence \emph{energy stability implies boundedness}: if every step
 satisfies $E^{n+1}\le E^n+W^n$ in its own metric ($W^n$ the work of the
 external forces) and $c$ holds for every $\mathcal M^n$, all values stay
 bounded by $h^{-1}(2(E^0+\sum_kW^k)/(c\min_{\phase}\dens^{\phase}))^{1/2}$.
-Without grid-line values (no coupling between the phases) the pressure
-response is bounded as well,
+On a uniform mesh without solids and without grid-line values
+($\dualvol{f}=h^2$ for every value, no coupling between the phases) the
+pressure response is bounded as well,
 $\dens^{\phase}h\,\abs{(\mathcal M^{-1}\mathsf B^{\transpose})_{fc}}\le\tfrac{3}{2c}$ (sharp).
-The metric is also bounded above, $\mathcal M\preceq C\Lambda$ with
-$C\le2g_{\max}+\beta(1+\sqrt{\bar\mu})^2+\beta$ ($g_{\max}\approx4.69$ the largest
-Gram-block entry in units of $\Lambda$, $\bar\mu$ the donor load; measured
-$C=4.6$--$6.9$), so the pressure operator is spectrally equivalent to the
-diagonal-mass one, $C^{-1}\mathsf B\Lambda^{-1}\mathsf B^{\transpose}\preceq
+Under the same hypotheses the metric is also bounded above,
+$\mathcal M\preceq C\Lambda$ with
+$C\le2g_{\max}+\beta(1+\sqrt{\bar\mu})^2+\beta$ ($g_{\max}\approx4.69$ the
+supremum of the Gram-block entries in units of $\Lambda$ over the straight cuts
+of a cell, which a floored block of a defective cell can exceed; $\bar\mu$ the
+donor load; measured $C=4.6$--$6.9$), so the Schur complement is spectrally
+equivalent to the diagonal-mass one,
+$C^{-1}\mathsf B\Lambda^{-1}\mathsf B^{\transpose}\preceq
 \mathsf B\mathcal M^{-1}\mathsf B^{\transpose}\preceq c^{-1}\mathsf B\Lambda^{-1}\mathsf B^{\transpose}$,
-uniformly in the apertures (the basis of its preconditioner).
+uniformly in the apertures. That makes $\mathsf B\Lambda^{-1}\mathsf B^{\transpose}$
+a candidate for a uniform preconditioner (future work); the present one is the
+multigrid of $\mathsf B\mathsf W^{-1}\mathsf B^{\transpose}$ with the staggered
+phase masses (\emph{Solver and price} below), which does not use $\Lambda$.
 
 \emph{The equivalence lemma.} Fix a phase, a threshold $a_G\in(0,\tfrac12]$,
 and call the values with $a_f<a_G$ that have a donor the tied set; all others
@@ -984,7 +991,7 @@ $\mathcal M$-orthogonal and removes only the gradient part, so it needs both
 properties separately: energy stability from the force (the booked carrier)
 and boundedness from the metric (the uniform ties). It gains a projection that
 is exactly energy-conserving in one norm, a pressure response bounded by
-$3/(2c)$ for every value, and, to $t=1.2$ in the static drop, no energy creep
+$3/(2c)$ for every value (uniform mesh, no solid, no grid-line values), and, to $t=1.2$ in the static drop, no energy creep
 (CMDGFM $\times7$--$\times14$).
 \end{deviation}
 
@@ -1376,8 +1383,9 @@ surface-energy release $-\sigma\sum\Delta\kappa\,\Phi$ of the transport while th
 clamp is inactive: the booked carrier closes the duality defect of force
 versus transport in the semi-discrete limit (audit note \emph{Static drop
 energy}). With equal phase values it is the upstream trace (at a solid its
-part on the open part of the face, which the transport moves); it depends on the
-signs of the values only and is not Galilean invariant (translating drop at
+part on the open part of the face, which the transport moves); it is
+homogeneous of degree zero in the two values (it depends on their ratio, with
+equal values on their sign only) and is not Galilean invariant (translating drop at
 densities $(1,1000)$: $\times1.8$ in the kinetic-energy error). With the mean
 aperture $\phaseaperture{\liq}{f}$ as carrier (before) the inviscid static drop
 grew $\times35$, $\times83$, $\times4300$ at DR 1, 3, 1000 by $t=0.4$ ($h=1/64$);
