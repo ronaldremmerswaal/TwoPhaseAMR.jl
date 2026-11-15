@@ -279,8 +279,9 @@ end
     # CMDGFM (0.053 against 0.025; 0.21 with the height-function curvature in
     # the contact-line cells); at 120° the current is within the factor 2
     # (0.072 against 0.044) but the shape error is 1.6 times (9.9e-5 against
-    # 6.1e-5; there the contact-line potential is the height-function
-    # curvature to 1e-4, one cut cell per wall row). With the exact constant
+    # 6.1e-5; unchanged by the contact-line potential, which agrees with the
+    # height-function curvature to 2e-4 where the touching cell is the only cut
+    # cell of the row). With the exact constant
     # curvature the same drops stay at rest to 1e-10 for a capillary time (the
     # wall blocks are consistent). At 120° the near-top slivers with
     # C ≈ 0.015–0.023 and curvatures 6–9 % high drive it (numerics review,

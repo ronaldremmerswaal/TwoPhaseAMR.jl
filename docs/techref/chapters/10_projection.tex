@@ -1446,8 +1446,8 @@ gives every cut cell of the row
   \kappa_c=\frac{\cos\theta_{3/2}-\cos\cangle}{h},\qquad
   \cos\theta_{3/2}=-\frac{o\,s}{\sqrt{1+s^2}},
 \end{equation}
-$\theta_{3/2}$ the angle of the chord ($h$ the cell size normal to the wall,
-$s$ scaled by the tangential over the normal size on rectangular cells). Its
+$\theta_{3/2}$ the angle of the chord ($h$ the cell size normal to the wall;
+the cells are square). Its
 derivative by the row-2 volume, $-\sigma\cos\theta_{3/2}/h$, is the lower
 flux of the conservative row-2 curvature
 $\sigma(\cos\theta_{5/2}-\cos\theta_{3/2})/h$, which the interior height
@@ -1475,8 +1475,10 @@ angle $\theta_0$, \cref{eq:projection:mimetic-contact} is the conservative
 row-1 curvature plus the Young term, and $\theta_0$ cancels; an angle from the
 cell's PLIC line (biased) made the line recede. The ghost-height
 curvature~\cref{eq:interface:contact-right} is the same formula to third
-order in the slope differences in the cell that gets it (at $120^\circ$,
-$h\le1/48$, one cut cell per row, both agree to $2\times10^{-4}$): the defect was the
+order in the slope differences in the cell that gets it (on the exact
+$120^\circ$ cap at $h=1/48$ with the touching cell the only cut cell of the
+row, $4.938$ against $4.939$; depending on the position the row has one or
+two cut cells there): the defect was the
 selection of the cells, not the formula. Swapping the phases ($C\to1-C$,
 $\cangle\to\pi-\cangle$) flips $o$ and the sign of $\kappa_c$, as required.
 The heights come from the padded block values~\cref{eq:interface:height-values}
@@ -1535,7 +1537,11 @@ height-function curvature: a thin cap, whose row-2 transition is wider than
 the columns (area $\pi\,0.1^2/2$ at $h=1/48$, 10 shifts: 54 of 70 row-1 cut
 cells at $25^\circ$, 34 of 46 at $155^\circ$, all 50 at $160^\circ$, none at
 $30^\circ$--$45^\circ$), or a run whose columns
-are cut off by a perpendicular wall, a solid or the padding.
+are cut off by a perpendicular wall (a contact line within about two cells of
+it), a solid, the padding or invalid resampled values across a level
+transition: these keep the height-function value as before. A cut cell in the
+first row of two walls (a corner) takes the first wall, in the order left,
+right, bottom, top, whose run has a cosine.
 
 \emph{Hydrostatic reference of the potentials.} Under gravity a per-phase
 potential difference $\sigma\kappa_c$ refers the curvature to the pressure

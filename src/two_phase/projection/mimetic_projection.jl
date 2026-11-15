@@ -1011,24 +1011,30 @@ function _mimetic_contact_line_curvature!(kappa, weight, workspace, interface)
     values = _fill_height_values!(interface)
     mesh = interface.mesh
     T = eltype(kappa)
+    # `cos θ_w` per wall (`NaN`: none), concrete: indexing the field's tuple of
+    # unions per cell allocated.
+    wall_cosines = ntuple(Val(4)) do wall
+        theta = interface.contact_angles[wall]
+        isnothing(theta) ? T(NaN) : cos(T(theta))::T
+    end
     for (cell, reference) in pairs(workspace.references)
         fraction = _conditional_fraction(interface, reference)
         zero(T) < fraction < one(T) || continue
         b, i, j = reference.block, reference.i, reference.j
         block = mesh.blocks[b]
-        center = cellcenter(mesh, b, i, j)
         for wall in 1:4
-            theta = interface.contact_angles[wall]
-            isnothing(theta) && continue
+            wall_cosine = wall_cosines[wall]
+            isnan(wall_cosine) && continue
             axis = wall <= 2 ? 1 : 2
             mesh.periodic[axis] && continue
             inward = isodd(wall) ? 1 : -1
-            boundary = mesh.origin[axis] + (inward == 1 ? 0 : mesh.extent[axis])
-            abs(center[axis] - boundary) <= block.spacing[axis] * (T(0.5) + 64eps(T)) || continue
-            aspect = T(block.spacing[3 - axis] / block.spacing[axis])
-            cosine = _mimetic_wall_run_cosine(values[b], i + 4, j + 4, axis, inward, aspect)
+            h = block.spacing[axis]
+            center = block.origin[axis] + ((axis == 1 ? i : j) - T(0.5)) * h
+            boundary = mesh.origin[axis] + (inward == 1 ? zero(T) : mesh.extent[axis])
+            abs(center - boundary) <= h * (T(0.5) + 64eps(T)) || continue
+            cosine = _mimetic_wall_run_cosine(values[b], i + 4, j + 4, axis, inward)
             isnothing(cosine) && continue
-            kappa[cell] = (cosine - cos(T(theta))) / T(block.spacing[axis])
+            kappa[cell] = (cosine - wall_cosine) / T(h)
             weight[cell] = fraction * (one(T) - fraction)
             break
         end
@@ -1043,8 +1049,8 @@ contiguous run of cut cells (`0 < C < 1`) of the row through `(i, j)`, the
 mean of the two at equal distance (the slope `s` is the same along a run).
 The run is followed through the padded values of the block; `nothing` if it
 has no cell with valid columns there."""
-function _mimetic_wall_run_cosine(values, i, j, axis, inward, aspect)
-    cosine = _mimetic_wall_row_cosine(values, i, j, axis, inward, aspect)
+function _mimetic_wall_run_cosine(values, i, j, axis, inward)
+    cosine = _mimetic_wall_row_cosine(values, i, j, axis, inward)
     isnothing(cosine) || return cosine
     T = eltype(values)
     di, dj = axis == 1 ? (0, 1) : (1, 0)
@@ -1054,8 +1060,8 @@ function _mimetic_wall_run_cosine(values, i, j, axis, inward, aspect)
     while low || high
         low = low && cut(i - step * di, j - step * dj)
         high = high && cut(i + step * di, j + step * dj)
-        below = low ? _mimetic_wall_row_cosine(values, i - step * di, j - step * dj, axis, inward, aspect) : nothing
-        above = high ? _mimetic_wall_row_cosine(values, i + step * di, j + step * dj, axis, inward, aspect) : nothing
+        below = low ? _mimetic_wall_row_cosine(values, i - step * di, j - step * dj, axis, inward) : nothing
+        above = high ? _mimetic_wall_row_cosine(values, i + step * di, j + step * dj, axis, inward) : nothing
         isnothing(below) || return isnothing(above) ? below : (below + above) / 2
         isnothing(above) || return above
         step += 1
@@ -1065,10 +1071,10 @@ end
 
 """`cos θ` of the chord between the wall-parallel local heights of the padded
 height values at `(i, j)` (first row along a wall of normal axis `axis`) and
-one row inward, `aspect` the ratio of the tangential to the normal cell size;
-`nothing` unless both columns are valid with one orientation. The columns
-reach four cells to either side, the padding of the height values."""
-function _mimetic_wall_row_cosine(values, i, j, axis, inward, aspect)
+one row inward (square cells); `nothing` unless both columns are valid with
+one orientation. The columns reach four cells to either side, the padding of
+the height values."""
+function _mimetic_wall_row_cosine(values, i, j, axis, inward)
     tangent = 3 - axis
     ii, jj = axis == 1 ? (i + inward, j) : (i, j + inward)
     for orientation in (-1, 1)
@@ -1076,7 +1082,7 @@ function _mimetic_wall_row_cosine(values, i, j, axis, inward, aspect)
         isnothing(first) && continue
         second = _local_height(values, ii, jj, tangent, orientation; radius = 4)
         isnothing(second) && return nothing
-        slope = (second - first) * aspect
+        slope = second - first
         return -orientation * slope / sqrt(1 + slope^2)
     end
     return nothing

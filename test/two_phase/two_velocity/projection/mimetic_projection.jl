@@ -2157,10 +2157,11 @@ end
     TP = TwoPhaseAMR
     n, wall, steps = 48, pi / 3, 200
     h = 1 / n
-    function cap(angle, x0)
-        radius = sqrt(pi * 0.2^2 / 2 / (angle - sin(angle) * cos(angle)))
-        return PolygonIndicator([(x0 + radius * sin(phi), radius * (cos(phi) - cos(angle))) for phi in range(angle, -angle; length = 801)])
-    end
+    vertices(angle, x0; area = pi * 0.2^2 / 2) = (
+        radius = sqrt(area / (angle - sin(angle) * cos(angle)));
+        [(x0 + radius * sin(phi), radius * (cos(phi) - cos(angle))) for phi in range(angle, -angle; length = 801)]
+    )
+    cap(angle, x0) = PolygonIndicator(vertices(angle, x0))
     function setup(interface)
         solver = MimeticProjectionSolver(interface; density = (1.0, 1.0e-3))
         work = MimeticProjectionWorkspace(solver)
@@ -2213,14 +2214,49 @@ end
     end
     # Label symmetry: swapping the phases (C → 1 - C, θ_w → π - θ_w) flips the
     # sign of the row's curvature.
-    complement = copy(interface.fraction)
-    for b in eachindex(mesh.blocks)
-        interior(complement, b) .= 1 .- interior(interface.fraction, b)
+    function swapped_kappa(field, side, angle)
+        complement = copy(field.fraction)
+        for b in eachindex(mesh.blocks)
+            interior(complement, b) .= 1 .- interior(field.fraction, b)
+        end
+        swapped = InterfaceField(complement; contact_angle = ntuple(w -> w == side ? pi - angle : nothing, 4))
+        return TP._mimetic_cell_curvature!(setup(swapped), swapped, nothing)
     end
-    swapped = InterfaceField(complement; contact_angle = (nothing, nothing, pi - wall, nothing))
-    swapped_kappa = TP._mimetic_cell_curvature!(setup(swapped), swapped, nothing)
     cells = [c for c in eachindex(fraction) if row[c] && 0 < fraction[c] < 1]
-    @test swapped_kappa[cells] ≈ -kappa[cells] rtol = 1.0e-10
+    @test swapped_kappa(interface, 3, wall)[cells] ≈ -kappa[cells] rtol = 1.0e-10
+    # Every wall: the cap mapped onto the left, right and top wall gives the
+    # bottom row's curvatures in the first row of that wall (to the round-off
+    # of the mapped vertices, measured 1e-12).
+    function wall_row(points, side, angle)
+        field = InterfaceField(mesh, PolygonIndicator(points); contact_angle = ntuple(w -> w == side ? angle : nothing, 4))
+        field_work = setup(field)
+        curvature = TP._mimetic_cell_curvature!(field_work, field, nothing)
+        in_row(r) = (r.i == 1, r.i == n, r.j == 1, r.j == n)[side]
+        row_cells = [c for (c, r) in pairs(field_work.references) if in_row(r) && 0 < TP._conditional_fraction(field, r) < 1]
+        return field, field_work, row_cells, curvature[row_cells]
+    end
+    rotations = (1 => ((x, y),) -> (y, x), 2 => ((x, y),) -> (1 - y, x), 4 => ((x, y),) -> (x, 1 - y))
+    for angle in (pi / 3, 2pi / 3)
+        points = vertices(angle, 0.5 + 0.3h)
+        bottom = sort(last(wall_row(points, 3, angle)))
+        for (side, rotate) in rotations
+            @test sort(last(wall_row(map(rotate, points), side, angle))) ≈ bottom rtol = 1.0e-10
+        end
+    end
+    # At 35° on a smaller cap (area π0.1²/2) the line spreads over four to six
+    # cells of the row and one or two of them have no valid columns (the row-2
+    # transition leaves the window of four cells): they take the cosine of
+    # the nearest valid cell of their run, so the row shares one curvature.
+    small = 35pi / 180
+    small_field, small_work, small_cells, small_kappa = wall_row(vertices(small, 0.5; area = pi * 0.1^2 / 2), 3, small)
+    small_values = TP._fill_height_values!(small_field)
+    @test count(small_cells) do c
+        r = small_work.references[c]
+        isnothing(TP._mimetic_wall_row_cosine(small_values[r.block], r.i + 4, r.j + 4, 2, 1))
+    end > 0
+    @test all(isfinite, small_kappa)
+    @test maximum(small_kappa) - minimum(small_kappa) <= 1.0e-12 * maximum(abs, small_kappa)
+    @test swapped_kappa(small_field, 3, small)[small_cells] ≈ -small_kappa rtol = 1.0e-10
 end
 
 @testset "Mimetic rest states with embedded solids" begin
