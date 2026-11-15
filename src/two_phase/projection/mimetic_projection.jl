@@ -983,7 +983,38 @@ function _mimetic_cell_curvature!(
     return kappa
 end
 
-"""Add the per-phase surface-tension increment `dt 𝓜⁻¹(a^π J^π)` to each phase.
+"""Booked carrier `c` of the capillary difference term on a face with both
+phase values (liquid aperture `aperture`, open aperture `open`), for the
+current liquid and gas values in `velocity`.
+
+`t⁻`, `t⁺` are the liquid traces of the PLIC lines of the minus and plus cell
+on the face (on a split side the trace on this face's segment, with a solid
+only its open part), `a` their mean. For `Δt → 0` the VOF transport moves,
+per unit time, the liquid volume `|f|(c^l u^l + c^g u^g)` through the face with
+`c^l = min(a, t^{d(u^l)})` and `c^g = max(t^{d(u^g)} - a, 0)`, where `d(u)` is
+the upstream cell of the value (minus for `u ≥ 0`): the liquid value moves
+liquid through its subface of width `a` where its donor's trace covers it, the
+gas value the donor's liquid on the gas subface. The booked carrier puts the
+gas value's share on the liquid value, `c = (c^l u^l + c^g u^g)/u^l` clamped to
+`[0, open]` (`min(a, t^{d(u^l)})` for `|u^l| ≤ 10⁻¹⁰`), so that the work
+`c u^l (J^l - J^g)` of the difference term is the surface-energy release
+`-σ Σ Δκ Φ` of the transport while the clamp is inactive."""
+@inline function _mimetic_booked_carrier(
+        interface, entry, velocity, face, aperture::T, open::T,
+    ) where {T}
+    minus_trace = T(_face_aperture(interface, interface.geometry, entry, entry.minus))
+    plus_trace = T(_face_aperture(interface, interface.geometry, entry, entry.plus))
+    ul = velocity[1].interior[face]
+    ug = velocity[2].interior[face]
+    ul = isfinite(ul) ? T(ul) : zero(T)
+    ug = isfinite(ug) ? T(ug) : zero(T)
+    liquid = min(aperture, ul >= zero(T) ? minus_trace : plus_trace)
+    abs(ul) > T(1.0e-10) || return liquid
+    gas = max((ug >= zero(T) ? minus_trace : plus_trace) - aperture, zero(T))
+    return clamp((liquid * ul + gas * ug) / ul, zero(T), open)
+end
+
+"""Add the per-phase surface-tension increment `dt 𝓜⁻¹ f^π` to each phase.
 
 Each phase has its own capillary potential, `φ^g = σκI` and
 `φ^l = σκI - σκ` with the cell curvature `κ` of
@@ -993,11 +1024,17 @@ gets the integrated jump `J^π_f = |f| (φ^π_+ - φ^π_-)`. The two potentials
 differ by `σκ`, the capillary pressure jump, so a static drop of constant
 curvature is exactly balanced (both jumps are then the common CGFM/CSF jump
 `σκ [I]_f |f|`, a gradient), while a varying curvature drives only the liquid
-(up to a common gradient the force is `-σ a^l |f| Δ_f κ` on the liquid alone).
-An identified grid-line value (one value for both phases on a face between a
-pure liquid and a pure gas cell) gets the common jump `σ κ_f [I]_f |f|` with
-the face curvature of [`surface_tension!`](@ref). A face whose force needs a
-curvature that is not available gets no force; such faces are counted in
+(up to a common gradient the force is `-σ|f|Δ_f κ` on the liquid alone). A
+value alone on its face gets `f^π = a^π J^π`. On a face with both values the
+gas value gets `f^g = a^g J^g` and the liquid value
+`f^l = a^l J^g + c (J^l - J^g)`: the difference term rides on the booked
+carrier `c` of [`_mimetic_booked_carrier`](@ref), the liquid volume the VOF
+transport moves through the face per unit liquid velocity, so that its work is
+the surface-energy release of the transport. An identified grid-line value
+(one value for both phases on a face between a pure liquid and a pure gas
+cell) gets the common jump `σ κ_f [I]_f |f|` with the face curvature of
+[`surface_tension!`](@ref). A face whose force needs a curvature that is not
+available gets no force; such faces are counted in
 `unresolved_curvature_faces`. `curvature` prescribes a constant curvature
 (tests of the balance)."""
 function _mimetic_capillary_force!(
@@ -1055,7 +1092,16 @@ function _mimetic_capillary_force!(
             continue
         end
         gas_aperture > zero(T) && (rhs[gas] = gas_aperture * gas_jump)
-        liquid_aperture > zero(T) && (rhs[liquid] = liquid_aperture * liquid_jump)
+        liquid_aperture > zero(T) || continue
+        if gas_aperture > zero(T)
+            # Both values: the difference term rides on the booked carrier.
+            carrier = _mimetic_booked_carrier(
+                interface, entry, velocity, face, liquid_aperture, liquid_aperture + gas_aperture,
+            )
+            rhs[liquid] = liquid_aperture * gas_jump + carrier * (liquid_jump - gas_jump)
+        else
+            rhs[liquid] = liquid_aperture * liquid_jump
+        end
     end
     isnothing(unresolved_curvature_faces) || (unresolved_curvature_faces[] = unresolved)
     acceleration = _mimetic_metric_solve!(workspace.force_solution, workspace, rhs)

@@ -390,7 +390,8 @@ end
     # the gas value of a face between two H = 1 cells the variation σΔκ of the
     # liquid's capillary pressure, ρ_l/ρ_g times the liquid's tangential
     # acceleration. Per phase, φ^g = σκH and φ^l = σκH - σκ: up to a common
-    # gradient the force is -σ a^l |f| Δκ on the liquid alone.
+    # gradient the force is -σ c |f| Δκ on the liquid alone (c the booked
+    # carrier, the aperture on a face without a gas value).
     TP = TwoPhaseAMR
     sigma, dt = 0.5, 1.0e-3
     kappa(x) = 4.0 + 2.0sinpi(2x)
@@ -412,12 +413,22 @@ end
         # Pure cells next to the interface carry a curvature (cell field).
         field = replace(work.cell_curvature, NaN => 0.0)
         Δκ(face) = field[topology.face_cells[2, face]] - field[topology.face_cells[1, face]]
+        # Up to the common gradient a^π J^g the liquid value gets the
+        # difference term -σ|f|Δκ on its carrier: the aperture where it is alone
+        # on its face, the booked carrier where the face has both values (at
+        # rest the upstream (minus) PLIC trace capped by the aperture).
+        carrier(dof) = (
+            face = assembly.dof_face[dof]; gas = assembly.gas_dof[face];
+            gas > 0 && assembly.dof_aperture[gas] > 0 ?
+                min(assembly.dof_aperture[dof], TP._face_aperture(interface, mesh.faces[face], mesh.faces[face].minus)) :
+                assembly.dof_aperture[dof]
+        )
         liquid_only = _mimetic_zero_velocity(case)
         _mimetic_add_force!(
             liquid_only, case, map(eachindex(assembly.dof_face)) do dof
                 face = assembly.dof_face[dof]
                 assembly.dof_phase[dof] == 1 ?
-                    -sigma * assembly.dof_aperture[dof] * mesh.faces[face].area * Δκ(face) : 0.0
+                    -sigma * carrier(dof) * mesh.faces[face].area * Δκ(face) : 0.0
             end, dt,
         )
         jumps = TP._surface_tension_jumps!(zeros(length(mesh.faces)), interface; sigma)
@@ -1968,6 +1979,68 @@ end
             "mimetic uniform equivalence ($name): c_min = ", round(result.c_min; digits = 4),
             ", max chi = ", round(result.chi; digits = 3),
         )
+    end
+end
+
+@testset "Mimetic capillary force: booked carrier" begin
+    # The difference term -σ|f|Δκ of a face with both values rides on the
+    # booked carrier c = (c^l u^l + c^g u^g)/u^l of the Δt → 0 VOF transport
+    # (c^l = min(a, t^{d(u^l)}), c^g = max(t^{d(u^g)} - a, 0), t the PLIC
+    # traces of the upstream cells d(u)). With equal phase values it is the
+    # upstream trace (the geometric flux of the common velocity), on split
+    # sides the trace on the face's segment and at a solid that of the open
+    # part; it depends on the signs of the values only, and a constant
+    # curvature (no difference term) stays the balanced common jump.
+    TP = TwoPhaseAMR
+    rng = Random.Xoshiro(29)
+    cases = (
+        _mimetic_case(32, _mimetic_circle(32); density = (1000.0, 1.0), periodic = (false, false)),
+        _mimetic_composite_case(_MIMETIC_COMPOSITE_REGIONS[2]..., _MIMETIC_COMPOSITE_LEVELSETS[1]; density = (1000.0, 1.0)),
+        _mimetic_solid_case(32, _mimetic_cylinder(0.513, 0.443, 0.2), (x, y) -> hypot(x - 0.47, y - 0.62) - 0.24; density = (1000.0, 1.0)),
+    )
+    for case in cases
+        mesh, interface, work = case.mesh, case.interface, case.workspace
+        reconstruct!(interface)
+        assembly = TP._mimetic_assemble!(case.solver, work)
+        both = filter(eachindex(mesh.faces)) do face
+            liquid, gas = assembly.liquid_dof[face], assembly.gas_dof[face]
+            liquid > 0 && gas > 0 && liquid != gas &&
+                assembly.dof_aperture[liquid] > 0 && assembly.dof_aperture[gas] > 0
+        end
+        @test !isempty(both)
+        trace(face, cell) = TP._face_aperture(interface, mesh.faces[face], cell)
+        for sign in (1.0, -1.0)
+            common = _mimetic_velocity(case, (phase, face) -> sign)
+            carriers = map(both) do face
+                liquid, gas = assembly.liquid_dof[face], assembly.gas_dof[face]
+                a, open = assembly.dof_aperture[liquid], assembly.dof_aperture[liquid] + assembly.dof_aperture[gas]
+                c = TP._mimetic_booked_carrier(interface, mesh.faces[face], common, face, a, open)
+                upstream = sign > 0 ? mesh.faces[face].minus : mesh.faces[face].plus
+                @test c ≈ trace(face, upstream) atol = 1.0e-14
+                @test 0 <= c <= open
+                c
+            end
+            # The traces differ from the mean aperture on most faces.
+            @test count(k -> !isapprox(carriers[k], assembly.dof_aperture[assembly.liquid_dof[both[k]]]; atol = 1.0e-12), eachindex(both)) > 0
+        end
+        values = (randn(rng, length(mesh.faces)), randn(rng, length(mesh.faces)))
+        function covector(scale; curvature = nothing)
+            velocity = _mimetic_velocity(case, (phase, face) -> 0.0)
+            for (phase, value) in zip(velocity, values), face in eachindex(phase.interior)
+                isfinite(phase.interior[face]) && (phase.interior[face] = scale * value[face])
+            end
+            unresolved = Ref(-1)
+            TP._mimetic_capillary_force!(
+                velocity, case.solver, work, 0.01; sigma = 1.0, curvature, unresolved_curvature_faces = unresolved,
+            )
+            @test unresolved[] == 0
+            return copy(work.force_rhs)
+        end
+        balanced = covector(0.0; curvature = 4.3)
+        @test maximum(abs, covector(1.0; curvature = 4.3) .- balanced) <= 1.0e-12 * maximum(abs, balanced)
+        forward = covector(1.0)
+        @test isequal(forward, covector(2.0))
+        @test !isequal(forward, covector(-1.0))
     end
 end
 
