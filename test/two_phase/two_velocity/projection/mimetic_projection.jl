@@ -2141,6 +2141,53 @@ end
     end
 end
 
+@testset "Mimetic capillary force: hydrostatic part on the aperture" begin
+    # A hydrostatic potential difference ψ = Ψ + Δρ g⋅x* (Ψ constant) is
+    # balanced with gravity's Gram moment ρ_π a|f| g⋅Δx* by one pressure per
+    # cell: on a face with both values the hydrostatic part -|f|Δ(Δρ g⋅x*) of
+    # the difference term keeps the liquid aperture, only the capillary part
+    # -|f|ΔΨ rides on the booked carrier (which depends on the phase values,
+    # here a moving state). Drop of radius 0.2, both labellings (liquid drop,
+    # liquid outside with the densities swapped). Measured 6e-12 – 7e-11 g dt;
+    # with the whole difference term on the booked carrier 0.066 – 61 g dt.
+    TP = TwoPhaseAMR
+    gravity, dt = (0.0, -9.81), 1.0e-3
+    circle = _mimetic_circle(32; radius = 0.2)
+    for density in ((1000.0, 1.0), (3.0, 1.0), (1.0, 1000.0)), swapped in (false, true)
+        case = swapped ?
+            _mimetic_case(32, (x, y) -> -circle(x, y); density = reverse(density), periodic = (false, false)) :
+            _mimetic_case(32, circle; density, periodic = (false, false))
+        interface, work = case.interface, case.workspace
+        reconstruct!(interface)
+        state = _mimetic_velocity(
+            case, (phase, face) -> phase == 1 ? 0.3 + sin(7face.center[1] + 3face.center[2]) :
+                -0.2 + cos(5face.center[2] - 2face.center[1]),
+        )
+        function increment(split)
+            velocity = _mimetic_zero_velocity(case)
+            TP._mimetic_uniform_acceleration!(velocity, case.solver, work, gravity, dt)
+            assembly = work.assembly
+            contrast = case.solver.density[1] - case.solver.density[2]
+            psi = map(eachindex(assembly.pressure_x)) do cell
+                2.3 + contrast * (gravity[1] * assembly.pressure_x[cell] + gravity[2] * assembly.pressure_y[cell])
+            end
+            # Without gravity the right-hand side has no hydrostatic part:
+            # the whole difference term on the booked carrier.
+            rhs, unresolved = TP._mimetic_capillary_rhs!(
+                work, case.solver, state, psi;
+                sigma = 1.0, formulation = CGFM(), curvature = nothing, gravity = split ? gravity : nothing,
+            )
+            @test unresolved == 0
+            _mimetic_add_force!(velocity, case, rhs, dt)
+            stats = project!(velocity, CellField(case.mesh), case.solver, dt, work; tolerance = 1.0e-12, max_iterations = 2000)
+            @test stats.converged
+            return _mimetic_maximum(velocity) / (9.81 * dt)
+        end
+        @test increment(true) <= 5.0e-10
+        @test increment(false) >= 0.03
+    end
+end
+
 @testset "Mimetic rest states with embedded solids" begin
     TP = TwoPhaseAMR
     h = 1 / 32
