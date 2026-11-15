@@ -403,10 +403,26 @@ end
     )
     return t * t * (3 - 2t) # approved correction to the thesis's printed polynomial
 end
+
+# Height-function coverage of a candidate axis whose normal component is
+# `principal`: one within π/4 of the axis (the principal direction), fading
+# with the same smoothstep over the last π/20 before the quality cutoff
+# 3π/10 of `_height_quality`.
+@inline function _height_coverage(principal)
+    angle = acos(clamp(principal, zero(principal), one(principal)))
+    pi_t = oftype(principal, pi)
+    t = clamp(
+        (pi_t / 4 + pi_t / 20 - angle) / (pi_t / 20),
+        zero(principal), one(principal)
+    )
+    return t * t * (3 - 2t)
+end
+
 function _lhf_geometry(values, i, j, spacing)
     T = promote_type(eltype(values), typeof(spacing[1]), typeof(spacing[2]))
     candidates = ntuple(_ -> ntuple(_ -> zero(T), 4), 4)
     count = 0
+    has_axis = (false, false)
     for axis in 1:2,orientation in (-1, 1)
         heights = ntuple(3) do k
             offset = k - 2
@@ -427,6 +443,7 @@ function _lhf_geometry(values, i, j, spacing)
         curvature = -orientation * second / norm^3
         count += 1
         candidates = Base.setindex(candidates, T.((nx, ny, curvature, quality)), count)
+        has_axis = Base.setindex(has_axis, true, axis)
     end
     count == 0 && return nothing
     nx = ny = kappa = weight = zero(T)
@@ -441,7 +458,16 @@ function _lhf_geometry(values, i, j, spacing)
         nx += w * c[1]; ny += w * c[2]; kappa += w * c[3]; weight += w
     end
     weight > 0 || return nothing
-    return nx, ny, kappa / weight
+    # Height-function coverage at the blended normal: one if an axis with a
+    # candidate is the principal direction (within π/4, always so with both
+    # axes), fading smoothly to zero as a secondary-axis candidate approaches
+    # its cutoff angle.
+    scale = hypot(nx, ny)
+    coverage = max(
+        has_axis[1] ? _height_coverage(abs(nx) / scale) : zero(T),
+        has_axis[2] ? _height_coverage(abs(ny) / scale) : zero(T),
+    )
+    return nx, ny, kappa / weight, coverage
 end
 
 """Return `(valid, filament)` for the thesis curvature-AMR tests.
