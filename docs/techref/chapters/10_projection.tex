@@ -988,6 +988,23 @@ by $t=0.4$, the force's unpaid work equal to the energy gained; the booked
 carrier of the capillary force (below) makes the energy flat, and the ties turn
 that into a bound on the values.
 
+\emph{Known regressions of the uniform ties.} The ties vanish on constants but
+not on affine fields: in a shear layer a tied value differs from its donor by
+about $h\,\partial_n\velo$, and its tie stores
+$\tfrac12w_f(\velo_f-\velo_{d(f)})^2\sim\beta\dens^{\phase}\dualvol{f}h^2(\partial_n\velo)^2$,
+spurious inertia of a value whose own volume is small. With the interphase
+drag in the no-slip regime the two meet: the drag pins a small value to the
+value of the other phase, its same-phase tie pulls it towards its donor.
+Measured: the capillary wave at DR 1, $n=32$, has the error
+$1.27\times10^{-2}$ against $6.56\times10^{-3}$ before the uniform ties; the
+viscous Kelvin--Helmholtz case \code{r1_thick} with drag has growth-rate errors
+of $34.6\,\%$ and $43.0\,\%$ at $\lambda/h=64$ and $128$, against $10.4\,\%$ and
+$0.66\,\%$ without drag (CMDGFM $3.6\,\%$ and $11.1\,\%$ with drag). Probes at
+$\lambda/h=128$: the tie weight times $0.1$ and $0.01$ gives $44.7\,\%$ and
+$3.0\,\%$, the drag distance times $2$ and $4$ gives $28.4\,\%$ and $4.4\,\%$
+(\code{mm-runs/viscous_kh_chf}, \code{kh.txt}, \code{probe.txt}). The planned
+remedy is a tie that vanishes on affine fields.
+
 \begin{deviation}{Kinetic metric and uniform equivalence}\label{dev:projection:uniform-equivalence}
 The thesis (and CMDGFM) weights the phase values with the staggered phase mass
 $\mathsf W=\diag{\dens^{\phase}\alpha_f\dualvol{f}}$, which is equivalent to
