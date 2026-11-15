@@ -253,8 +253,8 @@ end
     # With gravity at the density ratio 1000 (Bo = 1.21) the per-phase
     # potentials are referred hydrostatically to the curvature's interface
     # point (techref eq:projection:mimetic-hydrostatic). Measured: shape errors
-    # 9.8e-4, 2.7e-4, 2.3e-5 (rates 1.84, 3.55; CMDGFM 2.19, 2.73), largest
-    # phase value 0.018 at n = 48 against 0.064 for the CMDGFM. Referred to the
+    # 8.9e-4, 2.8e-4, 2.3e-5 (rates 1.66, 3.62; CMDGFM 2.19, 2.73), largest
+    # phase value 0.016 at n = 48 against 0.064 for the CMDGFM. Referred to the
     # pressure points the rates were 0.91, 0.79 and the largest value 1.04.
     @test all(rates["MM"] .>= 1.2)
     @test last(results["MM"]).maximum_velocity <=
@@ -316,7 +316,7 @@ end
         @test cap["MM"].maximum_velocity <= 1.25cap["CMDGFM"].maximum_velocity
         # With gravity (Bo = 1.21) the hydrostatic reference of the potentials
         # carries over to the adaptive trees: measured on both trees largest
-        # phase value 0.018 against 0.064 for the CMDGFM, shape error 2.34e-5
+        # phase value 0.016 against 0.064 for the CMDGFM, shape error 2.27e-5
         # against 2.82e-5 (1.04 and 3.15e-4 before).
         gravity = Dict(
             name => sessile_droplet_case(12; kind, velocity_model = model)
