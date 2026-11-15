@@ -44,11 +44,14 @@ physics = TwoPhase(
 appropriate when a shared interfacial velocity is the intended closure.
 
 [`TwoVelocityModel`](@ref) stores separate intrinsic phase velocities. Its two
-independent numerical choices are explicit:
+independent numerical choices, the pressure projection and the viscous
+coupling of the phases across the interface ([`InterphaseDrag`](@ref)), are
+explicit:
 
 ```julia
 velocity_model = TwoVelocityModel(
     pressure_projection=CMDGFMProjection(),
+    interphase_drag=InterphaseDrag(),
 )
 flow = FlowSimulation(mesh, physics; velocity_model)
 ```

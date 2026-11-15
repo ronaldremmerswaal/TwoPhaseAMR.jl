@@ -1,7 +1,8 @@
 """
     NavierStokesSystem(mesh, physics; options=NavierStokesOptions(),
         adaptivity=Adaptivity(), boundary=NoSlip(), geometry=nothing,
-        two_velocity_projection=CMDGFMProjection())
+        two_velocity_projection=CMDGFMProjection(),
+        two_velocity_drag=InterphaseDrag())
     NavierStokesSystem(mesh; density, dynamic_viscosity,
         boundary=NoSlip(), scheme=LaxWendroff(),
         amr_interface_scheme=default_amr_interface_scheme(scheme),
@@ -12,6 +13,7 @@
         pressure_preconditioner=:auto,
         diffusion_preconditioner=:auto,
         two_velocity_projection=CMDGFMProjection(),
+        two_velocity_drag=InterphaseDrag(),
         refinement_indicators=(), adaptive_fields=())
 
 Incompressible Navier--Stokes discretization. The typed constructor retains
@@ -56,6 +58,8 @@ For a liquid/gas velocity tuple, `two_velocity_projection` selects the
 physical pressure-gradient model. `CMDGFMProjection()` is the nonsymmetric
 conservative multidimensional ghost-fluid system and BiCGSTAB solve; it is the
 only supported projection.
+`two_velocity_drag` is the viscous coupling of the two phase velocities
+across the interface, [`InterphaseDrag`](@ref) by default or `nothing`.
 """
 mutable struct NavierStokesSystem{T, M <: BlockTreeMesh, O <: NavierStokesOptions, A <: Adaptivity, D, B, G, TP}
     mesh::M
@@ -143,6 +147,7 @@ function NavierStokesSystem(
         surface_tension_formulation = CGFM(), gravity = (0.0, 0.0),
         phase_scalars = (),
         two_velocity_projection = CMDGFMProjection(),
+        two_velocity_drag = InterphaseDrag(),
         T = eltype(mesh.origin)
     ) where {M <: BlockTreeMesh}
     options = NavierStokesOptions(
@@ -171,7 +176,7 @@ function NavierStokesSystem(
     adaptivity = Adaptivity(; criteria = refinement_indicators, fields = adaptive_fields)
     return NavierStokesSystem(
         mesh, physics; options, adaptivity, boundary, geometry,
-        two_velocity_projection, T,
+        two_velocity_projection, two_velocity_drag, T,
     )
 end
 
@@ -181,6 +186,7 @@ function NavierStokesSystem(
         adaptivity::Adaptivity = Adaptivity(),
         boundary = NoSlip(), geometry = nothing,
         two_velocity_projection = CMDGFMProjection(),
+        two_velocity_drag = InterphaseDrag(),
         T = eltype(mesh.origin),
     ) where {M <: BlockTreeMesh}
     _validate_linear_solver_symbols(
@@ -215,6 +221,7 @@ function NavierStokesSystem(
             throw(ArgumentError("interface must share solver mesh and scalar type"))
         phase_model = TwoPhaseModel(
             physics; pressure_projection = two_velocity_projection,
+            interphase_drag = two_velocity_drag,
         )
         phase_model, phase_model.density, phase_model.dynamic_viscosity
     end

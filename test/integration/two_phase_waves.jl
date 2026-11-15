@@ -89,6 +89,7 @@ function wave_case(
         formulation = CSF(), periods = 0.25,
         velocity_model = :one_velocity,
         two_velocity_projection = CMDGFMProjection(),
+        interphase_drag = InterphaseDrag(),
         timestep_factor = 1.0,
         solver_tolerance = 1.0e-9,
     )
@@ -148,7 +149,7 @@ function wave_case(
         velocity = initial_velocity,
         velocity_model = velocity_model === :one_velocity ? OneVelocityModel() :
             TwoVelocityModel(;
-                pressure_projection = two_velocity_projection
+                pressure_projection = two_velocity_projection, interphase_drag,
             ),
         boundary = FreeSlip(),
         adaptivity = Adaptivity(criteria = kind == :amr ? (indicator,) : ()),

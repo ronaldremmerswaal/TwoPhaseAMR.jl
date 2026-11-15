@@ -965,10 +965,109 @@ zero where the stress annihilates the uniform field (a periodic direction
 with free-slip walls); in the band the transported momentum
 $e_i^{\transpose}\mathsf Wu$ and the velocity jump are no longer those of the
 common increment. An identified grid-line value enters with the
-mass-weighted mean of its two phase values, as in the projection. The system
-has one unknown per phase value, is symmetric positive definite and is
-solved directly (sparse Cholesky factorisation, rebuilt every step since
-$\mathcal M$ follows the interface).
+mass-weighted mean of its two phase values, as in the projection.
+
+\emph{Interphase drag in the metric.} The interphase drag
+(\cref{eq:viscosity:drag}) enters the same system. With
+$d_f=e^{\gas}_f-e^{\liq}_f$ on every face with a liquid and a gas value
+and the Navier-slip coefficient $c_f=\dragcond_f/(1+\mathrm{Re}_f)\ge0$,
+whose $\mathrm{Re}_f=\abs{\jumpvelo_f}h_f/\nu_{\interface}$ is evaluated
+with the jump of $u^{\stage{1}}$ (lagged, so that the system stays linear),
+$\mathsf A_{\mathrm d}=\sum_fc_fd_fd_f^{\transpose}$ and
+$\mathcal A=\mathsf R^{\transpose}\mathsf K\mathsf R+\mathsf A_{\mathrm d}$,
+\begin{equation}\label{eq:projection:mimetic-viscous-drag}
+  \bigl(\mathcal M+\tfrac{\dt}2\mathcal A\bigr)u^{\stage{2}}
+  =\bigl(\mathcal M-\tfrac{\dt}2\mathcal A\bigr)u^{\stage{1}} .
+\end{equation}
+\emph{Dissipation for every $\dt$.} $\mathcal A$ is symmetric positive
+semi-definite (a sum of two such matrices) and $\mathcal M$ symmetric positive
+definite, so the system has a unique solution. Writing it as
+$\mathcal M(u^{\stage{2}}-u^{\stage{1}})=-\tfrac{\dt}2\mathcal A(u^{\stage{2}}+u^{\stage{1}})$
+and multiplying by $\tfrac12(u^{\stage{2}}+u^{\stage{1}})^{\transpose}$ gives,
+with $\mathsf R(u^{\stage{2}}+u^{\stage{1}})=\onevelo^{\stage{2}}+\onevelo^{\stage{1}}$ and
+$d_f^{\transpose}u=\jumpvelo_f$,
+\[
+  E_{\mathcal M}(u^{\stage{2}})-E_{\mathcal M}(u^{\stage{1}})
+  =-\tfrac{\dt}4\Bigl[(\onevelo^{\stage{2}}+\onevelo^{\stage{1}})^{\transpose}\mathsf K(\onevelo^{\stage{2}}+\onevelo^{\stage{1}})
+  +\sum_fc_f\bigl(\jumpvelo^{\stage{2}}_f+\jumpvelo^{\stage{1}}_f\bigr)^2\Bigr]\le0 .
+\]
+No property of the step size enters: the stress and the drag together are
+non-expansive in the norm of the projection for every $\dt$, and the drag
+never does positive work in $\mathcal M$ (the exact update
+of~\cref{eq:viscosity:drag} in the staggered masses after the step, as with
+CMDGFM, did so in 97\,\% of the steps of the viscous Kelvin--Helmholtz case
+\code{r10_thick} with the earlier common viscous increment). Since
+$\mathsf A_{\mathrm d}$ annihilates equal phase values, the first-moment
+momentum changes by the stress term above only. The amplification factor of
+a stiff slip mode, $(1-\dt\lambda/2)/(1+\dt\lambda/2)$, tends to $-1$ rather
+than to $0$ (the implicit midpoint is A- but not L-stable): a slip with
+$\lambda_f\dt\gg1$ alternates in sign and decays slowly, where the exact
+update of~\cref{eq:viscosity:drag} removes it in one step.
+
+\emph{Solver.} The system has one unknown per phase value and is symmetric
+positive definite. It is solved matrix-free by preconditioned conjugate
+gradients ($\mathcal M$ through its diagonal and band, $\mathsf R$ and
+$\mathsf R^{\transpose}$ face by face, $\mathsf K$ in the factorised form of
+the mixture solve, $\mathsf A_{\mathrm d}$ face by face), from
+$u^{\stage{1}}$, to the max-norm residual of the mixture solve's tolerance
+relative to the right-hand side, with the lifted mixture preconditioner
+\[
+  \mathcal P=\bigl(\mathsf G^{-1}-\mathsf P\mathsf B_{\mathsf W}^{-1}\mathsf P^{\transpose}\bigr)
+  +\mathsf P\,\mathcal V\,\mathsf P^{\transpose},
+  \qquad \mathsf G=\mathsf W+\tfrac{\dt}2\mathsf A_{\mathrm d},
+\]
+where $\mathcal V\approx(\mathsf B_{\mathsf W}+\tfrac{\dt}2\mathsf K)^{-1}$ is
+one cycle of the mixture solve's multigrid hierarchy, refreshed with the
+mixture masses $\mathsf B_{\mathsf W}$ of the metric, and $\mathsf G$ is
+$2\times2$ per face. Because $\mathsf A_{\mathrm d}$ annihilates equal phase
+values, $\mathsf G\mathsf P=\mathsf W\mathsf P$ and
+$\mathsf P^{\transpose}\mathsf G\mathsf P=\mathsf B_{\mathsf W}$, and the
+Woodbury identity gives
+$(\mathsf G+\tfrac{\dt}2\mathsf R^{\transpose}\mathsf K\mathsf R)^{-1}
+=\mathsf G^{-1}-\mathsf P\mathsf B_{\mathsf W}^{-1}\mathsf P^{\transpose}
++\mathsf P(\mathsf B_{\mathsf W}+\tfrac{\dt}2\mathsf K)^{-1}\mathsf P^{\transpose}$:
+where $\mathcal M=\mathsf W$ and the cycle is exact, $\mathcal P$ is the
+inverse of the system. Its first term is
+$\mathsf G^{-1/2}(\mathsf I-\Pi)\mathsf G^{-1/2}$ with the
+$\mathsf G$-orthogonal projector $\Pi$ onto the face fields, positive
+semi-definite, so $\mathcal P$ is symmetric positive definite whenever the
+cycle is (equal pre- and post-smoothing). Without a mixture preconditioner
+the cycle is the inverse diagonal of the mixture matrix. In the band
+$\mathcal M\ne\mathsf W$, and $\mathcal P$ alone needs 15--21 iterations (with
+$\mathcal M$ replaced by $\mathsf W$ one iteration, with an exact cycle still
+15--21): the band is the whole defect. The preconditioner is therefore $\mathcal P$
+inside a symmetric multiplicative correction with the exact band block of the
+operator, $C=E\mathcal A_{bb}^{-1}E^{\transpose}$ with the injection $E$ of the
+band values and
+$\mathcal A_{bb}=E^{\transpose}(\mathcal M+\tfrac{\dt}2\mathcal A)E$ (assembled
+every step, factorised by a simplicial sparse $LDL^{\transpose}$ whose symbolic
+analysis is kept while the pattern is unchanged),
+\[
+  z_1=Cr,\qquad z_2=z_1+\mathcal P(r-\mathcal Sz_1),\qquad
+  z=z_2+C(r-\mathcal Sz_2),\qquad \mathcal S=\mathcal M+\tfrac{\dt}2\mathcal A .
+\]
+\emph{It is symmetric positive definite for every symmetric positive definite
+$\mathcal P$ and every $\dt$:} $Q=I-C\mathcal S$ is the $\mathcal S$-orthogonal
+projector onto the $\mathcal S$-complement of the band values ($Q^2=Q$,
+$\mathcal SQ=Q^{\transpose}\mathcal S$), the error propagation of the
+preconditioner $\mathcal B$ is $I-\mathcal B\mathcal S=Q(I-\mathcal P\mathcal S)Q$,
+so with $x=\mathcal S^{-1}r$,
+\[
+  r^{\transpose}\mathcal Br=\norm{x}_{\mathcal S}^2-\norm{Qx}_{\mathcal S}^2
+  +(\mathcal SQx)^{\transpose}\mathcal P(\mathcal SQx)
+  =\norm{(I-Q)x}_{\mathcal S}^2+(\mathcal SQx)^{\transpose}\mathcal P(\mathcal SQx)\ge0,
+\]
+with equality only for $(I-Q)x=0$ and $\mathcal SQx=0$, i.e.\ $x=0$; $\mathcal B$ is
+symmetric by construction. $\mathcal P$ is symmetric positive definite for a
+symmetric cycle, which the step enforces (equal pre- and post-smoothing).
+Measured on the viscous Kelvin--Helmholtz case \code{r10_thick} and the static
+drop at $n=32$ for $\dt$ times $1$, $10^2$, $10^4$, $10^6$ of the step of the
+runs: the eigenvalues of $\mathcal B\mathcal S$ lie in $[0.46,1.99]$ (condition
+number at most $4.4$), and conjugate gradients need 1/6/14/15 (KH) and
+2/5/3/2 (drop) iterations. Reductions are serial, so the result does not depend
+on the thread counts; should round-off make $r^{\transpose}z$ or
+$p^{\transpose}\mathcal Sp$ non-positive, the iteration restarts with
+$\mathcal P$ alone.
 
 \emph{Properties} (the note's propositions on the meaning of consistency
 and on the assembly). $\mathcal M$ is symmetric positive definite (under the
@@ -1026,7 +1125,13 @@ preconditioner \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_
 forces \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_capillary_force!}~\cref{eq:projection:mimetic-capillary}
 with \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_cell_curvature!},
 \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_uniform_acceleration!};
-viscous step \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_viscous_step!}~\cref{eq:projection:mimetic-viscous}.
+viscous step \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_viscous_step!}~\cref{eq:projection:mimetic-viscous}
+with the drag of \srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_interphase_drag_coefficients!}~\cref{eq:projection:mimetic-viscous-drag},
+solved by \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_viscous_cg!}
+with \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_viscous_apply!} and
+\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_viscous_precondition!} with
+\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_lifted_mixture!} and
+\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_viscous_band_factor!}.
 Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric: symmetry, definiteness, diagonal masses and consistency},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic Gram blocks: the polygon block where the polygon exists, degenerate data},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric on averaged apertures that close no region},
@@ -1037,6 +1142,7 @@ Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mi
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic per-phase surface tension drives the liquid only},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic viscous step in the metric},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Two-value model of the viscous step and the projection},
+\testsym{test/two_phase/two_velocity/interphase_drag.jl}{Interphase drag in the mimetic viscous step},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection rejects cut cells at walls},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection with an interface on a grid line}.
 \end{implnote}

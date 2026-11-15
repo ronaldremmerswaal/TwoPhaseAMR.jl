@@ -158,16 +158,22 @@ function _prescribe_two_velocity_diffusion_values!(destination, source, dirichle
     return destination
 end
 
-"""Record the direct metric viscous solve of `MimeticProjection` in the
-statistics of the diffusion solver: one cycle with the relative residual."""
-function _record_mimetic_viscous_solve!(stats::LinearSolverStats{T}, residual, tolerance) where {T}
-    stats.cycles = 1
-    stats.converged = residual <= _dimensionless_tolerance(T, tolerance)
-    stats.final_l2 = stats.final_linf = T(residual)
-    stats.method = :cholesky
-    stats.preconditioner = :none
+"""Record the metric viscous solve of `MimeticProjection` (conjugate gradients
+with the lifted mixture preconditioner) in the statistics of the diffusion
+solver."""
+function _record_mimetic_viscous_solve!(
+        stats::LinearSolverStats{T}, result, tolerance, max_cycles,
+    ) where {T}
+    stats.cycles = result.iterations
+    stats.converged = result.residual <= _dimensionless_tolerance(T, tolerance)
+    stats.final_l2 = stats.final_linf = T(result.residual)
+    stats.method = :cg
+    stats.preconditioner = :mimetic_lifted_mixture
     stats.converged || throw(
-        ErrorException("mimetic viscous solve: relative residual $residual above the tolerance $tolerance"),
+        ErrorException(
+            "mimetic viscous solve: relative residual $(result.residual) above the " *
+                "tolerance $tolerance after $(result.iterations) of $max_cycles iterations",
+        ),
     )
     return stats
 end
@@ -189,13 +195,16 @@ function _diffusion_substep!(
     )
     if state.projection_solver isa MimeticProjectionSolver
         # Implicit midpoint of the phase values in the metric of the
-        # projection, unconditionally non-increasing in that metric.
+        # projection with the stress and the interphase drag in one system,
+        # unconditionally non-increasing in that metric.
         result = _mimetic_viscous_step!(
             velocity, state.convected, state.projection_solver,
-            state.projection_workspace, diffusion.stiffness, dt,
+            state.projection_workspace, diffusion,
+            workspace.two_phase.diffusion_solver, dt, model.interphase_drag, model;
+            tolerance, max_cycles,
         )
         _record_mimetic_viscous_solve!(
-            workspace.two_phase.diffusion_solver.stats, result.residual, tolerance,
+            workspace.two_phase.diffusion_solver.stats, result, tolerance, max_cycles,
         )
         _prescribe_two_velocity_diffusion_values!(
             velocity, state.convected, diffusion.dirichlet_faces,
@@ -215,6 +224,10 @@ function _diffusion_substep!(
             state.diffused_mixture, state.mixture_velocity;
             dirichlet_faces = diffusion.dirichlet_faces,
         )
+        # The common increment leaves the jump unchanged and the drag the
+        # mixture, so the two updates commute and the full drag step needs no
+        # splitting.
+        _interphase_drag!(velocity, model.interphase_drag, model, diffusion, dt)
     end
     _mark_inactive_phase_velocities!(
         velocity, model.interface, workspace.two_phase.inactive_failures,
@@ -367,7 +380,9 @@ Viscosity acts implicitly on the phase-mass weighted one-velocity state; its
 common increment is applied to both phases. With `MimeticProjection` the
 phase values instead take the implicit-midpoint step of the same stress in
 the projection's metric (see `_mimetic_viscous_step!`), which is that common
-increment where the metric is the staggered phase mass.
+increment where the metric is the staggered phase mass. The interphase drag
+of the model then relaxes the phase-velocity jump of the mixed faces (with
+`MimeticProjection`: inside the same implicit-midpoint system).
 
 The two-velocity projection keeps a Neumann pressure boundary and cannot
 correct open normal velocities. Boundary preparation extrapolates each phase;

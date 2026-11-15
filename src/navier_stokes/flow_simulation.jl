@@ -379,11 +379,13 @@ function FlowSimulation(
     initial_velocity = velocity_model isa TwoVelocityModel ?
         _two_velocity_initializer(velocity) :
         _one_velocity_initializer(velocity)
-    pressure_projection = velocity_model isa TwoVelocityModel ?
-        velocity_model.pressure_projection : CMDGFMProjection()
+    pressure_projection, drag = velocity_model isa TwoVelocityModel ?
+        (velocity_model.pressure_projection, velocity_model.interphase_drag) :
+        (CMDGFMProjection(), InterphaseDrag())
     return _flow_simulation(
         mesh, physics; numerics, adaptivity,
         two_velocity_projection = pressure_projection,
+        two_velocity_drag = drag,
         velocity = initial_velocity, pressure, time, dt, T,
         geometry, boundary, diagnostics, force,
     )

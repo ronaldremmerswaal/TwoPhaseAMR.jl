@@ -41,6 +41,8 @@ function _independent_solver(
         geometry = solver.geometry, boundary = solver.boundary,
         two_velocity_projection = isnothing(model) ?
             CMDGFMProjection() : model.pressure_projection,
+        two_velocity_drag = isnothing(model) ?
+            InterphaseDrag() : model.interphase_drag,
         T,
     )
 end
