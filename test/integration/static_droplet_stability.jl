@@ -46,9 +46,12 @@ const STATIC_DROP_CAPILLARY_BOUND = 5.0e-3
 # divided by a vanishing fraction rather than representing a current.
 const STATIC_DROP_PHASE_FLOOR = 0.05
 
+# 8 × 8 blocks, so the multigrid hierarchies coarsen (one n × n block would
+# leave a single level, solved by a sparse LU every step).
 function _static_drop_mesh(resolution)
     return BlockTreeMesh(
-        block_size = (resolution, resolution), periodic = (false, false),
+        base_mesh = (resolution, resolution), block_size = (8, 8),
+        periodic = (false, false),
     )
 end
 
