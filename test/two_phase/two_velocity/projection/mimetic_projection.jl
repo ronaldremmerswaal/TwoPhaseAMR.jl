@@ -2035,6 +2035,82 @@ end
     end
 end
 
+@testset "Mimetic pressure solver: band-cell correction of the multigrid preconditioner" begin
+    # The Schur complement S = D𝓜⁻¹Dᵀ differs from the preconditioning operator
+    # D W⁻¹ Dᵀ only on the band cells (the cells next to a band value); the
+    # preconditioner solves S there through the band-cell saddle-point matrix
+    # around one V-cycle (techref ch. 10, solver). It returns S z with z,
+    # is symmetric positive definite, and its factorisations are simplicial
+    # LDLᵀ solved in serial loops.
+    TP = TwoPhaseAMR
+    h = 1 / 32
+    sliver(x, y) = y - 10.03h - 0.02h * x
+    fixtures = (
+        ("drop", d -> _mimetic_case(32, _mimetic_circle(32); density = d, periodic = (false, false))),
+        ("tiny drop 0.3h", d -> _mimetic_case(32, (x, y) -> hypot(x - 0.5 - 0.13h, y - 0.5 + 0.21h) - 0.3h; density = d, periodic = (false, false))),
+        ("wall film", d -> _mimetic_case(32, (x, y) -> y - 0.23h - 0.05h * sin(2pi * x); density = d, periodic = (false, false))),
+        ("solid sliver", d -> _mimetic_solid_case(32, sliver, (x, y) -> hypot(x - 0.47, y - 0.42) - 0.24; density = d)),
+        ("adaptive drop", d -> _mimetic_composite_case(_MIMETIC_COMPOSITE_REGIONS[2]..., _MIMETIC_COMPOSITE_LEVELSETS[1]; density = d)),
+    )
+    rng = MersenneTwister(193)
+    for (name, build) in fixtures
+        case = build((1000.0, 1.0))
+        work = case.workspace
+        assembly = TP._mimetic_assemble!(case.solver, work)
+        preconditioner = TP._mimetic_preconditioner!(case.solver, work)
+        n = length(work.pressure_indices)
+        for vector in (
+                work.reduced_rhs, work.reduced_solution, work.cg_residual, work.cg_direction,
+                work.cg_preconditioned, work.cg_product, work.cg_schur, work.cg_scratch,
+                work.cg_correction,
+            )
+            resize!(vector, n)
+        end
+        @test !isempty(work.band_cells)
+        # The LDLᵀ solve of the band block.
+        metric = Matrix(assembly.band_matrix)
+        b = randn(rng, size(metric, 1))
+        x = TP._mimetic_ldlt_solve!(similar(b), work.band_ldlt, b)
+        @test norm(x - metric \ b) <= 1.0e-10 * norm(x)
+        # The Schur complement, its band-cell block and the band-cell solve:
+        # y = (S_cc + εΔ)⁻¹ g on the band cells, w = S E y.
+        unit(j) = (e = zeros(n); e[j] = 1.0; e)
+        S = reduce(hcat, (TP._mimetic_schur!(zeros(n), work, unit(j)) for j in 1:n))
+        @test S ≈ S' rtol = 1.0e-10
+        g = randn(rng, n)
+        z, w = zeros(n), zeros(n)
+        TP._mimetic_band_cell_solve!(z, w, work, g)
+        cells = work.band_cells
+        @test all(iszero, z[setdiff(1:n, cells)])
+        @test norm(w - S * z) <= 1.0e-10 * norm(w)
+        # The band-cell block of S is solved exactly up to the regularisation
+        # εΔ, Δ the diagonal of L + D_b diag(𝓜_bb)⁻¹ D_bᵀ.
+        divergence = work.divergence_band
+        delta = diag(work.diagonal_laplacian) .+ (divergence .^ 2) * inv.(diag(metric))
+        delta = delta[work.pressure_indices[cells]]
+        epsilon = TP._MIMETIC_SADDLE_REGULARIZATION
+        residual = S[cells, cells] * z[cells] .+ epsilon .* delta .* z[cells] .- g[cells]
+        @test norm(residual) <= 1.0e-8 * norm(g[cells])
+        # The preconditioner: w = S z, symmetric positive definite.
+        apply(r) = (z = zeros(n); w = zeros(n); TP._mimetic_pressure_precondition!(z, w, work, preconditioner, r); (z, w))
+        B = reduce(hcat, (first(apply(unit(j))) for j in 1:n))
+        @test B ≈ B' rtol = 1.0e-8
+        @test eigmin(Symmetric((B + B') / 2)) > 0
+        z, w = apply(g)
+        @test norm(w - S * z) <= 1.0e-10 * norm(w)
+        # Conjugate gradients: fewer iterations than with the V-cycle alone.
+        copyto!(work.reduced_rhs, g)
+        corrected = TP._mimetic_pressure_cg!(work, preconditioner, 1.0e-10, 500)
+        @test norm(S * work.reduced_solution - g) <= 1.0e-8 * norm(g)
+        saved = copy(work.band_cells)
+        empty!(work.band_cells)
+        plain = TP._mimetic_pressure_cg!(work, preconditioner, 1.0e-10, 500)
+        append!(work.band_cells, saved)
+        @test corrected < plain
+        println("mimetic pressure solver ($name): CG iterations ", corrected, " with the band-cell correction, ", plain, " without")
+    end
+end
+
 @testset "Mimetic capillary force: booked carrier" begin
     # The difference term -σ|f|Δκ of a face with both values rides on the
     # booked carrier c = (c^l u^l + c^g u^g)/u^l of the Δt → 0 VOF transport
