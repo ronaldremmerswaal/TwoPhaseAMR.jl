@@ -14,7 +14,10 @@ const TWO_PHASE_EXAMPLES = (
         example = load_example(name)
         models = name === :interfacial_instability ?
             (nothing, OneVelocityModel()) :
-            (OneVelocityModel(), TwoVelocityModel())
+            (
+                OneVelocityModel(), TwoVelocityModel(),
+                TwoVelocityModel(pressure_projection = MimeticProjection()),
+            )
         for model in models
             options = isnothing(model) ? (;) : (; velocity_model = model)
             if name !== :lgpi
@@ -117,6 +120,31 @@ end
             end
         end
     end
+end
+
+@testset "Sloped droplet AMR smoke test with the mimetic projection" begin
+    # The embedded sloped wall cuts cells at the contact line and next to
+    # finer blocks; the mimetic metric closes them with solid edges. The
+    # first solid edge left one static pure-gas cell defective in every step
+    # (averaged open traces that disagreed with its open fraction); the
+    # chords between the runs of open parts leave none.
+    example = load_example(:sloped_sessile_droplet)
+    run = call_example(
+        example, :run_example;
+        max_level = 1, final_time = 8.0e-4, dt = 1.0e-4,
+        velocity_model = TwoVelocityModel(pressure_projection = MimeticProjection()),
+    )
+    @test run.flow.system.two_phase.pressure_projection isa MimeticProjection
+    @test run.result.time ≈ 8.0e-4
+    @test run.result.steps == 8
+    @test run.result.projection.converged
+    @test run.result.projection.defective_cells == 0
+    @test run.result.projection.max_defective_cells == 0
+    @test run.result.projection.lumped_values == 0
+    @test any(block -> block.key.level == 1, run.flow.system.mesh.blocks)
+    @test run.flow.system.mesh.adaptation.last_update_step > 2
+    test_finite_example_fields(run.flow)
+    test_phase_volume_conservation(run.flow)
 end
 
 @testset "Sloped droplet transport through sliver cells" begin

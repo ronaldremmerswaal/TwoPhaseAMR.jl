@@ -345,9 +345,6 @@ function _two_velocity_forces_and_pressure!(
         state::TwoVelocityFlowWorkspace{<:Any, <:Any, <:Any, <:Any, <:MimeticProjectionSolver},
         model::TwoPhaseModel{T}, time_step,
     ) where {T}
-    isnothing(solver.geometry) || throw(
-        ArgumentError("MimeticProjection does not support embedded solid geometry"),
-    )
     reconstruct!(model.interface)
     if model.sigma > zero(T)
         _mimetic_capillary_force!(

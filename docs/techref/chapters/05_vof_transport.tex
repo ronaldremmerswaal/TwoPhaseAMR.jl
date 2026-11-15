@@ -654,7 +654,20 @@ towards which the averaged tangential interface normal does not point,
 where $\phasepart{\phase}{f}=\opencell{f}$ if
 $\phaseaperture{\phase}{f}\ge\aperture{f}$. The stored local normals of both
 cells enter (in pure cells those of the WY stencil); the solid's are those
-of~\cref{eq:cutcells:solid}. With a solid the ordering is frozen at the
+of~\cref{eq:cutcells:solid}. The shared aperture is the mean of the two
+cells' traces~\cref{eq:cutcells:trace}, so the end chosen by the averaged
+solid normal can lie in the donor's own solid, typically where a closed trace
+is averaged with an open one; if the donor's open area in the strip
+$\opencell{f}\times[-\frac12,\frac12]$ is not above the sweep's floor
+$256\machineeps\,\aperture{f}$, $\opencell{f}$ lies at the end towards which the
+donor's own tangential solid normal points (the open part of its plane
+reaches that end of the side, so the strip has open area). The choice
+depends on the face and the donor only, so the phase subfaces stay disjoint,
+and it changes nothing where the averaged end has open area. Before, a flux
+through such a face stopped the run with the empty-strip error of
+\cref{sec:vof:donating} (\issue{187}: single-phase liquid at rest under gravity
+over random thin slabs and wedges stopped in 8 of 80 runs, with both
+projections; the fluxes were round-off of the projection). With a solid the ordering is frozen at the
 start of the step; without a solid it follows the current reconstruction.
 Every phase with $\phaseaperture{\phase}{f}>0$ and
 $\velo^{\phase}_f\ne0$ sweeps the rectangle~\cref{eq:vof:rectangle} over

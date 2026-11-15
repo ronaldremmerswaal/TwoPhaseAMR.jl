@@ -8,7 +8,10 @@
 # package's face aperture, and the data of a cut cell are the wetted part of
 # each side and its midpoint, shared with the neighbour across the side. No
 # polygon is formed. On an adaptive (2:1 graded) mesh the side of a cell next
-# to two finer cells consists of two faces, the two segments of the side.
+# to two finer cells consists of two faces, the two segments of the side. With
+# an embedded solid a segment is open over the shared open aperture of its
+# face, and a cell cut by the solid has more sides, its solid edges, the
+# chords that close the open parts of its segments.
 
 # Outward normal of side k as a multiple of the face orientation (+axis).
 const _MIMETIC_OUTWARD = (-1, 1, 1, -1)
@@ -233,46 +236,89 @@ end
 """Segment of a cell side in unit cell coordinates (origin at the cell
 centre): the part `from ≤ t ≤ to` of side `side` on its counter-clockwise walk
 (`t = 0` at the start of the side), the liquid aperture of the segment (its
-wetted fraction) and whether the liquid lies at the segment's
-counter-clockwise start. A side of one face is one segment `0 ≤ t ≤ 1`, a side
-of two faces two segments of half its length."""
+wetted fraction) and whether the liquid lies at the counter-clockwise start of
+its open part. A side of one face is one segment `0 ≤ t ≤ 1`, a side of two
+faces two segments of half its length. With an embedded solid, `open` is the
+open fraction of the segment (the shared open aperture of its face) and
+`solid_start` whether the solid closes its counter-clockwise start; the
+liquid aperture is a fraction of the whole segment, at most `open`. The solid
+edge of a cut cell is a segment with `side = 0` (`_mimetic_solid_edge`).
+`a`, `b` are the end points of the whole segment and `normal` its outward
+unit normal."""
 struct _MimeticSegment{T}
     side::Int
     from::T
     to::T
     aperture::T
     start::Bool
+    open::T
+    solid_start::Bool
+    a::NTuple{2, T}
+    b::NTuple{2, T}
+    normal::NTuple{2, T}
+end
+
+"""Segment `from ≤ t ≤ to` of grid side `k` (see `_MimeticSegment`)."""
+function _MimeticSegment{T}(
+        k::Integer, from, to, aperture, start::Bool, open = one(T), solid_start::Bool = false,
+    ) where {T}
+    cx, cy = _mimetic_corner(T, k)
+    dx, dy = _mimetic_corner(T, mod1(k + 1, 4))
+    a = (cx + from * (dx - cx), cy + from * (dy - cy))
+    b = (cx + to * (dx - cx), cy + to * (dy - cy))
+    return _MimeticSegment{T}(
+        k, T(from), T(to), T(aperture), start, T(open), solid_start, a, b, _mimetic_normal(T, k),
+    )
 end
 
 """Segment of a whole side `k` (one face)."""
 _MimeticSegment(k::Integer, aperture::T, start::Bool) where {T} =
     _MimeticSegment{T}(k, zero(T), one(T), aperture, start)
 
+"""Solid edge of a cell from `a` to `b` (counter-clockwise, in unit cell
+coordinates) with outward unit `normal` (into the solid), liquid fraction
+`aperture` and whether the liquid lies at its start `a`."""
+function _mimetic_solid_edge(a::NTuple{2, T}, b::NTuple{2, T}, normal, aperture, start::Bool) where {T}
+    return _MimeticSegment{T}(
+        0, zero(T), hypot(b[1] - a[1], b[2] - a[2]), aperture, start, one(T), false, a, b, normal,
+    )
+end
+
 """Length of a segment in units of the cell width."""
 @inline _mimetic_length(segment) = segment.to - segment.from
 
 """End points of a segment in unit cell coordinates."""
-@inline function _mimetic_segment_ends(segment::_MimeticSegment{T}) where {T}
-    k = segment.side
-    cx, cy = _mimetic_corner(T, k)
-    dx, dy = _mimetic_corner(T, mod1(k + 1, 4))
-    a = (cx + segment.from * (dx - cx), cy + segment.from * (dy - cy))
-    b = (cx + segment.to * (dx - cx), cy + segment.to * (dy - cy))
-    return a, b
+@inline _mimetic_segment_ends(segment::_MimeticSegment) = segment.a, segment.b
+
+"""End points of the open part of a segment (the whole segment without a
+solid)."""
+@inline function _mimetic_open_ends(segment::_MimeticSegment{T}) where {T}
+    (ax, ay), (bx, by) = segment.a, segment.b
+    open = segment.open
+    open < one(T) || return (ax, ay), (bx, by)
+    lo, hi = segment.solid_start ? (one(T) - open, one(T)) : (zero(T), open)
+    return (ax + lo * (bx - ax), ay + lo * (by - ay)), (ax + hi * (bx - ax), ay + hi * (by - ay))
 end
 
 """Phase boundary on a segment and the midpoints of its liquid and gas parts
-in unit cell coordinates (origin at the cell centre). A part of length zero has
-its midpoint at the segment's end."""
+in unit cell coordinates (origin at the cell centre), on the open part of the
+segment. A part of length zero has its midpoint at the end of the open
+part."""
 @inline function _mimetic_segment_parts(segment::_MimeticSegment{T}) where {T}
-    (ax, ay), (bx, by) = _mimetic_segment_ends(segment)
+    (ax, ay), (bx, by) = _mimetic_open_ends(segment)
     start = segment.start
-    s = start ? segment.aperture : one(T) - segment.aperture
+    open = segment.open
+    fraction = open > zero(T) ? segment.aperture / open : zero(T)
+    s = start ? fraction : one(T) - fraction
     qx, qy = ax + s * (bx - ax), ay + s * (by - ay)
     low = ((ax + qx) / 2, (ay + qy) / 2)
     high = ((qx + bx) / 2, (qy + by) / 2)
     return (qx, qy), start ? low : high, start ? high : low
 end
+
+"""Wetted length of `phase` on a segment in units of the cell width."""
+@inline _mimetic_wetted(segment, phase) =
+    (phase == 1 ? segment.aperture : segment.open - segment.aperture) * _mimetic_length(segment)
 
 """Eigenvalues `λ₁ ≤ λ₂` of the symmetric matrix `[a b; b d]` and the unit
 eigenvector `(c, s)` of `λ₂` (that of `λ₁` is `(-s, c)`)."""
@@ -289,21 +335,24 @@ mimetic-gram, in units of `h`), for the `segments` of its sides
 (`_MimeticSegment`; `a_k` is the wetted length of segment `k`).
 
 With `M = Σ_k a_k n_k (x^l_k)ᵀ` the liquid Gram tensor at `x*` is
-`G^l = M - η x*ᵀ` and the gas one `G^g = I - G^l`. For `η ≠ 0` both are
-symmetric exactly on the line `η × x* = τ`, `τ = M₁₂ - M₂₁`. The data point
-is the point of that line closest to the interface of the data, the mean of
-the phase boundaries on the partially wetted segments (if every segment is
-wetted by one phase only: the length-weighted mean of the midpoints of the
-segments of the minority phase). It is kept if `0 ⪯ G^l ⪯ I` there;
-otherwise it moves along the line into the admissible interval
-(`_mimetic_admissible_point`, with the margin `cap`, by default that of a
-cell of the finest level). For `η = 0` the tensors do not depend on `x*`;
-the point satisfies the kernel condition instead (`_mimetic_kernel_point`). A
-point more than `1.5h` from the centre is replaced by the data mean (the cell
-is then defective).
+`G^l = M - η x*ᵀ` and the gas one `G^g = F - G^l`, with the Gram tensor `F`
+of the open cell: `I` without a solid, the symmetric tensor `fluid =
+(f₁₁, f₁₂, f₂₂)` of the open segments and the solid edges of a cell cut by an
+embedded solid. For `η ≠ 0` both are symmetric exactly on the line
+`η × x* = τ`, `τ = M₁₂ - M₂₁`. The data point is the point of that line
+closest to the interface of the data, the mean of the phase boundaries on the
+partially wetted segments (if every segment is wetted by one phase only: the
+length-weighted mean of the midpoints of the open parts of the segments of
+the minority phase). It is kept if `0 ⪯ G^l ⪯ F` there; otherwise it moves
+along the line into the admissible interval (`_mimetic_admissible_point`,
+with the margin `cap`, by default that of a cell of the finest level). For
+`η = 0` the tensors do not depend on `x*`; the point satisfies the kernel
+condition instead (`_mimetic_kernel_point`). A point more than `1.5h` from
+the centre is replaced by the data mean (the cell is then defective).
 """
 function _mimetic_pressure_point(
         segments::AbstractVector{_MimeticSegment{T}}, cap = T(_MIMETIC_POINT_MARGIN),
+        fluid = nothing,
     ) where {T}
     ex = ey = sx = sy = zero(T)
     m11 = m12 = m21 = m22 = zero(T)
@@ -312,7 +361,7 @@ function _mimetic_pressure_point(
     for segment in segments
         a = segment.aperture
         b = a * _mimetic_length(segment)
-        nx, ny = _mimetic_normal(T, segment.side)
+        nx, ny = segment.normal
         (qx, qy), (lx, ly), _ = _mimetic_segment_parts(segment)
         ex += b * nx
         ey += b * ny
@@ -321,8 +370,8 @@ function _mimetic_pressure_point(
         m21 += b * ny * lx
         m22 += b * ny * ly
         wetted += b
-        perimeter += _mimetic_length(segment)
-        if zero(T) < a < one(T)
+        perimeter += segment.open * _mimetic_length(segment)
+        if zero(T) < a < segment.open
             sx += qx
             sy += qy
             crossed += one(T)
@@ -331,9 +380,10 @@ function _mimetic_pressure_point(
     if iszero(crossed)
         minority = wetted >= perimeter / 2 ? zero(T) : one(T)
         for segment in segments
-            segment.aperture == minority || continue
-            length = _mimetic_length(segment)
-            (ax, ay), (bx, by) = _mimetic_segment_ends(segment)
+            segment.open > zero(T) || continue
+            segment.aperture == minority * segment.open || continue
+            length = segment.open * _mimetic_length(segment)
+            (ax, ay), (bx, by) = _mimetic_open_ends(segment)
             sx += length * ((ax + bx) / 2)
             sy += length * ((ay + by) / 2)
             crossed += length
@@ -344,10 +394,10 @@ function _mimetic_pressure_point(
     if e2 > T(1.0e-18)
         defect = (m12 - m21) - (ex * yr - ey * xr)
         xs, ys, admissible = _mimetic_admissible_point(
-            m11, m12, m21, m22, ex, ey, xr - defect * ey / e2, yr + defect * ex / e2, cap,
+            m11, m12, m21, m22, ex, ey, xr - defect * ey / e2, yr + defect * ex / e2, cap, fluid,
         )
     else
-        xs, ys = _mimetic_kernel_point(segments, m11, (m12 + m21) / 2, m22, xr, yr)
+        xs, ys = _mimetic_kernel_point(segments, m11, (m12 + m21) / 2, m22, xr, yr, fluid)
         admissible = false
     end
     !admissible && hypot(xs, ys) > T(1.5) && ((xs, ys) = (xr, yr))
@@ -372,7 +422,7 @@ continuously on the data, and a phase of vanishing area gets a block of order
 its wetted length times the margin instead of a block that vanishes or blows
 up at the end of the interval. Without an admissible point it stays (the cell
 is defective)."""
-function _mimetic_admissible_point(m11, m12, m21, m22, ex, ey, xs, ys, cap)
+function _mimetic_admissible_point(m11, m12, m21, m22, ex, ey, xs, ys, cap, ::Nothing)
     T = typeof(xs)
     tolerance = T(1.0e-12)
     c = sqrt(ex^2 + ey^2)
@@ -395,20 +445,67 @@ function _mimetic_admissible_point(m11, m12, m21, m22, ex, ey, xs, ys, cap)
     return xs + s * hx, ys + s * hy, true
 end
 
+"""`_mimetic_admissible_point` for `0 ⪯ G^l ⪯ F` with the symmetric positive
+definite Gram tensor `F = (f₁₁, f₁₂, f₂₂)` of the open part of a cell cut by
+an embedded solid. With `F = LLᵀ` (Cholesky) the condition is
+`0 ⪯ Q ⪯ I` for `Q = L⁻¹G^l L⁻ᵀ`, and moving `x*` by `s η̂` changes `Q` by
+`-s|η||L⁻¹η̂|² v vᵀ`, `v = L⁻¹η̂/|L⁻¹η̂|`: the interval of the unit case in the
+frame `(v, v^⊥)` of `Q`, with the rate `|η||L⁻¹η̂|²` of `q₁₁` along the line.
+Without a positive definite `F` there is no admissible point."""
+function _mimetic_admissible_point(m11, m12, m21, m22, ex, ey, xs, ys, cap, fluid::NTuple{3})
+    T = typeof(xs)
+    tolerance = T(1.0e-12)
+    f11, f12, f22 = fluid
+    f11 > zero(T) || return xs, ys, false
+    l11 = sqrt(f11)
+    l21 = f12 / l11
+    d = f22 - l21^2
+    d > zero(T) || return xs, ys, false
+    l22 = sqrt(d)
+    # Rows of L⁻¹ = [i11 0; i21 i22].
+    i11, i21, i22 = inv(l11), -l21 / (l11 * l22), inv(l22)
+    c = sqrt(ex^2 + ey^2)
+    hx, hy = ex / c, ey / c
+    g11, g22 = m11 - ex * xs, m22 - ey * ys
+    g12 = ((m12 - ex * ys) + (m21 - ey * xs)) / 2
+    r11 = i11^2 * g11
+    r12 = i11 * (i21 * g11 + i22 * g12)
+    r22 = i21^2 * g11 + 2 * i21 * i22 * g12 + i22^2 * g22
+    vx, vy = i11 * hx, i21 * hx + i22 * hy
+    w = hypot(vx, vy)
+    vx, vy = vx / w, vy / w
+    px, py = -vy, vx
+    rate = c * w^2
+    q11 = vx * (r11 * vx + r12 * vy) + vy * (r12 * vx + r22 * vy)
+    q12 = vx * (r11 * px + r12 * py) + vy * (r12 * px + r22 * py)
+    q22 = px * (r11 * px + r12 * py) + py * (r12 * px + r22 * py)
+    -tolerance <= q22 <= one(T) + tolerance || return xs, ys, false
+    q22 = clamp(q22, zero(T), one(T))
+    lo = q22 > T(1.0e-14) ? q12^2 / q22 : (abs(q12) < tolerance ? zero(T) : T(Inf))
+    hi = one(T) - q22 > T(1.0e-14) ? one(T) - q12^2 / (one(T) - q22) :
+        (abs(q12) < tolerance ? one(T) : -T(Inf))
+    lo > hi + tolerance && return xs, ys, false
+    smin, smax = (q11 - hi) / rate, (q11 - lo) / rate
+    margin = min(max(smax - smin, zero(T)) / 100, cap)
+    s = clamp(zero(T), smin + margin, max(smin + margin, smax - margin))
+    return xs + s * hx, ys + s * hy, true
+end
+
 """Largest distance (units of the finest cell width of the mesh) by which
 `_mimetic_admissible_point` keeps the pressure point inside the ends of its
 admissible interval."""
 const _MIMETIC_POINT_MARGIN = 0.01
 
 """Pressure point of a cut cell with `η = 0`: the Gram tensors `G^l` (symmetric
-part `[g11 g12; g12 g22]`) and `G^g = I - G^l` do not depend on `x*`, and a
-block with `m N = R` needs `ker G ⊂ ker R`. For every eigenvector `v` with
-eigenvalue `0` of `G^l` (or `1`: kernel of `G^g`) the component `v ⋅ x*` is
-set to the wetted-length weighted mean of `v ⋅ x_k` over the segments of that
-phase, which satisfies the condition when the `v ⋅ x_k` agree (a film along a
-grid line: its mid-height); the other component is that of the data point."""
+part `[g11 g12; g12 g22]`) and `G^g = F - G^l` (`F = I` without a solid, else
+the Gram tensor `fluid` of the open cell) do not depend on `x*`, and a block
+with `m N = R` needs `ker G ⊂ ker R`. For every eigenvector `v` with
+eigenvalue `0` of `G^l` or of `G^g` the component `v ⋅ x*` is set to the
+wetted-length weighted mean of `v ⋅ x_k` over the segments of that phase,
+which satisfies the condition when the `v ⋅ x_k` agree (a film along a grid
+line: its mid-height); the other component is that of the data point."""
 function _mimetic_kernel_point(
-        segments::AbstractVector{_MimeticSegment{T}}, g11, g12, g22, xs, ys,
+        segments::AbstractVector{_MimeticSegment{T}}, g11, g12, g22, xs, ys, ::Nothing,
     ) where {T}
     lambda1, lambda2, c, s = _mimetic_symmetric_eigen(g11, g12, g22)
     tolerance = T(1.0e-10)
@@ -419,6 +516,34 @@ function _mimetic_kernel_point(
             for segment in segments
                 a = segment.aperture
                 b = (phase == 1 ? a : one(T) - a) * _mimetic_length(segment)
+                b > zero(T) || continue
+                _, liquid, gas = _mimetic_segment_parts(segment)
+                mx, my = phase == 1 ? liquid : gas
+                total += b
+                weighted += b * (vx * mx + vy * my)
+            end
+            total > zero(T) || continue
+            shift = weighted / total - (vx * xs + vy * ys)
+            xs += shift * vx
+            ys += shift * vy
+        end
+    end
+    return xs, ys
+end
+
+function _mimetic_kernel_point(
+        segments::AbstractVector{_MimeticSegment{T}}, g11, g12, g22, xs, ys, fluid::NTuple{3},
+    ) where {T}
+    tolerance = T(1.0e-10)
+    f11, f12, f22 = fluid
+    for phase in 1:2
+        a11, a12, a22 = phase == 1 ? (g11, g12, g22) : (f11 - g11, f12 - g12, f22 - g22)
+        lambda1, lambda2, c, s = _mimetic_symmetric_eigen(a11, a12, a22)
+        for (lambda, vx, vy) in ((lambda1, -s, c), (lambda2, c, s))
+            lambda <= tolerance || continue
+            total = weighted = zero(T)
+            for segment in segments
+                b = _mimetic_wetted(segment, phase)
                 b > zero(T) || continue
                 _, liquid, gas = _mimetic_segment_parts(segment)
                 mx, my = phase == 1 ? liquid : gas
@@ -457,12 +582,11 @@ function _mimetic_gram_block!(
     m = 0
     g11 = g12 = g21 = g22 = zero(T)
     for (index, segment) in pairs(segments)
-        a = segment.aperture
-        b = (phase == 1 ? a : one(T) - a) * _mimetic_length(segment)
+        b = _mimetic_wetted(segment, phase)
         b > zero(T) || continue
         _, liquid, gas = _mimetic_segment_parts(segment)
         mx, my = phase == 1 ? liquid : gas
-        nx, ny = _mimetic_normal(T, segment.side)
+        nx, ny = segment.normal
         m += 1
         sides[m] = index
         lengths[m] = b
@@ -482,7 +606,7 @@ function _mimetic_gram_block!(
         for q in 1:m
             rx = ry = zero(T)
             for r in 1:m
-                nx, ny = _mimetic_normal(T, segments[sides[r]].side)
+                nx, ny = segments[sides[r]].normal
                 rx += block[q, r] * nx
                 ry += block[q, r] * ny
             end
@@ -521,7 +645,7 @@ function _mimetic_fill_gram_block!(
     cl = closing ? sqrt(e2) : zero(T)
     orientation = phase == 1 ? -one(T) : one(T)
     cnx, cny = closing ? (orientation * ex / cl, orientation * ey / cl) : (zero(T), zero(T))
-    edge(q) = q <= m ? (lengths[q], _mimetic_normal(T, segments[sides[q]].side)) : (cl, (cnx, cny))
+    edge(q) = q <= m ? (lengths[q], segments[sides[q]].normal) : (cl, (cnx, cny))
     p11 = p12 = p22 = zero(T)
     for q in 1:(m + closing)
         L, (nx, ny) = edge(q)
@@ -582,6 +706,7 @@ mutable struct _MimeticAssembly{T}
     pressure_y::Vector{T}
     wall_coupling::Vector{T}
     wall_cells::Int
+    solid_cells::Int
     cut_cells::Int
     slaved_values::Int
     stabilised_values::Int
@@ -604,8 +729,8 @@ end
 function _MimeticAssembly(::Type{T}) where {T}
     return _MimeticAssembly{T}(
         typemax(UInt), Int[], Int[], Int[], Int8[], T[], T[], T[], 0, Int[], Int[], T[],
-        spzeros(T, 0, 0), nothing, T[], T[], T[], 0, 0, 0, 0, 0, 0, T[], Int[], Int[], T[],
-        falses(0), Int8[], zeros(T, 8, 8), zeros(Int, 8), zeros(T, 8), zeros(T, 8, 2),
+        spzeros(T, 0, 0), nothing, T[], T[], T[], 0, 0, 0, 0, 0, 0, 0, T[], Int[], Int[], T[],
+        falses(0), Int8[], zeros(T, 16, 16), zeros(Int, 16), zeros(T, 16), zeros(T, 16, 2),
         _MimeticSegment{T}[], Int[],
     )
 end
@@ -628,28 +753,168 @@ end
     return nothing
 end
 
+"""Embedded-solid data of the metric (see `_assemble_cut_cell_metric!`): the
+shared open apertures of the interior and boundary faces, whether the solid
+closes the low tangential end of a partially open face (`low`,
+`boundary_low`), the open dual volumes of the interior faces, and per cell
+its open fraction, the centroid of its open polygon and its liquid PLIC line
+`line ⋅ x ≤ line_d` (unit cell coordinates) with its conditional liquid
+fraction."""
+struct _MimeticSolidData{T}
+    open::Vector{T}
+    low::Vector{Bool}
+    boundary_open::Vector{T}
+    boundary_low::Vector{Bool}
+    face_volume::Vector{T}
+    cell_open::Vector{T}
+    centroid_x::Vector{T}
+    centroid_y::Vector{T}
+    line_x::Vector{T}
+    line_y::Vector{T}
+    line_d::Vector{T}
+    fraction::Vector{T}
+end
+
+_MimeticSolidData(::Type{T}) where {T} = _MimeticSolidData{T}(
+    T[], Bool[], T[], Bool[], T[], T[], T[], T[], T[], T[], T[], T[],
+)
+
 """Segment `from ≤ t ≤ to` of side `k` of `cell` on interior face `face` (or
-boundary face `-face`) with its liquid aperture and wet end. A grid-line
-interface face is fully wet from its own cell's side."""
+boundary face `-face`) with its liquid aperture and wet end, and with an
+embedded solid (`solid`, `_MimeticSolidData`) its open fraction and solid
+end. A grid-line interface face is fully wet from its own cell's side."""
 function _mimetic_segment(
         ::Type{T}, k, from, to, face, cell, topology, data, flags,
-        boundary_aperture, boundary_low, gridline,
+        boundary_aperture, boundary_low, gridline, solid = nothing,
     ) where {T}
+    open = isnothing(solid) ? one(T) :
+        face < 0 ? solid.boundary_open[-face] : solid.open[face]
     aperture = if face < 0
         boundary_aperture[-face]
     elseif isnothing(gridline) || iszero(gridline[face])
         data.liquid_aperture[face]
     else
         minus = topology.face_cells[1, face] == cell
-        (gridline[face] > 0) == minus ? one(T) : zero(T)
+        (gridline[face] > 0) == minus ? open : zero(T)
     end
-    start = if zero(T) < aperture < one(T)
+    start = if zero(T) < aperture < open
         low = face > 0 ? flags[face] == _MIMETIC_LIQUID_LOW : boundary_low[-face]
         _MIMETIC_STARTS_LOW[k] ? low : !low
     else
         false
     end
-    return _MimeticSegment{T}(k, from, to, aperture, start)
+    isnothing(solid) && return _MimeticSegment{T}(k, from, to, aperture, start)
+    solid_start = if zero(T) < open < one(T)
+        low = face > 0 ? solid.low[face] : solid.boundary_low[-face]
+        _MIMETIC_STARTS_LOW[k] ? low : !low
+    else
+        false
+    end
+    return _MimeticSegment{T}(k, from, to, aperture, start, open, solid_start)
+end
+
+"""Length below which a chord between the open parts of a cell counts as
+closed (no solid edge), in units of the cell width."""
+const _MIMETIC_SOLID_EDGE_FLOOR = 1.0e-10
+
+"""Whether the open part of a grid segment reaches its counter-clockwise
+start (`start = true`) or end."""
+@inline function _mimetic_open_reaches(segment::_MimeticSegment{T}, start::Bool) where {T}
+    segment.open > zero(T) || return false
+    segment.open >= one(T) && return true
+    return segment.solid_start != start
+end
+
+"""Close the open parts of the grid segments of `cell` with its solid edges
+(eq. mimetic-solid-edge) and return the symmetric Gram tensor `F` of the open
+cell, `(f₁₁, f₁₂, f₂₂)` in units of `h²`.
+
+The open parts of consecutive segments along the counter-clockwise walk form
+runs (a run continues across a segment end that both open parts reach). A
+solid edge joins the free end of each run to the free start of the next run
+(of the same run if there is one): a side from `a` to `b` with outward unit
+normal `(b - a)^⊥` (into the solid) and midpoint `x_S`. The open parts and the
+edges bound the convex hull of the open parts (their end points lie on the
+boundary of the square in counter-clockwise order), so
+`F = P + Σ_S |S| n_S x_Sᵀ` (`P = Σ_s o_s ℓ_s n_s m_sᵀ`, open lengths
+`o_s ℓ_s`, outward normals `n_s`, midpoints `m_s` of the open parts) is `A I`
+with the area `A` of that polygon, whatever the shared open apertures:
+positive definite unless all open parts lie on one side of the cell. For one
+run whose chord is the solid's PLIC segment
+(data that bound the open polygon) it is the open polygon's tensor. Several
+runs come from a thin solid across the cell or from averaged traces that put
+an open part next to a closed side (a closed trace averaged with an open
+one). The liquid part of an edge is the part on the liquid side of the cell's
+PLIC line (the contact point is their intersection), all of it in a pure
+liquid cell, none in a pure gas cell. A chord of length at most
+`_MIMETIC_SOLID_EDGE_FLOOR` gives no edge."""
+function _mimetic_add_solid_edge!(
+        segments::Vector{_MimeticSegment{T}}, segment_faces, solid, cell,
+    ) where {T}
+    p11 = p12 = p21 = p22 = zero(T)
+    grid = length(segments)
+    for segment in segments
+        o = segment.open * _mimetic_length(segment)
+        o > zero(T) || continue
+        (ax, ay), (bx, by) = _mimetic_open_ends(segment)
+        mx, my = (ax + bx) / 2, (ay + by) / 2
+        nx, ny = segment.normal
+        p11 += o * nx * mx
+        p12 += o * nx * my
+        p21 += o * ny * mx
+        p22 += o * ny * my
+    end
+    # The first open part whose start is not joined to the previous open part
+    # starts a run; without one the open parts close the cell themselves.
+    joined(q) = _mimetic_open_reaches(segments[mod1(q - 1, grid)], false) && _mimetic_open_reaches(segments[q], true)
+    first_head = 0
+    for q in 1:grid
+        segments[q].open > zero(T) && !joined(q) && (first_head = q; break)
+    end
+    head = first_head
+    while head > 0
+        tail = head
+        while joined(mod1(tail + 1, grid))
+            tail = mod1(tail + 1, grid)
+        end
+        next = mod1(tail + 1, grid)
+        while !(segments[next].open > zero(T))
+            next = mod1(next + 1, grid)
+        end
+        _, a = _mimetic_open_ends(segments[tail])
+        b, _ = _mimetic_open_ends(segments[next])
+        head = next == first_head ? 0 : next
+        cx, cy = b[1] - a[1], b[2] - a[2]
+        chord = hypot(cx, cy)
+        chord > T(_MIMETIC_SOLID_EDGE_FLOOR) || continue
+        nx, ny = cy / chord, -cx / chord
+        xs, ys = (a[1] + b[1]) / 2, (a[2] + b[2]) / 2
+        aperture, start = _mimetic_solid_wetting(solid, cell, a, b)
+        push!(segments, _mimetic_solid_edge(a, b, (nx, ny), aperture, start))
+        push!(segment_faces, 0)
+        p11 += chord * nx * xs
+        p12 += chord * nx * ys
+        p21 += chord * ny * xs
+        p22 += chord * ny * ys
+    end
+    return p11, (p12 + p21) / 2, p22
+end
+
+"""Liquid fraction of the solid edge from `a` to `b` of `cell` and whether the
+liquid lies at `a`: the part on the liquid side `line ⋅ x ≤ line_d` of the
+cell's PLIC line."""
+function _mimetic_solid_wetting(solid, cell, (ax, ay), (bx, by))
+    fraction = solid.fraction[cell]
+    T = typeof(fraction)
+    fraction <= zero(T) && return zero(T), false
+    fraction >= one(T) && return one(T), false
+    nx, ny, d = solid.line_x[cell], solid.line_y[cell], solid.line_d[cell]
+    f0 = nx * ax + ny * ay - d
+    f1 = nx * bx + ny * by - d
+    f0 <= zero(T) && f1 <= zero(T) && return one(T), false
+    f0 > zero(T) && f1 > zero(T) && return zero(T), false
+    s = f0 / (f0 - f1)
+    return f0 <= zero(T) ? (s, true) : (one(T) - s, false)
 end
 
 """Assemble the mimetic cut-cell metric (Gram-tensor blocks of the cut cells,
@@ -669,8 +934,9 @@ with aperture below one half on a mixed face is tied to a donor with weight
 
 The geometry enters only through `data` (staggered liquid fractions, phase
 apertures and masses of the interior faces), the wet-end `flags` of the
-interior faces and the liquid apertures and wet ends (`true`: low end) of
-the boundary faces.
+interior faces, the liquid apertures and wet ends (`true`: low end) of
+the boundary faces and, with an embedded solid, `solid`
+(`_MimeticSolidData`).
 
 A side on the domain boundary (a wall) is a side of the cut cell like any
 other: its phase apertures, wet end and midpoint enter the pressure point and
@@ -693,11 +959,26 @@ lies on the face, no cell is cut. Both cells are treated as uncut and the two
 phase values of the face are identified (normal continuity `u^l = u^g`), the
 limit of the cut-cell construction as the chord approaches the face. Its one
 value carries the summed staggered mass and the full aperture.
+
+With an embedded solid a segment is open over the shared open aperture of
+its face, closed at the solid end decided for the face; the phase apertures
+are fractions of the whole face. A cell with a partially closed segment gets
+its solid edges, the chords that close the open parts (`_mimetic_add_solid_edge!`):
+sides with prescribed zero flux, restricted out of the blocks and coupled to
+the flux density `n_S ⋅ w` of a constant field like a wall side, with the
+contact point where the cell's PLIC line crosses them. The pressure point of a
+cut cell is admissible for `0 ⪯ G^l ⪯ F` with the Gram tensor `F` of the open
+cell; a pure cell cut by the solid gets the Gram block of its phase with the
+pressure point at the centroid of its open polygon. A value with aperture
+below one half on a partially closed face is tied like one on a mixed face,
+and a value without aperture and donor next to the solid ties to the solid
+(prescribed zero velocity) like a wall value. Faces without open dual volume
+have no values.
 """
 function _assemble_cut_cell_metric!(
         assembly::_MimeticAssembly{T}, mesh,
         topology, data, flags, boundary_aperture, boundary_low, density;
-        gridline = nothing,
+        gridline = nothing, solid = nothing,
     ) where {T}
     spacing = topology.spacing
     faces = length(mesh.faces)
@@ -714,14 +995,15 @@ function _assemble_cut_cell_metric!(
     assembly.gridline_faces = 0
     for face in 1:faces
         fraction = data.liquid_fraction[face]
-        volume = mesh.face_dual_volumes[face]
+        volume = isnothing(solid) ? mesh.face_dual_volumes[face] : solid.face_volume[face]
         assembly.liquid_dof[face] = 0
         assembly.gas_dof[face] = 0
+        iszero(volume) && continue
         if on_gridline(face)
             liquid, gas = data.liquid_mass[face], data.gas_mass[face]
             push!(assembly.dof_face, face)
             push!(assembly.dof_phase, Int8(3))
-            push!(assembly.dof_aperture, one(T))
+            push!(assembly.dof_aperture, isnothing(solid) ? one(T) : solid.open[face])
             push!(assembly.dof_mass, volume * (liquid + gas))
             push!(assembly.dof_liquid_weight, liquid / (liquid + gas))
             assembly.liquid_dof[face] = assembly.gas_dof[face] = length(assembly.dof_face)
@@ -757,7 +1039,7 @@ function _assemble_cut_cell_metric!(
     resize!(assembly.pressure_y, cells)
     fill!(resize!(assembly.wall_coupling, 2dofs), zero(T))
     nx, ny = mesh.block_size
-    cut_cells = defective_cells = wall_cells = 0
+    cut_cells = defective_cells = wall_cells = solid_cells = 0
     segments = assembly.segments
     segment_faces = assembly.segment_faces
     # The pressure-point margin is one length on the whole mesh (that of the
@@ -780,39 +1062,59 @@ function _assemble_cut_cell_metric!(
             low, high = topology.sides[k, cell], topology.second[k, cell]
             if iszero(high)
                 push!(segment_faces, low)
-                push!(segments, _mimetic_segment(T, k, zero(T), one(T), low, cell, topology, data, flags, boundary_aperture, boundary_low, gridline))
+                push!(segments, _mimetic_segment(T, k, zero(T), one(T), low, cell, topology, data, flags, boundary_aperture, boundary_low, gridline, solid))
             else
                 split = true
                 first, last = _MIMETIC_STARTS_LOW[k] ? (low, high) : (high, low)
                 half = T(0.5)
                 push!(segment_faces, first, last)
-                push!(segments, _mimetic_segment(T, k, zero(T), half, first, cell, topology, data, flags, boundary_aperture, boundary_low, gridline))
-                push!(segments, _mimetic_segment(T, k, half, one(T), last, cell, topology, data, flags, boundary_aperture, boundary_low, gridline))
+                push!(segments, _mimetic_segment(T, k, zero(T), half, first, cell, topology, data, flags, boundary_aperture, boundary_low, gridline, solid))
+                push!(segments, _mimetic_segment(T, k, half, one(T), last, cell, topology, data, flags, boundary_aperture, boundary_low, gridline, solid))
             end
         end
         dof_of(q, phase) = (
             face = segment_faces[q]; face <= 0 ? 0 :
                 (phase == 1 ? assembly.liquid_dof[face] : assembly.gas_dof[face])
         )
-        reference = segments[1].aperture
-        uncut = all(segment -> segment.aperture == reference, segments) &&
-            (iszero(reference) || isone(reference))
-        if uncut && !split
-            # Uncut cell: (1/2) rho h^2 on every face value, the diagonal metric.
-            phase = isone(reference) ? 1 : 2
-            for q in 1:4
-                dof = dof_of(q, phase)
-                dof > 0 && (assembly.full_diagonal[dof] += density[phase] * h^2 / 2)
-            end
-            continue
-        end
+        cap = T(_MIMETIC_POINT_MARGIN) * (finest / h)
         xs = ys = ex = ey = zero(T)
-        if !uncut
-            xs, ys, ex, ey = _mimetic_pressure_point(segments, T(_MIMETIC_POINT_MARGIN) * (finest / h))
+        if !isnothing(solid) && any(segment -> segment.open < one(T), segments)
+            # A cell cut by the solid: open segments and the solid edges.
+            iszero(solid.cell_open[cell]) && continue
+            fluid = _mimetic_add_solid_edge!(segments, segment_faces, solid, cell)
+            liquid = all(segment -> segment.aperture == segment.open, segments)
+            gas = all(segment -> iszero(segment.aperture), segments)
+            liquid && gas && continue
+            solid_cells += 1
+            if liquid || gas
+                xs, ys = solid.centroid_x[cell], solid.centroid_y[cell]
+            else
+                xs, ys, ex, ey = _mimetic_pressure_point(segments, cap, fluid)
+                cut_cells += 1
+                wall_cells += any(<(0), segment_faces)
+            end
             assembly.pressure_x[cell] = center[1] + h * xs
             assembly.pressure_y[cell] = center[2] + h * ys
-            cut_cells += 1
-            wall_cells += any(<(0), segment_faces)
+        else
+            reference = segments[1].aperture
+            uncut = all(segment -> segment.aperture == reference, segments) &&
+                (iszero(reference) || isone(reference))
+            if uncut && !split
+                # Uncut cell: (1/2) rho h^2 on every face value, the diagonal metric.
+                phase = isone(reference) ? 1 : 2
+                for q in 1:4
+                    dof = dof_of(q, phase)
+                    dof > 0 && (assembly.full_diagonal[dof] += density[phase] * h^2 / 2)
+                end
+                continue
+            end
+            if !uncut
+                xs, ys, ex, ey = _mimetic_pressure_point(segments, cap)
+                assembly.pressure_x[cell] = center[1] + h * xs
+                assembly.pressure_y[cell] = center[2] + h * ys
+                cut_cells += 1
+                wall_cells += any(<(0), segment_faces)
+            end
         end
         defective = false
         for phase in 1:2
@@ -826,7 +1128,7 @@ function _assemble_cut_cell_metric!(
                 sq = assembly.sides[q]
                 rq = dof_of(sq, phase)
                 if rq == 0
-                    segment_faces[sq] < 0 && continue
+                    segment_faces[sq] <= 0 && continue
                     error("mimetic metric: wetted face without a phase value")
                 end
                 for r in 1:m
@@ -835,9 +1137,10 @@ function _assemble_cut_cell_metric!(
                     value = _MIMETIC_OUTWARD[segments[sq].side] * scale * assembly.block[q, r]
                     if rr > 0
                         _mimetic_add!(assembly, rq, rr, _MIMETIC_OUTWARD[segments[sr].side] * value)
-                    elseif segment_faces[sr] < 0
-                        # Wall side: coupling to its prescribed flux density n_w ⋅ w.
-                        wx, wy = _mimetic_normal(T, segments[sr].side)
+                    elseif segment_faces[sr] <= 0
+                        # Wall side or solid edge: coupling to its prescribed
+                        # flux density n_w ⋅ w.
+                        wx, wy = segments[sr].normal
                         assembly.wall_coupling[2rq - 1] += value * wx
                         assembly.wall_coupling[2rq] += value * wy
                     end
@@ -855,6 +1158,7 @@ function _assemble_cut_cell_metric!(
             (block_diagonal[assembly.rows[index]] += assembly.values[index])
     end
     reaches(dof) = dof > 0 && assembly.dof_aperture[dof] > zero(T)
+    at_solid(face, axis) = !isnothing(solid) && _mimetic_solid_donor(topology, mesh, solid, face, axis)
     for dof in 1:dofs
         face = assembly.dof_face[dof]
         phase = assembly.dof_phase[dof]
@@ -870,7 +1174,8 @@ function _assemble_cut_cell_metric!(
                 lumped_values += 1
             end
             fraction = data.liquid_fraction[face]
-            zero(T) < fraction < one(T) && aperture < T(0.5) || continue
+            (zero(T) < fraction < one(T) || (!isnothing(solid) && solid.open[face] < one(T))) &&
+                aperture < T(0.5) || continue
             larger(g) = (
                 d = dof_at(g); reaches(d) &&
                     assembly.dof_aperture[d] > aperture + T(1.0e-12)
@@ -886,7 +1191,7 @@ function _assemble_cut_cell_metric!(
         donor = _mimetic_donor(topology, mesh, ring, dof_at, g -> reaches(dof_at(g)), assembly.dof_aperture)
         if donor == 0
             _mimetic_add!(assembly, dof, dof, mass)
-            if _mimetic_wall_donor(topology, face, axis)
+            if _mimetic_wall_donor(topology, face, axis) || at_solid(face, axis)
                 assembly.wall_coupling[2dof - 2 + axis] -= mass
                 slaved += 1
             else
@@ -931,6 +1236,7 @@ function _assemble_cut_cell_metric!(
     assembly.band_matrix = sparse(assembly.rows, assembly.columns, assembly.values, count, count)
     assembly.cut_cells = cut_cells
     assembly.wall_cells = wall_cells
+    assembly.solid_cells = solid_cells
     assembly.slaved_values = slaved
     assembly.stabilised_values = stabilised
     assembly.lumped_values = lumped_values
@@ -949,6 +1255,25 @@ function _mimetic_wall_donor(topology, face, axis)
     plus = topology.face_cells[2, face]
     low, high = axis == 1 ? (4, 2) : (1, 3)
     return topology.sides[low, minus] < 0 || topology.sides[high, plus] < 0
+end
+
+"""Whether a value on interior face `face` without a donor ties to the
+embedded solid (prescribed zero velocity): the face is partially closed or
+has a partially solid cell, or a same-axis face across one of its cells is
+partially closed by the solid (the solid counterpart of `_mimetic_wall_donor`)."""
+function _mimetic_solid_donor(topology, mesh, solid, face, axis)
+    T = eltype(solid.open)
+    (solid.open[face] < one(T) || solid.face_volume[face] < mesh.face_dual_volumes[face]) && return true
+    minus = topology.face_cells[1, face]
+    plus = topology.face_cells[2, face]
+    low, high = axis == 1 ? (4, 2) : (1, 3)
+    for across in (
+            topology.sides[low, minus], topology.second[low, minus],
+            topology.sides[high, plus], topology.second[high, plus],
+        )
+        across > 0 && solid.open[across] < one(T) && return true
+    end
+    return false
 end
 
 """Donor of a tie: the neighbour of the ring (then of the second ring) whose

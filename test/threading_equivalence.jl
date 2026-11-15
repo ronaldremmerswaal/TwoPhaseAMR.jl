@@ -17,8 +17,8 @@ covering them."""
 const ADAPTED_CASES = ("stokes3_two", "mimetic_amr")
 
 const EQUIVALENCE_CASES = (
-    "taylor_green", "droplet", "capillary", "capillary_mimetic", "mimetic_amr",
-    "stokes3_two", "cylinder",
+    "taylor_green", "droplet", "droplet_mimetic", "capillary", "capillary_mimetic",
+    "mimetic_amr", "stokes3_two", "cylinder",
 )
 
 """

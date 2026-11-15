@@ -96,9 +96,6 @@ _two_velocity_projection_types(projection::MimeticProjection, T, M, F) = (
 _validate_two_velocity_projection(::AbstractTwoVelocityProjection, interface) = nothing
 function _validate_two_velocity_projection(::MimeticProjection, interface)
     eltype(interface) === Float64 || throw(ArgumentError("MimeticProjection requires Float64"))
-    isnothing(interface.geometry) || throw(
-        ArgumentError("MimeticProjection does not support embedded solid geometry"),
-    )
     _mimetic_square_cells(interface.mesh)
     return nothing
 end

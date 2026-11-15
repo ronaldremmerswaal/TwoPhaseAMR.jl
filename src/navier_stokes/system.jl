@@ -200,9 +200,6 @@ function NavierStokesSystem(
     ) || throw(
         ArgumentError("geometry must share solver mesh and scalar type"),
     )
-    two_velocity_projection isa MimeticProjection && !isnothing(geometry) && throw(
-        ArgumentError("MimeticProjection does not support embedded solid geometry"),
-    )
     two_velocity_projection isa MimeticProjection &&
         _reject_mimetic_pressure_options(options.pressure)
     model, configured_density, configured_dynamic_viscosity = if physics isa SinglePhase

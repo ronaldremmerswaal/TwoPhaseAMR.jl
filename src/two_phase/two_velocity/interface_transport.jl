@@ -169,7 +169,23 @@ end
     )
 end
 
-"""Frozen open/phase subface interval in coordinates of the donor cell."""
+"""Open part `(lo, hi)` of width `width` of the tangential interval
+`(full_lo, full_hi)` of a face: at its high end if the solid normal's
+tangential component `solid_tangent` is positive (the solid then closes the
+low end), else at its low end."""
+@inline _frozen_open_interval(full_lo, full_hi, width, solid_tangent) =
+    solid_tangent > zero(solid_tangent) ? (full_hi - width, full_hi) : (full_lo, full_lo + width)
+
+"""Frozen open/phase subface interval in coordinates of the donor cell.
+
+The open part of a partially open face lies at the end that the averaged
+tangential solid normal of its two cells leaves open. The shared open aperture
+is the mean of the two cells' solid traces, so that end can lie in the donor's
+own solid (a closed trace averaged with an open one): if the donor has no
+resolvable open area behind the open part there, the open part lies at the end
+that the donor's own solid plane leaves open, where it has (issue #187). The
+choice depends on the face and the donor only, so the phase subfaces stay
+disjoint."""
 function _frozen_subface_interval(
         field::InterfaceField{T}, work::WYAdvectionWorkspace{T},
         face, face_index, donor, liquid_carrier::Bool, geometry,
@@ -184,13 +200,14 @@ function _frozen_subface_interval(
     open_lo, open_hi = full_lo, full_hi
     if open_width < full_width
         tangent = 3 - face.axis
-        solid_tangent = _averaged_tangent_normal(
-            geometry.solid, face, tangent,
+        solid = geometry.solid
+        open_lo, open_hi = _frozen_open_interval(
+            full_lo, full_hi, open_width, _averaged_tangent_normal(solid, face, tangent),
         )
-        if solid_tangent > zero(T)
-            open_lo = full_hi - open_width
-        else
-            open_hi = full_lo + open_width
+        area = _wy_open_strip_area(solid, donor, face.axis, open_lo, open_hi, -T(0.5), T(0.5))
+        if !(area > _wy_strip_floor(T, open_aperture))
+            own = tangent == 1 ? _get(solid.normal_x, donor) : _get(solid.normal_y, donor)
+            open_lo, open_hi = _frozen_open_interval(full_lo, full_hi, open_width, own)
         end
     end
     phase_aperture = liquid_carrier ?

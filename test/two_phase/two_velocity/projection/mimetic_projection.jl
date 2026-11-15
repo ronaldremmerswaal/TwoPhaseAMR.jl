@@ -62,14 +62,14 @@ _mimetic_circle(n; x = 0.5, y = 0.5, radius = 0.25) =
     @test FlowSimulation(
         graded, physics(graded_interface); velocity_model = model, boundary = FreeSlip(),
     ) isa FlowSimulation
-    # Embedded solids are rejected, through the interface or the system.
+    # Embedded solids are accepted, through the interface and the system.
     mesh = BlockTreeMesh(block_size = (16, 16), periodic = (false, false))
     geometry = GeometryField(mesh, (x, y) -> y - 0.1; lipschitz = 1)
     wet = InterfaceField(mesh, circle; geometry, lipschitz = 1)
-    @test_throws ArgumentError MimeticProjectionSolver(wet)
-    @test_throws ArgumentError FlowSimulation(
+    @test MimeticProjectionSolver(wet) isa MimeticProjectionSolver
+    @test FlowSimulation(
         mesh, physics(wet); geometry, velocity_model = model, boundary = FreeSlip(),
-    )
+    ) isa FlowSimulation
     # Square cells and Float64 only.
     stretched = BlockTreeMesh(block_size = (16, 16), extent = (2.0, 1.0))
     @test_throws ArgumentError MimeticProjectionSolver(
@@ -1631,4 +1631,434 @@ end
     @test case.workspace.preconditioner_topology === case.workspace.topology
     @test case.workspace.pressure_operator !== old_operator
     @test 1.0e-2 * maximum(abs, _mimetic_composite_divergence(case, velocity)) <= 1.0e-10
+end
+
+# Embedded solids (techref ch. 10, Embedded solids). Solid level sets are
+# negative in the solid, interface level sets in the liquid.
+_mimetic_slanted(angle; point = (0.5, 0.22)) =
+    (x, y) -> -sin(angle) * (x - point[1]) + cos(angle) * (y - point[2])
+_mimetic_cylinder(cx, cy, r) = (x, y) -> hypot(x - cx, y - cy) - r
+# The solid between two lines through `point` (a wedge) and a slab of
+# half-width `width` along a line.
+function _mimetic_wedge(first, second, point)
+    lower, upper = _mimetic_slanted(first; point), _mimetic_slanted(second + pi / 2; point)
+    return (x, y) -> max(lower(x, y), upper(x, y))
+end
+function _mimetic_slab(angle, width, point)
+    line = _mimetic_slanted(angle; point)
+    return (x, y) -> abs(line(x, y)) - width
+end
+
+function _mimetic_solid_case(n, solid, levelset; density = (1.0, 1.0), contact_angle = nothing, mesh = nothing)
+    mesh = isnothing(mesh) ? BlockTreeMesh(block_size = (n, n), periodic = (false, false)) : mesh
+    geometry = GeometryField(mesh, solid; lipschitz = 1, atol = 1.0e-7, maxdepth = 24)
+    options = isnothing(contact_angle) ? (;) : (; contact_angle)
+    interface = InterfaceField(mesh, levelset; geometry, lipschitz = 1, atol = 1.0e-7, maxdepth = 24, options...)
+    solver = MimeticProjectionSolver(interface; density)
+    return (; mesh, geometry, interface, solver, workspace = MimeticProjectionWorkspace(solver), density)
+end
+
+function _mimetic_solid_flow(n, solid, levelset, density; gravity = (0.0, -9.81), contact_angle = nothing, mesh = nothing, sigma = 0.0)
+    case = _mimetic_solid_case(n, solid, levelset; density, contact_angle, mesh)
+    physics = iszero(sigma) ?
+        TwoPhase(case.interface; density, dynamic_viscosity = (0.0, 0.0), gravity) :
+        TwoPhase(case.interface; density, dynamic_viscosity = (0.0, 0.0), gravity, surface_tension = SurfaceTension(sigma))
+    return FlowSimulation(
+        case.mesh, physics; geometry = case.geometry, boundary = FreeSlip(),
+        velocity_model = TwoVelocityModel(pressure_projection = MimeticProjection()),
+    )
+end
+
+# Relative defect of the assembled Gram moment 𝓜χ^π_k + C e_k = ρ^π a|f| (x*₊ - x*₋)_k
+# over every value of phase π (C: the coupling to the wall sides, solid edges
+# and ties), and zero on the values of the other phase. An identified
+# grid-line value carries both phases: it is one in χ^π_k of either phase,
+# and its blocks in the cells of the other phase couple it to their values,
+# so with identified values only the values of phase π are compared.
+function _mimetic_gram_moment_defect(case)
+    TP = TwoPhaseAMR
+    work = case.workspace
+    assembly = TP._mimetic_assemble!(case.solver, work)
+    topology = work.topology
+    point = (assembly.pressure_x, assembly.pressure_y)
+    axis(r) = case.mesh.faces[assembly.dof_face[r]].axis
+    defect = 0.0
+    for phase in 1:2, k in 1:2
+        dofs = filter(eachindex(assembly.dof_face)) do r
+            assembly.dof_phase[r] == phase || (assembly.gridline_faces == 0 && assembly.dof_phase[r] != 3)
+        end
+        field = [assembly.dof_phase[r] in (phase, 3) && axis(r) == k ? 1.0 : 0.0 for r in eachindex(assembly.dof_face)]
+        image = TP._mimetic_metric_product!(zeros(0), work, field)
+        target = map(dofs) do r
+            assembly.dof_phase[r] == phase || return 0.0
+            face = assembly.dof_face[r]
+            difference = point[k][topology.face_cells[2, face]] - point[k][topology.face_cells[1, face]]
+            case.density[phase] * case.mesh.faces[face].area * assembly.dof_aperture[r] * difference
+        end
+        coupled = [image[r] + (assembly.dof_phase[r] == phase ? TP._mimetic_wall_coupling(assembly, k, r) : 0.0) for r in dofs]
+        # A phase absent from the case (no interface) has no values.
+        scale = maximum(abs, coupled; init = 0.0)
+        scale > 0 && (defect = max(defect, maximum(abs, coupled .- target) / scale))
+    end
+    return defect
+end
+
+@testset "Mimetic solid edge on exact data" begin
+    # The open parts of the four sides of a cell cut by a straight solid line
+    # are closed by the solid edge (eq. mimetic-solid-edge): its end points are
+    # the crossings of the line, its normal points into the solid, and the
+    # Gram tensor of the open cell is |P| I. The contact point is where a
+    # liquid PLIC line crosses the edge, the line that wets the open parts.
+    TP = TwoPhaseAMR
+    corners = ((-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5))
+    for (direction, intercept) in (
+            ((0.3, 1.0), -0.15), ((-1.0, 0.4), 0.2), ((0.7, 0.6), 0.25), ((1.0, 0.0), -0.3), ((0.2, -1.0), -0.31),
+        )
+        n = direction ./ hypot(direction...)
+        opens = Tuple{Float64, Bool}[]
+        crossings = NTuple{2, Float64}[]
+        for k in 1:4
+            c, e = corners[k], corners[mod1(k + 1, 4)]
+            f0 = n[1] * c[1] + n[2] * c[2] - intercept
+            f1 = n[1] * e[1] + n[2] * e[2] - intercept
+            push!(
+                opens, if f0 >= 0 && f1 >= 0
+                    (1.0, false)
+                elseif f0 < 0 && f1 < 0
+                    (0.0, false)
+                else
+                    t = f0 / (f0 - f1)
+                    push!(crossings, (c[1] + t * (e[1] - c[1]), c[2] + t * (e[2] - c[2])))
+                    f0 < 0 ? (1 - t, true) : (t, false)
+                end
+            )
+        end
+        @test length(crossings) == 2
+        area = TP._polygon_area(TP._clip_polygon(TP._unit_cell_polygon(Float64), n[1], n[2], intercept; keep_less = false))
+        middle = (crossings[1] .+ crossings[2]) ./ 2
+        line = (0.2, 1.0)
+        level = line[1] * (middle[1] + 0.2 * (crossings[2][1] - crossings[1][1])) +
+            line[2] * (middle[2] + 0.2 * (crossings[2][2] - crossings[1][2]))
+        # Liquid: line ⋅ x ≤ level, on the open parts and on the edge.
+        g(p) = line[1] * p[1] + line[2] * p[2] - level
+        segments = map(1:4) do k
+            open, solid_start = opens[k]
+            p, q = TP._mimetic_open_ends(TP._MimeticSegment{Float64}(k, 0.0, 1.0, 0.0, false, open, solid_start))
+            aperture, start = if open == 0 || (g(p) > 0 && g(q) > 0)
+                (0.0, false)
+            elseif g(p) <= 0 && g(q) <= 0
+                (open, false)
+            else
+                t = g(p) / (g(p) - g(q))
+                g(p) <= 0 ? (t * open, true) : ((1 - t) * open, false)
+            end
+            TP._MimeticSegment{Float64}(k, 0.0, 1.0, aperture, start, open, solid_start)
+        end
+        solid = TP._MimeticSolidData{Float64}(
+            Float64[], Bool[], Float64[], Bool[], Float64[], [area], [0.0], [0.0],
+            [line[1]], [line[2]], [level], [0.5],
+        )
+        fluid = TP._mimetic_add_solid_edge!(segments, zeros(Int, 4), solid, 1)
+        edge = last(segments)
+        @test edge.side == 0 && length(segments) == 5
+        @test all(isapprox.(edge.normal, .-n; atol = 1.0e-14))
+        # The edge runs counter-clockwise from one crossing to the other.
+        near(p, q) = all(isapprox.(p, q; atol = 1.0e-14))
+        @test (near(edge.a, crossings[1]) && near(edge.b, crossings[2])) ||
+            (near(edge.a, crossings[2]) && near(edge.b, crossings[1]))
+        @test all(isapprox.(fluid, (area, 0.0, area); atol = 1.0e-14))
+        # Liquid part of the edge.
+        s = g(edge.a) / (g(edge.a) - g(edge.b))
+        @test 0 < edge.aperture < 1
+        @test edge.aperture ≈ (g(edge.a) <= 0 ? s : 1 - s) atol = 1.0e-14
+        @test edge.start == (g(edge.a) <= 0)
+    end
+    # Open parts in two opposite corners (a slab across the cell, or averaged
+    # traces next to closed sides): two runs, joined by two edges into the
+    # convex hull of the open parts, a hexagon of area 1 - 0.7².
+    segments = [
+        TP._MimeticSegment{Float64}(k, 0.0, 1.0, 0.3, false, 0.3, iseven(k)) for k in 1:4
+    ]
+    solid = TP._MimeticSolidData{Float64}(
+        Float64[], Bool[], Float64[], Bool[], Float64[], [0.3], [0.0], [0.0], [0.0], [1.0], [0.0], [1.0],
+    )
+    fluid = TP._mimetic_add_solid_edge!(segments, zeros(Int, 4), solid, 1)
+    @test length(segments) == 6 && all(segment -> segment.side == 0, segments[5:6])
+    corner(p, q) = all(isapprox.(p, q; atol = 1.0e-14))
+    @test corner(segments[5].a, (0.2, 0.5)) && corner(segments[5].b, (-0.5, -0.2))
+    @test corner(segments[6].a, (-0.2, -0.5)) && corner(segments[6].b, (0.5, 0.2))
+    @test corner(segments[6].normal, (sqrt(0.5), -sqrt(0.5)))
+    @test all(isapprox.(fluid, (1 - 0.49, 0.0, 1 - 0.49); atol = 1.0e-14))
+    # Pure liquid: the edges are wetted.
+    @test all(segment -> segment.aperture == 1.0, segments[5:6])
+end
+
+@testset "Mimetic metric with embedded solids: definiteness, consistency and the Gram moment" begin
+    # Cells cut by a solid get their solid edge (prescribed zero flux,
+    # restricted out of the block, coupled to n_S ⋅ w like a wall side); pure
+    # cells cut by the solid the Gram block of their phase. On every value
+    # 𝓜χ + Ce = ρ a|f|Δx* (eq. mimetic-transition with the solid coupling), the
+    # band is symmetric positive definite, no cell is defective and no value
+    # lumped, and the projection keeps its energy identity. Slanted-line and
+    # circular solids, a grid-aligned floor and step, random solids; no
+    # interface, a pool, drops; densities (1, 1) and (1000, 1).
+    TP = TwoPhaseAMR
+    h = 1 / 32
+    solids = Any[
+        _mimetic_slanted(0.3), _mimetic_slanted(pi / 12), _mimetic_cylinder(0.513, 0.443, 0.2),
+        (x, y) -> y - 10h, (x, y) -> min(y - 10h, x - 16h),
+    ]
+    rng = Random.Xoshiro(5)
+    for k in 1:4
+        if isodd(k)
+            cx, cy, r = 0.3 + 0.4rand(rng), 0.3 + 0.4rand(rng), 0.1 + 0.15rand(rng)
+            push!(solids, _mimetic_cylinder(cx, cy, r))
+        else
+            push!(solids, _mimetic_slanted(pi * (rand(rng) - 0.5) / 2; point = (0.5, 0.15 + 0.2rand(rng))))
+        end
+    end
+    interfaces = (
+        (x, y) -> -1.0, (x, y) -> y - 0.643, (x, y) -> hypot(x - 0.47, y - 0.42) - 0.24,
+        (x, y) -> hypot(x - 0.61, y - 0.33) - 0.17,
+    )
+    for solid in solids, levelset in interfaces, density in ((1.0, 1.0), (1000.0, 1.0))
+        case = _mimetic_solid_case(32, solid, levelset; density)
+        assembly = TP._mimetic_assemble!(case.solver, case.workspace)
+        @test assembly.solid_cells > 0
+        @test assembly.defective_cells == 0 && assembly.lumped_values == 0
+        band = assembly.band_matrix
+        @test maximum(abs, band - band') <= 1.0e-14 * maximum(abs, band)
+        @test isposdef(Symmetric(Matrix(band)))
+        @test _mimetic_gram_moment_defect(case) <= 1.0e-12
+        velocity = _mimetic_velocity(case, (phase, face) -> randn(rng))
+        stats = project!(velocity, CellField(case.mesh), case.solver, 1.0, case.workspace; tolerance = 1.0e-10, max_iterations = 2000)
+        @test stats.converged && stats.solid_cells == assembly.solid_cells
+        @test abs(stats.energy_identity_defect) <= 1.0e-12
+    end
+    # Adaptive meshes: cells cut by the solid next to finer cells.
+    refine = (key, origin, extent) -> key.level == 0 && origin[1] >= 0.25 && origin[2] <= 0.5
+    for solid in (_mimetic_slanted(0.3; point = (0.5, 0.31)), _mimetic_cylinder(0.513, 0.43, 0.17)),
+            levelset in ((x, y) -> y - 0.583, (x, y) -> hypot(x - 0.47, y - 0.42) - 0.24), density in ((1.0, 1.0), (1000.0, 1.0))
+        mesh = BlockTreeMesh(; base_mesh = (16, 16), block_size = (4, 4), periodic = (false, false), max_level = 1, refine)
+        case = _mimetic_solid_case(0, solid, levelset; density, mesh)
+        assembly = TP._mimetic_assemble!(case.solver, case.workspace)
+        @test assembly.solid_cells > 0 && assembly.defective_cells == 0 && assembly.lumped_values == 0
+        @test isposdef(Symmetric(Matrix(assembly.band_matrix)))
+        @test _mimetic_gram_moment_defect(case) <= 1.0e-12
+        velocity = _mimetic_velocity(case, (phase, face) -> randn(rng))
+        stats = project!(velocity, CellField(case.mesh), case.solver, 1.0, case.workspace; tolerance = 1.0e-10, max_iterations = 2000)
+        @test stats.converged && abs(stats.energy_identity_defect) <= 1.0e-12
+    end
+end
+
+@testset "Mimetic metric on random embedded solids: no defective cell, the Gram moment, the gauge" begin
+    # Random slanted lines, cylinders, wedges and thin slabs (traces of
+    # nearly covered cells averaged with open ones, open parts on two runs)
+    # with no interface, a pool or a drop: the solid edges close every cut
+    # cell, so F = A I, and where no cell is defective 𝓜χ + Ce = ρ a|f|Δx* on
+    # every value.
+    TP = TwoPhaseAMR
+    rng = Random.Xoshiro(23)
+    defective = 0
+    for k in 1:32
+        kind = mod1(k, 4)
+        solid = if kind == 1
+            _mimetic_slanted(0.9pi * (rand(rng) - 0.5); point = (0.5, 0.1 + 0.5rand(rng)))
+        elseif kind == 2
+            _mimetic_cylinder(0.25 + 0.5rand(rng), 0.25 + 0.5rand(rng), 0.08 + 0.25rand(rng))
+        elseif kind == 3
+            _mimetic_wedge(pi * rand(rng), pi * rand(rng), (0.3 + 0.4rand(rng), 0.3 + 0.4rand(rng)))
+        else
+            _mimetic_slab(pi * rand(rng), 0.01 + 0.05rand(rng), (0.5, 0.2 + 0.5rand(rng)))
+        end
+        levelset = if mod1(k, 3) == 1
+            (x, y) -> -1.0
+        elseif mod1(k, 3) == 2
+            height = 0.2 + 0.6rand(rng)
+            (x, y) -> y - height
+        else
+            centre, radius = (0.2 + 0.6rand(rng), 0.2 + 0.6rand(rng)), 0.05 + 0.25rand(rng)
+            (x, y) -> hypot(x - centre[1], y - centre[2]) - radius
+        end
+        density = isodd(k) ? (1.0, 1.0) : (1000.0, 1.0)
+        case = _mimetic_solid_case(k <= 16 ? 16 : 32, solid, levelset; density)
+        assembly = TP._mimetic_assemble!(case.solver, case.workspace)
+        @test assembly.solid_cells > 0
+        @test assembly.lumped_values == 0
+        @test isposdef(Symmetric(Matrix(assembly.band_matrix)))
+        defective += assembly.defective_cells > 0
+        assembly.defective_cells == 0 && @test _mimetic_gram_moment_defect(case) <= 1.0e-12
+        # Each open component is anchored at its cell of largest open volume.
+        velocity = _mimetic_velocity(case, (phase, face) -> randn(rng))
+        stats = project!(velocity, CellField(case.mesh), case.solver, 1.0, case.workspace; tolerance = 1.0e-10, max_iterations = 2000)
+        @test abs(stats.energy_identity_defect) <= 1.0e-12
+        work = case.workspace
+        @test all(work.anchor[cell] == 0 || work.cell_volume[work.anchor[cell]] >= work.cell_volume[cell] for cell in eachindex(work.anchor))
+        @test all(anchor -> work.anchor[anchor] == anchor, work.pressure_anchors)
+    end
+    # NUMERICS CONCERN: one configuration (a wedge, no interface) has a cell
+    # in which a gas sliver (conditional fraction just below one) wets only
+    # the gas part of one side and the solid edge over the closed part of
+    # that side: a film on one line, whose block cannot be consistent (its
+    # Gram tensor has the line as kernel, its moments do not vanish along it).
+    # Such film cells, and phases wetting only two parallel sides, are left
+    # in 7 of 1500 random fixtures (216 with the first solid edge).
+    @test_broken defective == 0
+    @test defective <= 1
+end
+
+@testset "Mimetic rest states with embedded solids" begin
+    TP = TwoPhaseAMR
+    h = 1 / 32
+    function rest!(flow; steps = 3)
+        for _ in 1:steps
+            stats = step!(flow.velocity, flow.pressure, flow.system, 1.0e-3, flow.workspace; tolerance = 1.0e-12, max_cycles = 2000)
+            @test stats.converged && stats.solid_cells > 0
+            @test stats.defective_cells == 0 && stats.lumped_values == 0
+        end
+        return _mimetic_maximum(flow.velocity)
+    end
+    # Hydrostatic pools over slanted solids and over a submerged cylinder, and
+    # a uniform acceleration at equal densities with drops on the solids
+    # (the solid edges carry the Gram moment of gravity through C): at rest
+    # to round-off through full steps.
+    for (solid, levelset, densities) in (
+                (_mimetic_slanted(pi / 12), (x, y) -> y - 0.6116, ((1.0, 1.0), (1000.0, 1.0))),
+                (_mimetic_slanted(0.4; point = (0.5, 0.3)), (x, y) -> y - 0.6616, ((1.0, 1.0), (1000.0, 1.0))),
+                (_mimetic_cylinder(0.513, 0.35, 0.15), (x, y) -> y - 0.7116, ((1.0, 1.0), (1000.0, 1.0))),
+                (_mimetic_slanted(pi / 12), (x, y) -> hypot(x - 0.45, y - 0.39) - 0.2, ((1.0, 1.0),)),
+                (_mimetic_cylinder(0.513, 0.35, 0.15), (x, y) -> hypot(x - 0.5, y - 0.6) - 0.15, ((1.0, 1.0),)),
+            ), density in densities
+        @test rest!(_mimetic_solid_flow(32, solid, levelset, density)) <= 1.0e-11
+    end
+    # Single-phase liquid under gravity over thin slabs and a wedge, and pools
+    # at densities (1000, 1) crossing a cylinder and a wedge, from the random
+    # fixtures of the review, where the averaged open traces leave open parts
+    # on two runs or next to closed sides (with the first solid edge these
+    # cells were defective: the liquid moved at 1e-5 to 1.6e-4, the pools at
+    # 7.5e-7 and 1.4e-3): at rest to round-off.
+    for (n, solid, levelset) in (
+            (32, _mimetic_slab(0.027061439586443845, 0.022716678135136562, (0.5, 0.6391707554866328)), (x, y) -> -1.0),
+            (32, _mimetic_slab(0.13692601250383316, 0.028239728109797614, (0.5, 0.6620588470957329)), (x, y) -> -1.0),
+            (16, _mimetic_wedge(0.24027809668251737, 0.129782988826112, (0.615848994355751, 0.5306335999561819)), (x, y) -> -1.0),
+            (16, _mimetic_slab(1.772750978307207, 0.04932741429721883, (0.5, 0.28897164951280135)), (x, y) -> -1.0),
+            (32, _mimetic_cylinder(0.5592126977250925, 0.5385026636552124, 0.10817924471508837), (x, y) -> y - 0.461603002625254),
+            (32, _mimetic_wedge(0.24015996113998678, 0.5770253086972441, (0.5565861708316273, 0.4988116063059008)), (x, y) -> y - 0.46792534783624884),
+        )
+        @test rest!(_mimetic_solid_flow(n, solid, levelset, (1000.0, 1.0))) <= 1.0e-11
+    end
+    # A pool whose surface crosses the cylinder: rest at the contact lines is
+    # limited by the PLIC accuracy of the contact cells times (ρ_l - ρ_g) g
+    # (a tilted liquid plane next to the solid puts their pressure points off
+    # the level line); on random pool-crossing solids MM rests to 1e-13 ... 1e-1
+    # and CMDGFM to 1e-17 ... 6e-2 at densities (1000, 1). This configuration
+    # is one of the mild ones.
+    flow = _mimetic_solid_flow(32, _mimetic_cylinder(0.513, 0.42, 0.2), (x, y) -> y - 0.5116, (1000.0, 1.0))
+    @test rest!(flow) <= 2.0e-6
+    # Films of thickness θh on a flat solid off and on a grid line and on a
+    # slanted solid: their values without aperture and donor tie to the solid
+    # (across a closed face too), so gravity gives them no increment.
+    for theta in (0.05, 0.3, 0.95)
+        for (solid, top, densities) in (
+                    ((x, y) -> y - 9.6h, 9.6h, ((1.0, 1.0), (1000.0, 1.0))),
+                    ((x, y) -> y - 10h, 10h, ((1.0, 1.0), (1000.0, 1.0))),
+                    (_mimetic_slanted(pi / 12; point = (0.5, 0.3)), nothing, ((1.0, 1.0),)),
+                ), density in densities
+            levelset = isnothing(top) ? (x, y) -> solid(x, y) - theta * h : (x, y) -> y - top - theta * h
+            @test rest!(_mimetic_solid_flow(32, solid, levelset, density)) <= 1.0e-11
+        end
+    end
+    # Adaptive meshes.
+    refine = (key, origin, extent) -> key.level == 0 && origin[1] >= 0.25 && origin[2] <= 0.5
+    for (solid, levelset) in (
+                (_mimetic_slanted(0.3; point = (0.5, 0.31)), (x, y) -> y - 0.613),
+                (_mimetic_cylinder(0.513, 0.43, 0.17), (x, y) -> y - 0.763),
+            ), density in ((1.0, 1.0), (1000.0, 1.0))
+        mesh = BlockTreeMesh(; base_mesh = (16, 16), block_size = (4, 4), periodic = (false, false), max_level = 1, refine)
+        @test rest!(_mimetic_solid_flow(0, solid, levelset, density; mesh)) <= 1.0e-11
+    end
+    # A drop on a slanted solid at its contact angle with the exact constant
+    # curvature: the per-phase capillary force is a gradient and the
+    # projection removes it.
+    point, angle, radius = (0.5, 0.22), pi / 12, 0.2
+    normal = (-sin(angle), cos(angle))
+    for theta in (pi / 3, pi / 2, 2pi / 3), formulation in (CSF(), CGFM()), density in ((1.0, 1.0), (1000.0, 1.0))
+        centre = point .- radius * cos(theta) .* normal
+        flow = _mimetic_solid_flow(
+            32, _mimetic_slanted(angle; point), (x, y) -> hypot(x - centre[1], y - centre[2]) - radius, density;
+            gravity = (0.0, 0.0), contact_angle = theta, sigma = 0.7,
+        )
+        model = flow.system.two_phase
+        state = TP._two_velocity_flow_workspace!(flow.workspace.two_phase, model)
+        reconstruct!(model.interface)
+        TP._mimetic_capillary_force!(
+            flow.velocity, state.projection_solver, state.projection_workspace, 1.0e-2;
+            sigma = 0.7, formulation, curvature = 1 / radius,
+        )
+        @test _mimetic_maximum(flow.velocity) > 1.0
+        stats = TP._project_two_velocity!(
+            flow.velocity, flow.pressure, flow.system, flow.workspace, state, 1.0e-2;
+            tolerance = 1.0e-12, max_iterations = 2000,
+        )
+        @test stats.converged && stats.solid_cells > 0
+        @test _mimetic_maximum(flow.velocity) <= 1.0e-12
+    end
+    # A constant field along a slanted solid (both phases, prescribed on the
+    # domain boundary) is admissible and the projection keeps it, up to the
+    # closure of the averaged open traces of the reconstructed solid: its
+    # outflow (norm 8e-13) is a volume defect of up to 1e-7 in sliver cells,
+    # whose correction changes values by 2e-11 (densities (1, 1)) and 8e-10
+    # (densities (1000, 1)). Below the tolerance 1e-10 the solve would iterate
+    # on the round-off of the sliver volumes (floor 5e-12).
+    w = (cos(pi / 12), sin(pi / 12))
+    for density in ((1.0, 1.0), (1000.0, 1.0)), levelset in ((x, y) -> hypot(x - 0.5, y - 0.42) - 0.2, (x, y) -> y - 0.6)
+        case = _mimetic_solid_case(32, _mimetic_slanted(pi / 12), levelset; density)
+        velocity = _mimetic_velocity(case, (phase, face) -> w[face.axis])
+        for phase in 1:2, (index, face) in pairs(case.mesh.boundary_faces)
+            isnan(velocity[phase].boundary[index]) || (velocity[phase].boundary[index] = w[face.axis])
+        end
+        stats = project!(velocity, CellField(case.mesh), case.solver, 1.0e-2, case.workspace; tolerance = 1.0e-10, max_iterations = 2000)
+        @test stats.converged
+        @test maximum(
+            maximum(abs(value - w[face.axis]) for (value, face) in zip(phase.interior, case.mesh.faces) if isfinite(value))
+                for phase in velocity
+        ) <= 2.0e-9
+    end
+end
+
+@testset "Mimetic viscous step with embedded solids" begin
+    # The implicit midpoint in the metric is non-increasing in 𝓜 with the
+    # no-slip stress of the cut cells (slanted and curved solids, no aligned
+    # faces), with its energy identity; faces without open volume have no
+    # value and enter the mixture as the solid's velocity.
+    TP = TwoPhaseAMR
+    n, viscosity = 32, 1.0e-2
+    for solid in (_mimetic_slanted(0.3), _mimetic_cylinder(0.513, 0.443, 0.2)), density in ((1.0, 1.0), (1000.0, 1.0)), number in (0.1, 10.0)
+        case = _mimetic_solid_case(n, solid, _mimetic_circle(n; y = 0.6, radius = 0.2); density)
+        physics = TwoPhase(case.interface; density, dynamic_viscosity = (viscosity, viscosity))
+        flow = FlowSimulation(
+            case.mesh, physics; geometry = case.geometry, boundary = NoSlip(),
+            velocity_model = TwoVelocityModel(pressure_projection = MimeticProjection(), interphase_drag = nothing),
+        )
+        model = flow.system.two_phase
+        state = TP._two_velocity_flow_workspace!(flow.workspace.two_phase, model)
+        @test isempty(flow.workspace.two_phase.diffusion.dirichlet_faces)
+        _mimetic_opposite_momenta!(state.convected, state, 0.1)
+        before = _mimetic_metric_energy(state.convected, state)
+        dt = number * min(density...) / (viscosity * n^2)
+        TP._diffusion_substep!(flow.velocity, flow.system, flow.workspace, dt, 0.0, model; tolerance = 1.0e-12)
+        @test flow.workspace.two_phase.diffusion_solver.stats.converged
+        after = _mimetic_metric_energy(flow.velocity, state)
+        @test after <= before
+        common = (; mesh = case.mesh, interface = case.interface, flow, model, state)
+        _, stiffness = _mimetic_common_viscous_step(common, dt)
+        old, old_mixture = _mimetic_values_and_mixture(state.convected, state)
+        new, new_mixture = _mimetic_values_and_mixture(flow.velocity, state)
+        # A face without open volume has no value: the solid's velocity, zero.
+        replace!(value -> isnan(value) ? 0.0 : value, old_mixture)
+        replace!(value -> isnan(value) ? 0.0 : value, new_mixture)
+        metric_sum = TP._mimetic_metric_product!(zeros(0), state.projection_workspace, new .+ old)
+        dissipation = -dt / 4 * dot(new_mixture .+ old_mixture, stiffness * (new_mixture .+ old_mixture))
+        @test abs(dot(new .- old, metric_sum) / 2 - dissipation) <= 1.0e-9 * before
+    end
 end

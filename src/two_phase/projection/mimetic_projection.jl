@@ -1,6 +1,6 @@
 # Kinetic-energy-orthogonal two-velocity projection in the mimetic cut-cell
 # metric (`MimeticProjection`). Meshes of square cells, uniform or adaptive
-# (2:1 graded), without embedded solids. See
+# (2:1 graded), with or without embedded solids. See
 # docs/techref/chapters/10_projection.tex, "Mimetic cut-cell projection".
 
 import SparseArrays: CHOLMOD, UMFPACK
@@ -8,9 +8,9 @@ import SparseArrays: CHOLMOD, UMFPACK
 """
     MimeticProjectionSolver(interface; density=(1, 1))
 
-Configuration of the mimetic cut-cell projection on `interface`. Throws
-`ArgumentError` for embedded solids, non-square cells and element types other
-than `Float64`.
+Configuration of the mimetic cut-cell projection on `interface` (with the
+embedded solid of `interface.geometry`, if any). Throws `ArgumentError` for
+non-square cells and element types other than `Float64`.
 """
 struct MimeticProjectionSolver{T, I}
     interface::I
@@ -24,9 +24,6 @@ function MimeticProjectionSolver(
     rho = (T(density[1]), T(density[2]))
     all(value -> isfinite(value) && value > zero(T), rho) || throw(
         ArgumentError("phase densities must be finite and positive"),
-    )
-    isnothing(interface.geometry) || throw(
-        ArgumentError("MimeticProjection does not support embedded solid geometry"),
     )
     _mimetic_square_cells(interface.mesh)
     return MimeticProjectionSolver{T, typeof(interface)}(interface, rho)
@@ -84,7 +81,13 @@ _MimeticViscousWork(::Type{T}) where {T} = _MimeticViscousWork{T}(
     Int[], Int[], T[], T[], Int[], Int[], nothing, 0,
 )
 
-"""Reusable fields and the most recently assembled mimetic system."""
+"""Reusable fields and the most recently assembled mimetic system.
+
+`pressure_indices` are the cells whose pressure is unknown and
+`pressure_anchors` the anchor cell of each (one per open-face component of
+the active cells, its cell of largest open volume); `anchor` maps every
+active cell to its anchor (zero for a cell without open volume) and
+`cell_volume` is the open volume of a cell (`h²` without a solid)."""
 mutable struct MimeticProjectionWorkspace{T, M <: BlockTreeMesh}
     liquid_fraction_x::FaceField{1, T, M}
     liquid_fraction_y::FaceField{2, T, M}
@@ -100,6 +103,17 @@ mutable struct MimeticProjectionWorkspace{T, M <: BlockTreeMesh}
     boundary_aperture::Vector{T}
     boundary_low::Vector{Bool}
     gridline::Vector{Int8}
+    solid::_MimeticSolidData{T}
+    gauge_topology::Union{Nothing, _MimeticTopology{T}}
+    gauge_revision::UInt
+    pressure_indices::Vector{Int}
+    pressure_anchors::Vector{Int}
+    anchor::Vector{Int}
+    cell_volume::Vector{T}
+    anchor_pressure::Vector{T}
+    component_stack::Vector{Int}
+    incidence::SparseMatrixCSC{T, Int}
+    incidence_counts::Vector{Int}
     preconditioner_coefficient::Vector{T}
     pressure_operator::Any
     multigrid::Any
@@ -134,7 +148,9 @@ function MimeticProjectionWorkspace(solver::MimeticProjectionSolver{T}) where {T
     return MimeticProjectionWorkspace{T, typeof(mesh)}(
         FaceField{1}(mesh, T), FaceField{2}(mesh, T), nothing, nothing,
         CellRef[], _MimeticAssembly(T), nothing, spzeros(T, 0, 0), spzeros(T, 0, 0),
-        spzeros(T, 0, 0), T[], T[], Bool[], Int8[], T[], nothing, nothing, nothing, nothing,
+        spzeros(T, 0, 0), T[], T[], Bool[], Int8[], _MimeticSolidData(T), nothing, UInt(0),
+        Int[], Int[], Int[], T[], T[], Int[], spzeros(T, 0, 0), Int[],
+        T[], nothing, nothing, nothing, nothing,
         T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], nothing, T[], T[], T[], T[],
         _MimeticViscousWork(T),
     )
@@ -142,8 +158,9 @@ end
 
 """Diagnostics of one mimetic cut-cell projection.
 
-`mixture_volume_defect` is `dt * max(abs(div(u_mix)))` of the projected state;
-`target_defect` the same relative to an inherited mixture-flux target.
+`mixture_volume_defect` is `dt * max(abs(div(u_mix)))` of the projected state
+(with an embedded solid the cell outflow divided by `max(V, h²/100)`, `V` the
+open volume); `target_defect` the same relative to an inherited mixture-flux target.
 `energy_identity_defect` is `(E(u*) - E(u⁺) - E(u* - u⁺)) / E(u*)` in the norm
 of the metric `𝓜`; on grid-line interface faces `E(u*)` and `E(u* - u⁺)`
 include the energy of the phase-velocity jump that identifying the two phase
@@ -154,7 +171,9 @@ faces; without values coupled to a wall the two are equal, with them they
 differ by `(Ce_i)ᵀ(u⁺ - u*)`, the momentum the walls take up; `transported_momentum_change` is the change of the transported
 momentum `e_iᵀWu` with the diagonal phase masses `W`, which this projection
 does not conserve, and `transported_momentum` its value before projection.
-`wall_cells` counts the cut cells with a side on the domain boundary.
+`wall_cells` counts the cut cells with a side on the domain boundary and
+`solid_cells` the cells cut by an embedded solid (cut by the interface or
+not), whose solid edges enter the metric.
 `defective_cells` counts the cut cells whose Gram tensor has no consistent
 block (least-squares fallback, see [`MimeticProjection`](@ref)); `lumped_values`
 the phase values that no block and no tie gives inertia (lumped mass).
@@ -177,6 +196,7 @@ struct MimeticProjectionStats{T}
     phase_values::Int
     cut_cells::Int
     wall_cells::Int
+    solid_cells::Int
     slaved_values::Int
     stabilised_values::Int
     lumped_values::Int
@@ -200,6 +220,7 @@ function Base.show(io::IO, stats::MimeticProjectionStats)
         ", band=", stats.band_unknowns, ")",
         ", cut_cells=", stats.cut_cells,
         ", wall_cells=", stats.wall_cells,
+        ", solid_cells=", stats.solid_cells,
         ", slaved_values=", stats.slaved_values,
         ", stabilised_values=", stats.stabilised_values,
         ", lumped_values=", stats.lumped_values,
@@ -210,14 +231,15 @@ end
 
 """Assemble the metric and the reduced operators for the current interface.
 
-The assembly is reused while the interface fractions (hence apertures) and
-the mesh topology are unchanged.
+The assembly is reused while the interface fractions (hence apertures), the
+embedded solid and the mesh topology are unchanged.
 """
 function _mimetic_assemble!(
         solver::MimeticProjectionSolver{T}, workspace::MimeticProjectionWorkspace{T},
     ) where {T}
     interface = solver.interface
     mesh = interface.mesh
+    geometry = interface.geometry
     topology_changed = !_mimetic_topology_current(workspace.topology, mesh)
     if topology_changed
         workspace.topology = _mimetic_topology(mesh)
@@ -225,17 +247,21 @@ function _mimetic_assemble!(
         _resize_face_field!(workspace.liquid_fraction_x, mesh)
         _resize_face_field!(workspace.liquid_fraction_y, mesh)
     end
+    solid_changed = !isnothing(geometry) && (
+        topology_changed || workspace.gauge_topology !== workspace.topology ||
+            workspace.gauge_revision != _interface_geometry_revision(geometry)
+    )
     data = _projection_face_data(solver, workspace; storage = workspace.face_data)
     workspace.face_data = data
     assembly = workspace.assembly
     revision = interface.phase_aperture_updates[]
-    !topology_changed && assembly.revision == revision && return assembly
+    !topology_changed && !solid_changed && assembly.revision == revision && return assembly
     flags = _mimetic_face_sides!(assembly.flags, interface, workspace.topology, data.liquid_aperture)
     gridline = _mimetic_gridline_faces!(workspace.gridline, interface)
     boundary_aperture = resize!(workspace.boundary_aperture, length(mesh.boundary_faces))
     boundary_low = resize!(workspace.boundary_low, length(mesh.boundary_faces))
     for (index, face) in pairs(mesh.boundary_faces)
-        boundary_aperture[index] = _phase_boundary_face_apertures(interface, nothing, index)[1]
+        boundary_aperture[index] = _phase_boundary_face_apertures(interface, geometry, index)[1]
         fraction = _conditional_fraction(interface, face.cell)
         boundary_low[index] = zero(T) < fraction < one(T) && first(
             _mimetic_trace_vote(
@@ -243,28 +269,97 @@ function _mimetic_assemble!(
             ),
         ) > 0
     end
+    solid = isnothing(geometry) ? nothing : _mimetic_solid_data!(
+            workspace.solid, interface, geometry, workspace.references, solid_changed,
+        )
     _mimetic_assemble_from_data!(
         workspace, mesh, data, flags, boundary_aperture,
-        boundary_low, solver.density; gridline,
+        boundary_low, solver.density; gridline, solid, geometry,
     )
     assembly.revision = revision
     return assembly
 end
 
+"""Fill the embedded-solid data of the metric (`_MimeticSolidData`): with
+`static`, the data of the fixed solid on the current mesh (open apertures,
+solid ends, open dual volumes, open fractions and centroids of the open
+polygons), and on every call the liquid PLIC lines of the cells."""
+function _mimetic_solid_data!(
+        solid::_MimeticSolidData{T}, interface, geometry, references, static,
+    ) where {T}
+    mesh = interface.mesh
+    cells = length(references)
+    if static
+        faces, boundaries = length(mesh.faces), length(mesh.boundary_faces)
+        copyto!(resize!(solid.open, faces), geometry.aperture)
+        copyto!(resize!(solid.boundary_open, boundaries), geometry.boundary_aperture)
+        copyto!(resize!(solid.face_volume, faces), geometry.face_dual_volumes)
+        resize!(solid.low, faces)
+        for (index, face) in pairs(mesh.faces)
+            solid.low[index] = _mimetic_solid_low(geometry.solid, (face.minus, face.plus), face.axis)
+        end
+        resize!(solid.boundary_low, boundaries)
+        for (index, face) in pairs(mesh.boundary_faces)
+            solid.boundary_low[index] = _mimetic_solid_low(geometry.solid, (face.cell,), face.axis)
+        end
+        for values in (solid.cell_open, solid.centroid_x, solid.centroid_y)
+            resize!(values, cells)
+        end
+        for cell in 1:cells
+            reference = references[cell]
+            solid.cell_open[cell] = _get(geometry.open_fraction, reference)
+            area, first_x, first_y = _polygon_area_moments(_open_cell_polygon(geometry, reference))
+            solid.centroid_x[cell] = area > zero(T) ? first_x / area : zero(T)
+            solid.centroid_y[cell] = area > zero(T) ? first_y / area : zero(T)
+        end
+    end
+    for values in (solid.line_x, solid.line_y, solid.line_d, solid.fraction)
+        resize!(values, cells)
+    end
+    for cell in 1:cells
+        reference = references[cell]
+        solid.line_x[cell] = _get(interface.normal_x, reference)
+        solid.line_y[cell] = _get(interface.normal_y, reference)
+        solid.line_d[cell] = _get(interface.intercept, reference)
+        solid.fraction[cell] = _conditional_fraction(interface, reference)
+    end
+    return solid
+end
+
+"""Whether the solid closes the low tangential end of a face of axis `axis`
+between the cells `references`: the sign of the sum of the tangential
+components of the unit normals of their solid PLIC planes (the solid is
+`n ⋅ x ≤ d`, at the low end for a positive component); the low end without a
+plane."""
+function _mimetic_solid_low(solid, references, axis)
+    T = eltype(solid)
+    vote = zero(T)
+    for reference in references
+        fraction = _get(solid.fraction, reference)
+        zero(T) < fraction < one(T) || continue
+        nx, ny = _get(solid.normal_x, reference), _get(solid.normal_y, reference)
+        vote += (axis == 1 ? ny : nx) / hypot(nx, ny)
+    end
+    return vote >= zero(T)
+end
+
 """Assemble `𝓜`, factorize its band block and build the reduced divergence
-operators from given face geometry (see `_assemble_cut_cell_metric!`)."""
+operators from given face geometry (see `_assemble_cut_cell_metric!`; `solid`
+the data of an embedded solid, `geometry` the solid for the pressure gauge)."""
 function _mimetic_assemble_from_data!(
         workspace::MimeticProjectionWorkspace{T}, mesh, data, flags,
         boundary_aperture, boundary_low, density; gridline = nothing,
+        solid = nothing, geometry = nothing,
     ) where {T}
     if !_mimetic_topology_current(workspace.topology, mesh)
         workspace.topology = _mimetic_topology(mesh)
         workspace.references = _cell_references(mesh)
     end
     topology = workspace.topology
+    _mimetic_gauge!(workspace, mesh, geometry)
     assembly = _assemble_cut_cell_metric!(
         workspace.assembly, mesh, topology, data, flags,
-        boundary_aperture, boundary_low, density; gridline,
+        boundary_aperture, boundary_low, density; gridline, solid,
     )
     workspace.factor = isempty(assembly.band) ? nothing : lu(assembly.band_matrix)
     cells = size(topology.sides, 2)
@@ -317,9 +412,74 @@ function _mimetic_assemble_from_data!(
         aperture = assembly.dof_aperture[dof]
         iszero(aperture) && continue
         face = assembly.dof_face[dof]
-        beta[face] += aperture^2 * mesh.face_dual_volumes[face] / assembly.dof_mass[dof]
+        volume = isnothing(solid) ? mesh.face_dual_volumes[face] : solid.face_volume[face]
+        beta[face] += aperture^2 * volume / assembly.dof_mass[dof]
     end
     return assembly
+end
+
+"""Pressure gauge of the mimetic solve: the unknown cells, their anchors, the
+anchor of every cell and the cell volumes (see
+`MimeticProjectionWorkspace`). Without a solid every cell but the first is
+unknown; with one, the cells with open volume form components connected by
+open faces (`_projection_gauge_partition!`), each anchored at its cell of
+largest open volume (the first of equal ones), so that no sliver cell holds
+the gauge. Rebuilt when the topology or the solid changes."""
+function _mimetic_gauge!(workspace::MimeticProjectionWorkspace{T}, mesh, geometry) where {T}
+    topology = workspace.topology
+    revision = isnothing(geometry) ? UInt(0) : _interface_geometry_revision(geometry)
+    workspace.gauge_topology === topology && workspace.gauge_revision == revision && return workspace
+    cells = size(topology.sides, 2)
+    indices, anchors, anchor = workspace.pressure_indices, workspace.pressure_anchors, workspace.anchor
+    volume = resize!(workspace.cell_volume, cells)
+    if isnothing(geometry)
+        resize!(indices, cells - 1) .= 2:cells
+        fill!(resize!(anchors, cells - 1), 1)
+        fill!(resize!(anchor, cells), 1)
+        for cell in 1:cells
+            volume[cell] = topology.spacing[cell]^2
+        end
+    else
+        copyto!(volume, _geometry_cell_volumes(geometry))
+        workspace.incidence = _projection_incidence!(
+            workspace.incidence, workspace.incidence_counts, mesh,
+        )
+        # `anchor` serves as the label scratch of the partition.
+        _projection_gauge_partition!(
+            indices, anchors, anchor, workspace.component_stack, workspace.incidence,
+            mesh, geometry.active_cells, geometry.aperture,
+        )
+        # `anchor[cell]`: the root (smallest cell) of its component.
+        fill!(resize!(anchor, cells), 0)
+        for cell in 1:cells
+            geometry.active_cells[cell] && (anchor[cell] = cell)
+        end
+        for (index, cell) in pairs(indices)
+            anchor[cell] = anchors[index]
+        end
+        # `largest[root]`: the cell of largest open volume of that component.
+        largest = fill!(resize!(workspace.component_stack, cells), 0)
+        for cell in 1:cells
+            root = anchor[cell]
+            root > 0 || continue
+            best = largest[root]
+            (best == 0 || volume[cell] > volume[best]) && (largest[root] = cell)
+        end
+        empty!(indices)
+        empty!(anchors)
+        for cell in 1:cells
+            root = anchor[cell]
+            root > 0 || continue
+            anchor[cell] = largest[root]
+            if anchor[cell] != cell
+                push!(indices, cell)
+                push!(anchors, anchor[cell])
+            end
+        end
+    end
+    workspace.gauge_topology = topology
+    workspace.gauge_revision = revision
+    return workspace
 end
 
 function _mimetic_boundary_flux!(flux, solver, workspace, velocity)
@@ -328,7 +488,7 @@ function _mimetic_boundary_flux!(flux, solver, workspace, velocity)
     fill!(flux, zero(eltype(flux)))
     nx, ny = interface.mesh.block_size
     for (index, face) in pairs(interface.mesh.boundary_faces)
-        liquid, gas = _phase_boundary_face_apertures(interface, nothing, index)
+        liquid, gas = _phase_boundary_face_apertures(interface, interface.geometry, index)
         cell = _cell_index(face.cell, nx, ny)
         flux[cell] += face.side * face.area * _projection_phase_sum(
             liquid, velocity[1].boundary[index], gas, velocity[2].boundary[index],
@@ -352,11 +512,16 @@ end
 function mul!(destination, op::_MimeticSchurOperator{T}, source) where {T}
     work = op.workspace
     full = work.cell_scratch
-    full[1] = zero(T)
-    copyto!(full, 2, source, 1, op.size)
+    fill!(full, zero(T))
+    indices = work.pressure_indices
+    for (index, cell) in pairs(indices)
+        full[cell] = source[index]
+    end
     result = work.cell_residual
     _mimetic_schur_full!(result, work, full)
-    copyto!(destination, 1, result, 2, op.size)
+    for (index, cell) in pairs(indices)
+        destination[index] = result[cell]
+    end
     return destination
 end
 
@@ -406,17 +571,23 @@ identified grid-line value goes to both phases."""
 end
 
 """Mark the interior faces between a pure liquid and a pure gas cell (`1`:
-liquid minus cell, `-1`: liquid plus cell). Cell fractions are snapped to
-exactly zero and one below the interface's fraction floor, so the test is
-exact."""
+liquid minus cell, `-1`: liquid plus cell); with an embedded solid only open
+faces between cells with open volume. Cell fractions are snapped to exactly
+zero and one below the interface's fraction floor, so the test is exact."""
 function _mimetic_gridline_faces!(gridline, interface)
     mesh = interface.mesh
+    geometry = interface.geometry
     resize!(gridline, length(mesh.faces))
     for (index, face) in pairs(mesh.faces)
         minus = _conditional_fraction(interface, face.minus)
         plus = _conditional_fraction(interface, face.plus)
         gridline[index] = minus == 1 && iszero(plus) ? Int8(1) :
             iszero(minus) && plus == 1 ? Int8(-1) : Int8(0)
+        isnothing(geometry) && continue
+        open = geometry.aperture[index] > 0 &&
+            _get(geometry.open_fraction, face.minus) > 0 &&
+            _get(geometry.open_fraction, face.plus) > 0
+        open || (gridline[index] = Int8(0))
     end
     return gridline
 end
@@ -510,16 +681,18 @@ end
 
 """Gauge-reduced V-cycle of the pressure operator with the face coefficient
 `workspace.preconditioner_coefficient` (by default `D W⁻¹ Dᵀ`, the pressure
-operator of the diagonal phase-mass metric). The operator and its multigrid
+operator of the diagonal phase-mass metric; with an embedded solid the
+cut-cell pressure operator of its open cells). The operator and its multigrid
 hierarchy are rebuilt when the mesh topology changes (a regrid)."""
 function _mimetic_preconditioner!(solver, workspace)
     interface = solver.interface
-    cells = size(workspace.topology.sides, 2)
+    geometry = interface.geometry
     operator = workspace.pressure_operator
     fresh = !(operator isa EllipticOperator) || operator.mesh !== interface.mesh ||
         workspace.preconditioner_topology !== workspace.topology
     if fresh
-        operator = PoissonOperator(interface; density = solver.density)
+        operator = isnothing(geometry) ? PoissonOperator(interface; density = solver.density) :
+            PoissonOperator(interface, geometry; density = solver.density)
         workspace.pressure_operator = operator
         workspace.preconditioner_topology = workspace.topology
     end
@@ -528,12 +701,12 @@ function _mimetic_preconditioner!(solver, workspace)
     if !fresh && multigrid isa TreeGeometricMultigridPreconditioner
         _refresh_geometric_multigrid!(multigrid, operator)
     else
-        multigrid = TreeGeometricMultigridPreconditioner(operator)
+        multigrid = TreeGeometricMultigridPreconditioner(operator; geometry)
         workspace.multigrid = multigrid
     end
     previous = workspace.preconditioner
     workspace.preconditioner = _cmdgfm_reduced_pressure(
-        multigrid, operator, collect(2:cells), ones(Int, cells - 1), nothing;
+        multigrid, operator, workspace.pressure_indices, workspace.pressure_anchors, geometry;
         reuse = !fresh && previous isa CMDGFMReducedPressurePreconditioner ? previous : nothing,
     )
     return workspace.preconditioner
@@ -547,7 +720,8 @@ Project the liquid and gas face velocities onto vanishing aperture-weighted
 mixture divergence, orthogonally in the mimetic cut-cell kinetic metric `𝓜`
 (`MimeticProjection`). The projection is absolute: `velocity` is the full
 predictor, and `pressure` is overwritten with the projection pressure, whose
-value in the first cell is kept. Forces must therefore not subtract a
+value in the anchor cell of each open component (the first cell without a
+solid, the cell of largest open volume with one) is kept; cells without open volume keep theirs. Forces must therefore not subtract a
 pressure gradient from the predictor; any `𝓜⁻¹Dᵀ` gradient in the predictor
 is removed exactly.
 
@@ -581,12 +755,19 @@ function project!(
     _mimetic_boundary_flux!(workspace.boundary_flux, solver, workspace, velocity)
     removed_energy = _mimetic_gather!(workspace.predictor, assembly, velocity)
     preconditioner = _mimetic_preconditioner!(solver, workspace)
-    # Warm start from the previous pressure; the first cell is the anchor.
+    # Warm start from the previous pressure, relative to the anchor of each
+    # component.
     cells = length(workspace.references)
     multiplier = workspace.multiplier
-    anchor_pressure = _get(pressure, workspace.references[1])
+    anchor = workspace.anchor
+    base = resize!(workspace.anchor_pressure, cells)
     for cell in 1:cells
-        multiplier[cell] = T(dt) * (_get(pressure, workspace.references[cell]) - anchor_pressure)
+        if iszero(anchor[cell])
+            base[cell] = multiplier[cell] = zero(T)
+            continue
+        end
+        base[cell] = _get(pressure, workspace.references[anchor[cell]])
+        multiplier[cell] = T(dt) * (_get(pressure, workspace.references[cell]) - base[cell])
     end
     weight = isnothing(_inherited_cell_flux) ? zero(T) : one(T) - T(dt) / T(_reference_dt)
     result = _mimetic_solve!(
@@ -599,7 +780,8 @@ function project!(
     end
     _mark_inactive_phase_velocities!(velocity, interface)
     for cell in 1:cells
-        _set!(pressure, anchor_pressure + multiplier[cell] / T(dt), workspace.references[cell])
+        iszero(anchor[cell]) && continue
+        _set!(pressure, base[cell] + multiplier[cell] / T(dt), workspace.references[cell])
     end
     fill_halo!(pressure)
     return MimeticProjectionStats(
@@ -608,21 +790,30 @@ function project!(
         T(dt) * result.mixture_divergence, result.target_defect,
         result.energy_identity_defect, result.momentum_change,
         result.momentum_wall_force, result.transported_momentum_change,
-        result.transported_momentum, cells - 1, length(assembly.band),
-        length(projected), assembly.cut_cells, assembly.wall_cells, assembly.slaved_values,
+        result.transported_momentum, length(workspace.pressure_indices), length(assembly.band),
+        length(projected), assembly.cut_cells, assembly.wall_cells, assembly.solid_cells,
+        assembly.slaved_values,
         assembly.stabilised_values, assembly.lumped_values, assembly.defective_cells,
         assembly.gridline_faces,
         :pressure_multigrid,
     )
 end
 
+"""Smallest volume, in units of `h²`, by which the volume defect of a cell is
+divided: the defect of a sliver cell is its volume defect per hundredth of
+the cell, so the round-off of its fluxes does not hold the solve above its
+tolerance. It does not act without a solid."""
+const _MIMETIC_VOLUME_FLOOR = 1.0e-2
+
 """Solve the projection for the gathered predictor `workspace.predictor`.
 
 `workspace.multiplier` holds the initial guess of `λ = dt p` (zero in the
-anchor cell) and returns the solution; `workspace.velocity` returns the
+anchor cells and the cells without open volume) and returns the solution; `workspace.velocity` returns the
 projected phase values. The target outflow is `-weight` times the inherited
 (negative integrated) cell flux. `removed_energy` is the jump energy removed
-by gathering (see `_mimetic_gather!`); it enters the energy identity.
+by gathering (see `_mimetic_gather!`); it enters the energy identity. The
+volume defects divide by `max(V, _MIMETIC_VOLUME_FLOOR h²)` with the open
+volume `V`.
 """
 function _mimetic_solve!(
         workspace::MimeticProjectionWorkspace{T}, dt, preconditioner, inherited,
@@ -634,14 +825,22 @@ function _mimetic_solve!(
     predictor = workspace.predictor
     resize!(workspace.velocity, length(predictor))
     target(cell) = iszero(weight) ? zero(T) : -weight * inherited[cell]
-    spacing = topology.spacing
-    defect_of(outflow) = maximum(c -> dt * abs(outflow[c] - target(c)) / spacing[c]^2, 1:cells)
+    volume = workspace.cell_volume
+    indices = workspace.pressure_indices
+    # The volume defects divide by the open volume, at least the floor
+    # `_MIMETIC_VOLUME_FLOOR h²` (`h²` without a solid).
+    floored(c) = max(volume[c], T(_MIMETIC_VOLUME_FLOOR) * topology.spacing[c]^2)
+    defect_of(outflow) = maximum(
+        c -> volume[c] > zero(T) ? dt * abs(outflow[c] - target(c)) / floored(c) : zero(T), 1:cells,
+    )
     multiplier = workspace.multiplier
-    multiplier[1] = zero(T)
+    for cell in 1:cells
+        workspace.anchor[cell] == cell && (multiplier[cell] = zero(T))
+    end
     initial_residual = norm(_mimetic_outflow!(workspace.cell_scratch, workspace, predictor))
     _mimetic_recover!(workspace, multiplier)
     outflow = _mimetic_outflow!(workspace.cell_residual, workspace, workspace.velocity)
-    reduced = cells - 1
+    reduced = length(indices)
     resize!(workspace.reduced_rhs, reduced)
     resize!(workspace.reduced_solution, reduced)
     if isnothing(workspace.krylov) || length(workspace.krylov.x) != reduced
@@ -652,8 +851,8 @@ function _mimetic_solve!(
     defect = defect_of(outflow)
     while defect > tolerance && iterations < max_iterations && reduced > 0
         # S δλ = target - outflow on the non-anchor cells.
-        for cell in 2:cells
-            workspace.reduced_rhs[cell - 1] = target(cell) - outflow[cell]
+        for (index, cell) in pairs(indices)
+            workspace.reduced_rhs[index] = target(cell) - outflow[cell]
         end
         rhs_norm = norm(workspace.reduced_rhs)
         (isfinite(rhs_norm) && rhs_norm > zero(T)) || break
@@ -667,8 +866,8 @@ function _mimetic_solve!(
         attempt = Krylov.iteration_count(workspace.krylov)
         iterations += attempt
         (all(isfinite, correction) && attempt > 0) || break
-        for cell in 2:cells
-            multiplier[cell] += correction[cell - 1]
+        for (index, cell) in pairs(indices)
+            multiplier[cell] += correction[index]
         end
         _mimetic_recover!(workspace, multiplier)
         outflow = _mimetic_outflow!(workspace.cell_residual, workspace, workspace.velocity)
@@ -680,7 +879,8 @@ function _mimetic_solve!(
     # A plain loop: a closure over the reassigned `outflow` would box it.
     mixture_divergence = zero(T)
     for cell in 1:cells
-        mixture_divergence = max(mixture_divergence, abs(outflow[cell]) / spacing[cell]^2)
+        volume[cell] > zero(T) || continue
+        mixture_divergence = max(mixture_divergence, abs(outflow[cell]) / floored(cell))
     end
 
     # Diagnostics in the metric 𝓜 and the transported momentum.
@@ -879,7 +1079,11 @@ function _mimetic_viscous_apply!(y, workspace, operator, half, x)
     for face in eachindex(mean)
         liquid = assembly.liquid_dof[face]
         gas = assembly.gas_dof[face]
-        mean[face] = if liquid == gas || gas == 0
+        # A face without open volume (covered by a solid) has no value: the
+        # solid's velocity, zero.
+        mean[face] = if liquid == 0 && gas == 0
+            zero(eltype(x))
+        elseif liquid == gas || gas == 0
             x[liquid]
         elseif liquid == 0
             x[gas]
@@ -937,7 +1141,8 @@ function _mimetic_lifted_mixture!(z, workspace, mixture_solver, half, r)
     for face in eachindex(sum)
         liquid = assembly.liquid_dof[face]
         gas = assembly.gas_dof[face]
-        sum[face] = liquid == gas || gas == 0 ? r[liquid] :
+        sum[face] = liquid == 0 && gas == 0 ? zero(eltype(r)) :
+            liquid == gas || gas == 0 ? r[liquid] :
             liquid == 0 ? r[gas] : r[liquid] + r[gas]
     end
     correction = _mimetic_mixture_cycle!(work.face_correction, work, mixture_solver, sum)
@@ -946,7 +1151,9 @@ function _mimetic_lifted_mixture!(z, workspace, mixture_solver, half, r)
     for face in eachindex(sum)
         liquid = assembly.liquid_dof[face]
         gas = assembly.gas_dof[face]
-        if liquid == gas || gas == 0
+        if liquid == 0 && gas == 0
+            continue
+        elseif liquid == gas || gas == 0
             z[liquid] = correction[face]
         elseif liquid == 0
             z[gas] = correction[face]
@@ -1210,11 +1417,15 @@ function _mimetic_viscous_step!(
     for face in 1:faces
         liquid = assembly.liquid_dof[face]
         gas = assembly.gas_dof[face]
-        mass = liquid == gas || gas == 0 ? assembly.dof_mass[liquid] :
+        mass = liquid == 0 && gas == 0 ? zero(T) :
+            liquid == gas || gas == 0 ? assembly.dof_mass[liquid] :
             liquid == 0 ? assembly.dof_mass[gas] :
             assembly.dof_mass[liquid] + assembly.dof_mass[gas]
         work.face_mass[face] = mass
-        work.face_density[face] = mass / operator.volumes[face]
+        # A face without values (no open volume) keeps the mixture density of
+        # the common viscous solve.
+        work.face_density[face] = iszero(mass) ? workspace.face_data.total_mass[face] :
+            mass / operator.volumes[face]
     end
     _interphase_drag_coefficients!(
         work.drag, assembly, work.values, drag, model, operator.averaging,
