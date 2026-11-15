@@ -934,7 +934,10 @@ end
 """Cell curvature `κ_c` of the per-phase capillary potentials, in
 `workspace.cell_curvature` (`NaN` where none is available).
 
-A cut cell keeps its own (height-function) curvature. Every other cell, and a
+A cut cell keeps its own (height-function) curvature, except in the first row
+along a domain wall with a contact angle, where every cut cell with a finite
+curvature takes the energy-consistent contact-line curvature of
+[`_mimetic_contact_line_curvature!`](@ref). Every other cell, and a
 cut cell without a finite curvature, takes the `C(1 - C)`-weighted mean of the
 curvatures of its cut face neighbours; the curvatures of the cut cells are not
 averaged among themselves. A pure cell can carry phase values of both phases
@@ -965,6 +968,7 @@ function _mimetic_cell_curvature!(
             weight[cell] = zero(T)
         end
     end
+    _mimetic_contact_line_curvature!(kappa, weight, workspace, interface)
     topology = workspace.topology
     for cell in 1:cells
         iszero(weight[cell]) || continue
@@ -982,6 +986,68 @@ function _mimetic_cell_curvature!(
         weights > zero(T) && (kappa[cell] = total / weights)
     end
     return kappa
+end
+
+"""Set the energy-consistent curvature of the contact-line cells (techref
+ch. 10, Contact line).
+
+A cut cell (`weight > 0`) whose centre lies in the first row along a domain
+wall with a contact angle `θ_w` (axis not periodic) gets
+`κ = (cos θ - cos θ_w)/h`, `h` the cell size normal to the wall, with
+`cos θ = -o s/√(1 + s²)` the angle of the chord between the wall-parallel
+local heights `H₁` of its own column and `H₂` of the column one row inward
+(both relative to the cell's tangential centre), `s` the chord's slope and
+`o = ±1` the orientation of the columns (`o = 1`: liquid on the low side).
+With the wetted wall length `H₁` (the liquid volume of the row over `h`) and
+the chord between the two row centres, `σκ` is the derivative `∂E/∂V₁` of the
+contact-line energy `E = σ(|chord| - cos θ_w H₁)` by the liquid volume of the
+row, the same for every cut cell of the row, so that the booked carrier pays
+the change of the surface and wall energy. A cell without both heights (for
+example next to an embedded solid) keeps its height-function curvature."""
+function _mimetic_contact_line_curvature!(kappa, weight, workspace, interface)
+    all(isnothing, interface.contact_angles) && return kappa
+    values = _fill_height_values!(interface)
+    mesh = interface.mesh
+    T = eltype(kappa)
+    for (cell, reference) in pairs(workspace.references)
+        weight[cell] > zero(T) || continue
+        b, i, j = reference.block, reference.i, reference.j
+        block = mesh.blocks[b]
+        center = cellcenter(mesh, b, i, j)
+        for wall in 1:4
+            theta = interface.contact_angles[wall]
+            isnothing(theta) && continue
+            axis = wall <= 2 ? 1 : 2
+            mesh.periodic[axis] && continue
+            inward = isodd(wall) ? 1 : -1
+            boundary = mesh.origin[axis] + (inward == 1 ? 0 : mesh.extent[axis])
+            abs(center[axis] - boundary) <= block.spacing[axis] * (T(0.5) + 64eps(T)) || continue
+            aspect = T(block.spacing[3 - axis] / block.spacing[axis])
+            cosine = _mimetic_wall_row_cosine(values[b], i + 4, j + 4, axis, inward, aspect)
+            isnothing(cosine) && continue
+            kappa[cell] = (cosine - cos(T(theta))) / T(block.spacing[axis])
+            break
+        end
+    end
+    return kappa
+end
+
+"""`cos θ` of the chord between the wall-parallel local heights of the padded
+height values at `(i, j)` (first row along a wall of normal axis `axis`) and
+one row inward, `aspect` the ratio of the tangential to the normal cell size;
+`nothing` unless both columns are valid with one orientation."""
+function _mimetic_wall_row_cosine(values, i, j, axis, inward, aspect)
+    tangent = 3 - axis
+    ii, jj = axis == 1 ? (i + inward, j) : (i, j + inward)
+    for orientation in (-1, 1)
+        first = _local_height(values, i, j, tangent, orientation)
+        isnothing(first) && continue
+        second = _local_height(values, ii, jj, tangent, orientation)
+        isnothing(second) && return nothing
+        slope = (second - first) * aspect
+        return -orientation * slope / sqrt(1 + slope^2)
+    end
+    return nothing
 end
 
 """Booked carrier `c` of the capillary difference term on a face with both

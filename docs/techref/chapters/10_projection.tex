@@ -1067,21 +1067,23 @@ $\beta\Lambda_f(\velo^{\phase}_f-\velo_{\mathrm w})^2$~\cref{eq:projection:mimet
 weight $\beta\Lambda_f$ to the diagonal, as lumping would, and its negative to
 $\mathsf C$ on the value's axis, so the identity holds on it and gravity gives
 it no increment (lumped, such a value fell freely: $3\,\dt g$ after three
-steps of a floor film at densities $(1000,1)$). The contact angle enters as with the
-CMDGFM, through the height-function curvature with the wall
-condition~(\cref{sec:interface:contact}); the capillary jumps live on interior
+steps of a floor film at densities $(1000,1)$). The contact angle enters
+through the contact-line curvature~\cref{eq:projection:mimetic-contact} of the
+first wall row (Surface tension, below), the energy-consistent form of the
+height-function wall condition (\cref{sec:interface:contact}); the capillary jumps live on interior
 faces, so a constant curvature on a drop at a wall is balanced exactly.
 Measured: a pool between the side walls at densities $(1000,1)$ and a drop on
 the floor at equal densities under gravity stay at rest to $10^{-12}$; sessile
 drops at $60^\circ$, $90^\circ$ and $120^\circ$ with the exact constant
 curvature stay at rest to $3\times10^{-10}$ for a capillary time at densities
 $(1,1)$ and $(1000,1)$ ($h=1/32$, full steps with the no-slip viscous step).
-With the height-function curvature (the sessile drop of the integration
-suite, densities $(1,10^{-3})$, $h=1/48$) the mimetic drop matches the CMDGFM
-at $90^\circ$ without gravity, but its currents are $2.5$ to $16$ times those of
-the CMDGFM at $60^\circ$ and $120^\circ$ and with gravity (Bond number $1.21$),
-where its shape converges at first order only: the cell curvature of the
-per-phase force, not the wall blocks (recorded as broken there). A dam break
+With the height-function curvature and the contact-line curvature (the sessile
+drop of the integration suite, densities $(1,10^{-3})$, $h=1/48$, a quarter
+capillary time) the mimetic shape error is $1.15$, $1.09$ and $1.63$ times
+the CMDGFM's at $90^\circ$, $60^\circ$ and $120^\circ$ without gravity and
+$0.87$ times at $90^\circ$ with gravity (Bond number $1.21$), its largest
+phase value $1.2$, $2.1$, $1.6$ and $0.53$ times (recorded as broken where
+outside the tolerances). A dam break
 at densities $(1000,1)$ runs through the impact on the wall at $h=1/32$ and
 $1/64$ with the liquid at the physical velocity scale; near-empty phase values
 reach $10^3$--$10^4$ and shorten single steps, as away from walls.
@@ -1317,7 +1319,9 @@ and a constant field along a slanted solid is kept to $2\times10^{-11}$
 (densities $(1,1)$) and $8\times10^{-10}$ (densities $(1000,1)$): its outflow is
 the closure defect of the averaged open traces of the reconstructed solid,
 which the projection removes through the small apertures of sliver cells.
-With the height-function curvature the contact lines on an embedded solid
+With the height-function curvature (embedded solids keep it; the contact-line
+curvature~\cref{eq:projection:mimetic-contact} needs a domain wall) the contact
+lines on an embedded solid
 drive much larger currents than on a domain wall, for both projections: a
 drop at $90^\circ$ ($R=0.2$, densities $(1,10^{-3})$, $h=1/32$, no gravity)
 after $40$ steps of $2\times10^{-4}$ has $\max\abs u=0.017$ (CMDGFM) and
@@ -1394,8 +1398,10 @@ trace of a cut neighbour gives one of its faces partial apertures, and with
 $\kappa=0$ there a static drop at constant curvature is not at rest (gas
 $4\times10^{-3}$ after one step at densities $(1000,1)$, $h=1/16$; audit
 \code{proof_review/sec-remedies-forcemap/}). A cut cell keeps its
-height-function curvature; every other cell, and a cut cell without a finite
-curvature, takes the $C(1-C)$-weighted mean of the curvatures of its cut face
+height-function curvature, in the first row along a wall with a contact angle
+the contact-line curvature~\cref{eq:projection:mimetic-contact} below; every
+other cell, and a cut cell without a finite curvature, takes the
+$C(1-C)$-weighted mean of the curvatures of its cut face
 neighbours, which reproduces a constant curvature. Every cell whose potential
 enters a value with an aperture is a face neighbour of a cut cell. The
 curvatures of the cut cells are not averaged among themselves: replacing them
@@ -1406,6 +1412,109 @@ jump $\sigma\kappa_f\jump{I}_f\meas{f}$ with the face curvature
 of~\cref{ch:forces}. A face whose force needs a curvature that is not
 available gets no force and is counted in \code{unresolved_curvature_faces},
 as for the other projections. The projection has no options of its own.
+
+\emph{Contact line.} Along a domain wall with a contact angle $\cangle$ the
+cut cells of the first row take the potential of a discrete surface energy
+(study \code{mm-runs/contact_young}). With the booked carrier the capillary
+force does the work $-\sum_c\sigma\kappa_c\dot V_c$ ($V_c=C_ch^2$, while the
+clamp is inactive), so it is energy consistent where
+$\sigma\kappa_c=\partial E_h/\partial V_c$ for a discrete energy $E_h(V)$;
+then the work around a closed loop of states vanishes. The height-function
+curvature fails this at the contact line: the cell whose PLIC line touches
+the wall gets the ghost-height curvature~\cref{eq:interface:contact-right}
+(or~\cref{eq:interface:contact-acute}), the other cut cells of the same row
+the one-sided wall, local or generalised value (at $60^\circ$, $h=1/48$:
+$5.118$ and $5.009$ in the two cut cells of one row). Volume exchanged within
+the row changes neither the wetted length nor the row's height but releases
+$\sigma\Delta\kappa\,\mathrm dV$, and the selection switches as the line
+crosses a face. Take the wall $y=0$, the liquid on the low-$x$ side of the
+line (orientation $o=1$; $o=-1$ gives the same result) and the wall-parallel
+heights $\hdisc{1}$, $\hdisc{2}$~\cref{eq:interface:height} (in cells) of rows~1
+and~2, both relative to the cell's tangential centre. The volume data define
+the wetted length $W=h\hdisc{1}+\text{const}$ (the liquid volume of row~1
+over $h$), the chord between the two row centres, of slope
+$s=\hdisc{2}-\hdisc{1}$, and the stub between the wall and the row-1 centre.
+The stub's slope $s_0$ is below the resolution: its energy
+$\sigma\frac h2(\sqrt{1+s_0^2}+\cos\cangle\,s_0)$ (its length and the
+correction of the wetted length) is stationary at the angle $\cangle$, Young's
+law, with the minimum $\sigma\frac h2\sin\cangle$, independent of the heights.
+The reduced contact-line energy is therefore
+$\sigma(h\sqrt{1+s^2}-\cos\cangle\,h\hdisc{1})+\text{const}$, and its
+derivative by the row's liquid volume ($\mathrm dV_1=h^2\,\mathrm d\hdisc{1}$)
+gives every cut cell of the row
+\begin{equation}\label{eq:projection:mimetic-contact}
+  \kappa_c=\frac{\cos\theta_{3/2}-\cos\cangle}{h},\qquad
+  \cos\theta_{3/2}=-\frac{o\,s}{\sqrt{1+s^2}},
+\end{equation}
+$\theta_{3/2}$ the angle of the chord ($h$ the cell size normal to the wall,
+$s$ scaled by the tangential over the normal size on rectangular cells). Its
+derivative by the row-2 volume, $-\sigma\cos\theta_{3/2}/h$, is the lower
+flux of the conservative row-2 curvature
+$\sigma(\cos\theta_{5/2}-\cos\theta_{3/2})/h$, which the interior height
+function supplies to $O(h^2)$. A cut cell without a finite curvature or
+without both heights keeps the value of the rule above.
+\emph{Equilibrium.} Row~1 balances the pressure $\sigma\kappa$ of a cap of
+curvature $\kappa$ where $\cos\theta_{3/2}=\cos\cangle+\kappa h$; along the
+cap $\mathrm d\cos\theta/\mathrm dy=\kappa$, so the continuum angle at
+$y=h$ satisfies the same relation when the wall angle is $\cangle$: the
+equilibrium angle is consistent to second order (exact $60^\circ$ cap of
+curvature $5$, $h=1/48$: $\cos\theta_{3/2}=0.6068$ against
+$0.5+5/48=0.6042$). Slaving the stub to the chord ($s_0=s$) instead adds half
+of~\cref{eq:projection:mimetic-contact} and gives
+$\cos\theta_{3/2}=\cos\cangle+\frac23\kappa h$, wrong at first order. Written
+as $(\cos\theta_{3/2}-\cos\theta_0)/h+(\cos\theta_0-\cos\cangle)/h$ for any wall
+angle $\theta_0$, \cref{eq:projection:mimetic-contact} is the conservative
+row-1 curvature plus the Young term, and $\theta_0$ cancels; an angle from the
+cell's PLIC line (biased) made the line recede. The ghost-height
+curvature~\cref{eq:interface:contact-right} is the same formula to third
+order in the slope differences in the cell that gets it (at $120^\circ$,
+$h\le1/48$, one cut cell per row, both agree to $2\times10^{-4}$): the defect was the
+selection of the cells, not the formula. Swapping the phases ($C\to1-C$,
+$\cangle\to\pi-\cangle$) flips $o$ and the sign of $\kappa_c$, as required.
+The heights come from the padded block values~\cref{eq:interface:height-values}
+at the block's level, so the construction carries over to adaptive meshes (the
+adapted and the mixed tree reproduce the uniform $h=1/48$ sessile drop
+exactly).
+\emph{Measured} (study \code{mm-runs/contact_young}). Closed loops of exact
+caps (shift by $h/2$ at $90^\circ$, $90^\circ\to60^\circ$, shift back,
+$60^\circ\to90^\circ$; 200 or 400 steps, $\cangle=60^\circ$): the work of the
+row-1 cells is at most $1.3\times10^{-6}$ at $h=1/32$--$1/64$, against
+$5\times10^{-5}$--$3\times10^{-4}$ with the height-function curvature (the
+unit test pins $1.1\times10^{-7}$ at $h=1/48$). Along the open path
+$90^\circ\to60^\circ$ all cells release $0.0311$, $0.0326$, $0.0333$
+($h=1/32,1/48,1/64$) of the exact energy drop $0.0354$ (the first-order
+discrete energy of exact caps; $0.0261$--$0.0289$ before). Sessile drops
+without gravity ($R=0.2$, densities $(1,10^{-3})$, La $550$, five capillary
+times): at $60^\circ$ the final kinetic energy at $h=1/48$ and $1/64$ is
+$4.1\times10^{-11}$ and $1.9\times10^{-11}$ (before $9.8\times10^{-5}$ and
+$9.5\times10^{-7}$; CMDGFM $8.9\times10^{-11}$ and $1.2\times10^{-7}$), with the
+shape error below the CMDGFM's and the angle within $0.25^\circ$; at
+$120^\circ$, $h=1/32$, $3.5\times10^{-6}$ (before $5.3\times10^{-4}$); a drop
+spreading from $90^\circ$ on a $60^\circ$ wall moves at the CMDGFM's rate to the
+equilibrium, and the booked release equals the surface-energy drop to
+$2.5\,\%$ ($h=1/48$) and $0.3\,\%$ ($h=1/64$), where the height-function
+curvature booked $4$ and $1.4$ times it. Drops off the walls are bitwise
+unchanged.
+\emph{Limitations.} (i)~Embedded solids keep the height-function curvature:
+a cut-cell solid has no wall-parallel column (its cells are unavailable to
+the heights); the energy argument carries over,
+$E=\sigma(\meas{\Gamma}-\cos\cangle\,\meas{W})$ with the wetted solid length,
+but needs a solid-aligned pair of heights. (ii)~A $60^\circ$ cap about three
+cells high ($h=1/32$, $R=0.2$) keeps moving (final kinetic energy
+$3.5\times10^{-4}$, before $1.5\times10^{-3}$, CMDGFM $9\times10^{-7}$): there the
+loop work is in the interior height function ($4\times10^{-5}$). (iii)~Under
+gravity (Bond number $1.21$) the slow rise of the sessile drop's kinetic
+energy is in rows~3 and above (booked release $1.7\times10^{-4}$ there,
+$10^{-6}$ in the contact-line cells) and unchanged; at $90^\circ$, $h=1/64$ it
+levels off at $5.3\times10^{-6}$ by $15$ capillary times (CMDGFM plateau
+$2.9\times10^{-5}$). (iv)~While a line moves the largest phase value reaches
+$1$--$16$ (CMDGFM at most $2.4$) and decays once it settles. (v)~The chord of
+row-averaged heights and the interior height function have different
+second-order biases (on the exact $90^\circ$ cap at $h=1/48$: $+0.27\,\%$ and
+$+0.42\,\%$, the row-1 curvature $5.0138$ against $5.021$--$5.022$ in rows~2
+and~3), which raises the $90^\circ$ shape error of the integration suite's
+drop from $1.07\times10^{-5}$ to $1.18\times10^{-5}$ (CMDGFM
+$1.03\times10^{-5}$).
 
 \emph{Hydrostatic reference of the potentials.} Under gravity a per-phase
 potential difference $\sigma\kappa_c$ refers the curvature to the pressure
@@ -1429,16 +1538,20 @@ origin of that fit. Every candidate lies on the PLIC line, so a flat interface
 normal to $g$ stays at rest exactly (tested uniform, across level transitions,
 $10^{-3}$ of a finest cell above a grid line, and above a solid floor).
 Measured (sessile drop of the integration suite, Bond number $1.21$, densities
-$(1,10^{-3})$, $h=1/48$): shape error $2.9\times10^{-4}\to2.3\times10^{-5}$ and
+$(1,10^{-3})$, $h=1/48$, height-function curvature at the contact line): shape error $2.9\times10^{-4}\to2.3\times10^{-5}$ and
 $\max\abs u$ $0.82\to0.018$ at $90^\circ$, $8.2\times10^{-5}\to2.3\times10^{-5}$ and
-$0.27\to0.025$ at $60^\circ$ (CMDGFM $2.8\times10^{-5}$, $0.064$); cost
+$0.27\to0.025$ at $60^\circ$ (CMDGFM $2.8\times10^{-5}$, $0.064$; with the
+contact-line curvature~\cref{eq:projection:mimetic-contact} $2.4\times10^{-5}$
+and $0.034$ at $90^\circ$); cost
 Rayleigh--Taylor $3.91\to4.03\times10^{-2}$ (DR 3), $2.32\to2.49\times10^{-2}$
 (DR 1000), combined case $2.94\to2.98\times10^{-2}$ ($h=\lambda/32$). The study's
 other reference points (the height-function point itself, its tangential
 shift, the PLIC point on the column) are not ported. Where the curvature comes
 from a wall or contact-angle closure the same rule refers it to the centred
 column point or the PLIC centroid; that is an approximation of the closure's
-own point.
+own point. The contact-line curvature~\cref{eq:projection:mimetic-contact} is
+the mean curvature over the first row, $\kappa(h/2)+O(h^2)$, and those points
+lie at about $h/2$ from the wall.
 
 \emph{Gravity} is the Gram moment $\mathsf R g$ of the constant field $g$, the
 work $\dens^{\phase}g\cdot u$ of the blocks: by~\cref{eq:projection:mimetic-wall-moment}
@@ -1695,7 +1808,8 @@ predictor and removed jump energy \srcsym{src/two_phase/projection/mimetic_proje
 solve \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_solve!}~\cref{eq:projection:mimetic},
 preconditioner \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_preconditioner!};
 forces \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_capillary_force!}~\cref{eq:projection:mimetic-capillary}
-with \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_cell_curvature!},
+with \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_cell_curvature!}
+and the contact-line curvature \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_contact_line_curvature!}~\cref{eq:projection:mimetic-contact},
 \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_uniform_acceleration!};
 viscous step \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_viscous_step!}~\cref{eq:projection:mimetic-viscous}
 with the drag of \srcsym{src/two_phase/two_velocity/interphase_drag.jl}{_interphase_drag_coefficients!}~\cref{eq:projection:mimetic-viscous-drag},
@@ -1726,7 +1840,8 @@ Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mi
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic solid edge on exact data},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric with embedded solids: definiteness, consistency and the Gram moment},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic rest states with embedded solids},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic viscous step with embedded solids}.
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic viscous step with embedded solids},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic contact-line potential: energy consistency}.
 \end{implnote}
 
 \section{Fully discrete projection stage}\label{sec:projection:time}

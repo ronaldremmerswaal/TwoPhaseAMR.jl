@@ -2141,6 +2141,88 @@ end
     end
 end
 
+@testset "Mimetic contact-line potential: energy consistency" begin
+    # The booked carrier makes the capillary work -Σ_c σκ_c dV_c. On the first
+    # row along a wall with a contact angle θ_w every cut cell gets
+    # κ = (cos θ_{3/2} - cos θ_w)/h, θ_{3/2} the angle of the chord between the
+    # wall-parallel heights of rows 1 and 2: the derivative of the
+    # contact-line energy σ(|chord| - cos θ_w H₁) by the row's liquid volume
+    # (techref eq:projection:mimetic-contact). Along a closed loop of exact
+    # circular caps (shift by h/2 at 90°, 90° → 60°, shift back, 60° → 90°;
+    # 200 steps, h = 1/48) the work of the row-1 cells vanishes up to the
+    # quadrature error: measured 1.1e-7 against a release of 0.0206 on the
+    # open path 90° → 60°; the height-function curvature with the
+    # contact-angle ghost height in the touching cell gave 9.3e-5 (study
+    # mm-runs/contact_young).
+    TP = TwoPhaseAMR
+    n, wall, steps = 48, pi / 3, 200
+    h = 1 / n
+    function cap(angle, x0)
+        radius = sqrt(pi * 0.2^2 / 2 / (angle - sin(angle) * cos(angle)))
+        return PolygonIndicator([(x0 + radius * sin(phi), radius * (cos(phi) - cos(angle))) for phi in range(angle, -angle; length = 801)])
+    end
+    function setup(interface)
+        solver = MimeticProjectionSolver(interface; density = (1.0, 1.0e-3))
+        work = MimeticProjectionWorkspace(solver)
+        TP._mimetic_assemble!(solver, work)
+        return work
+    end
+    mesh = BlockTreeMesh(block_size = (n, n), periodic = (false, false))
+    interface = InterfaceField(mesh, cap(pi / 2, 0.5); contact_angle = (nothing, nothing, wall, nothing))
+    work = setup(interface)
+    row = [reference.j == 1 for reference in work.references]
+    function state(angle, x0)
+        initialize!(interface, cap(angle, x0))
+        reconstruct!(interface; force = true)
+        return [TP._get(interface.fraction, reference) for reference in work.references],
+            copy(TP._mimetic_cell_curvature!(work, interface, nothing))
+    end
+    function row_work(path)
+        last_fraction, last_kappa = state(first(path)...)
+        total = 0.0
+        for point in path[2:end]
+            next_fraction, next_kappa = state(point...)
+            for cell in eachindex(last_fraction)
+                row[cell] && next_fraction[cell] != last_fraction[cell] || continue
+                total -= (last_kappa[cell] + next_kappa[cell]) / 2 * (next_fraction[cell] - last_fraction[cell]) * h^2
+            end
+            last_fraction, last_kappa = next_fraction, next_kappa
+        end
+        return total
+    end
+    angles = range(pi / 2, wall; length = steps + 1)
+    shifts = range(0.5, 0.5 + h / 2; length = steps ÷ 4 + 1)
+    release = row_work([(angle, 0.5) for angle in angles])
+    loop = row_work(
+        vcat(
+            [(pi / 2, x) for x in shifts], [(angle, last(shifts)) for angle in angles[2:end]],
+            [(wall, x) for x in reverse(shifts)[2:end]], [(angle, 0.5) for angle in reverse(angles)[2:end]],
+        )
+    )
+    @test 0.02 <= release <= 0.021
+    @test abs(loop) <= 1.0e-6
+    # At the 60° cap the cut cells of the row share one curvature per contact
+    # line, close to the cap's 1/R = 3.13 (measured 3.17, the mean curvature over
+    # the row).
+    fraction, kappa = state(wall, 0.5)
+    for side in (<(n ÷ 2), >(n ÷ 2))
+        row_kappa = [kappa[c] for c in eachindex(fraction) if row[c] && 0 < fraction[c] < 1 && side(work.references[c].i)]
+        @test length(row_kappa) == 2
+        @test row_kappa[1] ≈ row_kappa[2] rtol = 1.0e-13
+        @test row_kappa[1] ≈ sqrt(2 * pi / 3 - sqrt(3) / 2) / sqrt(pi * 0.2^2) rtol = 0.02
+    end
+    # Label symmetry: swapping the phases (C → 1 - C, θ_w → π - θ_w) flips the
+    # sign of the row's curvature.
+    complement = copy(interface.fraction)
+    for b in eachindex(mesh.blocks)
+        interior(complement, b) .= 1 .- interior(interface.fraction, b)
+    end
+    swapped = InterfaceField(complement; contact_angle = (nothing, nothing, pi - wall, nothing))
+    swapped_kappa = TP._mimetic_cell_curvature!(setup(swapped), swapped, nothing)
+    cells = [c for c in eachindex(fraction) if row[c] && 0 < fraction[c] < 1]
+    @test swapped_kappa[cells] ≈ -kappa[cells] rtol = 1.0e-10
+end
+
 @testset "Mimetic rest states with embedded solids" begin
     TP = TwoPhaseAMR
     h = 1 / 32
