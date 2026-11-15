@@ -334,7 +334,9 @@ end
 """Apply phase forces for the mimetic projection.
 
 Surface tension is the per-phase capillary force through the mimetic gradient
-map `𝓜⁻¹Dᵀ` (see `_mimetic_capillary_force!`); gravity is the Gram moment of
+map `𝓜⁻¹Dᵀ` (see `_mimetic_capillary_force!`), whose potentials are referred
+hydrostatically to the curvature's point under gravity
+(`_mimetic_cell_potential!`); gravity is the Gram moment of
 the uniform acceleration (see `_mimetic_uniform_acceleration!`). The
 mimetic projection is absolute, so no old pressure gradient is subtracted: an
 `𝓜⁻¹Dᵀ` gradient in the predictor is removed exactly, and the projection
@@ -349,7 +351,7 @@ function _two_velocity_forces_and_pressure!(
     if model.sigma > zero(T)
         _mimetic_capillary_force!(
             velocity, state.projection_solver, state.projection_workspace, time_step;
-            sigma = model.sigma, formulation = model.formulation,
+            sigma = model.sigma, formulation = model.formulation, gravity = model.gravity,
             unresolved_curvature_faces = workspace.unresolved_curvature_faces,
         )
     end

@@ -2044,6 +2044,87 @@ end
     end
 end
 
+@testset "Mimetic capillary potential under gravity" begin
+    # With surface tension and gravity the potential difference ψ of the
+    # per-phase potentials is referred hydrostatically to the curvature's
+    # point x_Γ on the PLIC line (the centred height-function column point
+    # projected onto it, else the PLIC centroid): Ψ = σκ - Δρ g⋅x_Γ on the
+    # cut cells, extended to the other cells, ψ = Ψ + Δρ g⋅x*.
+    TP = TwoPhaseAMR
+    finest = 1 / (16 * 2^2)
+    h = 1 / 32
+    # Flat pools at density ratio 1000 with σ > 0 stay at rest through full
+    # steps: uniform, across level transitions (also 1e-3 of a finest cell
+    # above a grid line, clamped pressure points), and above a solid floor.
+    pools = (
+        ("uniform", () -> BlockTreeMesh(block_size = (32, 32), periodic = (true, false)), 0.5 + 0.37h, nothing),
+        ("adaptive", () -> _mimetic_composite_mesh(_MIMETIC_COMPOSITE_REGIONS[1][1]; max_level = 1), 0.5 + 0.37h, nothing),
+        ("adaptive sliver", () -> _mimetic_composite_mesh(_MIMETIC_COMPOSITE_REGIONS[2][1]; max_level = 2), 0.5 + 1.0e-3finest, nothing),
+        ("solid floor", () -> BlockTreeMesh(block_size = (32, 32), periodic = (true, false)), 0.5 + 0.37h, (x, y) -> y - 0.2 - 0.1h * sin(2pi * x)),
+    )
+    for (name, build, height, solid) in pools
+        mesh = build()
+        geometry = isnothing(solid) ? nothing : GeometryField(mesh, solid; lipschitz = 1)
+        interface = isnothing(geometry) ? InterfaceField(mesh, (x, y) -> y - height; lipschitz = 1) :
+            InterfaceField(mesh, (x, y) -> y - height; geometry, lipschitz = 1)
+        physics = TwoPhase(
+            interface; density = (1000.0, 1.0), dynamic_viscosity = (0.0, 0.0), gravity = (0.0, -9.81),
+            surface_tension = SurfaceTension(0.7),
+        )
+        flow = isnothing(geometry) ?
+            FlowSimulation(mesh, physics; velocity_model = TwoVelocityModel(pressure_projection = MimeticProjection()), boundary = FreeSlip()) :
+            FlowSimulation(mesh, physics; geometry, velocity_model = TwoVelocityModel(pressure_projection = MimeticProjection()), boundary = FreeSlip())
+        for _ in 1:3
+            @test step!(
+                flow.velocity, flow.pressure, flow.system, 1.0e-3, flow.workspace;
+                tolerance = 1.0e-12, max_cycles = 2000,
+            ).converged
+        end
+        @test flow.workspace.unresolved_curvature_faces[] == 0
+        @test _mimetic_maximum(flow.velocity) <= 1.0e-9
+    end
+    # On a drop the curvature points lie on the PLIC lines, within a cell of
+    # the centre; ψ = σκ without gravity; with gravity every cell next to a
+    # cut cell (on a split side across either face) has a finite potential.
+    for case in (
+            _mimetic_case(32, _mimetic_circle(32); density = (1000.0, 1.0), periodic = (false, false)),
+            _mimetic_composite_case(_MIMETIC_COMPOSITE_REGIONS[2]..., _MIMETIC_COMPOSITE_LEVELSETS[1]; density = (1000.0, 1.0)),
+        )
+        interface, work = case.interface, case.workspace
+        reconstruct!(interface)
+        TP._mimetic_assemble!(case.solver, work)
+        kappa = TP._mimetic_cell_curvature!(work, interface, nothing)
+        @test isequal(TP._mimetic_cell_potential!(work, interface, kappa, 0.7, (0.0, 0.0), case.solver.density), 0.7 .* kappa)
+        values = TP._fill_height_values!(interface)
+        on_line = 0
+        for (cell, reference) in pairs(work.references)
+            fraction = TP._conditional_fraction(interface, reference)
+            0 < fraction < 1 || continue
+            spacing = work.topology.spacing[cell]
+            x, y = TP._mimetic_curvature_point(interface, values, reference, spacing)
+            center = cellcenter(case.mesh, reference.block, reference.i, reference.j)
+            mx, my = TP._get(interface.normal_x, reference), TP._get(interface.normal_y, reference)
+            distance = (mx * (x - center[1]) + my * (y - center[2])) / spacing - TP._get(interface.intercept, reference)
+            @test abs(distance) <= 1.0e-12
+            @test max(abs(x - center[1]), abs(y - center[2])) <= spacing
+            on_line += 1
+        end
+        @test on_line > 0
+        psi = TP._mimetic_cell_potential!(work, interface, kappa, 0.7, (0.0, -9.81), case.solver.density)
+        topology = work.topology
+        for cell in eachindex(psi)
+            near = any(
+                face > 0 && (
+                    reference = work.references[topology.face_cells[1, face] == cell ? topology.face_cells[2, face] : topology.face_cells[1, face]];
+                    0 < TP._conditional_fraction(interface, reference) < 1 &&
+                        isfinite(TP._get(interface.curvature, reference))
+                ) for k in 1:4 for face in (topology.sides[k, cell], topology.second[k, cell])
+            )
+            near && @test isfinite(psi[cell])
+        end
+    end
+end
+
 @testset "Mimetic rest states with embedded solids" begin
     TP = TwoPhaseAMR
     h = 1 / 32
