@@ -140,9 +140,9 @@ function cylinder_flow(max_level)
 end
 
 """Droplet on an embedded sloped wall (example 09's physics without its
-recorder): CMDGFM, gravity, contact angle, interface, curvature and geometry
-refinement."""
-function droplet_flow(max_level; diagnostics = ())
+recorder): CMDGFM (or `model`), gravity, contact angle, interface, curvature
+and geometry refinement."""
+function droplet_flow(max_level; diagnostics = (), model = CMDGFM)
     wall_angle = pi / 12
     bond = 1.21
     laplace = 5.5e2
@@ -183,7 +183,7 @@ function droplet_flow(max_level; diagnostics = ())
         gravity = -gravity .* normal,
     )
     flow = FlowSimulation(
-        mesh, physics; velocity_model = CMDGFM, geometry, diagnostics,
+        mesh, physics; velocity_model = model, geometry, diagnostics,
         boundary = FreeSlip(), adaptivity = Adaptivity(criteria = refinement),
     )
     return flow, 0.1 * stable_timestep(flow)
@@ -202,6 +202,12 @@ const CASES = (
     ("capillary_mimetic", 10, () -> mimetic_capillary_flow(diagnostics = TWO_PHASE_DIAGNOSTICS)),
     ("mimetic_amr", 10, () -> mimetic_amr_flow(diagnostics = TWO_PHASE_DIAGNOSTICS)),
     ("droplet", 6, () -> droplet_flow(2; diagnostics = TWO_PHASE_DIAGNOSTICS)),
+    (
+        "droplet_mimetic", 6, () -> droplet_flow(
+            2; diagnostics = TWO_PHASE_DIAGNOSTICS,
+            model = TwoVelocityModel(pressure_projection = MimeticProjection()),
+        ),
+    ),
     ("stokes3_two", 6, () -> stokes3_flow(3)),
     ("cylinder", 6, () -> cylinder_flow(2)),
     ("taylor_green", 10, () -> taylor_green_flow(3)),
