@@ -433,6 +433,84 @@ end
         @test checked > 0
     end
 end
+
+@testset "LHF-first face curvature" begin
+    # Thesis floating drop: R = 0.2 on a grid vertex of a periodic unit box.
+    mesh = BlockTreeMesh(
+        base_mesh = (64, 64), block_size = (8, 8), periodic = (true, true),
+    )
+    field = InterfaceField(mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.2; lipschitz = 1)
+    fraction(ref) = TwoPhaseAMR._conditional_fraction(field, ref)
+    quality(ref) = TwoPhaseAMR._get(field.curvature_quality, ref)
+    mixed = [r for r in TwoPhaseAMR._cell_references(mesh) if 0 < fraction(r) < 1]
+    # Without walls and solids an LHF curvature (code 1) has a positive
+    # coverage and a GHF curvature none; both axes give coverage one.
+    @test all(r -> (TwoPhaseAMR._get(field.reconstruction, r) == 1) == (quality(r) > 0), mixed)
+    @test all(r -> 0 <= quality(r) <= 1, mixed)
+    @test count(r -> quality(r) == 0, mixed) == 4
+    @test count(r -> quality(r) >= 1 - 4eps(), mixed) >= 80
+
+    # The four GHF curvatures at the diagonals are not mirror symmetric. The
+    # c(1-c) interpolant gave the CGFM jumps a resultant of 1.5e-5; the
+    # LHF-first curvature leaves round-off.
+    resultant = zeros(2)
+    former = zeros(2)
+    for face in mesh.faces
+        cm, cp = fraction(face.minus), fraction(face.plus)
+        jump = (cp > 0.5) - (cm > 0.5)
+        jump == 0 && continue
+        resultant[face.axis] += TwoPhaseAMR._face_curvature(field, face) * jump * face.area
+        total = weight = 0.0
+        for (c, ref) in ((cm, face.minus), (cp, face.plus))
+            kappa = TwoPhaseAMR._get(field.curvature, ref)
+            c * (1 - c) > 0 && isfinite(kappa) || continue
+            total += c * (1 - c) * kappa
+            weight += c * (1 - c)
+        end
+        former[face.axis] += total / weight * jump * face.area
+    end
+    @test maximum(abs, resultant) <= 1.0e-13
+    @test maximum(abs, former) >= 1.0e-6
+
+    # Synthetic data on one face between two mixed cells.
+    face = first(
+        f for f in mesh.faces if 0 < fraction(f.minus) < 1 && 0 < fraction(f.plus) < 1
+    )
+    function curvature(cm, km, qm, cp, kp, qp)
+        for (ref, c, k, q) in ((face.minus, cm, km, qm), (face.plus, cp, kp, qp))
+            TwoPhaseAMR._set!(field.conditional_fraction, c, ref)
+            TwoPhaseAMR._set!(field.curvature, k, ref)
+            TwoPhaseAMR._set!(field.curvature_quality, q, ref)
+        end
+        return TwoPhaseAMR._face_curvature(field, face)
+    end
+    interpolant(cm, km, cp, kp) =
+        (cm * (1 - cm) * km + cp * (1 - cp) * kp) / (cm * (1 - cm) + cp * (1 - cp))
+    # No height-function cell: the c(1-c) interpolant, bitwise.
+    @test isequal(curvature(0.3, 5.0, 0.0, 0.01, 7.0, 0.0), interpolant(0.3, 5.0, 0.01, 7.0))
+    # A height-function cell: its curvature alone, whatever the weights.
+    @test curvature(0.3, 5.0, 1.0, 0.01, 7.0, 0.0) ≈ 5.0 rtol = 2eps()
+    @test curvature(0.01, 5.0, 1.0, 0.3, 7.0, 0.0) ≈ 5.0 rtol = 2eps()
+    @test curvature(0.01, 7.0, 0.0, 0.3, 5.0, 1.0) ≈ 5.0 rtol = 2eps()
+    # Two height-function cells: the c(1-c) interpolant.
+    @test curvature(0.3, 5.0, 1.0, 0.6, 7.0, 1.0) ≈ interpolant(0.3, 5.0, 0.6, 7.0) rtol = 4eps()
+    # Continuous in the coverage at both ends.
+    @test abs(curvature(0.3, 5.0, 1.0e-9, 0.01, 7.0, 0.0) - interpolant(0.3, 5.0, 0.01, 7.0)) <= 1.0e-8
+    @test abs(curvature(0.3, 5.0, 1 - 1.0e-9, 0.01, 7.0, 0.0) - 5.0) <= 1.0e-8
+    @test abs(curvature(0.01, 5.0, 1 - 1.0e-9, 0.3, 7.0, 0.0) - 5.0) <= 1.0e-7
+    # Continuous in the fractions of mixed cells.
+    @test abs(curvature(0.3 + 1.0e-9, 5.0, 0.6, 0.2, 7.0, 0.1) - curvature(0.3, 5.0, 0.6, 0.2, 7.0, 0.1)) <= 1.0e-8
+    @test abs(curvature(1.0e-10, 5.0, 0.4, 0.3, 7.0, 0.0) - 7.0) <= 1.0e-8
+    # Symmetric in the two cells and a convex combination.
+    for (cm, km, qm, cp, kp, qp) in (
+            (0.3, 5.0, 0.7, 0.2, 7.0, 0.1), (0.01, -2.0, 0.0, 0.45, 3.0, 0.96),
+            (0.9, 1.0, 0.5, 0.05, 4.0, 1.0), (0.6, 2.0, 0.2, 0.6, 3.0, 0.2),
+        )
+        value = curvature(cm, km, qm, cp, kp, qp)
+        @test isequal(value, curvature(cp, kp, qp, cm, km, qm))
+        @test min(km, kp) <= value <= max(km, kp)
+    end
+end
 @testset "Hydrostatic balance" begin
     for kind in 1:3, gravity in ((0.0, -1.0), (0.6, -0.8))
         mesh = BlockTreeMesh(

@@ -443,3 +443,100 @@ end
         end
     end
 end
+
+# Thesis floating droplet (st_validation.tex sec. 4.8.2, pt2_validation.tex,
+# ComFLOW r2): R = 0.2 centred on a grid vertex of a periodic unit box,
+# n = 64 (h/R = 1/12.8), DR 1000, inviscid, sigma = 1, CGFM and the thesis time
+# step, to ten mode-4 periods T_4 = 2 pi sqrt((rho_l + rho_g) R^3 / (60 sigma)).
+# The thesis energy E_k / E_sigma(0) (staggered-fraction kinetic energy, PLIC
+# length) oscillates at 2 omega_4 around 5.6e-9 (one fluid) and 6.3e-9 (two
+# fluids), with the same peaks in the first and last thirds. The GHF curvature
+# of the nearly empty cells at the diagonals used to enter the face curvature
+# (techref eq:forces:curvature) and drove a corner current that grew
+# exponentially and masked the oscillation: mean 2.4e-6 / 3.7e-7 / 2.1e-7,
+# last/first-third peaks 97 / 9.5 / 0.77, oscillation contrast 0.16 / 0.10 /
+# 0.30 (one velocity / CMDGFM / mimetic).
+const FLOATING_DROP_RESOLUTION = 64
+const FLOATING_DROP_DENSITY = (1.0, 1.0e-3)
+const FLOATING_DROP_TIME_STEP = 4.4149e-4
+const FLOATING_DROP_PERIOD = 2pi * sqrt(
+    sum(FLOATING_DROP_DENSITY) * STATIC_DROP_RADIUS^3 / (60STATIC_DROP_SIGMA),
+)
+const FLOATING_DROP_MODELS = (:one_velocity, :cmdgfm)
+# Measured with the LHF-first face curvature (study driver, same measure, to
+# t = 1.2), both models: mean 6.8e-9, last/first-third peaks 0.99-1.00,
+# contrast 0.97, energy line at 1.00-1.01 x 2 omega_4. The mimetic projection
+# is not included: its cut-cell curvature still takes the GHF curvature of the
+# nearly empty cells (mean 2.1e-7, contrast 0.30). The bounds are the thesis level (mean below 1e-8, a
+# factor 1.5 above the measured mean), no growth (10 %), a clean oscillation
+# (contrast 0.8) and its frequency (5 %).
+const FLOATING_DROP_MEAN_BOUND = 1.0e-8
+const FLOATING_DROP_GROWTH_BOUND = 1.1
+const FLOATING_DROP_CONTRAST_BOUND = 0.8
+const FLOATING_DROP_FREQUENCY_TOLERANCE = 0.05
+
+function thesis_floating_drop_case(model)
+    n = FLOATING_DROP_RESOLUTION
+    mesh = BlockTreeMesh(
+        base_mesh = (n, n), block_size = (8, 8), periodic = (true, true),
+    )
+    interface = InterfaceField(mesh, _static_drop_levelset; lipschitz = 1)
+    physics = TwoPhase(
+        interface; dynamic_viscosity = (0.0, 0.0),
+        density = FLOATING_DROP_DENSITY,
+        surface_tension = SurfaceTension(STATIC_DROP_SIGMA; method = CGFM()),
+    )
+    flow = FlowSimulation(
+        mesh, physics; velocity_model = _static_drop_model(model),
+        boundary = FreeSlip(), diagnostics = (KineticEnergy(), SurfaceEnergy()),
+    )
+    simulate!(
+        flow, 10FLOATING_DROP_PERIOD;
+        dt = FLOATING_DROP_TIME_STEP, tolerance = 1.0e-9,
+    )
+    kinetic = diagnostic_history(flow, :kinetic_energy)
+    surface = diagnostic_history(flow, :surface_energy)
+    period = FLOATING_DROP_PERIOD
+    selected = findall(>(period / 4), kinetic.times)
+    times = kinetic.times[selected]
+    ratio = kinetic.values[selected] ./ first(surface.values)
+    final_time = last(times)
+    first_third = [r for (t, r) in zip(times, ratio) if t <= final_time / 3]
+    last_third = [r for (t, r) in zip(times, ratio) if t >= 2final_time / 3]
+    # Median over half periods of (max - min) / (max + min).
+    contrasts = Float64[]
+    for k in 1:floor(Int, 2final_time / period)
+        window = [r for (t, r) in zip(times, ratio) if k * period / 2 <= t < (k + 1) * period / 2]
+        length(window) > 4 || continue
+        push!(contrasts, (maximum(window) - minimum(window)) / (maximum(window) + minimum(window)))
+    end
+    sort!(contrasts)
+    # Strongest line of the Hann-windowed energy (mean removed) between
+    # omega_4 and 3 omega_4, relative to 2 omega_4.
+    omega = 4pi / period
+    centred = ratio .- sum(ratio) / length(ratio)
+    span = final_time - first(times)
+    window = @. sin(pi * (times - first(times)) / span)^2
+    frequencies = range(0.5omega, 1.5omega; length = 2001)
+    power = map(frequencies) do w
+        abs2(sum(@. window * centred * cis(w * times)))
+    end
+    return (;
+        mean = sum(ratio) / length(ratio),
+        growth = maximum(last_third) / maximum(first_third),
+        contrast = contrasts[(length(contrasts) + 1) ÷ 2],
+        frequency = frequencies[argmax(power)] / omega,
+    )
+end
+
+@testset "Thesis floating droplet" begin
+    for model in FLOATING_DROP_MODELS
+        @testset "$model" begin
+            result = thesis_floating_drop_case(model)
+            @test result.mean <= FLOATING_DROP_MEAN_BOUND
+            @test result.growth <= FLOATING_DROP_GROWTH_BOUND
+            @test result.contrast >= FLOATING_DROP_CONTRAST_BOUND
+            @test abs(result.frequency - 1) <= FLOATING_DROP_FREQUENCY_TOLERANCE
+        end
+    end
+end

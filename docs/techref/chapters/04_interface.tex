@@ -489,6 +489,34 @@ The result is clipped to the mesh,
 and is undefined (\code{NaN}) where no estimate exists and in pure cells; the
 force of \cref{ch:forces} raises an error on a face that needs it.
 
+\emph{Curvature quality.} With the curvature the reconstruction stores its
+height-function coverage $\curvquality{c}\in[0,1]$, which selects the face
+curvature of \cref{sec:forces:curvature}. For an LHF curvature, with the
+blended LHF normal $\inormal$ and the set $K_c$ of axes with an LHF candidate,
+\begin{equation}\label{eq:interface:coverage}
+  \curvquality{c}=\max_{k\in K_c}\smoothstep\roundpar{\frac{\pi/4+\hftol-\arccos(\abs{\inormal\cdot\unitvec{k}}/\abs{\inormal}_2)}{\hftol}};
+\end{equation}
+$\curvquality{c}=1$ for a domain-wall contact curvature and for a triple-cell
+fit with the contact row, which carry the boundary condition, and
+$\curvquality{c}=0$ for every other GHF fit and in pure cells. The coverage is
+one if an axis with a candidate lies within $\pi/4$ of $\inormal$, the
+principal direction that every normal has (so always with candidates on both
+axes: the angles of $\inormal$ to $\unitvec{1}$ and $\unitvec{2}$ add up to
+$\pi/2$). With a candidate on the secondary axis only, it fades with the
+smoothstep of~\cref{eq:interface:lhf} over the upper half of that quality's
+transition, from $\pi/4$ to the cutoff $\pi/4+\hftol=3\pi/10$, where the
+candidate drops out and the cell falls back to the GHF fit; it uses only the
+constants of~\cref{eq:interface:lhf}. The coverage is evaluated at the blended
+normal, whose angles to the two axes add up to $\pi/2$; the candidates' own
+normals are not complementary (in the protruding diagonal cells of the
+floating-drop fixture of~\cref{sec:forces:curvature} their
+qualities~\cref{eq:interface:lhf} add up to $0.967$, not one). The quality
+itself would be a poorer coverage: it is $\frac12$ for a lone principal-axis
+candidate at $\pi/4$, whose curvature the cell uses in full. Its sum over the
+axes at the blended normal as the coverage leaves such GHF shares in the face
+curvature, which on the generic drop position at $n=32$ raised the kinetic
+energy twentyfold (\cref{par:verif:floating-drop}).
+
 \emph{Checks} (\code{figures/generate.jl}). On the circle fixture (exact
 curvature \chkCircleKappa) the LHF curvatures deviate by at most $\chkLhfExact$ and
 the GHF curvatures of the \chkWyCells\ remaining mixed cells by $\chkGhfExact$;
@@ -511,7 +539,11 @@ the contact row
 \srcsym{src/interface/height_functions.jl}{_embedded_ghf_constraint}~\cref{eq:interface:contact-row};
 choice and clipping
 \srcsym{src/interface/interface_field.jl}{_reconstruct_interface_cell!} and
-\srcsym{src/interface/interface_field.jl}{_clip_curvature_to_mesh}~\cref{eq:interface:clip}.
+\srcsym{src/interface/interface_field.jl}{_clip_curvature_to_mesh}~\cref{eq:interface:clip};
+the coverage \srcsym{src/interface/height_functions.jl}{_lhf_geometry}~\cref{eq:interface:coverage},
+stored in \code{curvature_quality} by
+\srcsym{src/interface/interface_field.jl}{_reconstruct_interface_cell!} and
+\srcsym{src/interface/interface_field.jl}{_reconstruct_embedded_triple_cell!}.
 Tests: \testsym{test/indicator/phase/height_functions.jl}{Circular LHF curvature converges}
 (order at least $1.7$),
 \testsym{test/indicator/phase/height_functions.jl}{Curvature is bounded by the local mesh resolution},
