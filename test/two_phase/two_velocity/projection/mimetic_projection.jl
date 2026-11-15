@@ -242,11 +242,16 @@ end
 
 @testset "Mimetic projection under a uniform acceleration (T3)" begin
     # Laboratory geometry (exact apertures and staggered fractions): equal
-    # densities are at rest to round-off, contrasts converge at first order.
-    # Measured with the uniform ties β ρ_π V_f (the audit's numbers with the
-    # former mass-proportional ties, tab. mm-tests: 0.0702, 0.0385, 0.0789,
-    # 0.0435).
+    # densities are at rest to round-off, contrasts converge at first order
+    # with the audit's numbers (tab. mm-tests).
     laboratory = Dict(
+        (10.0, 32) => 0.0702, (10.0, 64) => 0.0385,
+        (1000.0, 32) => 0.0789, (1000.0, 64) => 0.0435,
+    )
+    # NUMERICS CONCERN: with the uniform ties β ρ_π V_f the errors are 13 – 16 %
+    # above the audit's numbers (measured 0.081, 0.0434, 0.0914, 0.0497); the
+    # pins below are a regression guard at the measured level, not the target.
+    measured = Dict(
         (10.0, 32) => 0.081, (10.0, 64) => 0.0434,
         (1000.0, 32) => 0.0914, (1000.0, 64) => 0.0497,
     )
@@ -256,7 +261,8 @@ end
             # Round-off bounds the attainable divergence defect at 1000:1.
             error, out = MimeticLab.t3_error(n, (ratio, 1.0); tolerance = 1.0e-9)
             @test out.result.target_defect <= 1.0e-9
-            @test error ≈ laboratory[(ratio, n)] rtol = 5.0e-3
+            @test_broken isapprox(error, laboratory[(ratio, n)]; rtol = 5.0e-3)
+            @test error ≈ measured[(ratio, n)] rtol = 5.0e-3
             error
         end
         @test errors[2] < errors[1]
@@ -1116,14 +1122,18 @@ end
         end
     end
     # Without the wall coupling (the uniform increment dt g alone) the drop on
-    # the floor is not at rest after one projection (measured 0.14 dt g with
-    # the uniform ties, 0.29 dt g with the former mass-proportional ties).
+    # the floor is not at rest after one projection (measured 0.29 dt g with
+    # the former mass-proportional ties).
     case = _mimetic_case(32, floor_drop; periodic = (false, false))
     velocity = _mimetic_velocity(case, (phase, face) -> face.axis == 2 ? -9.81e-3 : 0.0)
     stats = project!(velocity, CellField(case.mesh), case.solver, 1.0e-3, case.workspace; tolerance = 1.0e-12)
     @test stats.converged
     uncoupled = _mimetic_maximum(velocity)
     println("mimetic floor drop, equal densities, dt g without the wall coupling: max |u| = ", uncoupled)
+    # NUMERICS CONCERN: with the uniform ties the uncoupled motion is 0.14 dt g
+    # (1.39e-3), below the original bound; the second assertion is a
+    # regression guard at the measured level (the coupling still matters).
+    @test_broken uncoupled >= 0.25 * 9.81e-3
     @test uncoupled >= 0.1 * 9.81e-3
     # A constant curvature on a drop on the floor (contact angle about 66°) at
     # densities (1000, 1): the per-phase capillary force is a gradient on the
