@@ -1115,9 +1115,13 @@ next to the solid (its face partially closed, a partially solid cell, or a
 partially closed same-axis face across one of its cells) is tied to the
 solid, whose velocity is prescribed, as a wall value is: no free fall of a
 film on a solid. A cell without open volume has no pressure; the cells with
-open volume form components connected by open faces, each with its smallest
-cell as pressure anchor, and the defects of
-\cref{sec:projection:defects} divide by the open cell volume. The
+open volume form components connected by open faces, each anchored at its
+cell of largest open volume, and the defects of
+\cref{sec:projection:defects} divide by $\max(\meas{\opencell{c}},h_c^2/100)$:
+divided by the open volume alone, the round-off of the fluxes of a sliver
+cell ($\meas{\opencell{c}}/h_c^2\sim10^{-6}$) held the solve above the
+tolerance $10^{-10}$ (3 of 120 random two-level configurations, up to
+$6\times10^{-9}$); with the floor all converge. The
 preconditioner is the cut-cell pressure operator of the open cells with the
 same face coefficient. Without a solid nothing changes (bitwise).
 Measured on 56 static configurations at $h=1/32$ (slanted-line and circular
@@ -1133,7 +1137,14 @@ two-level configurations above (interfaces: none, a pool, a drop) no cell is
 defective and \cref{eq:projection:mimetic-transition} holds to
 $6\times10^{-14}$; neither the example-09 smoke test nor LGPI to $t=0.2$ has a
 defective cell, and single-phase liquid at densities $(1000,1)$ over 73 random
-solids stays at rest to $4\times10^{-13}$. A uniform acceleration at equal densities
+solids stays at rest to $4\times10^{-13}$. Of 1500 further random fixtures
+($h=1/16,1/32$) 7 keep a defective cell (216 with the first edge): a phase
+that wets only parts of one line, a film along a side together with the edge
+over the closed part of that side, or only two parallel sides. Its Gram
+tensor has the line as kernel while its moments do not vanish along it, so
+no block is consistent. They come from phase apertures and PLIC lines that
+disagree (a gas sliver of a cell whose conditional fraction is just below
+one); 5 of the 7 were defective with the first edge too. A uniform acceleration at equal densities
 with drops on a slanted solid and on a cylinder, hydrostatic pools over
 slanted solids and a submerged cylinder at densities $(1000,1)$, and films of
 $0.05h$ to $0.95h$ on flat solids on and off a grid line stay at rest to

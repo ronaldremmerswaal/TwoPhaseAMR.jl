@@ -85,9 +85,9 @@ _MimeticViscousWork(::Type{T}) where {T} = _MimeticViscousWork{T}(
 
 `pressure_indices` are the cells whose pressure is unknown and
 `pressure_anchors` the anchor cell of each (one per open-face component of
-the active cells, its smallest cell); `anchor` maps every active cell to its
-anchor (zero for a cell without open volume) and `cell_volume` is the open
-volume of a cell (`h²` without a solid)."""
+the active cells, its cell of largest open volume); `anchor` maps every
+active cell to its anchor (zero for a cell without open volume) and
+`cell_volume` is the open volume of a cell (`h²` without a solid)."""
 mutable struct MimeticProjectionWorkspace{T, M <: BlockTreeMesh}
     liquid_fraction_x::FaceField{1, T, M}
     liquid_fraction_y::FaceField{2, T, M}
@@ -158,8 +158,9 @@ end
 
 """Diagnostics of one mimetic cut-cell projection.
 
-`mixture_volume_defect` is `dt * max(abs(div(u_mix)))` of the projected state;
-`target_defect` the same relative to an inherited mixture-flux target.
+`mixture_volume_defect` is `dt * max(abs(div(u_mix)))` of the projected state
+(with an embedded solid the cell outflow divided by `max(V, h²/100)`, `V` the
+open volume); `target_defect` the same relative to an inherited mixture-flux target.
 `energy_identity_defect` is `(E(u*) - E(u⁺) - E(u* - u⁺)) / E(u*)` in the norm
 of the metric `𝓜`; on grid-line interface faces `E(u*)` and `E(u* - u⁺)`
 include the energy of the phase-velocity jump that identifying the two phase
@@ -172,7 +173,7 @@ momentum `e_iᵀWu` with the diagonal phase masses `W`, which this projection
 does not conserve, and `transported_momentum` its value before projection.
 `wall_cells` counts the cut cells with a side on the domain boundary and
 `solid_cells` the cells cut by an embedded solid (cut by the interface or
-not), whose solid edge enters the metric.
+not), whose solid edges enter the metric.
 `defective_cells` counts the cut cells whose Gram tensor has no consistent
 block (least-squares fallback, see [`MimeticProjection`](@ref)); `lumped_values`
 the phase values that no block and no tie gives inertia (lumped mass).
@@ -421,9 +422,9 @@ end
 anchor of every cell and the cell volumes (see
 `MimeticProjectionWorkspace`). Without a solid every cell but the first is
 unknown; with one, the cells with open volume form components connected by
-open faces, each with its smallest cell as anchor
-(`_projection_gauge_partition!`). Rebuilt when the topology or the solid
-changes."""
+open faces (`_projection_gauge_partition!`), each anchored at its cell of
+largest open volume (the first of equal ones), so that no sliver cell holds
+the gauge. Rebuilt when the topology or the solid changes."""
 function _mimetic_gauge!(workspace::MimeticProjectionWorkspace{T}, mesh, geometry) where {T}
     topology = workspace.topology
     revision = isnothing(geometry) ? UInt(0) : _interface_geometry_revision(geometry)
@@ -439,6 +440,7 @@ function _mimetic_gauge!(workspace::MimeticProjectionWorkspace{T}, mesh, geometr
             volume[cell] = topology.spacing[cell]^2
         end
     else
+        copyto!(volume, _geometry_cell_volumes(geometry))
         workspace.incidence = _projection_incidence!(
             workspace.incidence, workspace.incidence_counts, mesh,
         )
@@ -447,6 +449,7 @@ function _mimetic_gauge!(workspace::MimeticProjectionWorkspace{T}, mesh, geometr
             indices, anchors, anchor, workspace.component_stack, workspace.incidence,
             mesh, geometry.active_cells, geometry.aperture,
         )
+        # `anchor[cell]`: the root (smallest cell) of its component.
         fill!(resize!(anchor, cells), 0)
         for cell in 1:cells
             geometry.active_cells[cell] && (anchor[cell] = cell)
@@ -454,7 +457,25 @@ function _mimetic_gauge!(workspace::MimeticProjectionWorkspace{T}, mesh, geometr
         for (index, cell) in pairs(indices)
             anchor[cell] = anchors[index]
         end
-        copyto!(volume, _geometry_cell_volumes(geometry))
+        # `largest[root]`: the cell of largest open volume of that component.
+        largest = fill!(resize!(workspace.component_stack, cells), 0)
+        for cell in 1:cells
+            root = anchor[cell]
+            root > 0 || continue
+            best = largest[root]
+            (best == 0 || volume[cell] > volume[best]) && (largest[root] = cell)
+        end
+        empty!(indices)
+        empty!(anchors)
+        for cell in 1:cells
+            root = anchor[cell]
+            root > 0 || continue
+            anchor[cell] = largest[root]
+            if anchor[cell] != cell
+                push!(indices, cell)
+                push!(anchors, anchor[cell])
+            end
+        end
     end
     workspace.gauge_topology = topology
     workspace.gauge_revision = revision
@@ -700,7 +721,7 @@ mixture divergence, orthogonally in the mimetic cut-cell kinetic metric `𝓜`
 (`MimeticProjection`). The projection is absolute: `velocity` is the full
 predictor, and `pressure` is overwritten with the projection pressure, whose
 value in the anchor cell of each open component (the first cell without a
-solid) is kept; cells without open volume keep theirs. Forces must therefore not subtract a
+solid, the cell of largest open volume with one) is kept; cells without open volume keep theirs. Forces must therefore not subtract a
 pressure gradient from the predictor; any `𝓜⁻¹Dᵀ` gradient in the predictor
 is removed exactly.
 
@@ -735,7 +756,7 @@ function project!(
     removed_energy = _mimetic_gather!(workspace.predictor, assembly, velocity)
     preconditioner = _mimetic_preconditioner!(solver, workspace)
     # Warm start from the previous pressure, relative to the anchor of each
-    # component (the first cell without a solid).
+    # component.
     cells = length(workspace.references)
     multiplier = workspace.multiplier
     anchor = workspace.anchor
@@ -778,13 +799,21 @@ function project!(
     )
 end
 
+"""Smallest volume, in units of `h²`, by which the volume defect of a cell is
+divided: the defect of a sliver cell is its volume defect per hundredth of
+the cell, so the round-off of its fluxes does not hold the solve above its
+tolerance. It does not act without a solid."""
+const _MIMETIC_VOLUME_FLOOR = 1.0e-2
+
 """Solve the projection for the gathered predictor `workspace.predictor`.
 
 `workspace.multiplier` holds the initial guess of `λ = dt p` (zero in the
 anchor cells and the cells without open volume) and returns the solution; `workspace.velocity` returns the
 projected phase values. The target outflow is `-weight` times the inherited
 (negative integrated) cell flux. `removed_energy` is the jump energy removed
-by gathering (see `_mimetic_gather!`); it enters the energy identity.
+by gathering (see `_mimetic_gather!`); it enters the energy identity. The
+volume defects divide by `max(V, _MIMETIC_VOLUME_FLOOR h²)` with the open
+volume `V`.
 """
 function _mimetic_solve!(
         workspace::MimeticProjectionWorkspace{T}, dt, preconditioner, inherited,
@@ -798,8 +827,11 @@ function _mimetic_solve!(
     target(cell) = iszero(weight) ? zero(T) : -weight * inherited[cell]
     volume = workspace.cell_volume
     indices = workspace.pressure_indices
+    # The volume defects divide by the open volume, at least the floor
+    # `_MIMETIC_VOLUME_FLOOR h²` (`h²` without a solid).
+    floored(c) = max(volume[c], T(_MIMETIC_VOLUME_FLOOR) * topology.spacing[c]^2)
     defect_of(outflow) = maximum(
-        c -> volume[c] > zero(T) ? dt * abs(outflow[c] - target(c)) / volume[c] : zero(T), 1:cells,
+        c -> volume[c] > zero(T) ? dt * abs(outflow[c] - target(c)) / floored(c) : zero(T), 1:cells,
     )
     multiplier = workspace.multiplier
     for cell in 1:cells
@@ -848,7 +880,7 @@ function _mimetic_solve!(
     mixture_divergence = zero(T)
     for cell in 1:cells
         volume[cell] > zero(T) || continue
-        mixture_divergence = max(mixture_divergence, abs(outflow[cell]) / volume[cell])
+        mixture_divergence = max(mixture_divergence, abs(outflow[cell]) / floored(cell))
     end
 
     # Diagnostics in the metric 𝓜 and the transported momentum.
