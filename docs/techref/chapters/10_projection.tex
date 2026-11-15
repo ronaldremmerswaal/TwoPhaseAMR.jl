@@ -802,8 +802,8 @@ side of a cut cell has $\mathsf G^{\phase}_c=0$ at the wetted midpoint, an end o
 its interval; with the margin its pressure point lies $0.01h$ inside the cell,
 $\mathsf G^{\phase}_c=0.01\,b\,h^2\,nn^{\transpose}$, and its block is
 $0.01\,b\,h^2$ for the wetted fraction $b$. A value whose blocks give it no
-more than $10^{-12}\dens^{\phase}h^2$ gets its lumped staggered mass
-$\dualvol{f}\facemass{\phase}{f}$ instead, which is counted in
+more than $10^{-12}\dens^{\phase}h^2$ gets the lumped term $\beta\Lambda_f$
+of~\cref{eq:projection:mimetic-ties} instead, which is counted in
 \code{lumped_values} and is not consistent at that value.
 The interface on a grid line, the other case of a vanishing Gram tensor, is
 treated below. A singular $\mathsf G^{\phase}_c$ enters through its
@@ -830,14 +830,163 @@ of two sides, so that the line lies far outside the cell or
 $\mathsf G^{\gas}_c$ vanishes normal to it while $\mathsf R^{\gas}_c$ does not.
 Clamping the data point into the interval removed the defective cells of
 Rayleigh--Taylor at densities $(3,1)$ and changed its errors by less than
-$3\,\%$. A phase value on a face that its phase does not reach
-($\phaseaperture{\phase}{f}=0<\facemass{\phase}{f}$) gets the tie
-$\dualvol{f}\facemass{\phase}{f}(\velo^{\phase}_f-\velo^{\phase}_{d(f)})^2$ to the
-neighbouring same-axis face $d(f)$ with the largest aperture of the phase, and
-a value with $0<\phaseaperture{\phase}{f}<\tfrac12$ on a mixed face the same tie
-with the weight $1-2\phaseaperture{\phase}{f}$ (small-cell stabilisation).
-Both ties vanish on fields that are constant
-per phase and axis.
+$3\,\%$.
+
+\emph{Ties and uniform equivalence.} A phase value on a face that its phase
+does not reach ($\phaseaperture{\phase}{f}=0<\facemass{\phase}{f}$, a
+\emph{slaved} value) is tied to the neighbouring same-axis face $d(f)$ of the
+ring (then the second ring) with the largest aperture of the phase, and a
+value with $0<\phaseaperture{\phase}{f}<\tfrac12$ on a mixed (or partially
+closed) face to such a donor with $a_{d(f)}>a_f$ (small-cell stabilisation);
+a small value without such a donor (a \emph{small-untied} value, e.g.\ in a
+drop of radius $\lesssim h$) is tied with the same weight to the value of its
+phase of largest aperture in the rings, a slaved or small value without any
+donor to the prescribed wall or solid value if it is next to one (below), and
+a slaved value without either gets that weight as a lumped diagonal term.
+Every slaved or small value thus has at most one floor (no lumped term on top
+of a tie, so $\mathcal M$ is continuous as $a\to0^{+}$; a value with
+$a\ge\tfrac12$ whose blocks give it no inertia beyond round-off is lumped).
+All these stability parts use the \emph{aperture-independent} mass of a
+full value, $\Lambda_f=\dens^{\phase}\dualvol{f}$ ($\dualvol{f}$ the full, with
+a solid the open, dual volume; on adaptive meshes the composite one),
+\begin{equation}\label{eq:projection:mimetic-ties}
+  \mathcal M=\mathcal M_G+\sum_{f\in\mathcal T}w_f\,(e_f-e_{d(f)})(e_f-e_{d(f)})^{\transpose}
+  +\sum_{f\in\mathcal W}w_f\,e_fe_f^{\transpose}+\sum_{f\in\mathcal L}\beta\Lambda_f\,e_fe_f^{\transpose},
+  \qquad w_f=\max\bigl(0,1-2\phaseaperture{\phase}{f}\bigr)\,\beta\,\Lambda_f,\quad\beta=1,
+\end{equation}
+with $\mathcal M_G$ the Gram blocks, $\mathcal T$ the tied, $\mathcal W$ the
+wall- or solid-tied and $\mathcal L$ the lumped values (\code{_MIMETIC_TIE_BETA};
+a slaved value has $a_f=0$, so $w_f=\beta\Lambda_f$). Before, the weights were
+$(1-2a_f)\dualvol{f}\facemass{\phase}{f}$ and $\dualvol{f}\facemass{\phase}{f}$,
+proportional to the staggered phase fraction $\alpha_f$, so a nearly empty value
+had almost no inertia. The ties vanish on the four per-phase constant fields
+$\mathsf Z$ (value and donor lie on parallel faces of one phase), so the Gram
+moment identity $\mathcal M\mathsf Z+\mathsf C=\mathsf R$, rest under a uniform
+acceleration and the balance of a constant curvature are unchanged, and so is
+the momentum functional $\mathsf Z^{\transpose}\mathcal Mu=\mathsf R^{\transpose}u$
+on periodic domains (with walls $\mathsf C$ enters); $\mathcal M$
+stays symmetric positive definite and the projection
+$\mathcal M$-orthogonal with its energy identity. The lumped fallback is the one
+exception: its diagonal term breaks the moment identity on that value
+(counted in \code{lumped_values}; none occurs in the test fixtures). The
+following summarises the audit's note \emph{Uniform equivalence of the
+mimetic metric with continuous uniform ties}.
+
+\emph{Energy controls the values through their compliance.} For any symmetric
+positive definite $\mathcal M$ and $E=\tfrac12u^{\transpose}\mathcal Mu$,
+Cauchy--Schwarz in the $\mathcal M$ inner product gives
+\begin{equation}\label{eq:projection:mimetic-pointwise}
+  u_f^2\le2E\,(\mathcal M^{-1})_{ff},
+\end{equation}
+with equality for $u\parallel\mathcal M^{-1}e_f$. The metric is
+\emph{uniformly equivalent} to $\Lambda=\diag{\Lambda_f}$ if
+$\mathcal M\succeq c\Lambda$ with $c>0$ independent of the apertures, the
+staggered fractions, the mesh width, the density ratio and the time step.
+Then $(\mathcal M^{-1})_{ff}\le1/(c\Lambda_f)$, the compliance
+$\chi_f=\Lambda_f(\mathcal M^{-1})_{ff}\le1/c$, and
+$\abs{u_f}\le h^{-1}(2E/(c\,\dens^{\phase}))^{1/2}$ on a uniform mesh: every value,
+slaved values included, is bounded like a full value up to the factor
+$c^{-1/2}$. Hence \emph{energy stability implies boundedness}: if every step
+satisfies $E^{n+1}\le E^n+W^n$ in its own metric ($W^n$ the work of the
+external forces) and $c$ holds for every $\mathcal M^n$, all values stay
+bounded by $h^{-1}(2(E^0+\sum_kW^k)/(c\min_{\phase}\dens^{\phase}))^{1/2}$.
+Without grid-line values (no coupling between the phases) the pressure
+response is bounded as well,
+$\dens^{\phase}h\,\abs{(\mathcal M^{-1}\mathsf B^{\transpose})_{fc}}\le\tfrac{3}{2c}$ (sharp).
+The metric is also bounded above, $\mathcal M\preceq C\Lambda$ with
+$C\le2g_{\max}+\beta(1+\sqrt{\bar\mu})^2+\beta$ ($g_{\max}\approx4.69$ the largest
+Gram-block entry in units of $\Lambda$, $\bar\mu$ the donor load; measured
+$C=4.6$--$6.9$), so the pressure operator is spectrally equivalent to the
+diagonal-mass one, $C^{-1}\mathsf B\Lambda^{-1}\mathsf B^{\transpose}\preceq
+\mathsf B\mathcal M^{-1}\mathsf B^{\transpose}\preceq c^{-1}\mathsf B\Lambda^{-1}\mathsf B^{\transpose}$,
+uniformly in the apertures (the basis of its preconditioner).
+
+\emph{The equivalence lemma.} Fix a phase, a threshold $a_G\in(0,\tfrac12]$,
+and call the values with $a_f<a_G$ that have a donor the tied set; all others
+(uncut and Gram values with $a\ge a_G$, small values without a donor, wall-tied
+and lumped values) are roots. Assume: (A1) every tied value has a donor of
+the same phase with larger aperture, so the donor graph is a forest with roots
+as roots; (A2) $w_f\ge\beta_*\Lambda_f$ on the tied and wall-tied values;
+(A3) root coercivity,
+$u^{\transpose}(\mathcal M_G+\sum_{\mathcal L}\beta\Lambda_fe_fe_f^{\transpose})u\ge\gamma\sum_{\text{anchors}}\Lambda_fu_f^2$;
+(A4) the load $\mu=\max_d\sum_{f:d(f)=d}\dualvol{f}/\dualvol{d}$ is finite; (A5)
+every donor chain reaches a root in at most $L$ links. With
+$\gamma_0=\min(\gamma,\beta_*)$ and $\Gamma_L(q)=\sum_{k=0}^Lq^k$,
+\begin{equation}\label{eq:projection:mimetic-equivalence}
+  \mathcal M\succeq c\,\Lambda,\qquad
+  c=\max_{\varepsilon>0}\Bigl[\Gamma_L\bigl((1+\varepsilon)\mu\bigr)
+  \max\Bigl(\frac{1+\varepsilon}{\varepsilon\beta_*},\frac1{\gamma_0}\Bigr)\Bigr]^{-1};
+\end{equation}
+for $\mu\le1$ and $\varepsilon=1/L$, $c\ge\min(\beta_*/(L+1),\gamma_0)/(\mathrm e(L+1))$,
+for $\mu<1$ a bound independent of $L$, and without tied values $c=\gamma_0$.
+\emph{Proof sketch.} With $S_k=\sum_{\mathrm{depth}(f)=k}\Lambda_fu_f^2$ and
+$T_k=\sum_{\mathrm{depth}(f)=k}w_f(u_f-u_{d(f)})^2$, the terms
+of~\cref{eq:projection:mimetic-ties} are positive semi-definite, so
+$u^{\transpose}\mathcal Mu\ge\sum_{k\ge1}T_k+\gamma_0S_0$. The key inequality is
+$u_f^2\le(1+\varepsilon^{-1})(u_f-u_{d(f)})^2+(1+\varepsilon)u_{d(f)}^2$; weighted
+with $\Lambda_f$, summed per depth and grouped by donors (A4) it gives
+$S_k\le\frac{1+\varepsilon}{\varepsilon\beta_*}T_k+qS_{k-1}$, $q=(1+\varepsilon)\mu$,
+and by induction and summation over $k\le L$,
+$\sum_kS_k\le\Gamma_L(q)\max(\frac{1+\varepsilon}{\varepsilon\beta_*},\gamma_0^{-1})\,u^{\transpose}\mathcal Mu$.
+The plain weight $\beta\Lambda_f$ satisfies (A2) with $a_G=\tfrac12$,
+$\beta_*=\beta$; the continuous weight with $\beta_*=(1-2a_G)\beta$ for every
+$a_G<\tfrac12$, the values with $a\in[a_G,\tfrac12)$ moving to the anchors that
+(A3) must cover. The dependence on the chain is sharp: a path of $L$ equal
+links behind a wall tie has $\lambda_{\min}\sim\beta\pi^2/(4L^2)$, and a binary
+tree anchored at its root has $c\le\beta/(2^{L+1}-1)$ (the factor $\mu^L$ cannot
+be removed). In the package the donor is local (two rings) and the chains are
+short. Status: the lemma is verified numerically (random forests, the ported
+metric on laboratory bands) with an independent derivation check pending;
+(A3) is \emph{measured, not proved}: per cut cell $\gamma\approx0.005$ for
+$a\ge\tfrac12$ in a straight-cut model, where thin films and wedges along a
+side are held only by the margin $0.01h$ of the pressure point
+(\code{_MIMETIC_POINT_MARGIN}), about $0.05$ away from thin phases, and
+$\tfrac12$ from an uncut neighbour. Small-untied values keep the floor
+$w_f$ (measured $c_{\min}\ge0.03$ on drops of radius $0.9h$ and $1.2h$, where
+their $O(a^2)$ block alone gave $c\approx0.0075$); defective cells (eigenvalues
+floored at $0.02h^2$) are not covered.
+
+\emph{Continuity in time.} The weight $\max(0,1-2a)\beta\Lambda_f$ is continuous
+at $a=\tfrac12$ (the plain weight jumps by $\beta\Lambda_f$ there) and tends to
+the slaved weight $\beta\Lambda_f$ as $a\to0^+$, where the block entries of the
+value are $O(a^2)$ and the admissible donors agree: $\mathcal M$ is continuous
+across slaved $\leftrightarrow$ stabilised. Not under the control of the
+weight and remaining discontinuous: the birth of a value (its staggered
+volume becomes positive; the activity rule is unchanged) with the tie at once,
+cut $\leftrightarrow$ uncut cells, and switches of the largest-aperture donor.
+
+\emph{Measured.} With $\beta=1$: $c_{\min}=\lambda_{\min}(\mathcal M,\Lambda)\ge0.085$
+and $\max\chi\le5.7$ over the inviscid static drop ($n=32,64$, DR 1, 3, 1000),
+Rayleigh--Taylor (DR 3, 1000) and Kelvin--Helmholtz (DR 1), against
+$c_{\min}\approx10^{-8}$ and $\chi\approx10^8$ on slaved values with the former
+weights; the worst value is always a slaved value at the end of a donor chain;
+for small $\beta$, $c\approx\beta/4$. On the fixtures of the test (drops, a wall
+film, a corner drop, a solid sliver, a solid slab, two adaptive meshes; DR 1,
+1000, 1/1000) $c_{\min}=0.111$--$0.257$ and $\max\chi\le4.97$. Equivalence alone is
+\emph{not} energy stability: with the former capillary carrier the inviscid
+static drop at $n=64$ still grew $\times2.4$/$\times5.4$/$\times2.0$ (DR 1/3/1000)
+by $t=0.4$, the force's unpaid work equal to the energy gained; the booked
+carrier of the capillary force (below) makes the energy flat, and the ties turn
+that into a bound on the values.
+
+\begin{deviation}{Kinetic metric and uniform equivalence}\label{dev:projection:uniform-equivalence}
+The thesis (and CMDGFM) weights the phase values with the staggered phase mass
+$\mathsf W=\diag{\dens^{\phase}\alpha_f\dualvol{f}}$, which is equivalent to
+$\Lambda$ only with $c=\min_f\alpha_f$: $10^{-8}$--$6\times10^{-6}$ in the static
+drop, compliances $10^5$--$10^8$ on nearly empty values and pressure responses
+up to $\dens^{\phase}/\dens_{\mathrm{mix}}\approx1000$. CMDGFM is nevertheless
+stable for another reason: its projection is not energy-neutral in
+$\mathsf W$. Both phase values receive the common mixture-density correction
+and the jump unknowns remove the interface-normal slip (a plastic collision);
+per step the projection takes back the force's unpaid work to 1--5\,\%,
+including that stored in nearly empty values. The mimetic projection is
+$\mathcal M$-orthogonal and removes only the gradient part, so it needs both
+properties separately: energy stability from the force (the booked carrier)
+and boundedness from the metric (the uniform ties). It gains a projection that
+is exactly energy-conserving in one norm, a pressure response bounded by
+$3/(2c)$ for every value, and, to $t=1.2$ in the static drop, no energy creep
+(CMDGFM $\times7$--$\times14$).
+\end{deviation}
 
 \emph{Interface on a grid line.} On an interior face between a pure liquid
 and a pure gas cell no cell is cut. Both cells are treated as uncut and the
@@ -914,8 +1063,8 @@ wherever no value is lumped (one case has one lumped value), against relative
 defects $0.16$--$1$ without $\mathsf C$. A value that its phase does not
 reach and that has no donor (a film or sliver along a wall) is tied to the
 same-axis wall face across its cell, whose value is prescribed: the tie
-$\dualvol{f}\facemass{\phase}{f}(\velo^{\phase}_f-\velo_{\mathrm w})^2$ adds the
-staggered mass to the diagonal, as lumping would, and its negative to
+$\beta\Lambda_f(\velo^{\phase}_f-\velo_{\mathrm w})^2$~\cref{eq:projection:mimetic-ties} adds the
+weight $\beta\Lambda_f$ to the diagonal, as lumping would, and its negative to
 $\mathsf C$ on the value's axis, so the identity holds on it and gravity gives
 it no increment (lumped, such a value fell freely: $3\,\dt g$ after three
 steps of a floor film at densities $(1000,1)$). The contact angle enters as with the
@@ -1109,8 +1258,8 @@ centroid of its open polygon. Small open apertures: a block entry scales with
 the square of the open length over the open area, so a value on a face with a
 small open aperture would get a small inertia and a large velocity for a
 bounded flux; such a value ($\phaseaperture{\phase}{f}<\frac12$ on a face with
-$o_f<1$) gets the tie of weight $1-2\phaseaperture{\phase}{f}$ of the mixed
-faces, which vanishes on constant fields. A value without aperture and donor
+$o_f<1$) gets the tie $w_f$ of~\cref{eq:projection:mimetic-ties} with
+$\Lambda_f$ from the open dual volume, which vanishes on constant fields. A value without aperture and donor
 next to the solid (its face partially closed, a partially solid cell, or a
 partially closed same-axis face across one of its cells) is tied to the
 solid, whose velocity is prescribed, as a wall value is: no free fall of a
@@ -1192,16 +1341,44 @@ section~3). Each phase has its own capillary potential on the cells,
   J^{\phase}_f=\meas{f}\bigl(\varphi^{\phase}_{\cplus{f}}-\varphi^{\phase}_{\cminus{f}}\bigr),
 \end{equation}
 with the Heaviside $I_c=[C_c>\tfrac12]$ (\apitype{CGFM}) or the liquid
-fraction $I_c=C_c$ (\apitype{CSF}), and the value of phase $\phase$ on face $f$
-gets the increment $\dt\,\mathcal M^{-1}(\phaseaperture{\phase}{f}J^{\phase}_f)$.
+fraction $I_c=C_c$ (\apitype{CSF}). A value alone on its face gets the
+increment $\dt\,\mathcal M^{-1}(\phaseaperture{\phase}{f}J^{\phase}_f)$; on a face
+with both values the gas value gets $\phaseaperture{\gas}{f}J^{\gas}_f$ and the
+liquid value
+\begin{equation}\label{eq:projection:mimetic-booked}
+  f^{\liq}_f=\phaseaperture{\liq}{f}J^{\gas}_f+c_f\,(J^{\liq}_f-J^{\gas}_f),\qquad
+  c_f=\operatorname{clamp}\Bigl(\frac{c^{\liq}_f\velo^{\liq}_f+c^{\gas}_f\velo^{\gas}_f}{\velo^{\liq}_f},\,0,\,o_f\Bigr),
+\end{equation}
+the \emph{booked carrier}, with $c^{\liq}_f=\min(\phaseaperture{\liq}{f},t^{d(\velo^{\liq})}_f)$,
+$c^{\gas}_f=\max(t^{d(\velo^{\gas})}_f-\phaseaperture{\liq}{f},0)$, $t^{\mp}_f$ the
+liquid traces of the PLIC lines of the two cells on the face (on a split side
+on the face's segment, at a solid of the open part; $o_f$ the open aperture),
+$d(\velo)$ the upstream cell of the value, and
+$c_f=\min(\phaseaperture{\liq}{f},t^{d(\velo^{\liq})}_f)$ for $\abs{\velo^{\liq}_f}\le10^{-10}$.
+For $\dt\to0$ the VOF transport moves the liquid volume
+$\meas{f}(c^{\liq}\velo^{\liq}+c^{\gas}\velo^{\gas})$ through the face, so the work
+$c_f\velo^{\liq}_f(J^{\liq}_f-J^{\gas}_f)$ of the difference term is the
+surface-energy release $-\sigma\sum\Delta\kappa\,\Phi$ of the transport while the
+clamp is inactive: the booked carrier closes the duality defect of force
+versus transport in the semi-discrete limit (audit note \emph{Static drop
+energy}). With equal phase values it is the upstream trace; it depends on the
+signs of the values only and is not Galilean invariant (translating drop at
+densities $(1,1000)$: $\times1.8$ in the kinetic-energy error). With the mean
+aperture $\phaseaperture{\liq}{f}$ as carrier (before) the inviscid static drop
+grew $\times35$, $\times83$, $\times4300$ at DR 1, 3, 1000 by $t=0.4$ ($h=1/64$);
+with the booked carrier and the uniform ties its energy is flat to $t=1.2$
+(measured in this branch: $\times0.73$, $\times1.06$, $\times1.01$ from the first to
+the last third, late currents $0.023$--$0.028$) and the residual motion is the
+capillary mode-4 oscillation.
 The two potentials differ by the capillary pressure jump $\sigma\kappa_c$. One
 pressure per cell absorbs both exactly where that difference is the same on
 the neighbouring cells that carry values of both phases (the audit's balance
 lemma): for a constant curvature both jumps are the common jump
 $\sigma\kappa\jump{I}_f\meas{f}$, the face jump of the cell potential
-$\sigma\kappa I$, which the projection removes exactly at any density ratio.
+$\sigma\kappa I$, which the projection removes exactly at any density ratio,
+whatever the carrier.
 For a varying curvature the force is, up to such a gradient,
-$-\sigma\phaseaperture{\liq}{f}\meas{f}(\kappa_{\cplus{f}}-\kappa_{\cminus{f}})$
+$-\sigma c_f\meas{f}(\kappa_{\cplus{f}}-\kappa_{\cminus{f}})$
 on the liquid alone. The common jump $\sigma\kappa_f\jump{I}_f\meas{f}$ on both
 phases, used before, gave the gas value of a face between two cells with
 $I=1$ (a thin gas layer over liquid-dominated cells) the variation of the
@@ -1230,6 +1407,39 @@ of~\cref{ch:forces}. A face whose force needs a curvature that is not
 available gets no force and is counted in \code{unresolved_curvature_faces},
 as for the other projections. The projection has no options of its own.
 
+\emph{Hydrostatic reference of the potentials.} Under gravity a per-phase
+potential difference $\sigma\kappa_c$ refers the curvature to the pressure
+point, whereas the height-function curvature belongs to an interface point
+$x_\Gamma$. With $\sigma>0$ and $g\neq0$ the potentials
+of~\cref{eq:projection:mimetic-capillary} use, in place of $\sigma\kappa_c$,
+\begin{equation}\label{eq:projection:mimetic-hydrostatic}
+  \psi_c=\Psi_c+(\dens^{\liq}-\dens^{\gas})\,g\cdot x^{*}_c,\qquad
+  \Psi_c=\sigma\kappa_c-(\dens^{\liq}-\dens^{\gas})\,g\cdot x_{\Gamma,c}
+\end{equation}
+on the cut cells with their own curvature, and the $C(1-C)$-weighted mean of
+$\Psi$ of the cut face neighbours (both faces of a split side) on the other
+cells: the hydrostatic extension $\sigma\kappa(x_\Gamma)+(\dens^{\liq}-\dens^{\gas})g\cdot(x-x_\Gamma)$
+of the pressure jump, sampled at the pressure points with which gravity's Gram
+moment~\cref{eq:projection:mimetic-gravity} is balanced. $x_{\Gamma,c}$ is the
+interface point of the centred height-function columns (their quality-weighted
+mean, as in the curvature) projected orthogonally onto the cell's PLIC line;
+where the centred columns are not valid (the generalised height-function fit,
+cells cut by a solid) it is the centroid of the PLIC line in the cell, the
+origin of that fit. Every candidate lies on the PLIC line, so a flat interface
+normal to $g$ stays at rest exactly (tested uniform, across level transitions,
+$10^{-3}$ of a finest cell above a grid line, and above a solid floor).
+Measured (sessile drop of the integration suite, Bond number $1.21$, densities
+$(1,10^{-3})$, $h=1/48$): shape error $2.9\times10^{-4}\to2.3\times10^{-5}$ and
+$\max\abs u$ $0.82\to0.018$ at $90^\circ$, $8.2\times10^{-5}\to2.3\times10^{-5}$ and
+$0.27\to0.025$ at $60^\circ$ (CMDGFM $2.8\times10^{-5}$, $0.064$); cost
+Rayleigh--Taylor $3.91\to4.03\times10^{-2}$ (DR 3), $2.32\to2.49\times10^{-2}$
+(DR 1000), combined case $2.94\to2.98\times10^{-2}$ ($h=\lambda/32$). The study's
+other reference points (the height-function point itself, its tangential
+shift, the PLIC point on the column) are not ported. Where the curvature comes
+from a wall or contact-angle closure the same rule refers it to the centred
+column point or the PLIC centroid; that is an approximation of the closure's
+own point.
+
 \emph{Gravity} is the Gram moment $\mathsf R g$ of the constant field $g$, the
 work $\dens^{\phase}g\cdot u$ of the blocks: by~\cref{eq:projection:mimetic-wall-moment}
 $\mathsf Rg=\mathcal Mg+\mathsf Cg$, and every present phase value gets
@@ -1242,9 +1452,27 @@ every value $\mathsf Rg$ is the face difference
 $\dens^{\phase}\phaseaperture{\phase}{f}\meas{f}\,g\cdot(x^{*}_{\cplus{f}}-x^{*}_{\cminus{f}})$,
 so a fluid whose cut-cell pressure points lie on one level line is at rest,
 at the floor too. Without the coupling a drop on the floor at equal
-densities is not at rest ($\max\abs{u}=0.29\,\dt\abs{g}$ after one projection, $h=1/32$). (A density-weighted jump force $\mathcal M^{-1}(\phaseaperture{\phase}{f}\stagdens_fJ_f)$
+densities is not at rest ($\max\abs{u}=0.14\,\dt\abs{g}$ after one projection, $h=1/32$). (A density-weighted jump force $\mathcal M^{-1}(\phaseaperture{\phase}{f}\stagdens_fJ_f)$
 would give the gas value of a mixed face the weight of the mixture: about
 $500\,\dt g$ after one step at densities $(1000,1)$.)
+
+\emph{Momentum transport in the metric (measured, not adopted).} The phase
+values are transported in the lumped metric $\mathsf W$
+(\cref{ch:momentum-transport}). A completion in $\mathcal M$ was measured: the increment
+form $\mathcal M^{+}(u^{+}-\bar u)=\mathsf W^{+}(u_{\mathsf W}-\bar u)$ ($\bar u$
+the extended start values, $u_{\mathsf W}$ the swept values; constants exact,
+bounded) with a mass-proportional restoration of the $\mathcal M$-momentum
+$\mathsf Z^{\transpose}\mathcal Mu$ and mass-matched pressure points (slides
+along the symmetry lines, $O(h^3)$, making $\mathsf Z^{\transpose}\mathcal M\mathsf Z$
+the VOF phase mass away from walls; the free stream stayed exact to
+$3\times10^{-15}$). With the uniform ties, the booked carrier and the
+hydrostatic reference it made the inviscid static drop at $h=1/64$ grow again
+(energy $\times1.12$/$\times1.33$ at DR 1/3 by $t=1.2$, against $\times0.73$/$\times1.06$,
+currents $0.033$ against $0.023$), Kelvin--Helmholtz ($0.118$ against $0.103$) and
+the combined case ($0.041$ against $0.030$) less accurate and the impact peak
+larger ($85$ against $47$), while Rayleigh--Taylor at DR 1000 and the waves at
+DR 1000 improved. It is not part of the projection; the prototype and the
+measurements are kept with the study (\code{mm-runs/mm_config}).
 
 \emph{Viscosity.} With this projection the phase values take the implicit
 midpoint step of the mixture stress in the metric of the projection. With the

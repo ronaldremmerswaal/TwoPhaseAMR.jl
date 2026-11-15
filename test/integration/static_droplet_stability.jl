@@ -407,26 +407,16 @@ end
                 # k = 4 Lamb oscillation neither grows nor decays. Measured
                 # worst ratio of the last-third to first-third peak energies
                 # of the passing cases: 1.14; every such case is within 25%.
+                # The mimetic projection with the uniform ties and the booked
+                # capillary carrier (techref eq:projection:mimetic-ties,
+                # eq:projection:mimetic-booked): measured last/first-third peak
+                # energies 0.70 (DR 1), 0.63 (DR 3), 0.70 (DR 1000) at n = 32;
+                # with the former mass-proportional ties and the aperture as
+                # carrier 2.19, 1.98, 1.68.
                 @test coarse.energy_late <=
                     coarse.energy_early * (1 + STATIC_DROP_ENERGY_GROWTH_TOLERANCE)
-                if model === :mimetic
-                    # NUMERICS CONCERN: without viscosity the n = 32 energy
-                    # grows: last/first-third peak energy 2.19 (DR 1), 1.98
-                    # (DR 3), 1.68 (DR 1000), while the currents stay flat
-                    # (DR 1: liquid 7.6e-3 -> 7.8e-3, gas 5.5e-3 -> 5.8e-3).
-                    # With the common capillary jump this case passed (1.14).
-                    # Cause: the slow curvature-driven instability of the
-                    # per-phase coupling (audit note static_drop_stability,
-                    # sec:zero; the height-function curvature is not the
-                    # variation of an interface energy). The interphase drag
-                    # removed it in the audit's runs; candidate fix: a
-                    # variational (conservative height-function) curvature.
-                    @test_broken fine.energy_late <=
-                        fine.energy_early * (1 + STATIC_DROP_ENERGY_GROWTH_TOLERANCE)
-                else
-                    @test fine.energy_late <=
-                        fine.energy_early * (1 + STATIC_DROP_ENERGY_GROWTH_TOLERANCE)
-                end
+                @test fine.energy_late <=
+                    fine.energy_early * (1 + STATIC_DROP_ENERGY_GROWTH_TOLERANCE)
             else
                 # With the interphase drag (default; with the mimetic
                 # projection inside the metric viscous step) the mimetic n = 32
