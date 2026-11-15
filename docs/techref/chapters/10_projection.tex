@@ -1729,7 +1729,9 @@ drop at $n=32$ for $\dt$ times $1$, $10^2$, $10^4$, $10^6$ of the step of the
 runs: the eigenvalues of $\mathcal B\mathcal S$ lie in $[0.46,1.99]$ (condition
 number at most $4.4$), and conjugate gradients need 1/6/14/15 (KH) and
 2/5/3/2 (drop) iterations. Reductions are serial, so the result does not depend
-on the thread counts; should round-off make $r^{\transpose}z$ or
+on the Julia thread count (it does on the BLAS thread count, through the
+UMFPACK $LU$ of the coarsest level of the mixture solve's multigrid; measured
+on a drop at $n=128$, densities $(1000,1)$); should round-off make $r^{\transpose}z$ or
 $p^{\transpose}\mathcal Sp$ non-positive, the iteration restarts with
 $\mathcal P$ alone.
 
@@ -1787,7 +1789,8 @@ $\mathsf L_{cc}$ the band-cell block of $\mathsf L$, $\Delta$ the diagonal of
 $\mathsf L+\mathsf B_b\operatorname{diag}(\mathcal M_{bb})^{-1}\mathsf B_b^{\transpose}$
 there and $\epsilon=10^{-4}$: eliminating the band values leaves
 $-(\mathcal S_{cc}+\epsilon\Delta)$. A cell whose sides all carry band values
-makes $\mathsf L_{cc}$ singular; with $\epsilon>0$, $K$ is symmetric
+makes $\mathsf L_{cc}$ singular, which is common (64 of the 154 band cells of
+a drop at $n=32$, densities $(1000,1)$); with $\epsilon>0$, $K$ is symmetric
 quasi-definite and has an $LDL^{\transpose}$ factorisation for every
 symmetric ordering~\cite{vanderbei1995}. With the extension by zero $E$ from
 the band cells and $C=E(\mathcal S_{cc}+\epsilon\Delta)^{-1}E^{\transpose}$,
@@ -1801,8 +1804,11 @@ cycle:} from $I-\mathcal B\mathcal S=(I-C\mathcal S)(I-\mathcal P\mathcal S)(I-C
 $\mathcal B=2C-C\mathcal SC+(I-C\mathcal S)\mathcal P(I-\mathcal SC)$; with
 $Y=(\mathcal S_{cc}+\epsilon\Delta)^{-1}$ the first part is
 $EY(\mathcal S_{cc}+2\epsilon\Delta)YE^{\transpose}\succeq0$, positive off the
-kernel of $E^{\transpose}$, and on that kernel the second part is
-$r^{\transpose}\mathcal Pr>0$. The band values of the saddle-point solve are
+kernel of $E^{\transpose}$ since $\mathcal S_{cc}$, a principal block of the
+symmetric positive definite $\mathcal S$, is positive definite; on that kernel
+the second part is $r^{\transpose}\mathcal Pr>0$. The argument holds for
+$\epsilon=0$ as well: $\epsilon>0$ is needed only for the factorisation of
+$K$, not for the definiteness of $\mathcal B$. The band values of the saddle-point solve are
 $\mathcal M_{bb}^{-1}\mathsf B_{bc}^{\transpose}y$, so $\mathcal SEy$ costs two
 sparse products. Conjugate gradients form $\mathcal Sp$ by a Schur product,
 not from the recurrence of the directions with the products $\mathcal Sz$ of

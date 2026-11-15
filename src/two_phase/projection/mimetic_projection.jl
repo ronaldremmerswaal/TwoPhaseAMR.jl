@@ -4,6 +4,7 @@
 # docs/techref/chapters/10_projection.tex, "Mimetic cut-cell projection".
 
 import SparseArrays: CHOLMOD
+import SparseArrays.LibSuiteSparse: CHOLMOD_LONG, CHOLMOD_REAL, CHOLMOD_DOUBLE
 
 """
     MimeticProjectionSolver(interface; density=(1, 1))
@@ -35,8 +36,9 @@ keeps its symbolic analysis while the sparsity pattern of the factorised
 matrix is unchanged (the result is bitwise that of a fresh factorisation).
 The factor (`L` with `D` on its diagonal, the diagonal first in each column,
 in `pointers`, `rows`, `entries`) and the fill-reducing permutation are copied
-out of CHOLMOD's storage into reused vectors, and `_mimetic_ldlt_solve!`
-solves with them in serial loops without allocating."""
+into reused vectors (`_mimetic_ldlt_copy!`), and `_mimetic_ldlt_solve!` solves
+with them in serial loops without allocating. `work` is the scratch of the
+solve: one factorisation is not solved with from two threads at once."""
 mutable struct _MimeticLDLT{T}
     factor::Union{Nothing, CHOLMOD.Factor{T, Int}}
     colptr::Vector{Int}
@@ -60,15 +62,28 @@ function _mimetic_ldlt!(ldlt::_MimeticLDLT{T}, matrix::Symmetric) where {T}
     else
         CHOLMOD.ldlt!(ldlt.factor, matrix)
     end
+    _mimetic_ldlt_copy!(ldlt, size(data, 1)) || _mimetic_ldlt_public_copy!(ldlt)
+    resize!(ldlt.work, size(data, 1))
+    return ldlt
+end
+
+"""Copy the factor of `ldlt.factor` (dimension `n`) out of CHOLMOD's own
+storage, the `cholmod_factor` struct, without allocating. The struct is not
+public API, so the copy checks its kind first: a real double-precision
+simplicial `LDLᵀ` factor with `Int` indices of dimension `n` that factorised
+completely (`minor == n`), each column holding its diagonal first. Returns
+`false`, the copy unusable, when a check fails; `_mimetic_ldlt!` then copies
+through the public API (`_mimetic_ldlt_public_copy!`)."""
+function _mimetic_ldlt_copy!(ldlt::_MimeticLDLT{T}, n) where {T}
+    T === Float64 || return false
     factor = ldlt.factor
     GC.@preserve factor begin
-        # A simplicial LDLᵀ factor: column `j` holds `nz[j]` entries from `p[j]`
-        # (zero-based, the columns not necessarily in order in memory).
         stored = unsafe_load(factor.ptr)
-        iszero(stored.is_ll) && iszero(stored.is_super) || throw(
-            ArgumentError("CHOLMOD returned no simplicial LDLᵀ factor"),
-        )
-        n = Int(stored.n)
+        kind = stored.itype == CHOLMOD_LONG && stored.xtype == CHOLMOD_REAL &&
+            stored.dtype == CHOLMOD_DOUBLE && iszero(stored.is_ll) && iszero(stored.is_super)
+        kind && stored.n == n && stored.minor == n || return false
+        # Column `j` holds `nz[j]` entries from `p[j]` (zero-based; the columns
+        # are not necessarily in order in memory).
         start, row, value = Ptr{Int}(stored.p), Ptr{Int}(stored.i), Ptr{T}(stored.x)
         count, order = Ptr{Int}(stored.nz), Ptr{Int}(stored.Perm)
         pointers = resize!(ldlt.pointers, n + 1)
@@ -84,13 +99,24 @@ function _mimetic_ldlt!(ldlt::_MimeticLDLT{T}, matrix::Symmetric) where {T}
                 rows[entry] = unsafe_load(row, entry + offset) + 1
                 entries[entry] = unsafe_load(value, entry + offset)
             end
+            pointers[column] < pointers[column + 1] && rows[pointers[column]] == column || return false
         end
         permutation = resize!(ldlt.permutation, n)
         for index in 1:n
             permutation[index] = unsafe_load(order, index) + 1
         end
     end
-    resize!(ldlt.work, size(data, 1))
+    return true
+end
+
+"""Copy the factor of `ldlt.factor` through CHOLMOD's public API (`LD` as a
+sparse matrix, rows sorted, so the diagonal comes first, and `p`); allocates."""
+function _mimetic_ldlt_public_copy!(ldlt::_MimeticLDLT)
+    lower = sparse(ldlt.factor.LD)
+    copy!(ldlt.pointers, lower.colptr)
+    copy!(ldlt.rows, rowvals(lower))
+    copy!(ldlt.entries, nonzeros(lower))
+    copy!(ldlt.permutation, ldlt.factor.p)
     return ldlt
 end
 
@@ -185,9 +211,9 @@ mutable struct MimeticProjectionWorkspace{T, M <: BlockTreeMesh}
     band_cells::Vector{Int}
     reduced_index::Vector{Int}
     cell_band_position::Vector{Int}
-    saddle_rows::Vector{Int}
-    saddle_columns::Vector{Int}
-    saddle_values::Vector{T}
+    saddle_colptr::Vector{Int}
+    saddle_rowval::Vector{Int}
+    saddle_nzval::Vector{T}
     saddle_rhs::Vector{T}
     saddle_solution::Vector{T}
     divergence_band::SparseMatrixCSC{T, Int}
@@ -223,6 +249,7 @@ mutable struct MimeticProjectionWorkspace{T, M <: BlockTreeMesh}
     multiplier::Vector{T}
     cell_residual::Vector{T}
     cell_scratch::Vector{T}
+    cell_product::Vector{T}
     band_scratch::Vector{T}
     band_solution::Vector{T}
     reduced_rhs::Vector{T}
@@ -258,7 +285,7 @@ function MimeticProjectionWorkspace(solver::MimeticProjectionSolver{T}) where {T
         Int[], Int[], Int[], T[], T[], Int[], spzeros(T, 0, 0), Int[],
         T[], nothing, nothing, nothing, nothing,
         T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[],
-        T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[],
+        T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[], T[],
         _MimeticViscousWork(T),
     )
 end
@@ -480,6 +507,7 @@ function _mimetic_assemble_from_data!(
     resize!(workspace.band_solution, count)
     resize!(workspace.cell_residual, cells)
     resize!(workspace.cell_scratch, cells)
+    resize!(workspace.cell_product, cells)
     resize!(workspace.multiplier, cells)
     # Face coefficient of the preconditioning pressure operator `D W⁻¹ Dᵀ`, in
     # units of 1/rho: Σ_π (a|f|)² / W_r with W_r the diagonal phase mass, per
@@ -589,10 +617,16 @@ preconditioning operator. `D_bc` is the divergence of the band values on
 them, `L_cc` the principal block of `L`, `Δ` the diagonal of
 `L + D_b diag(𝓜_bb)⁻¹ D_bᵀ` on them and `ε = _MIMETIC_SADDLE_REGULARIZATION`.
 Eliminating the band values gives `-(S_cc + εΔ)`, `S_cc` the band-cell block
-of `S`. `L_cc` alone can be singular (a cell whose sides all carry band
-values); with `ε > 0` the matrix is symmetric quasi-definite, so its `LDLᵀ`
-factorisation exists for every symmetric ordering. The cells are taken in
-increasing order, so the matrix does not depend on the thread count."""
+of `S`. `L_cc` is singular wherever a band cell has band values on all its
+sides, which is common (64 of the 154 band cells of a drop at `n = 32` and
+densities `(1000, 1)`); with `ε > 0` the matrix is symmetric quasi-definite,
+so its `LDLᵀ` factorisation exists for every symmetric ordering. `ε` serves
+only that factorisation: the preconditioner is symmetric positive definite
+for `ε = 0` as well (`_mimetic_pressure_precondition!`). The upper triangle
+of `K` is assembled column by column in reused storage (no triplets; the
+entries and their order are those of a triplet assembly that skips the zero
+entries of `L`), the cells in increasing order, so the matrix does not depend
+on the thread count. Without band cells nothing is factorised."""
 function _mimetic_band_cell_saddle!(workspace::MimeticProjectionWorkspace{T}) where {T}
     assembly = workspace.assembly
     band = assembly.band
@@ -604,6 +638,7 @@ function _mimetic_band_cell_saddle!(workspace::MimeticProjectionWorkspace{T}) wh
     band_cells = empty!(workspace.band_cells)
     isempty(band) && return workspace
     divergence = workspace.divergence_band
+    transpose = workspace.divergence_band_transpose
     laplacian = workspace.diagonal_laplacian
     metric = assembly.band_matrix
     position = fill!(resize!(workspace.cell_band_position, cells), 0)
@@ -615,53 +650,69 @@ function _mimetic_band_cell_saddle!(workspace::MimeticProjectionWorkspace{T}) wh
         push!(band_cells, reduced[cell])
         position[cell] = length(band_cells)
     end
+    isempty(band_cells) && return workspace
     count = length(band)
-    rows = empty!(workspace.saddle_rows)
-    columns = empty!(workspace.saddle_columns)
-    values = empty!(workspace.saddle_values)
-    # Δ, accumulated in the solution buffer before the factorisation.
+    dimension = count + length(band_cells)
+    # Δ, accumulated in the solution buffer before the factorisation: the
+    # band part here, the diagonal of `L` with the cell columns below.
     delta = fill!(resize!(workspace.saddle_solution, length(band_cells)), zero(T))
     for column in 1:count
         diagonal = zero(T)
         for pointer in nzrange(metric, column)
-            row = rowvals(metric)[pointer]
-            row <= column || continue
-            push!(rows, row)
-            push!(columns, column)
-            push!(values, nonzeros(metric)[pointer])
-            row == column && (diagonal = nonzeros(metric)[pointer])
+            rowvals(metric)[pointer] == column && (diagonal = nonzeros(metric)[pointer])
         end
         for pointer in nzrange(divergence, column)
             k = position[rowvals(divergence)[pointer]]
-            k > 0 || continue
-            value = nonzeros(divergence)[pointer]
-            push!(rows, column)
-            push!(columns, count + k)
-            push!(values, -value)
-            delta[k] += value^2 / diagonal
+            k > 0 && (delta[k] += nonzeros(divergence)[pointer]^2 / diagonal)
         end
     end
+    pointers = resize!(workspace.saddle_colptr, dimension + 1)
+    rows = empty!(workspace.saddle_rowval)
+    values = empty!(workspace.saddle_nzval)
+    pointers[1] = 1
+    # Band columns: the upper triangle of 𝓜_bb.
+    for column in 1:count
+        for pointer in nzrange(metric, column)
+            row = rowvals(metric)[pointer]
+            row <= column || continue
+            push!(rows, row)
+            push!(values, nonzeros(metric)[pointer])
+        end
+        pointers[column + 1] = length(rows) + 1
+    end
+    # Cell columns: -D_bcᵀ (the band values of the cell, rows in increasing
+    # order in the transpose), then -L_cc above and on the diagonal (the rows
+    # of a column of `L` in increasing cell order, so in increasing `k`) with
+    # -εΔ on the diagonal.
+    epsilon = T(_MIMETIC_SADDLE_REGULARIZATION)
     for (k, index) in pairs(band_cells)
-        for pointer in nzrange(laplacian, workspace.pressure_indices[index])
-            other = position[rowvals(laplacian)[pointer]]
-            other >= k || continue
-            value = nonzeros(laplacian)[pointer]
-            iszero(value) && continue
-            push!(rows, count + k)
-            push!(columns, count + other)
-            push!(values, -value)
-            other == k && (delta[k] += value)
+        cell = workspace.pressure_indices[index]
+        for pointer in nzrange(transpose, cell)
+            push!(rows, rowvals(transpose)[pointer])
+            push!(values, -nonzeros(transpose)[pointer])
         end
-    end
-    for k in eachindex(band_cells)
+        laplacian_diagonal = zero(T)
+        for pointer in nzrange(laplacian, cell)
+            other = position[rowvals(laplacian)[pointer]]
+            value = nonzeros(laplacian)[pointer]
+            if other == k
+                laplacian_diagonal = value
+            elseif 0 < other < k && !iszero(value)
+                push!(rows, count + other)
+                push!(values, -value)
+            end
+        end
+        iszero(laplacian_diagonal) || (delta[k] += laplacian_diagonal)
         push!(rows, count + k)
-        push!(columns, count + k)
-        push!(values, -T(_MIMETIC_SADDLE_REGULARIZATION) * delta[k])
+        push!(
+            values, iszero(laplacian_diagonal) ? -epsilon * delta[k] :
+                -laplacian_diagonal + -epsilon * delta[k],
+        )
+        pointers[count + k + 1] = length(rows) + 1
     end
-    dimension = count + length(band_cells)
     _mimetic_ldlt!(
         workspace.saddle_ldlt,
-        Symmetric(sparse(rows, columns, values, dimension, dimension), :U),
+        Symmetric(SparseMatrixCSC(dimension, dimension, pointers, rows, values), :U),
     )
     resize!(workspace.saddle_rhs, dimension)
     resize!(workspace.saddle_solution, dimension)
@@ -762,7 +813,9 @@ end
 """`y = S x` with the gauge-reduced Schur complement `S = D 𝓜⁻¹ Dᵀ` of the
 mimetic saddle-point system on the pressure unknowns `pressure_indices` (zero
 pressure at the anchors), applied matrix-free: the band block of `𝓜` with its
-factorisation, the diagonal part through an assembled cell matrix."""
+factorisation, the diagonal part through an assembled cell matrix. Its cell
+buffers (`cell_scratch`, `cell_product`) are its own, so the outflow
+(`cell_residual`) of `_mimetic_solve!` survives a solve."""
 function _mimetic_schur!(y, workspace, x)
     T = eltype(y)
     full = workspace.cell_scratch
@@ -771,7 +824,7 @@ function _mimetic_schur!(y, workspace, x)
     for (index, cell) in pairs(indices)
         full[cell] = x[index]
     end
-    result = workspace.cell_residual
+    result = workspace.cell_product
     _mimetic_schur_full!(result, workspace, full)
     for (index, cell) in pairs(indices)
         y[index] = result[cell]
@@ -830,9 +883,12 @@ correction with the band cells, `C = E (S_cc + εΔ)⁻¹ Eᵀ`
 `S` differs from the operator of `M` only in the rows of the band cells, on
 which `C` is exact up to `ε`. From `I - BS = (I - CS)(I - MS)(I - CS)`,
 `B = 2C - CSC + (I - CS) M (I - SC)`. With `Y = (S_cc + εΔ)⁻¹`,
-`2C - CSC = E Y (S_cc + 2εΔ) Y Eᵀ` is positive semi-definite, and the second
-term is positive on the kernel of `C`, where `I - SC` is the identity: `B` is
-symmetric positive definite for every symmetric positive definite `M`.
+`2C - CSC = E Y (S_cc + 2εΔ) Y Eᵀ` is positive semi-definite, as `S_cc`, a
+principal block of the symmetric positive definite `S`, is positive definite,
+and the second term is positive on the kernel of `C`, where `I - SC` is the
+identity: `B` is symmetric positive definite for every symmetric positive
+definite `M`. The argument holds for `ε = 0` too; `ε > 0` is needed only for
+the `LDLᵀ` factorisation of the saddle-point matrix (`L_cc` is often singular).
 `S z₁` comes from the saddle-point solve (`_mimetic_band_cell_solve!`), so one
 application costs one V-cycle, one Schur product and two band-cell solves.
 Without band cells `z = M r`."""
@@ -857,15 +913,16 @@ end
 """Preconditioned conjugate gradients for `S x = b` (`b = workspace.reduced_rhs`,
 `x = workspace.reduced_solution` from zero) with the preconditioner
 `_mimetic_pressure_precondition!`, stopped when the preconditioned residual
-norm `√(rᵀBr)` falls to `rtol` times its initial value, after `itmax`
-iterations, or when `rᵀBr` or `pᵀSp` is not positive in round-off. `Sp` is a
-Schur product (`_mimetic_schur!`), not the recurrence of the directions from
-products `Sz` of the preconditioner: their band-cell part comes from the
-quasi-definite saddle-point solve, exact to only round-off times its
-conditioning (up to `6e-12` relative measured), and the recursive residual
-would drift from `b - Sx` by as much (a film at rest at densities
-`(1000, 1)` then moved its gas at `3e-15` and was set in motion within two
-steps). Reductions are serial, so the bits do not depend on the
+norm `√(rᵀBr)` falls to `rtol` times its initial value or vanishes, or after
+`itmax` iterations. A negative or non-finite `rᵀBr`, or a non-positive or
+non-finite `pᵀSp`, throws (`S` or `B` not symmetric positive definite, as
+Krylov.jl's `cg` threw). `Sp` is a Schur product (`_mimetic_schur!`), not the
+recurrence of the directions from products `Sz` of the preconditioner: their
+band-cell part comes from the quasi-definite saddle-point solve, exact to only
+round-off times its conditioning (up to `6e-12` relative measured), and the
+recursive residual would drift from `b - Sx` by as much (a film at rest at
+densities `(1000, 1)` then moved its gas at `3e-15` and was set in motion
+within two steps). Reductions are serial, so the bits do not depend on the
 Julia thread count. Returns the iterations."""
 function _mimetic_pressure_cg!(workspace, preconditioner, rtol, itmax)
     x = workspace.reduced_solution
@@ -878,26 +935,35 @@ function _mimetic_pressure_cg!(workspace, preconditioner, rtol, itmax)
     copyto!(r, workspace.reduced_rhs)
     _mimetic_pressure_precondition!(z, workspace, preconditioner, r)
     gamma = _mimetic_dot(r, z)
-    gamma > zero(T) || return 0
+    _mimetic_cg_check(isfinite(gamma) && gamma >= zero(T), "rᵀBr", gamma)
+    iszero(gamma) && return 0
     target = rtol * sqrt(gamma)
     copyto!(p, z)
     iterations = 0
     while iterations < itmax
         _mimetic_schur!(q, workspace, p)
         curvature = _mimetic_dot(p, q)
-        curvature > zero(T) || break
+        _mimetic_cg_check(isfinite(curvature) && curvature > zero(T), "pᵀSp", curvature)
         alpha = gamma / curvature
         x .+= alpha .* p
         r .-= alpha .* q
         iterations += 1
         _mimetic_pressure_precondition!(z, workspace, preconditioner, r)
         next = _mimetic_dot(r, z)
-        next > zero(T) && sqrt(next) > target || break
+        _mimetic_cg_check(isfinite(next) && next >= zero(T), "rᵀBr", next)
+        sqrt(next) > target || break
         p .= z .+ (next / gamma) .* p
         gamma = next
     end
     return iterations
 end
+
+@inline _mimetic_cg_check(valid, name, value) = valid || _mimetic_cg_breakdown(name, value)
+
+@noinline _mimetic_cg_breakdown(name, value) = error(
+    "MimeticProjection pressure solve: $name = $value in conjugate gradients; " *
+        "the Schur complement or its preconditioner is not symmetric positive definite",
+)
 
 """Phase values of `velocity` on the degrees of freedom of the assembly.
 

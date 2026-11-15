@@ -2035,6 +2035,79 @@ end
     end
 end
 
+# Preconditioners that break conjugate gradients.
+struct _MimeticNegativePreconditioner end
+LinearAlgebra.ldiv!(z, ::_MimeticNegativePreconditioner, r) = (z .= .-r; z)
+struct _MimeticNaNPreconditioner end
+LinearAlgebra.ldiv!(z, ::_MimeticNaNPreconditioner, r) = fill!(z, NaN)
+
+# The factor of a `_MimeticLDLT` as a sparse matrix.
+function _mimetic_ldlt_matrix(ldlt)
+    n = length(ldlt.pointers) - 1
+    columns = [column for column in 1:n for _ in ldlt.pointers[column]:(ldlt.pointers[column + 1] - 1)]
+    return sparse(ldlt.rows, columns, ldlt.entries, n, n)
+end
+
+@testset "Mimetic sparse LDLᵀ: copy of the CHOLMOD factor, reuse, pattern change" begin
+    # The factor is copied out of CHOLMOD's internal storage; it must equal
+    # the factor of the public API (`LD`, `p`) for a fresh factorisation, a
+    # refactorisation on the same pattern (symbolic reuse) and a pattern with
+    # the same column counts but other rows, for a symmetric positive definite
+    # and a quasi-definite matrix, and it must solve.
+    TP = TwoPhaseAMR
+    rng = MersenneTwister(31)
+    n = 60
+    random = sprandn(rng, n, n, 0.08)
+    spd = random + random' + n * I
+    coupling = sprandn(rng, 20, n, 0.1)
+    quasi = [spd coupling'; coupling -spdiagm(fill(1.0e-2, 20))]
+    for matrix in (spd, quasi)
+        upper = triu(matrix)
+        dimension = size(upper, 1)
+        # Same pattern, other values: the off-diagonal entries scaled.
+        rescaled = copy(upper)
+        for column in 1:dimension, pointer in nzrange(rescaled, column)
+            rowvals(rescaled)[pointer] == column || (nonzeros(rescaled)[pointer] *= 1.3)
+        end
+        # Same column pointers, other rows: one off-diagonal entry moved up a row.
+        moved = copy(upper)
+        found = false
+        for column in 1:dimension, pointer in nzrange(moved, column)
+            row = rowvals(moved)[pointer]
+            if !found && 1 < row < column && (pointer == first(nzrange(moved, column)) || rowvals(moved)[pointer - 1] < row - 1)
+                rowvals(moved)[pointer] = row - 1
+                found = true
+            end
+        end
+        @test found && moved.colptr == upper.colptr && rowvals(moved) != rowvals(upper)
+        ldlt = TP._MimeticLDLT(Float64)
+        b = randn(rng, dimension)
+        previous = nothing
+        for (step, current) in enumerate((upper, rescaled, moved))
+            TP._mimetic_ldlt!(ldlt, Symmetric(current, :U))
+            # Symbolic reuse on the same pattern, a new factor on a new one.
+            step == 2 && @test ldlt.factor === previous
+            step == 3 && @test ldlt.factor !== previous
+            previous = ldlt.factor
+            # The internal copy is taken (its checks pass) and equals the
+            # public one.
+            @test TP._mimetic_ldlt_copy!(ldlt, dimension)
+            public = TP._MimeticLDLT(Float64)
+            public.factor = ldlt.factor
+            TP._mimetic_ldlt_public_copy!(public)
+            @test _mimetic_ldlt_matrix(ldlt) == _mimetic_ldlt_matrix(public)
+            @test ldlt.permutation == public.permutation
+            @test all(column -> ldlt.rows[ldlt.pointers[column]] == column, 1:dimension)
+            x = TP._mimetic_ldlt_solve!(similar(b), ldlt, b)
+            @test norm(Symmetric(current, :U) * x - b) <= 1.0e-12 * norm(b)
+            # The refactorisation equals a fresh factorisation.
+            fresh = TP._mimetic_ldlt!(TP._MimeticLDLT(Float64), Symmetric(copy(current), :U))
+            @test _mimetic_ldlt_matrix(ldlt) == _mimetic_ldlt_matrix(fresh)
+            @test ldlt.permutation == fresh.permutation
+        end
+    end
+end
+
 @testset "Mimetic pressure solver: band-cell correction of the multigrid preconditioner" begin
     # The Schur complement S = D𝓜⁻¹Dᵀ differs from the preconditioning operator
     # D W⁻¹ Dᵀ only on the band cells (the cells next to a band value); the
@@ -2051,6 +2124,9 @@ end
         ("wall film", d -> _mimetic_case(32, (x, y) -> y - 0.23h - 0.05h * sin(2pi * x); density = d, periodic = (false, false))),
         ("solid sliver", d -> _mimetic_solid_case(32, sliver, (x, y) -> hypot(x - 0.47, y - 0.42) - 0.24; density = d)),
         ("adaptive drop", d -> _mimetic_composite_case(_MIMETIC_COMPOSITE_REGIONS[2]..., _MIMETIC_COMPOSITE_LEVELSETS[1]; density = d)),
+        # A solid slab splits the domain into two open components, each with
+        # its own pressure anchor.
+        ("two components", d -> _mimetic_solid_case(32, (x, y) -> abs(x - 0.5) - 0.1, (x, y) -> min(hypot(x - 0.25, y - 0.5) - 0.1, hypot(x - 0.75, y - 0.45) - 0.09); density = d)),
     )
     rng = MersenneTwister(193)
     for (name, build) in fixtures
@@ -2067,6 +2143,7 @@ end
             resize!(vector, n)
         end
         @test !isempty(work.band_cells)
+        @test length(unique(work.pressure_anchors)) == (name == "two components" ? 2 : 1)
         # The LDLᵀ solve of the band block.
         metric = Matrix(assembly.band_matrix)
         b = randn(rng, size(metric, 1))
@@ -2077,6 +2154,12 @@ end
         unit(j) = (e = zeros(n); e[j] = 1.0; e)
         S = reduce(hcat, (TP._mimetic_schur!(zeros(n), work, unit(j)) for j in 1:n))
         @test S ≈ S' rtol = 1.0e-10
+        @test eigmin(Symmetric((S + S') / 2)) > 0
+        # The Schur product keeps the outflow buffer of the solve.
+        outflow = rand(rng, length(work.cell_residual))
+        copyto!(work.cell_residual, outflow)
+        TP._mimetic_schur!(zeros(n), work, randn(rng, n))
+        @test work.cell_residual == outflow
         g = randn(rng, n)
         z, w = zeros(n), zeros(n)
         TP._mimetic_band_cell_solve!(z, w, work, g)
@@ -2106,7 +2189,25 @@ end
         append!(work.band_cells, saved)
         @test corrected < plain
         println("mimetic pressure solver ($name): CG iterations ", corrected, " with the band-cell correction, ", plain, " without")
+        # The projection itself: a predictor projected to the tolerance.
+        velocity = _mimetic_velocity(case, (phase, face) -> (phase == 1 ? 1.0 : -0.6) * sin(5face.center[1] + 3face.center[2] + face.axis))
+        stats = project!(velocity, CellField(case.mesh), case.solver, 1.0e-2, work; tolerance = 1.0e-10)
+        @test stats.converged && stats.mixture_volume_defect <= 1.0e-10
     end
+    # A breakdown of conjugate gradients throws (as Krylov.jl's `cg` did): a
+    # negative definite and a non-finite preconditioner.
+    case = fixtures[1][2]((1000.0, 1.0))
+    work = case.workspace
+    TP._mimetic_assemble!(case.solver, work)
+    TP._mimetic_preconditioner!(case.solver, work)
+    n = length(work.pressure_indices)
+    for vector in (work.reduced_rhs, work.reduced_solution, work.cg_residual, work.cg_direction, work.cg_preconditioned, work.cg_product)
+        resize!(vector, n)
+    end
+    empty!(work.band_cells)
+    copyto!(work.reduced_rhs, randn(rng, n))
+    @test_throws ErrorException TP._mimetic_pressure_cg!(work, _MimeticNegativePreconditioner(), 1.0e-8, 50)
+    @test_throws ErrorException TP._mimetic_pressure_cg!(work, _MimeticNaNPreconditioner(), 1.0e-8, 50)
 end
 
 @testset "Mimetic capillary force: booked carrier" begin
