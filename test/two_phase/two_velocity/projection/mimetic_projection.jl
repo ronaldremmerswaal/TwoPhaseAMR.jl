@@ -1638,6 +1638,16 @@ end
 _mimetic_slanted(angle; point = (0.5, 0.22)) =
     (x, y) -> -sin(angle) * (x - point[1]) + cos(angle) * (y - point[2])
 _mimetic_cylinder(cx, cy, r) = (x, y) -> hypot(x - cx, y - cy) - r
+# The solid between two lines through `point` (a wedge) and a slab of
+# half-width `width` along a line.
+function _mimetic_wedge(first, second, point)
+    lower, upper = _mimetic_slanted(first; point), _mimetic_slanted(second + pi / 2; point)
+    return (x, y) -> max(lower(x, y), upper(x, y))
+end
+function _mimetic_slab(angle, width, point)
+    line = _mimetic_slanted(angle; point)
+    return (x, y) -> abs(line(x, y)) - width
+end
 
 function _mimetic_solid_case(n, solid, levelset; density = (1.0, 1.0), contact_angle = nothing, mesh = nothing)
     mesh = isnothing(mesh) ? BlockTreeMesh(block_size = (n, n), periodic = (false, false)) : mesh
@@ -1660,18 +1670,24 @@ function _mimetic_solid_flow(n, solid, levelset, density; gravity = (0.0, -9.81)
 end
 
 # Relative defect of the assembled Gram moment 𝓜χ^π_k + C e_k = ρ^π a|f| (x*₊ - x*₋)_k
-# over every value (C: the coupling to the wall sides, solid edges and ties).
+# over every value of phase π (C: the coupling to the wall sides, solid edges
+# and ties), and zero on the values of the other phase. An identified
+# grid-line value carries both phases: it is one in χ^π_k of either phase,
+# and its blocks in the cells of the other phase couple it to their values,
+# so with identified values only the values of phase π are compared.
 function _mimetic_gram_moment_defect(case)
     TP = TwoPhaseAMR
     work = case.workspace
     assembly = TP._mimetic_assemble!(case.solver, work)
     topology = work.topology
     point = (assembly.pressure_x, assembly.pressure_y)
-    dofs = eachindex(assembly.dof_face)
     axis(r) = case.mesh.faces[assembly.dof_face[r]].axis
     defect = 0.0
     for phase in 1:2, k in 1:2
-        field = [assembly.dof_phase[r] == phase && axis(r) == k ? 1.0 : 0.0 for r in dofs]
+        dofs = filter(eachindex(assembly.dof_face)) do r
+            assembly.dof_phase[r] == phase || (assembly.gridline_faces == 0 && assembly.dof_phase[r] != 3)
+        end
+        field = [assembly.dof_phase[r] in (phase, 3) && axis(r) == k ? 1.0 : 0.0 for r in eachindex(assembly.dof_face)]
         image = TP._mimetic_metric_product!(zeros(0), work, field)
         target = map(dofs) do r
             assembly.dof_phase[r] == phase || return 0.0
@@ -1742,6 +1758,24 @@ end
         @test edge.aperture ≈ (g(edge.a) <= 0 ? s : 1 - s) atol = 1.0e-14
         @test edge.start == (g(edge.a) <= 0)
     end
+    # Open parts in two opposite corners (a slab across the cell, or averaged
+    # traces next to closed sides): two runs, joined by two edges into the
+    # convex hull of the open parts, a hexagon of area 1 - 0.7².
+    segments = [
+        TP._MimeticSegment{Float64}(k, 0.0, 1.0, 0.3, false, 0.3, iseven(k)) for k in 1:4
+    ]
+    solid = TP._MimeticSolidData{Float64}(
+        Float64[], Bool[], Float64[], Bool[], Float64[], [0.3], [0.0], [0.0], [0.0], [1.0], [0.0], [1.0],
+    )
+    fluid = TP._mimetic_add_solid_edge!(segments, zeros(Int, 4), solid, 1)
+    @test length(segments) == 6 && all(segment -> segment.side == 0, segments[5:6])
+    corner(p, q) = all(isapprox.(p, q; atol = 1.0e-14))
+    @test corner(segments[5].a, (0.2, 0.5)) && corner(segments[5].b, (-0.5, -0.2))
+    @test corner(segments[6].a, (-0.2, -0.5)) && corner(segments[6].b, (0.5, 0.2))
+    @test corner(segments[6].normal, (sqrt(0.5), -sqrt(0.5)))
+    @test all(isapprox.(fluid, (1 - 0.49, 0.0, 1 - 0.49); atol = 1.0e-14))
+    # Pure liquid: the edges are wetted.
+    @test all(segment -> segment.aperture == 1.0, segments[5:6])
 end
 
 @testset "Mimetic metric with embedded solids: definiteness, consistency and the Gram moment" begin
@@ -1802,6 +1836,43 @@ end
     end
 end
 
+@testset "Mimetic metric on random embedded solids: no defective cell, the Gram moment" begin
+    # Random slanted lines, cylinders, wedges and thin slabs (traces of
+    # nearly covered cells averaged with open ones, open parts on two runs)
+    # with no interface, a pool or a drop: the solid edges close every cut
+    # cell, so no cell is defective and 𝓜χ + Ce = ρ a|f|Δx* on every value.
+    TP = TwoPhaseAMR
+    rng = Random.Xoshiro(23)
+    for k in 1:32
+        kind = mod1(k, 4)
+        solid = if kind == 1
+            _mimetic_slanted(0.9pi * (rand(rng) - 0.5); point = (0.5, 0.1 + 0.5rand(rng)))
+        elseif kind == 2
+            _mimetic_cylinder(0.25 + 0.5rand(rng), 0.25 + 0.5rand(rng), 0.08 + 0.25rand(rng))
+        elseif kind == 3
+            _mimetic_wedge(pi * rand(rng), pi * rand(rng), (0.3 + 0.4rand(rng), 0.3 + 0.4rand(rng)))
+        else
+            _mimetic_slab(pi * rand(rng), 0.01 + 0.05rand(rng), (0.5, 0.2 + 0.5rand(rng)))
+        end
+        levelset = if mod1(k, 3) == 1
+            (x, y) -> -1.0
+        elseif mod1(k, 3) == 2
+            height = 0.2 + 0.6rand(rng)
+            (x, y) -> y - height
+        else
+            centre, radius = (0.2 + 0.6rand(rng), 0.2 + 0.6rand(rng)), 0.05 + 0.25rand(rng)
+            (x, y) -> hypot(x - centre[1], y - centre[2]) - radius
+        end
+        density = isodd(k) ? (1.0, 1.0) : (1000.0, 1.0)
+        case = _mimetic_solid_case(k <= 16 ? 16 : 32, solid, levelset; density)
+        assembly = TP._mimetic_assemble!(case.solver, case.workspace)
+        @test assembly.solid_cells > 0
+        @test assembly.defective_cells == 0 && assembly.lumped_values == 0
+        @test isposdef(Symmetric(Matrix(assembly.band_matrix)))
+        @test _mimetic_gram_moment_defect(case) <= 1.0e-12
+    end
+end
+
 @testset "Mimetic rest states with embedded solids" begin
     TP = TwoPhaseAMR
     h = 1 / 32
@@ -1825,6 +1896,22 @@ end
                 (_mimetic_cylinder(0.513, 0.35, 0.15), (x, y) -> hypot(x - 0.5, y - 0.6) - 0.15, ((1.0, 1.0),)),
             ), density in densities
         @test rest!(_mimetic_solid_flow(32, solid, levelset, density)) <= 1.0e-11
+    end
+    # Single-phase liquid under gravity over thin slabs and a wedge, and pools
+    # at densities (1000, 1) crossing a cylinder and a wedge, from the random
+    # fixtures of the review, where the averaged open traces leave open parts
+    # on two runs or next to closed sides (with the first solid edge these
+    # cells were defective: the liquid moved at 1e-5 to 1.6e-4, the pools at
+    # 7.5e-7 and 1.4e-3): at rest to round-off.
+    for (n, solid, levelset) in (
+            (32, _mimetic_slab(0.027061439586443845, 0.022716678135136562, (0.5, 0.6391707554866328)), (x, y) -> -1.0),
+            (32, _mimetic_slab(0.13692601250383316, 0.028239728109797614, (0.5, 0.6620588470957329)), (x, y) -> -1.0),
+            (16, _mimetic_wedge(0.24027809668251737, 0.129782988826112, (0.615848994355751, 0.5306335999561819)), (x, y) -> -1.0),
+            (16, _mimetic_slab(1.772750978307207, 0.04932741429721883, (0.5, 0.28897164951280135)), (x, y) -> -1.0),
+            (32, _mimetic_cylinder(0.5592126977250925, 0.5385026636552124, 0.10817924471508837), (x, y) -> y - 0.461603002625254),
+            (32, _mimetic_wedge(0.24015996113998678, 0.5770253086972441, (0.5565861708316273, 0.4988116063059008)), (x, y) -> y - 0.46792534783624884),
+        )
+        @test rest!(_mimetic_solid_flow(n, solid, levelset, (1000.0, 1.0))) <= 1.0e-11
     end
     # A pool whose surface crosses the cylinder: the contact cells' pressure
     # points lie off the level line by the mismatch of the averaged open

@@ -10,8 +10,8 @@
 # polygon is formed. On an adaptive (2:1 graded) mesh the side of a cell next
 # to two finer cells consists of two faces, the two segments of the side. With
 # an embedded solid a segment is open over the shared open aperture of its
-# face, and a cell cut by the solid has one more side, its solid edge, the
-# closing edge of the open parts of its segments.
+# face, and a cell cut by the solid has more sides, its solid edges, the
+# chords that close the open parts of its segments.
 
 # Outward normal of side k as a multiple of the face orientation (+axis).
 const _MIMETIC_OUTWARD = (-1, 1, 1, -1)
@@ -337,7 +337,7 @@ mimetic-gram, in units of `h`), for the `segments` of its sides
 With `M = Σ_k a_k n_k (x^l_k)ᵀ` the liquid Gram tensor at `x*` is
 `G^l = M - η x*ᵀ` and the gas one `G^g = F - G^l`, with the Gram tensor `F`
 of the open cell: `I` without a solid, the symmetric tensor `fluid =
-(f₁₁, f₁₂, f₂₂)` of the open segments and the solid edge of a cell cut by an
+(f₁₁, f₁₂, f₂₂)` of the open segments and the solid edges of a cell cut by an
 embedded solid. For `η ≠ 0` both are symmetric exactly on the line
 `η × x* = τ`, `τ = M₁₂ - M₂₁`. The data point is the point of that line
 closest to the interface of the data, the mean of the phase boundaries on the
@@ -730,7 +730,7 @@ function _MimeticAssembly(::Type{T}) where {T}
     return _MimeticAssembly{T}(
         typemax(UInt), Int[], Int[], Int[], Int8[], T[], T[], T[], 0, Int[], Int[], T[],
         spzeros(T, 0, 0), nothing, T[], T[], T[], 0, 0, 0, 0, 0, 0, 0, T[], Int[], Int[], T[],
-        falses(0), Int8[], zeros(T, 9, 9), zeros(Int, 9), zeros(T, 9), zeros(T, 9, 2),
+        falses(0), Int8[], zeros(T, 16, 16), zeros(Int, 16), zeros(T, 16), zeros(T, 16, 2),
         _MimeticSegment{T}[], Int[],
     )
 end
@@ -813,58 +813,89 @@ function _mimetic_segment(
     return _MimeticSegment{T}(k, from, to, aperture, start, open, solid_start)
 end
 
-"""Length below which the open parts of the segments of a cell count as
+"""Length below which a chord between the open parts of a cell counts as
 closed (no solid edge), in units of the cell width."""
 const _MIMETIC_SOLID_EDGE_FLOOR = 1.0e-10
 
-"""Close the open parts of the grid segments of `cell` with its solid edge
+"""Whether the open part of a grid segment reaches its counter-clockwise
+start (`start = true`) or end."""
+@inline function _mimetic_open_reaches(segment::_MimeticSegment{T}, start::Bool) where {T}
+    segment.open > zero(T) || return false
+    segment.open >= one(T) && return true
+    return segment.solid_start != start
+end
+
+"""Close the open parts of the grid segments of `cell` with its solid edges
 (eq. mimetic-solid-edge) and return the symmetric Gram tensor `F` of the open
 cell, `(f₁₁, f₁₂, f₂₂)` in units of `h²`.
 
-The edge is the closing vector `u = -Σ_s o_s ℓ_s n_s` of the open parts
-(open lengths `o_s ℓ_s`, outward normals `n_s`): length `|u|`, outward normal
-`u/|u|` (into the solid). Its midpoint `x_S` makes the tensor
-`F = P + u x_Sᵀ` (`P = Σ_s o_s ℓ_s n_s m_sᵀ`, `m_s` the midpoints of the open
-parts) symmetric with trace twice the open fraction `A` of the cell,
-`u × x_S = P₂₁ - P₁₂` and `u ⋅ x_S = 2A - tr P`: for data that bound the open
-polygon it is the midpoint of its solid edge, where `F = A I`. The liquid
-part of the edge is the part on the liquid side of the cell's PLIC line (the
-contact point is their intersection), all of it in a pure liquid cell, none
-in a pure gas cell. Without an edge (`|u|` at most
-`_MIMETIC_SOLID_EDGE_FLOOR`), `F` is the symmetric part of `P`."""
+The open parts of consecutive segments along the counter-clockwise walk form
+runs (a run continues across a segment end that both open parts reach). A
+solid edge joins the free end of each run to the free start of the next run
+(of the same run if there is one): a side from `a` to `b` with outward unit
+normal `(b - a)^⊥` (into the solid) and midpoint `x_S`. The open parts and the
+edges bound the convex hull of the open parts (their end points lie on the
+boundary of the square in counter-clockwise order), so
+`F = P + Σ_S |S| n_S x_Sᵀ` (`P = Σ_s o_s ℓ_s n_s m_sᵀ`, open lengths
+`o_s ℓ_s`, outward normals `n_s`, midpoints `m_s` of the open parts) is `A I`
+with the area `A` of that polygon, whatever the shared open apertures:
+positive definite unless all open parts lie on one side of the cell. For one
+run whose chord is the solid's PLIC segment
+(data that bound the open polygon) it is the open polygon's tensor. Several
+runs come from a thin solid across the cell or from averaged traces that put
+an open part next to a closed side (a closed trace averaged with an open
+one). The liquid part of an edge is the part on the liquid side of the cell's
+PLIC line (the contact point is their intersection), all of it in a pure
+liquid cell, none in a pure gas cell. A chord of length at most
+`_MIMETIC_SOLID_EDGE_FLOOR` gives no edge."""
 function _mimetic_add_solid_edge!(
         segments::Vector{_MimeticSegment{T}}, segment_faces, solid, cell,
     ) where {T}
-    ux = uy = p11 = p12 = p21 = p22 = zero(T)
+    p11 = p12 = p21 = p22 = zero(T)
+    grid = length(segments)
     for segment in segments
         o = segment.open * _mimetic_length(segment)
         o > zero(T) || continue
         (ax, ay), (bx, by) = _mimetic_open_ends(segment)
         mx, my = (ax + bx) / 2, (ay + by) / 2
         nx, ny = segment.normal
-        ux -= o * nx
-        uy -= o * ny
         p11 += o * nx * mx
         p12 += o * nx * my
         p21 += o * ny * mx
         p22 += o * ny * my
     end
-    length = hypot(ux, uy)
-    if length > T(_MIMETIC_SOLID_EDGE_FLOOR)
-        alpha = 2 * solid.cell_open[cell] - (p11 + p22)
-        beta = p21 - p12
-        xs = (ux * alpha - uy * beta) / length^2
-        ys = (uy * alpha + ux * beta) / length^2
-        nx, ny = ux / length, uy / length
-        a = (xs + length / 2 * ny, ys - length / 2 * nx)
-        b = (xs - length / 2 * ny, ys + length / 2 * nx)
+    # The first open part whose start is not joined to the previous open part
+    # starts a run; without one the open parts close the cell themselves.
+    joined(q) = _mimetic_open_reaches(segments[mod1(q - 1, grid)], false) && _mimetic_open_reaches(segments[q], true)
+    first_head = 0
+    for q in 1:grid
+        segments[q].open > zero(T) && !joined(q) && (first_head = q; break)
+    end
+    head = first_head
+    while head > 0
+        tail = head
+        while joined(mod1(tail + 1, grid))
+            tail = mod1(tail + 1, grid)
+        end
+        next = mod1(tail + 1, grid)
+        while !(segments[next].open > zero(T))
+            next = mod1(next + 1, grid)
+        end
+        _, a = _mimetic_open_ends(segments[tail])
+        b, _ = _mimetic_open_ends(segments[next])
+        head = next == first_head ? 0 : next
+        cx, cy = b[1] - a[1], b[2] - a[2]
+        chord = hypot(cx, cy)
+        chord > T(_MIMETIC_SOLID_EDGE_FLOOR) || continue
+        nx, ny = cy / chord, -cx / chord
+        xs, ys = (a[1] + b[1]) / 2, (a[2] + b[2]) / 2
         aperture, start = _mimetic_solid_wetting(solid, cell, a, b)
         push!(segments, _mimetic_solid_edge(a, b, (nx, ny), aperture, start))
         push!(segment_faces, 0)
-        p11 += ux * xs
-        p12 += ux * ys
-        p21 += uy * xs
-        p22 += uy * ys
+        p11 += chord * nx * xs
+        p12 += chord * nx * ys
+        p21 += chord * ny * xs
+        p22 += chord * ny * ys
     end
     return p11, (p12 + p21) / 2, p22
 end
@@ -932,10 +963,10 @@ value carries the summed staggered mass and the full aperture.
 With an embedded solid a segment is open over the shared open aperture of
 its face, closed at the solid end decided for the face; the phase apertures
 are fractions of the whole face. A cell with a partially closed segment gets
-its solid edge, the closing edge of the open parts (`_mimetic_add_solid_edge!`):
-a side with prescribed zero flux, restricted out of the blocks and coupled to
+its solid edges, the chords that close the open parts (`_mimetic_add_solid_edge!`):
+sides with prescribed zero flux, restricted out of the blocks and coupled to
 the flux density `n_S ⋅ w` of a constant field like a wall side, with the
-contact point where the cell's PLIC line crosses it. The pressure point of a
+contact point where the cell's PLIC line crosses them. The pressure point of a
 cut cell is admissible for `0 ⪯ G^l ⪯ F` with the Gram tensor `F` of the open
 cell; a pure cell cut by the solid gets the Gram block of its phase with the
 pressure point at the centroid of its open polygon. A value with aperture
@@ -1048,7 +1079,7 @@ function _assemble_cut_cell_metric!(
         cap = T(_MIMETIC_POINT_MARGIN) * (finest / h)
         xs = ys = ex = ey = zero(T)
         if !isnothing(solid) && any(segment -> segment.open < one(T), segments)
-            # A cell cut by the solid: open segments and the solid edge.
+            # A cell cut by the solid: open segments and the solid edges.
             iszero(solid.cell_open[cell]) && continue
             fluid = _mimetic_add_solid_edge!(segments, segment_faces, solid, cell)
             liquid = all(segment -> segment.aperture == segment.open, segments)

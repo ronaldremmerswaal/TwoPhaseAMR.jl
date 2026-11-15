@@ -1045,36 +1045,54 @@ open over $o_s\ell_s$; which end the solid closes is decided once per face,
 by the sign of the summed tangential components of the solid normals of the
 adjacent cells (as the wet end, from the phase planes). Within the open part
 the phase parts are placed as before, so both cells of a face see the same
-wetted lengths and midpoints. A cell with a partially closed segment has one
-more side, its \emph{solid edge} $S$. The shared open apertures are means of
-the two cells' traces and need not close the cell's own solid plane, so the
-edge is not taken from that plane but closes the open parts: with
-$P=\sum_so_s\ell_s\,n_s m_s^{\transpose}$ ($m_s$ the midpoints of the open
-parts) and the open fraction $A$ of the cell,
+wetted lengths and midpoints. A cell with a partially closed segment has more
+sides, its \emph{solid edges}. The shared open apertures are means of the two
+cells' traces and need not close the cell's own solid plane, so the edges are
+not taken from that plane but close the open parts. Along the
+counter-clockwise walk the open parts form runs $j=1,\dots,J$ (a run continues
+across a segment end that both open parts reach), from a free start $b_j$ to a
+free end $e_j$; the edge $S_j$ joins the end of each run to the start of the
+next ($b_{J+1}=b_1$),
 \begin{equation}\label{eq:projection:mimetic-solid-edge}
-  \abs{S}\,n_S=u:=-\sum_so_s\ell_s\,n_s,\qquad
-  u\times x_S=P_{21}-P_{12},\quad u\cdot x_S=2A-\operatorname{tr}P,\qquad
-  \mathsf F_c=P+u\,x_S^{\transpose},
+  S_j=[e_j,b_{j+1}],\qquad
+  \abs{S_j}\,n_{S_j}=(b_{j+1}-e_j)^{\perp},\qquad
+  \mathsf F_c=P+\sum_j\abs{S_j}\,n_{S_j}x_{S_j}^{\transpose}=A_c\,I,
 \end{equation}
-in units of $h$: the edge has the closing length and the outward normal
-$u/\abs{u}$ (into the solid), and its midpoint $x_S$ makes the Gram tensor
-$\mathsf F_c$ of the open cell symmetric with trace $2A$. For data that bound
-the open polygon $x_S$ is the midpoint of its solid edge and
-$\mathsf F_c=A\,I$ (a chord along a grid line: the closed side itself, as at
-a grid-aligned solid whose covered faces have $o_f=0$). The liquid part of
-the edge lies on the liquid side of the cell's PLIC line: the contact point
-is where that line crosses the edge, at which end the liquid lies follows
-from the line, and a pure cell wets the edge with its phase. The contact
-angle enters only through the PLIC planes and the height-function curvature
-with the solid's contact condition (\cref{sec:interface:contact}). The edge
-is a side like a wall side: it enters the pressure point,
+in units of $h$, with $v^{\perp}=(v_2,-v_1)$ (the outward normal, into the
+solid), $x_{S_j}$ the midpoint of the edge and
+$P=\sum_so_s\ell_s\,n_s m_s^{\transpose}$ ($m_s$ the midpoints of the open
+parts). The end points lie on the boundary of the square in counter-clockwise
+order, so the open parts and the edges bound a convex polygon, the convex hull
+of the open parts, and its Gram tensor $\mathsf F_c$ is its area $A_c$ times
+the identity for any shared open apertures (positive definite unless all open
+parts lie on one side). For data that bound the open polygon there is one run
+and its edge is the polygon's solid edge (a chord along a grid line: the closed
+side itself, as at a grid-aligned solid whose covered faces have $o_f=0$).
+Several runs come from a thin solid across a cell, or from averaged traces
+that put an open part next to a closed side, typically a closed trace averaged
+with an open one ($o_f=(0+1)/2$) next to a nearly covered cell; the hull then
+includes solid parts of the cell, which is consistent (the block only needs
+$\mathsf F_c$) but not the open area. The first version of the edge closed the
+open parts with one edge of the closing vector $-\sum_so_s\ell_sn_s$ whose
+midpoint made $\mathsf F_c$ symmetric with trace twice the open fraction of the
+cell; where that fraction disagreed with the averaged traces $\mathsf F_c$ was
+indefinite and the cell defective (69 of 400 random fixtures with slanted
+lines, cylinders, wedges and thin slabs at $h=1/16,1/32$, 10 of 120 two-level
+ones, a static gas cell in example~09, three liquid cells in LGPI), and
+single-phase liquid at rest under gravity moved at up to $1.6\times10^{-4}$.
+The liquid part of an edge lies on the liquid side of the cell's PLIC line:
+the contact point is where that line crosses the edge, at which end the liquid
+lies follows from the line, and a pure cell wets the edge with its phase. The
+contact angle enters only through the PLIC planes and the height-function
+curvature with the solid's contact condition (\cref{sec:interface:contact}).
+An edge is a side like a wall side: it enters the pressure point,
 $\mathsf G^{\phase}_c$, $\eta_c$, $\tau_c$, the stabilisation and the closing
 flux~\cref{eq:projection:mimetic-slave} of each phase with its wetted part,
 its flux is prescribed (zero), the block is restricted to the fluxed sides,
-and its coupling enters $\mathsf C$ with the normal $n_S$, so
+and its coupling enters $\mathsf C$ with its normal $n_S$, so
 \cref{eq:projection:mimetic-wall,eq:projection:mimetic-wall-moment} hold
 verbatim and the projection stays $\mathcal M$-orthogonal with exact cut-cell
-divergence. The segments and the edge close each cell, so
+divergence. The segments and the edges close each cell, so
 $\mathsf G^{\liq}_c+\mathsf G^{\gas}_c=\mathsf F_c$ for every $x^{*}_c$, both
 tensors are symmetric on the same line $\eta_c\times x^{*}_c=\tau_c$, and the
 admissible interval~\cref{eq:projection:mimetic-interval} becomes
@@ -1110,7 +1128,12 @@ or lumped value, the band symmetric positive definite (smallest eigenvalue
 $10^{-8}h^2$, contact slivers), \cref{eq:projection:mimetic-transition} with
 the solid coupling to $3\times10^{-15}$ (relative), the energy identity to
 $10^{-15}$; on exact data the edge is the chord and
-$\mathsf F_c=A\,I$ to $10^{-14}$. A uniform acceleration at equal densities
+$\mathsf F_c=A\,I$ to $10^{-14}$. On the 400 random fixtures and 120 random
+two-level configurations above (interfaces: none, a pool, a drop) no cell is
+defective and \cref{eq:projection:mimetic-transition} holds to
+$6\times10^{-14}$; neither the example-09 smoke test nor LGPI to $t=0.2$ has a
+defective cell, and single-phase liquid at densities $(1000,1)$ over 73 random
+solids stays at rest to $4\times10^{-13}$. A uniform acceleration at equal densities
 with drops on a slanted solid and on a cylinder, hydrostatic pools over
 slanted solids and a submerged cylinder at densities $(1000,1)$, and films of
 $0.05h$ to $0.95h$ on flat solids on and off a grid line stay at rest to

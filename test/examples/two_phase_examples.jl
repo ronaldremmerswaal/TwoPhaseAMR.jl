@@ -124,7 +124,10 @@ end
 
 @testset "Sloped droplet AMR smoke test with the mimetic projection" begin
     # The embedded sloped wall cuts cells at the contact line and next to
-    # finer blocks; the mimetic metric closes them with solid edges.
+    # finer blocks; the mimetic metric closes them with solid edges. The
+    # first solid edge left one static pure-gas cell defective in every step
+    # (averaged open traces that disagreed with its open fraction); the
+    # chords between the runs of open parts leave none.
     example = load_example(:sloped_sessile_droplet)
     run = call_example(
         example, :run_example;
@@ -135,11 +138,8 @@ end
     @test run.result.time ≈ 8.0e-4
     @test run.result.steps == 8
     @test run.result.projection.converged
-    # NUMERICS CONCERN: the moving contact line on the embedded wall yields cut
-    # cells without an admissible pressure point (least-squares blocks): 8 in
-    # these 8 steps, none in the static solid fixtures of the unit tests.
-    @test_broken run.result.projection.defective_cells == 0
-    @test run.result.projection.defective_cells <= 8
+    @test run.result.projection.defective_cells == 0
+    @test run.result.projection.max_defective_cells == 0
     @test run.result.projection.lumped_values == 0
     @test any(block -> block.key.level == 1, run.flow.system.mesh.blocks)
     @test run.flow.system.mesh.adaptation.last_update_step > 2
