@@ -156,8 +156,9 @@ every thread count.
 
 \begin{table}[tbp]
   \centering\footnotesize
-  \caption{Tiers of continuous integration (workflow \code{CI}, and the
-  technical-reference job of workflow \code{Documentation}). Julia ``1'' is
+  \caption{Tiers of continuous integration (workflows \code{CI} and
+  \code{Integration}, and the technical-reference job of workflow
+  \code{Documentation}). Julia ``1'' is
   the current release; the \code{unit} shards run on Julia 1.11 (the lower
   compat bound) and 1.12, the unit and integration jobs run on two threads and
   \code{threading-equivalence} on four. The \code{ci-ok} check of a pull
@@ -169,7 +170,7 @@ every thread count.
     \midrule
     Pull request & every pull request and push to \code{main} & \code{format} (Runic 1.10.0); \code{unit} shards A (\code{two_phase}), B (\code{registry}, \code{mesh}, \code{threading}, \code{indicators}, \code{operators}, \code{solvers}, \code{aqua}), C (\code{navier_stokes}, \code{diagnostics}), D (\code{examples}) and E (\code{recording}) on Julia 1.11 (the lower compat bound) and 1.12, with coverage from the 1.12 shards; \code{threading-equivalence} (group \code{threading_equivalence}: complete flows in fresh 1-, 2- and 4-thread processes, Julia 1.12); \code{makie} (visualisation extension); \code{studio} (Studio server, Julia 1.11 and 1.12); \code{frontend} (browser client tests and bundle check)\\
     Main & push to \code{main} & \code{contracts} (group \code{performance}, one thread); \code{benchmark} (one-sample smoke run of the benchmarks and the latency probe)\\
-    Integration & weekly (Monday 03:00 UTC), dispatch, or a pull request labelled \code{run-integration} & eleven integration groups in three shards: A \code{two_velocity_vortex}, \code{two_velocity_transport}, \code{staggered_wave_equation}; B \code{two_phase_waves}, \code{two_phase_droplet}, \code{wave_equation}, \code{amr_manufactured_flow}; C \code{two_phase_vortex}, \code{two_velocity_rotation}, \code{anisotropic_cells}, \code{two_phase_sessile_droplet}\\
+    Integration & workflow \code{Integration}: weekly (Monday 03:00 UTC), dispatch, or a pull request labelled \code{run-integration} (its code updates included) & eleven integration groups in three shards: A \code{two_velocity_vortex}, \code{two_velocity_transport}, \code{staggered_wave_equation}; B \code{two_phase_waves}, \code{two_phase_droplet}, \code{wave_equation}, \code{amr_manufactured_flow}; C \code{two_phase_vortex}, \code{two_velocity_rotation}, \code{anisotropic_cells}, \code{two_phase_sessile_droplet}. Its own workflow, so that labelling a pull request starts no \code{CI} run whose skipped jobs would replace the required \code{ci-ok} of the code run\\
     Heavy & monthly (1st, 04:00 UTC) or dispatch & \code{two_velocity_instabilities} and \code{single_phase_cylinder}; a failure does not fail the run (\code{continue-on-error})\\
     Scaling & dispatch, tier \code{scaling} & \code{thread-scaling}: the ten target cases of \code{benchmark/threading/scaling.jl} (Taylor--Green, cylinder, capillary wave and the one- and two-velocity Stokes-3 wave, each at its default resolution and one level finer) at one, two and four threads, one job per thread count, with the logs uploaded as an artifact\\
     Browser & weekly and monthly schedule, dispatch & \code{studio-browser}: Studio smoke, live AMR and examples tests in Chromium\\
@@ -202,7 +203,8 @@ Registry \srcsym{test/groups.jl}{TEST_GROUPS},
 \srcsym{test/runtests.jl}{check_registry}; the equivalence cases
 \nolinkurl{test/threading_equivalence_cases.jl} and their comparison
 \nolinkurl{test/threading_equivalence.jl}. Workflows
-\code{.github/workflows/CI.yml} and \code{.github/workflows/Documentation.yml};
+\code{.github/workflows/CI.yml}, \code{.github/workflows/Integration.yml} and
+\code{.github/workflows/Documentation.yml};
 the entry points and their use are documented in \code{docs/src/testing.md}.
 \end{implnote}
 
@@ -672,7 +674,7 @@ code.
     07 interfacial instability & amplitude at $t=2\operatorname{arcosh}2$; largest sampled error & linear theory, $0.02$ & $0.0196321$; $3.67921\times10^{-4}$\\
     08 sessile droplet & area change; final kinetic energy & zero; none & $-3.49632\times10^{-10}$; $3.39393\times10^{-5}$\\
     09 sloped sessile droplet & volume change; divergence norm & zero & $-1.46794\times10^{-11}$; $7.9249\times10^{-8}$\\
-    10 Stokes wave & interface after two periods versus initial profile (RMS; maximum) & third-order Stokes profile (not an exact solution) & $0.0449043$; $0.103414$\\
+    10 Stokes wave & interface after two periods versus initial profile (RMS; maximum) & third-order Stokes profile (not an exact solution) & $0.0401907$; $0.0768548$\\
     11 LGPI & liquid volume change & zero & $-3.61\times10^{-9}$ of $0.182426$\\
     12 manufactured Poisson & pressure RMS/maximum error, $32$ cells & manufactured & CMDGFM $1.04378/8.98783$\\
     \bottomrule

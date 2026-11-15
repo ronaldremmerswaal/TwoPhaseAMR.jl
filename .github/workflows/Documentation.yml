@@ -49,7 +49,7 @@ jobs:
           fi
           printf '\\def\\apibase{https://ronaldremmerswaal.github.io/TwoPhaseAMR.jl/%s}\n' "$version" > docs/techref/apibase.tex
       - name: Compile PDF
-        uses: xu-cheng/latex-action@e2f99d4b3685b0da93f97e1b86ad8fab81105098 # v3
+        uses: xu-cheng/latex-action@6549dc21effb2730855a1281407ecfcececc6c1b # v4.1.0
         with:
           texlive_version: '2024'
           working_directory: docs/techref
@@ -63,7 +63,7 @@ jobs:
           fi
       - name: Name the PDF artifact
         run: cp docs/techref/techref.pdf docs/techref/TwoPhaseAMR-techref.pdf
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: TwoPhaseAMR-techref.pdf
           path: docs/techref/TwoPhaseAMR-techref.pdf
@@ -80,7 +80,7 @@ jobs:
       statuses: write
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: TwoPhaseAMR-techref.pdf
           path: docs/src/assets/techref
