@@ -313,6 +313,25 @@ round-off ($3\cdot10^{-15}$, $1\cdot10^{-14}$). In time the force couple
 around the corner cell drives a current that grows exponentially and masks the
 mode-4 oscillation (\cref{par:verif:floating-drop}).
 
+\emph{Locality.} The preference needs height-function values that belong to
+the face. A nearly full or empty cell can have a valid height-function
+curvature of its neighbour's interface: its columns cross the interface up to a
+cell away. The coverage~\cref{eq:interface:coverage} therefore fades with the
+distance of the crossing from the cell (locality $\hflocal{}$). On the sessile
+drop of \testsym{test/integration/two_phase_sessile_droplet.jl}{Sessile droplet equilibrium convergence}
+at $90^\circ$, $\mathrm{Bo}=1.21$, $n=24$, the
+curvature varies along the interface with the hydrostatic gradient
+$(\dens^{\liq}-\dens^{\gas})g/\surftens=30.25$, $1.26$ per cell. Two faces of a
+GHF cell ($C=0.415$) near the contact line have nearly full neighbours
+($C=0.990$, $0.987$) whose LHF crossings lie $0.71$--$0.90$ and $0.67$ cells
+away. Exact profile curvatures at the faces: $5.25$ and $5.89$. Without the
+locality the face curvatures are these cells' values $4.55$ and $6.65$; the
+shape error at $T/4$ rises from $1.86\cdot10^{-4}$ (former
+$\curvweight{}$-interpolant: $5.67$, $5.76$) to $4.88\cdot10^{-4}$, and the
+largest velocity from $0.044$ to $0.52$. With the locality (coverages $0.63$,
+$0.75$) the face curvatures are $5.62$ and $5.85$, the shape error is
+$2.15\cdot10^{-4}$ and the largest velocity $0.043$.
+
 The weights are continuous in $\curvquality{}$, so the switch between
 height-function and GHF curvatures follows the coverage: a cell whose
 coverage fades with the angle ($\curvquality{c}\to0$

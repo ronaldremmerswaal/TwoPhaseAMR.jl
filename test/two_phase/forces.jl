@@ -444,11 +444,25 @@ end
     quality(ref) = TwoPhaseAMR._get(field.curvature_quality, ref)
     mixed = [r for r in TwoPhaseAMR._cell_references(mesh) if 0 < fraction(r) < 1]
     # Without walls and solids an LHF curvature (code 1) has a positive
-    # coverage and a GHF curvature none; both axes give coverage one.
+    # coverage and a GHF curvature none. Cells whose height columns cross the
+    # interface outside the cell lose coverage with the locality: 24 nearly
+    # full or empty cells (C > 0.999, 0.037, 0.937: coverages 0.18, 0.995,
+    # 0.995); every other LHF cell has coverage one.
     @test all(r -> (TwoPhaseAMR._get(field.reconstruction, r) == 1) == (quality(r) > 0), mixed)
     @test all(r -> 0 <= quality(r) <= 1, mixed)
     @test count(r -> quality(r) == 0, mixed) == 4
-    @test count(r -> quality(r) >= 1 - 4eps(), mixed) >= 80
+    @test count(r -> quality(r) >= 1 - 4eps(), mixed) == 72
+    @test all(r -> quality(r) >= 1 - 4eps() || quality(r) == 0, filter(r -> 0.1 <= fraction(r) <= 0.9, mixed))
+    # Locality of a height-function candidate: one while its interface
+    # crossing lies in the cell, zero from the neighbour's centre on, even and
+    # continuous at both bounds.
+    locality = TwoPhaseAMR._height_locality
+    @test locality(0.0) == locality(0.5) == locality(-0.5) == 1
+    @test locality(1.0) == locality(-1.0) == locality(1.7) == 0
+    @test locality(0.75) ≈ 0.5 rtol = 4eps()
+    @test locality(-0.6) == locality(0.6)
+    @test abs(locality(0.5 + 1.0e-9) - 1) <= 1.0e-8
+    @test abs(locality(1 - 1.0e-9)) <= 1.0e-8
 
     # The four GHF curvatures at the diagonals are not mirror symmetric. The
     # c(1-c) interpolant gave the CGFM jumps a resultant of 1.5e-5; the

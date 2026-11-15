@@ -463,13 +463,14 @@ const FLOATING_DROP_PERIOD = 2pi * sqrt(
     sum(FLOATING_DROP_DENSITY) * STATIC_DROP_RADIUS^3 / (60STATIC_DROP_SIGMA),
 )
 const FLOATING_DROP_MODELS = (:one_velocity, :cmdgfm)
-# Measured with the LHF-first face curvature (study driver, same measure, to
-# t = 1.2), both models: mean 6.8e-9, last/first-third peaks 0.99-1.00,
-# contrast 0.97, energy line at 1.00-1.01 x 2 omega_4. The mimetic projection
-# is not included: its cut-cell curvature still takes the GHF curvature of the
-# nearly empty cells (mean 2.1e-7, contrast 0.30). The bounds are the thesis level (mean below 1e-8, a
-# factor 1.5 above the measured mean), no growth (10 %), a clean oscillation
-# (contrast 0.8) and its frequency (5 %).
+# Measured with the LHF-first face curvature (`thesis_floating_drop_case`,
+# one velocity / CMDGFM): mean 6.81e-9 / 6.77e-9, last/first-third peaks
+# 1.011 / 1.005, contrast 0.977 / 0.963, energy line at 1.003 / 1.010 x
+# 2 omega_4. The mimetic projection is not included: its cut-cell curvature
+# still takes the GHF curvature of the nearly empty cells (mean 2.16e-7, peaks
+# 0.73, contrast 0.29, line 1.08). The bounds are the thesis level (mean below
+# 1e-8, a factor 1.5 above the measured mean), no growth (10 %), a clean
+# oscillation (contrast 0.8) and its frequency (5 %).
 const FLOATING_DROP_MEAN_BOUND = 1.0e-8
 const FLOATING_DROP_GROWTH_BOUND = 1.1
 const FLOATING_DROP_CONTRAST_BOUND = 0.8
@@ -515,8 +516,9 @@ function thesis_floating_drop_case(model)
     # omega_4 and 3 omega_4, relative to 2 omega_4.
     omega = 4pi / period
     centred = ratio .- sum(ratio) / length(ratio)
-    span = final_time - first(times)
-    window = @. sin(pi * (times - first(times)) / span)^2
+    start = first(times)
+    span = final_time - start
+    window = @. sin(pi * (times - start) / span)^2
     frequencies = range(0.5omega, 1.5omega; length = 2001)
     power = map(frequencies) do w
         abs2(sum(@. window * centred * cis(w * times)))

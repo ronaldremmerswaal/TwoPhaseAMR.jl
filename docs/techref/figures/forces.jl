@@ -70,8 +70,10 @@ force_operator(field) = isnothing(field.geometry) ?
 function face_curvature_independent(field, face)
     mesh = field.mesh
     cells = [
-        (AMR._get(field.curvature, ref), cond(field, ref) * (1 - cond(field, ref)),
-            AMR._get(field.curvature_quality, ref))
+        (
+            AMR._get(field.curvature, ref), cond(field, ref) * (1 - cond(field, ref)),
+            AMR._get(field.curvature_quality, ref),
+        )
             for ref in (face.minus, face.plus)
     ]
     filter!(((k, w, q),) -> w > 0 && isfinite(k), cells)
