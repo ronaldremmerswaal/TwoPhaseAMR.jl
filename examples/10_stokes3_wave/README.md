@@ -4,7 +4,7 @@ A steep, finite-depth wave propagates for two nominal periods on an adaptively r
 
 ![Plunging breaker just after its jet hits the forward face and traps a gas pocket: vorticity and PLIC interface](assets/hero.png)
 
-The wave breaks within the first period. The snapshot comes from a separate level-5 run of the first period (finest `dx = dy = 1/256`): the first state with an entrapped gas pocket (`t/T≈0.640`), located by re-running the bracketing keyframe interval with every step stored as a keyframe; half a wavelength wide, vorticity with a symmetric range. The animation and profile below come from the level-4 docs run.
+The wave breaks within the first period. The snapshot comes from a separate level-5 run of the first period (finest `dx = dy = 1/256`): the first state with an entrapped gas pocket (`t/T≈0.624`), located by re-running the bracketing keyframe interval with every step stored as a keyframe; half a wavelength wide, vorticity with a symmetric range. The animation and profile below come from the level-4 docs run.
 
 ## At a glance
 
@@ -13,14 +13,14 @@ The wave breaks within the first period. The snapshot comes from a separate leve
 | **Physics** | Two phases, density ratio `850`, `g=1`, Bond number `1000`, Reynolds number `4×10⁴`, steepness `0.55` and depth `0.5`. The domain is `[-0.5,0.5]²`, periodic in `x` with free-slip `y` boundaries. |
 | **Algorithms** | One velocity by default; WY geometric VOF, `:lhf` PLIC with WY fallback, CGFM surface tension, Lax–Wendroff momentum advection and implicit-midpoint viscosity. Pressure and two-phase diffusion use CG with tree-geometric multigrid. AMR combines the interface indicator through `t=0.01`, curvature at 8 cells per radius, and vorticity thresholds `0.2` and `0.2/3`; adaptation is attempted every step with coarsen delay 2. |
 | **Worth varying** | `steepness=0.55` changes the initialized wave and frequency; `bond=1000` changes surface tension; `reynolds=4e4` changes viscosity; `density_ratio=850` changes gas density; `max_level=5` sets the refinement ceiling; `final_time=nothing` selects one nominal period. |
-| **Validated against** | At docs size, the final interface after two periods, at 200 evenly spaced `x` positions, differs from the analytical third-order *initial* profile by sample RMS `0.0449043` and maximum `0.103414`. This approximate Stokes profile is not an exact solution of the viscous, capillary, two-phase problem. |
-| **Cost** | `run_example` default: `max_level=5`, one period, runtime and final cells unmeasured. Gallery `:docs`: `max_level=4`, two periods (`T≈4.39705`), 2308 steps and 6208 final cells; setup and simulation took 163.7 s on one thread, including first-use compilation, and the separate level-5 first-period hero and impact-location runs took 297.5 s. The whole figure script took 519.6 s. Gallery `:default` uses `max_level=6`, two periods. |
+| **Validated against** | At docs size, the final interface after two periods, at 200 evenly spaced `x` positions, differs from the analytical third-order *initial* profile by sample RMS `0.0401907` and maximum `0.0768548`. This approximate Stokes profile is not an exact solution of the viscous, capillary, two-phase problem. |
+| **Cost** | `run_example` default: `max_level=5`, one period, runtime and final cells unmeasured. Gallery `:docs`: `max_level=4`, two periods (`T≈4.39705`), 2460 steps and 5632 final cells; setup and simulation took 228.2 s on one thread, including first-use compilation, and the separate level-5 first-period hero and impact-location runs took 276.5 s. The whole figure script took 582.5 s wall clock, including package loading. Gallery `:default` uses `max_level=6`, two periods. |
 
-Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded.
+Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded unless stated.
 
 ## Setup
 
-The liquid occupies the region below the third-order profile returned by `stokes3_initial_condition().elevation`; its initial analytical velocity is projected before time integration. With `k=2π`, `h=0.5`, `ε=0.55` and `χ=coth(kh)`, the initialization uses
+The liquid occupies the region below the third-order profile returned by `stokes3_initial_condition().elevation`. Every active liquid velocity value takes the analytical third-order potential flow, wherever its face centre lies relative to the interface, and the gas starts at rest: the two-velocity model sets the phase values, the one-velocity model the mass-weighted mixture velocity `ρ_l α u_l / (ρ_l α + ρ_g (1 − α))` of each face, with `α` the face liquid fraction of the mass-compatible interpolant. This velocity is projected before time integration. With `k=2π`, `h=0.5`, `ε=0.55` and `χ=coth(kh)`, the initialization uses
 
 ```math
 \omega^2=\frac{gk}{\chi}\left[1+\epsilon^2\left(\frac98(\chi^2-1)^2+\chi^2\right)\right],
@@ -52,7 +52,7 @@ press Ctrl+C to close Studio after the run.
 
 ![Computed interface after two periods and the third-order initial profile](assets/profile.png)
 
-After two nominal periods, the sampled interface differs from the third-order initialization by RMS `0.0449043` and maximum `0.103414`; the wave has broken, so these differences include physical model differences as well as numerical error.
+After two nominal periods, the sampled interface differs from the third-order initialization by RMS `0.0401907` and maximum `0.0768548`; the wave has broken, so these differences include physical model differences as well as numerical error.
 
 ![Final vorticity with interface](assets/vorticity.png)
 
