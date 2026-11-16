@@ -242,11 +242,16 @@ end
 
 @testset "Mimetic projection under a uniform acceleration (T3)" begin
     # Laboratory geometry (exact apertures and staggered fractions): equal
-    # densities are at rest to round-off, contrasts converge at first order.
-    # Measured with the uniform ties β ρ_π V_f (the audit's numbers with the
-    # former mass-proportional ties, tab. mm-tests: 0.0702, 0.0385, 0.0789,
-    # 0.0435).
+    # densities are at rest to round-off, contrasts converge at first order
+    # with the audit's numbers (tab. mm-tests).
     laboratory = Dict(
+        (10.0, 32) => 0.0702, (10.0, 64) => 0.0385,
+        (1000.0, 32) => 0.0789, (1000.0, 64) => 0.0435,
+    )
+    # NUMERICS CONCERN: with the uniform ties β ρ_π V_f the errors are 13 – 16 %
+    # above the audit's numbers (measured 0.081, 0.0434, 0.0914, 0.0497); the
+    # pins below are a regression guard at the measured level, not the target.
+    measured = Dict(
         (10.0, 32) => 0.081, (10.0, 64) => 0.0434,
         (1000.0, 32) => 0.0914, (1000.0, 64) => 0.0497,
     )
@@ -256,7 +261,8 @@ end
             # Round-off bounds the attainable divergence defect at 1000:1.
             error, out = MimeticLab.t3_error(n, (ratio, 1.0); tolerance = 1.0e-9)
             @test out.result.target_defect <= 1.0e-9
-            @test error ≈ laboratory[(ratio, n)] rtol = 5.0e-3
+            @test_broken isapprox(error, laboratory[(ratio, n)]; rtol = 5.0e-3)
+            @test error ≈ measured[(ratio, n)] rtol = 5.0e-3
             error
         end
         @test errors[2] < errors[1]
@@ -1116,14 +1122,18 @@ end
         end
     end
     # Without the wall coupling (the uniform increment dt g alone) the drop on
-    # the floor is not at rest after one projection (measured 0.14 dt g with
-    # the uniform ties, 0.29 dt g with the former mass-proportional ties).
+    # the floor is not at rest after one projection (measured 0.29 dt g with
+    # the former mass-proportional ties).
     case = _mimetic_case(32, floor_drop; periodic = (false, false))
     velocity = _mimetic_velocity(case, (phase, face) -> face.axis == 2 ? -9.81e-3 : 0.0)
     stats = project!(velocity, CellField(case.mesh), case.solver, 1.0e-3, case.workspace; tolerance = 1.0e-12)
     @test stats.converged
     uncoupled = _mimetic_maximum(velocity)
     println("mimetic floor drop, equal densities, dt g without the wall coupling: max |u| = ", uncoupled)
+    # NUMERICS CONCERN: with the uniform ties the uncoupled motion is 0.14 dt g
+    # (1.39e-3), below the original bound; the second assertion is a
+    # regression guard at the measured level (the coupling still matters).
+    @test_broken uncoupled >= 0.25 * 9.81e-3
     @test uncoupled >= 0.1 * 9.81e-3
     # A constant curvature on a drop on the floor (contact angle about 66°) at
     # densities (1000, 1): the per-phase capillary force is a gradient on the
@@ -1946,13 +1956,31 @@ function _mimetic_equivalence(case)
     return (; c_min, chi, slaved = count(iszero, assembly.dof_aperture), assembly)
 end
 
+# Small values (0 < a < 1/2 on a face with a staggered fraction strictly
+# between 0 and 1) without a value of their phase of larger aperture in the
+# rings of the metric's donor search (small-untied).
+function _mimetic_small_untied(case, assembly)
+    TP = TwoPhaseAMR
+    topology, mesh = case.workspace.topology, case.mesh
+    fraction = case.workspace.face_data.liquid_fraction
+    return count(eachindex(assembly.dof_face)) do dof
+        phase, face, aperture = assembly.dof_phase[dof], assembly.dof_face[dof], assembly.dof_aperture[dof]
+        (phase != 3 && 0 < aperture < 0.5 && 0 < fraction[face] < 1) || return false
+        dof_at(g) = g == 0 ? 0 : (phase == 1 ? assembly.liquid_dof[g] : assembly.gas_dof[g])
+        larger(g) = (d = dof_at(g); d > 0 && assembly.dof_aperture[d] > aperture + 1.0e-12)
+        ring = TP._mimetic_face_ring(topology, face, mesh.faces[face].axis)
+        return TP._mimetic_donor(topology, mesh, ring, dof_at, larger, assembly.dof_aperture) == 0
+    end
+end
+
 @testset "Mimetic metric: uniform equivalence with the aperture-independent mass" begin
     # The ties and lumped fallbacks weigh β ρ_π V_f, continuous in the
     # aperture (techref ch. 10, uniform ties), so 𝓜 ⪰ c diag(ρ_π V_f) with c
     # independent of the apertures and fractions, also on the values a phase
-    # does not reach (slaved, aperture 0). Measured: c_min 0.112 – 0.183 and
-    # max χ 2.7 – 4.6 on these fixtures for every density ratio (with the
-    # former weights (1 - 2a) m_f, m_f: c_min ~1e-8, χ ~1e8).
+    # does not reach (slaved, aperture 0). Measured: c_min 0.111 – 0.257 and
+    # max χ 2.5 – 5.0 on these fixtures for every density ratio, 0.0316 and
+    # 7.1 on the drop of radius 0.3h (with the former weights (1 - 2a) m_f,
+    # m_f: c_min ~1e-8, χ ~1e8).
     h = 1 / 32
     sliver(x, y) = y - 10.03h - 0.02h * x
     fixtures = (
@@ -1960,6 +1988,8 @@ end
         ("small drop", d -> _mimetic_case(32, _mimetic_circle(32; radius = 0.07); density = d, periodic = (false, false))),
         ("tiny drop 1.2h", d -> _mimetic_case(32, _mimetic_circle(32; radius = 1.2h); density = d, periodic = (false, false))),
         ("tiny drop 0.9h", d -> _mimetic_case(32, (x, y) -> hypot(x - 0.5 - 0.43h, y - 0.5 - 0.29h) - 0.9h; density = d, periodic = (false, false))),
+        ("tiny drop 0.3h", d -> _mimetic_case(32, (x, y) -> hypot(x - 0.5 - 0.13h, y - 0.5 + 0.21h) - 0.3h; density = d, periodic = (false, false))),
+        ("flat film", d -> _mimetic_case(32, (x, y) -> y - 0.5 - 1.0e-7h; density = d)),
         ("wall film", d -> _mimetic_case(32, (x, y) -> y - 0.23h - 0.05h * sin(2pi * x); density = d, periodic = (false, false))),
         ("corner drop", d -> _mimetic_case(32, (x, y) -> hypot(x - 0.03, y - 0.05) - 0.3; density = d, periodic = (false, false))),
         ("solid sliver", d -> _mimetic_solid_case(32, sliver, (x, y) -> hypot(x - 0.47, y - 0.42) - 0.24; density = d)),
@@ -1975,17 +2005,24 @@ end
         @test result.slaved > 0
         name == "wall film" && @test result.assembly.wall_cells > 0
         startswith(name, "solid") && @test result.assembly.solid_cells > 0
-        # Tiny drops (R ≤ 1.2h) have small values without a donor of larger
-        # aperture: they keep the floor (1 - 2a) β ρ_π V_f (tie to the wall or
-        # solid, else lumped) instead of their O(a²) block alone.
+        # A small value (0 < a < 1/2 on a mixed face) without a donor of
+        # larger aperture (small-untied) is tied with the floor
+        # (1 - 2a) β ρ_π V_f to the best other value of its phase; the drop of
+        # radius 0.3h has one (in a 2-cycle with the small value it is the
+        # donor of), the drops of radius 0.9h and 1.2h have none. Measured
+        # there: c_min 0.0316 with the tie, 0.0319 lumped, 0.0316 with its
+        # O(a²) block alone.
         tiny = startswith(name, "tiny")
+        name == "tiny drop 0.3h" && @test _mimetic_small_untied(case, result.assembly) > 0
         @test result.c_min >= (tiny ? 0.03 : 0.1)
         @test result.chi <= (tiny ? 1 / 0.03 : 5.0)
         # One floor per value: a value of vanishing aperture has the slaved
-        # weight, not the floor twice (continuity as a → 0⁺).
+        # weight, not the floor twice (continuity as a → 0⁺); the flat film
+        # 1e-7 h above a grid line has such values.
         assembly = result.assembly
-        for dof in eachindex(assembly.dof_face)
-            0 < assembly.dof_aperture[dof] < 1.0e-6 || continue
+        vanishing = filter(dof -> 0 < assembly.dof_aperture[dof] < 1.0e-6, eachindex(assembly.dof_face))
+        name == "flat film" && @test !isempty(vanishing)
+        for dof in vanishing
             iszero(assembly.band_position[dof]) && continue
             band = assembly.band_position[dof]
             floor = case.solver.density[assembly.dof_phase[dof]] * case.mesh.face_dual_volumes[assembly.dof_face[dof]]
@@ -2001,18 +2038,27 @@ end
 @testset "Mimetic capillary force: booked carrier" begin
     # The difference term -σ|f|Δκ of a face with both values rides on the
     # booked carrier c = (c^l u^l + c^g u^g)/u^l of the Δt → 0 VOF transport
-    # (c^l = min(a, t^{d(u^l)}), c^g = max(t^{d(u^g)} - a, 0), t the PLIC
-    # traces of the upstream cells d(u)). With equal phase values it is the
-    # upstream trace (the geometric flux of the common velocity), on split
-    # sides the trace on the face's segment and at a solid that of the open
-    # part; it depends on the signs of the values only, and a constant
-    # curvature (no difference term) stays the balanced common jump.
+    # (c^π the overlap of the transport's subface of phase π with the PLIC
+    # trace of the upstream cell d(u^π) on the face). With equal phase values it
+    # is the upstream trace (the geometric flux of the common velocity), on split
+    # sides the trace on the face's segment and at a solid its part on the
+    # open interval of the face. It is homogeneous of degree zero in the values
+    # (it depends on their ratio, the force on the common scale of the values
+    # not at all), and a constant curvature (no difference term) stays the
+    # balanced common jump.
     TP = TwoPhaseAMR
     rng = Random.Xoshiro(29)
+    h = 1 / 32
     cases = (
         _mimetic_case(32, _mimetic_circle(32); density = (1000.0, 1.0), periodic = (false, false)),
         _mimetic_composite_case(_MIMETIC_COMPOSITE_REGIONS[2]..., _MIMETIC_COMPOSITE_LEVELSETS[1]; density = (1000.0, 1.0)),
         _mimetic_solid_case(32, _mimetic_cylinder(0.513, 0.443, 0.2), (x, y) -> hypot(x - 0.47, y - 0.62) - 0.24; density = (1000.0, 1.0)),
+        # Under-resolved: the donor's liquid trace and the liquid subface of
+        # the transport lie at opposite ends of some faces (the carrier with
+        # the trace anchored at the liquid subface missed the transport's
+        # flux by 0.058 and 0.19 here).
+        _mimetic_case(32, (x, y) -> hypot(x - 0.5 - 0.43h, y - 0.5 - 0.29h) - 0.9h; density = (1000.0, 1.0), periodic = (false, false)),
+        _mimetic_case(32, (x, y) -> abs(y - 0.5 - 0.1h * sin(2pi * x) - 0.05x) - 0.75h; density = (1000.0, 1.0)),
     )
     for case in cases
         mesh, interface, work = case.mesh, case.interface, case.workspace
@@ -2030,15 +2076,41 @@ end
             carriers = map(both) do face
                 liquid, gas = assembly.liquid_dof[face], assembly.gas_dof[face]
                 a, open = assembly.dof_aperture[liquid], assembly.dof_aperture[liquid] + assembly.dof_aperture[gas]
-                c = TP._mimetic_booked_carrier(interface, mesh.faces[face], common, face, a, open)
+                c = TP._mimetic_booked_carrier(interface, mesh.faces[face], common, face, a, assembly.dof_aperture[gas])
                 upstream = sign > 0 ? mesh.faces[face].minus : mesh.faces[face].plus
-                @test c ≈ trace(face, upstream) atol = 1.0e-14
+                # The upstream trace on the open part of the face (both
+                # subfaces): the whole trace without a solid.
+                @test c ≈ TP._mimetic_carried_liquid(interface, mesh.faces[face], face, upstream, true, open) atol = 1.0e-14
+                @test c <= trace(face, upstream) + 1.0e-14
+                isnothing(interface.geometry) && @test c ≈ trace(face, upstream) atol = 1.0e-14
                 @test 0 <= c <= open
                 c
             end
             # The traces differ from the mean aperture on most faces.
             @test count(k -> !isapprox(carriers[k], assembly.dof_aperture[assembly.liquid_dof[both[k]]]; atol = 1.0e-12), eachindex(both)) > 0
         end
+        # c^l u^l + c^g u^g is the liquid flux of the VOF transport per unit
+        # time and face area for Δt → 0 (here Δt = 1e-9 for O(1) values).
+        moving = _mimetic_velocity(
+            case, (phase, face) -> phase == 1 ? 0.3 + sin(7face.center[1] + 3face.center[2]) :
+                -0.2 + cos(5face.center[2] - 2face.center[1]),
+        )
+        transport = WYAdvectionWorkspace(interface, moving)
+        TP._freeze_phase_apertures!(interface, transport)
+        for axis in (1, 2)
+            TP._compute_directional_wy_fluxes!(interface, moving, 1.0e-9, transport, axis)
+        end
+        flux_error = maximum(both) do face
+            entry = mesh.faces[face]
+            liquid, gas = assembly.liquid_dof[face], assembly.gas_dof[face]
+            ul, ug = moving[1].interior[face], moving[2].interior[face]
+            carried(u, liquid_carrier, aperture) = TP._mimetic_carried_liquid(
+                interface, entry, face, u >= 0 ? entry.minus : entry.plus, liquid_carrier, aperture,
+            )
+            booked = carried(ul, true, assembly.dof_aperture[liquid]) * ul + carried(ug, false, assembly.dof_aperture[gas]) * ug
+            abs(booked - transport.liquid_flux[face] / (1.0e-9 * entry.area))
+        end
+        @test flux_error <= 1.0e-6
         values = (randn(rng, length(mesh.faces)), randn(rng, length(mesh.faces)))
         function covector(scale; curvature = nothing)
             velocity = _mimetic_velocity(case, (phase, face) -> 0.0)
@@ -2257,6 +2329,53 @@ end
     @test all(isfinite, small_kappa)
     @test maximum(small_kappa) - minimum(small_kappa) <= 1.0e-12 * maximum(abs, small_kappa)
     @test swapped_kappa(small_field, 3, small)[small_cells] ≈ -small_kappa rtol = 1.0e-10
+end
+
+@testset "Mimetic capillary force: hydrostatic part on the aperture" begin
+    # A hydrostatic potential difference ψ = Ψ + Δρ g⋅x* (Ψ constant) is
+    # balanced with gravity's Gram moment ρ_π a|f| g⋅Δx* by one pressure per
+    # cell: on a face with both values the hydrostatic part -|f|Δ(Δρ g⋅x*) of
+    # the difference term keeps the liquid aperture, only the capillary part
+    # -|f|ΔΨ rides on the booked carrier (which depends on the phase values,
+    # here a moving state). Drop of radius 0.2, both labellings (liquid drop,
+    # liquid outside with the densities swapped). Measured 6e-12 – 7e-11 g dt;
+    # with the whole difference term on the booked carrier 0.066 – 61 g dt.
+    TP = TwoPhaseAMR
+    gravity, dt = (0.0, -9.81), 1.0e-3
+    circle = _mimetic_circle(32; radius = 0.2)
+    for density in ((1000.0, 1.0), (3.0, 1.0), (1.0, 1000.0)), swapped in (false, true)
+        case = swapped ?
+            _mimetic_case(32, (x, y) -> -circle(x, y); density = reverse(density), periodic = (false, false)) :
+            _mimetic_case(32, circle; density, periodic = (false, false))
+        interface, work = case.interface, case.workspace
+        reconstruct!(interface)
+        state = _mimetic_velocity(
+            case, (phase, face) -> phase == 1 ? 0.3 + sin(7face.center[1] + 3face.center[2]) :
+                -0.2 + cos(5face.center[2] - 2face.center[1]),
+        )
+        function increment(split)
+            velocity = _mimetic_zero_velocity(case)
+            TP._mimetic_uniform_acceleration!(velocity, case.solver, work, gravity, dt)
+            assembly = work.assembly
+            contrast = case.solver.density[1] - case.solver.density[2]
+            psi = map(eachindex(assembly.pressure_x)) do cell
+                2.3 + contrast * (gravity[1] * assembly.pressure_x[cell] + gravity[2] * assembly.pressure_y[cell])
+            end
+            # Without gravity the right-hand side has no hydrostatic part:
+            # the whole difference term on the booked carrier.
+            rhs, unresolved = TP._mimetic_capillary_rhs!(
+                work, case.solver, state, psi;
+                sigma = 1.0, formulation = CGFM(), curvature = nothing, gravity = split ? gravity : nothing,
+            )
+            @test unresolved == 0
+            _mimetic_add_force!(velocity, case, rhs, dt)
+            stats = project!(velocity, CellField(case.mesh), case.solver, dt, work; tolerance = 1.0e-12, max_iterations = 2000)
+            @test stats.converged
+            return _mimetic_maximum(velocity) / (9.81 * dt)
+        end
+        @test increment(true) <= 5.0e-10
+        @test increment(false) >= 0.03
+    end
 end
 
 @testset "Mimetic rest states with embedded solids" begin
