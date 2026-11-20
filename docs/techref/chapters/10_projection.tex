@@ -642,7 +642,9 @@ with the mixture velocity vector $\bar{\velo}_f$ of the face (its own
 mass-weighted mixture velocity along axis $k$, the mean of the mixture
 velocities of the axis-$t$ faces of its two cells along $t$), and $U_f$ the
 largest $\abs{\bar{\velo}}$ over $f$ and its four donors (at least the
-smallest normal floating-point number). For a kinematic interface $w_f$ is
+smallest normal floating-point number); the row takes the smaller of this
+weight and the diagonal-dominance bound~\cref{eq:projection:dominant-slope}
+below. For a kinematic interface $w_f$ is
 the speed at which it crosses $f$. $\slopeweight_f$ is evaluated from the
 state that the projection receives (in a step the predictor
 $\velo^{\stage{3}}$, after a regrid the transferred state; no history), is
@@ -719,10 +721,28 @@ row, or without transverse mixed faces, keep their jump.
 fallback. The second donors of a row with the linear inference are
 single-phase faces without unknowns, so the off-diagonal sum bounded
 in~\cref{eq:projection:dominance} is at most
-$\jumpbeta_f\abs{\normratio{f}}+(1+\slopeweight_f)(1-\jumpbeta_f)\infersum{f}$,
-which may exceed one by $\slopeweight_f(1-\jumpbeta_f)\infersum{f}$, and by
-$(1+\slopeweight_f)\infersum{f}-1$ in a tangential row: weak dominance is not
-guaranteed for these rows.
+$\jumpbeta_f\abs{\normratio{f}}+(1-\jumpbeta_f)(1+\slopeweight_f)\infersum{f}$:
+the first donors carry their mass fractions with the weight
+$1+\slopeweight_f$. With $\jumpbeta_f$ of~\cref{eq:projection:beta} this
+exceeded one by $\slopeweight_f(1-\jumpbeta_f)\infersum{f}$ (smallest margins
+$-7.7\times10^{-3}$ and $-2.7\times10^{-5}$ at the density ratios $1$ and
+$1000$ in the invariants test). The rule~\cref{eq:projection:beta} applied to
+the sum $(1+\slopeweight_f)\infersum{f}$ restores weak dominance for every
+$\slopeweight_f$: since $\jumpbeta=0$ gives the off-diagonal sum
+$(1+\slopeweight_f)\infersum{f}$, the slope weight of~(iv) is capped where
+that sum reaches one, and $\jumpbeta_f$ of a row with transverse faces is the
+largest weight for which the bound does not exceed one,
+\begin{equation}\label{eq:projection:dominant-slope}
+  \slopeweight_f\le\frac{1-\infersum{f}}{\infersum{f}},\qquad
+  \jumpbeta_f=\frac{1-(1+\slopeweight_f)\infersum{f}}{\abs{\normratio{f}}-(1+\slopeweight_f)\infersum{f}},
+\end{equation}
+while a tangential row keeps $\jumpbeta_f=0$. The cap binds only where the
+cross fractions of the two first donors sum to more than $\half$,
+$\slopeweight_f=0$
+gives the one-donor row, and both quantities are continuous in
+$\slopeweight_f$ and in the mass fractions; the margin of a row with
+transverse faces is zero, as for the one-donor rule with
+$\abs{\normratio{f}}>1$.
 
 \emph{Checks} (\code{cmdgfm_check}, with \apitype{ConstantJumpInference}). On
 the four fixtures of \cref{tab:projection:counts}, an independent classification
@@ -817,6 +837,7 @@ tangential rows \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_t
 with the increment form \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_incremental_row},
 normal rows \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_normal_stencil!},
 rows \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_extrapolated_inference!}
+with the dominance cap and $\jumpbeta_f$ \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_dominant_row}~\cref{eq:projection:dominant-slope}
 and \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_inferred_jump},
 limiter \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_limit_extrapolation!}
 (frozen weights released by \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_release_crossing!})

@@ -230,9 +230,18 @@ end
         data = CJI._projection_face_data(solver, work)
         stencils = filter(stencil -> stencil.resolved, CJI._cmdgfm_jump_stencils(solver, data))
         @test count(stencil -> stencil.gas_extrapolation_face > 0, stencils) > 8
+        # The cap (1 - s)/s of the slope weight that keeps the row weakly
+        # diagonally dominant (s: cross mass fractions of the first donors).
+        function cap(stencil)
+            gas, liquid = stencil.gas_inference_face, stencil.liquid_inference_face
+            s = data.liquid_mass[gas] / data.total_mass[gas] +
+                data.gas_mass[liquid] / data.total_mass[liquid]
+            return s > 0 ? (1 - s) / s : Inf
+        end
         rest = (FaceVelocity(mesh), FaceVelocity(mesh))
         @test all(
-            stencil -> stencil.slope == 1,
+            stencil -> stencil.gas_extrapolation_face == 0 ? stencil.slope == 1 :
+                stencil.slope == min(1.0, cap(stencil)),
             CJI._cmdgfm_limit_extrapolation!(copy(stencils), data, rest, interface),
         )
         translation = ntuple(_ -> FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ? 1.0 : 0.0), 2)
@@ -241,7 +250,7 @@ end
         for stencil in limited
             stencil.gas_extrapolation_face > 0 || continue
             normal = CJI._cmdgfm_face_normal(interface, mesh.faces[stencil.face])
-            @test stencil.slope ≈ ramp(abs(normal[1])) atol = 1.0e-12
+            @test stencil.slope ≈ min(ramp(abs(normal[1])), cap(stencil)) atol = 1.0e-12
             slopes[stencil.face] = stencil.slope
         end
         @test any(<(1), values(slopes)) && any(==(1), values(slopes))

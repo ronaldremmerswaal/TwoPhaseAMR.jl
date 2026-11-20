@@ -808,11 +808,13 @@ function _cmdgfm_tangential_stencil!(
         parallel, gas_face, liquid_face,
     )
     counts.tangential_rows += 1
+    stencil = CMDGFMJumpStencil(
+        face_index, transverse, weights, ratio, gas_face, liquid_face,
+        zero(T), true, false, gas_second, liquid_second,
+    )
     push!(
-        stencils, CMDGFMJumpStencil(
-            face_index, transverse, weights, ratio, gas_face, liquid_face,
-            zero(T), true, false, gas_second, liquid_second,
-        ),
+        stencils,
+        gas_second > 0 ? _cmdgfm_dominant_row(stencil, data, one(T)) : stencil,
     )
     return :row
 end
@@ -1022,13 +1024,14 @@ function _cmdgfm_jump_stencils(
                 )
             end
         end
+        stencil = CMDGFMJumpStencil(
+            face_index, transverse, weights, ratio,
+            gas_face, liquid_face, beta, true, false,
+            gas_second, liquid_second,
+        )
         push!(
             stencils,
-            CMDGFMJumpStencil(
-                face_index, transverse, weights, ratio,
-                gas_face, liquid_face, beta, true, false,
-                gas_second, liquid_second,
-            ),
+            gas_second > 0 ? _cmdgfm_dominant_row(stencil, data, one(T)) : stencil,
         )
     end
     return stencils
@@ -1169,11 +1172,42 @@ function _cmdgfm_crossing_slope(
     return one(T) - s * s * (3 - 2s)
 end
 
-"""Set the slope weight `θ` ([`_cmdgfm_crossing_slope`](@ref)) of every row
-of `stencils` with second donors from `velocity`. `θ` is frozen in the row:
-velocity, jump and pressure-gradient columns all use it, so the row stays
-homogeneous in the projected state and a single-valued gradient is still
-removed exactly.
+"""Row `stencil` with second donors, given the slope weight `slope` (`θ`) and
+the `β` that keep its jump-block row weakly diagonally dominant. The first
+donors enter the linear row with the weight `1 + θ`, so its off-diagonal sum is
+at most `β|r| + (1 - β)(1 + θ)s`, `s` the inference sum of the first donors
+(the cross mass fractions, techref `eq:projection:dominance`). `β = 0` gives
+`(1 + θ)s`, so `θ` is capped at `(1 - s)/s` (binding only for `s > 1/2`); a
+row with transverse faces takes the `β` of the published rule for the sum
+`(1 + θ)s`, the largest for which the bound does not exceed one, and a
+tangential row keeps `β = 0`. `θ = 0` gives the one-donor row; `θ` and `β`
+are continuous in the slope weight and the mass fractions."""
+function _cmdgfm_dominant_row(stencil::CMDGFMJumpStencil{T}, data, slope) where {T}
+    gas_face = stencil.gas_inference_face
+    liquid_face = stencil.liquid_inference_face
+    inferred_sum = data.liquid_mass[gas_face] / data.total_mass[gas_face] +
+        data.gas_mass[liquid_face] / data.total_mass[liquid_face]
+    inferred_sum > zero(T) && (slope = min(slope, (one(T) - inferred_sum) / inferred_sum))
+    beta = stencil.beta
+    if !isempty(stencil.transverse_faces)
+        effective = (one(T) + slope) * inferred_sum
+        beta = clamp(
+            (one(T) - effective) / (abs(stencil.ratio) - effective), zero(T), one(T),
+        )
+    end
+    return CMDGFMJumpStencil{T}(
+        stencil.face, stencil.transverse_faces, stencil.transverse_weights,
+        stencil.ratio, gas_face, liquid_face, beta, stencil.resolved,
+        stencil.full_remove, stencil.gas_extrapolation_face,
+        stencil.liquid_extrapolation_face, slope,
+    )
+end
+
+"""Set the slope weight `θ` ([`_cmdgfm_crossing_slope`](@ref), capped by
+[`_cmdgfm_dominant_row`](@ref) with its `β`) of every row of `stencils` with
+second donors from `velocity`. `θ` is frozen in the row: velocity, jump and
+pressure-gradient columns all use it, so the row stays homogeneous in the
+projected state and a single-valued gradient is still removed exactly.
 
 With the pressure `cache` of a workspace, `θ` is also frozen with the rows of
 the reconstructed interface: the first projection after the interface has
@@ -1204,12 +1238,7 @@ function _cmdgfm_limit_extrapolation!(
             slope = _cmdgfm_crossing_slope(stencil, data, liquid, gas, mesh, incidence, interface)
             isnothing(cache) || (cache.crossing_slope[stencil.face] = slope)
         end
-        stencils[row] = CMDGFMJumpStencil{T}(
-            stencil.face, stencil.transverse_faces, stencil.transverse_weights,
-            stencil.ratio, stencil.gas_inference_face, stencil.liquid_inference_face,
-            stencil.beta, stencil.resolved, stencil.full_remove,
-            stencil.gas_extrapolation_face, stencil.liquid_extrapolation_face, slope,
-        )
+        stencils[row] = _cmdgfm_dominant_row(stencil, data, slope)
     end
     return stencils
 end

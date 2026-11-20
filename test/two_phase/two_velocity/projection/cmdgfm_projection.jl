@@ -284,18 +284,11 @@ end
         @test stats.matrix_asymmetry > 0
         @test stats.mixture_volume_defect <= tolerance
         @test stats.normal_velocity_defect <= tolerance
-        if jump_inference isa ConstantJumpInference || !isnothing(geometry)
-            # On the cut composite mesh the second donors fall back to one
-            # donor next to the solid and the level transition.
-            @test stats.minimum_jump_diagonal_margin >= -512eps()
-        else
-            # NUMERICS CONCERN (#171): the rows with second donors take the
-            # mass fractions of their first donors with the weight 1 + θ, so
-            # their off-diagonal sum can exceed one (techref, *Jump
-            # inference*); measured margins -7.7e-3 and -2.7e-5 at the density
-            # ratios 1 and 1000.
-            @test_broken stats.minimum_jump_diagonal_margin >= -512eps()
-        end
+        # The rows with second donors cap their slope weight and take the β
+        # for the inference sum (1 + θ)s, so their off-diagonal sum stays at
+        # most one (#171; before: margins -7.7e-3 and -2.7e-5 at the density
+        # ratios 1 and 1000).
+        @test stats.minimum_jump_diagonal_margin >= -512eps()
         @test stats.momentum_identity_error <= 1024eps() * maximum(density)
         if isnothing(geometry)
             @test maximum(abs, stats.momentum_error) <=

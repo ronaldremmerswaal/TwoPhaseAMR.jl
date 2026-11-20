@@ -1506,11 +1506,22 @@ label = "eq:projection:crossing-limiter"
 sources = [
   { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_crossing_slope" },
   { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_limit_extrapolation!" },
-  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_CMDGFM_CROSSING_RAMP" }
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_CMDGFM_CROSSING_RAMP" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_release_crossing!" }
 ]
 tests = [
   { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: crossing-speed limiter" },
-  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: a translating drop stays at the one-donor level" }
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: a translating drop stays at the one-donor level" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: the projection is idempotent" }
+]
+[[claims]]
+label = "eq:projection:dominant-slope"
+sources = [
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_dominant_row" }
+]
+tests = [
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_projection.jl", testset = "CMDGFM projection invariants" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: crossing-speed limiter" }
 ]
 [[claims]]
 label = "eq:projection:normal-row"
