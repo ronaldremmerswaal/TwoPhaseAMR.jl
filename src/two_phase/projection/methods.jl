@@ -61,7 +61,8 @@ Unsupported choices are rejected at construction.
 recommended one for violent flows (impacts, splashes, thin films): its jump
 rows and the frozen jumps of its unresolved faces bound the light-phase values
 independently of the density ratio (a drop impact at density ratio 1000,
-`n = 32/64`: median largest velocity 3.5/5.0, against 50/111 with
+`n = 32/64`: median largest velocity 4.2/4.9, 3.5/5.0 with the published
+rows, against 50/111 with
 [`MimeticProjection`](@ref)). It conserves momentum but not kinetic energy.
 For capillary-dominated and moderate flows [`MimeticProjection`](@ref) is
 recommended.
@@ -156,8 +157,8 @@ line the wall energy.
 [`CMDGFMProjection`](@ref) remains the default and is recommended for violent
 flows (impacts, splashes, thin films). There the near-empty light-phase
 values of the mimetic projection grow: a drop impact at density ratio 1000,
-`n = 32/64`, has the median largest velocity 50/111, against 3.5/5.0 with the
-CMDGFM. In an energy-neutral projection with homogeneous constraints,
+`n = 32/64`, has the median largest velocity 50/111, against 4.2/4.9 with the
+CMDGFM (3.5/5.0 with the published rows). In an energy-neutral projection with homogeneous constraints,
 controlling the light phase and keeping the tangential slip between the phases
 conflict; the CMDGFM obtains both only through parts that are not
 energy-neutral (technical reference, chapter 10, *Scope and limitations*).
