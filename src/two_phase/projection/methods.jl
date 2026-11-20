@@ -1,28 +1,92 @@
 """Interface for selecting a two-velocity pressure projection."""
 abstract type AbstractTwoVelocityProjection end
 
+"""Rule by which a CMDGFM jump row infers the phase velocities of its mixed
+face from the neighbouring faces. See [`LinearJumpInference`](@ref) (the
+default) and [`ConstantJumpInference`](@ref) (the published rows)."""
+abstract type AbstractJumpInference end
+
+"""
+    LinearJumpInference()
+
+The CMDGFM jump inference (the default, issue #171). Compared with the
+published rows ([`ConstantJumpInference`](@ref)):
+
+- each phase is extrapolated linearly from two donors on its side of the
+  interface, `u(h₁) + θ (u(h₁) - u(h₂))`, in the velocity and in the matching
+  jump and pressure-gradient columns; for a smooth single-valued field and
+  `θ = 1` the inferred jump is `O(h³)` instead of `O(h)`;
+- the slope weight `θ ∈ [0, 1]` of a row is one minus a smoothstep of the
+  interface crossing speed `w/U` over the ramp `[1/16, 3/16]`, with `w` the
+  normal component of the mixture velocity at the face and `U` the local
+  mixture speed: an interface that moves through the face gets the one-donor
+  rule, a quasi-static one (a shear layer) the linear extrapolation;
+- a mixed face without a regular row gets a row that makes the interpolated
+  normal jump of the projected state vanish where `|n_t| ≤ |n_a|`, and the
+  tangential row below where `|n_t| > |n_a|`, instead of keeping its jump;
+- a mixed face with an exactly tangential staggered normal gets the row with
+  `β = 0` and no transverse term, imposed as an increment of the face's own
+  jump.
+
+Where a row would use a face across a refinement-level transition or a face
+reduced by a solid, or where a second donor is missing, does not carry its
+phase or is itself a mixed face, that face falls back to the rule of
+[`ConstantJumpInference`](@ref); the counts are reported in
+`CMDGFMProjectionStats.jump_inference`.
+"""
+struct LinearJumpInference <: AbstractJumpInference end
+
+"""
+    ConstantJumpInference()
+
+The CMDGFM jump rows as published (the thesis reference). A row whose
+staggered normal is closer to the transverse axis infers each phase from one
+same-axis donor face next to the mixed face (a constant extrapolation of each
+phase); faces without a row keep their jump. In a resolved shear layer the
+inferred jump is the two-point difference `2U'h` of the shear (issue #171).
+"""
+struct ConstantJumpInference <: AbstractJumpInference end
+
 """Pressure-projection policy for the conservative multidimensional ghost-fluid method.
 
 The supported preconditioners are `:block` (the default), `:ilu`, and `nothing`;
-unsupported choices are rejected at construction.
+`jump_inference` is [`LinearJumpInference()`](@ref LinearJumpInference)
+(the default) or the published rows
+[`ConstantJumpInference()`](@ref ConstantJumpInference).
+Unsupported choices are rejected at construction.
 """
-struct CMDGFMProjection{P, O} <: AbstractTwoVelocityProjection
+struct CMDGFMProjection{P, O, J <: AbstractJumpInference} <: AbstractTwoVelocityProjection
     preconditioner::P
     preconditioner_options::O
+    jump_inference::J
 
-    function CMDGFMProjection(preconditioner, preconditioner_options)
+    function CMDGFMProjection(
+            preconditioner, preconditioner_options,
+            jump_inference = LinearJumpInference(),
+        )
         preconditioner in (:block, :ilu, nothing) || throw(
             ArgumentError("CMDGFM preconditioner must be :block, :ilu, or nothing"),
         )
-        return new{typeof(preconditioner), typeof(preconditioner_options)}(
-            preconditioner, preconditioner_options,
+        _validate_jump_inference(jump_inference)
+        return new{
+            typeof(preconditioner), typeof(preconditioner_options), typeof(jump_inference),
+        }(
+            preconditioner, preconditioner_options, jump_inference,
         )
     end
 end
 
 CMDGFMProjection(;
     preconditioner = :block, preconditioner_options = (;),
-) = CMDGFMProjection(preconditioner, preconditioner_options)
+    jump_inference = LinearJumpInference(),
+) = CMDGFMProjection(preconditioner, preconditioner_options, jump_inference)
+
+_validate_jump_inference(jump_inference) =
+    jump_inference isa AbstractJumpInference || throw(
+    ArgumentError(
+        "CMDGFM jump_inference must be LinearJumpInference() or ConstantJumpInference()",
+    ),
+)
 
 """
     MimeticProjection()

@@ -1,4 +1,10 @@
-"""One local CMDGFM normal-jump equation associated with a mixed face."""
+"""One local CMDGFM normal-jump equation associated with a mixed face.
+
+`gas_extrapolation_face` and `liquid_extrapolation_face` are the second donors
+of the linear inference of [`LinearJumpInference`](@ref) (zero for a row with
+one donor per phase); `slope` is the weight `θ` of the extrapolation slope of
+both phases (1: linear, 0: one donor), set per projection by
+[`_cmdgfm_limit_extrapolation!`](@ref)."""
 struct CMDGFMJumpStencil{T}
     face::Int
     transverse_faces::Vector{Int}
@@ -9,6 +15,55 @@ struct CMDGFMJumpStencil{T}
     beta::T
     resolved::Bool
     full_remove::Bool
+    gas_extrapolation_face::Int
+    liquid_extrapolation_face::Int
+    slope::T
+end
+
+# A row with one donor per phase has no second donors.
+CMDGFMJumpStencil(
+    face, transverse_faces, transverse_weights::Vector{T}, ratio, gas_inference_face,
+    liquid_inference_face, beta, resolved, full_remove,
+    gas_extrapolation_face = 0, liquid_extrapolation_face = 0,
+) where {T} = CMDGFMJumpStencil{T}(
+    face, transverse_faces, transverse_weights, ratio, gas_inference_face,
+    liquid_inference_face, beta, resolved, full_remove,
+    gas_extrapolation_face, liquid_extrapolation_face, one(T),
+)
+
+"""Per-projection counts of the extended rows of [`LinearJumpInference`](@ref)
+and of the faces that fall back to the constant inference."""
+mutable struct CMDGFMInferenceCounts
+    extrapolated_rows::Int
+    tangential_rows::Int
+    normal_rows::Int
+    level_fallbacks::Int
+    solid_fallbacks::Int
+    missing_donor_fallbacks::Int
+    mixed_donor_fallbacks::Int
+    normal_fallbacks::Int
+    tangential_fallbacks::Int
+end
+CMDGFMInferenceCounts() = CMDGFMInferenceCounts(0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+const _CMDGFMInferenceSummary = NamedTuple{
+    (
+        :extrapolated_rows, :tangential_rows, :normal_rows, :level_fallbacks,
+        :solid_fallbacks, :missing_donor_fallbacks, :mixed_donor_fallbacks,
+        :normal_fallbacks, :tangential_fallbacks,
+    ),
+    NTuple{9, Int},
+}
+
+function _cmdgfm_inference_summary(counts::CMDGFMInferenceCounts)
+    return _CMDGFMInferenceSummary(
+        (
+            counts.extrapolated_rows, counts.tangential_rows, counts.normal_rows,
+            counts.level_fallbacks, counts.solid_fallbacks,
+            counts.missing_donor_fallbacks, counts.mixed_donor_fallbacks,
+            counts.normal_fallbacks, counts.tangential_fallbacks,
+        ),
+    )
 end
 
 # Connectivity needs face indices only, not the geometric MetricFace objects
@@ -32,10 +87,13 @@ mutable struct CMDGFMStencilStorage{T}
     weights::Vector{Vector{T}}
     parallel::Vector{Int}
     normal::Vector{Int}
+    # LinearJumpInference: second-donor scratch.
+    beyond::Vector{Int}
+    counts::CMDGFMInferenceCounts
 end
 CMDGFMStencilStorage(::Type{T}) where {T} = CMDGFMStencilStorage(
     CMDGFMJumpStencil{T}[], CMDGFMJumpStencil{T}[], Int[], Vector{Int}[],
-    Vector{T}[], Int[], Int[]
+    Vector{T}[], Int[], Int[], Int[], CMDGFMInferenceCounts(),
 )
 
 mutable struct CMDGFMTriplets{T}
@@ -94,6 +152,7 @@ mutable struct CMDGFMPressureCache{T, M <: BlockTreeMesh}
     jump_pressure::SparseMatrixCSC{T, Int}
     jump_block::SparseMatrixCSC{T, Int}
     jump_rhs::Vector{T}
+    jump_offset::Vector{T}
     pressure_triplets::CMDGFMTriplets{T}
     jump_triplets::CMDGFMTriplets{T}
 
@@ -104,7 +163,7 @@ mutable struct CMDGFMPressureCache{T, M <: BlockTreeMesh}
             EllipticWorkspace(T[], T[], T[], T[]), GradientConstructionCache(T),
             nothing, Int[], nothing, nothing, nothing, spzeros(T, 0, 0),
             Int[], T[], spzeros(T, 0, 0), T[], CMDGFMStencilStorage(T), Int[],
-            spzeros(T, 0, 0), spzeros(T, 0, 0), spzeros(T, 0, 0), T[],
+            spzeros(T, 0, 0), spzeros(T, 0, 0), spzeros(T, 0, 0), T[], T[],
             CMDGFMTriplets(T), CMDGFMTriplets(T),
         )
     end
