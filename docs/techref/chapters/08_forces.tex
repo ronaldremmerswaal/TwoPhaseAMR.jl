@@ -503,22 +503,27 @@ transition. A cut cell in the
 first row of two walls (a corner) takes the first wall, in the order left,
 right, bottom, top, whose run has a cosine.
 \emph{Measured} (sessile drops of the integration suite, $R=0.2$, densities
-$(1,10^{-3})$, La $550$, a quarter capillary time; study
+$(1,10^{-3})$, La $550$, a quarter capillary time, with the LHF-first face
+curvature~\cref{eq:forces:curvature}; study
 \code{mm-runs/contact_cmdgfm}). Against the contact-angle formulas
 of~\cref{sec:interface:contact} in the first row, the CMDGFM's shape error at
 $h=1/48$ without gravity is $1.12\times10^{-5}$ against $1.03\times10^{-5}$ at
-$90^\circ$, $4.70\times10^{-5}$ against $4.98\times10^{-5}$ at $60^\circ$ and
-$6.10\times10^{-5}$ at $120^\circ$ (unchanged); at $h=1/24$, $60^\circ$ it is
+$90^\circ$, $4.22\times10^{-5}$ against $4.13\times10^{-5}$ at $60^\circ$ and
+$2.33\times10^{-5}$ at $120^\circ$ (unchanged); at $h=1/24$, $60^\circ$ it is
 $1.6\times10^{-4}$ against $7.2\times10^{-4}$ (largest velocity $0.11$ against
 $0.92$). Under gravity (Bond number $1.21$) the $90^\circ$ errors are
-$8.5\times10^{-4}$, $2.1\times10^{-4}$, $2.9\times10^{-5}$ (rates $2.01$, $2.90$;
-before $2.19$, $2.73$), at $60^\circ$ $2.5\times10^{-4}$ and $4.0\times10^{-5}$ at
-$h=1/24$, $1/48$ (before $1.2\times10^{-3}$, $3.7\times10^{-5}$). At $h=1/48$ the
-one-velocity model's shape errors lie within $5\,\%$ of the CMDGFM's. The
+$8.5\times10^{-4}$, $2.4\times10^{-4}$, $2.9\times10^{-5}$ (rates $1.81$, $3.05$;
+before $8.5\times10^{-4}$, $2.2\times10^{-4}$, $2.9\times10^{-5}$, rates $1.97$,
+$2.91$), at $60^\circ$ $2.5\times10^{-4}$ and $4.4\times10^{-5}$ at
+$h=1/24$, $1/48$ (before $1.2\times10^{-3}$, $4.1\times10^{-5}$). The
+one-velocity model's shape errors lie within $5\,\%$ of the CMDGFM's at
+$h=1/48$, and the adaptive and the mixed tree reproduce the uniform $h=1/48$
+values. The
 $90^\circ$ rise is the mismatch of the second-order biases of the row-1 chord
 and the interior height function (exact $90^\circ$ cap of curvature $5$ at
 $h=1/48$: $+0.27\,\%$ and $+0.42\,\%$, the row-1 curvature $5.0138$ against
-$5.021$--$5.022$ in rows~2 and~3). A $90^\circ$ cap ($R=0.2$, no gravity)
+$5.021$--$5.022$ in rows~2 and~3). The following spreading runs were made
+with the former face curvature. A $90^\circ$ cap ($R=0.2$, no gravity)
 spreading on a $60^\circ$ wall or receding on a $120^\circ$ wall: after twelve
 capillary times the CMDGFM's distance to the equilibrium cap is
 $2.9\times10^{-4}$, $9.8\times10^{-5}$ ($60^\circ$, $h=1/24$, $1/48$) and

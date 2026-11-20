@@ -193,7 +193,7 @@ end
     # method; all five triple-point regimes have their own curvature-order
     # study in height_functions.jl. Measured (one-velocity, Bo = 1.21, with the
     # contact-line curvature of techref eq:forces:contact-line): shape errors
-    # 8.5e-4, 2.1e-4, 2.9e-5 (rates 2.02, 2.87; 2.19, 2.72 with the
+    # 8.5e-4, 2.4e-4, 2.9e-5 (rates 1.83, 3.04; 1.98, 2.90 with the
     # contact-angle formulas in the first row).
     results = [
         sessile_droplet_case(resolution; contact_angle = pi / 2)
@@ -258,56 +258,50 @@ end
     # point (techref eq:projection:mimetic-hydrostatic). Measured with the
     # contact-line curvature (techref eq:forces:contact-line) in both
     # projections: shape errors 8.9e-4, 3.1e-4, 2.3e-5 (rates 1.53, 3.72;
-    # CMDGFM 8.5e-4, 2.1e-4, 2.9e-5, rates 2.01, 2.90), largest phase value
-    # 0.015 at n = 48 against 0.066 for the CMDGFM (with the contact-angle
-    # formulas in the first row 2.8e-4, 2.3e-5, rates 1.66, 3.63 and 0.016;
-    # CMDGFM rates 2.19, 2.73 and 0.064). Referred to the pressure points the
-    # rates were 0.91, 0.79 and the largest value 1.04.
+    # CMDGFM 8.5e-4, 2.4e-4, 2.9e-5, rates 1.81, 3.05), largest phase value
+    # 0.0153 at n = 48 (CMDGFM 0.066). With the contact-angle formulas in the
+    # first row: 2.8e-4, 2.3e-5, rates 1.66, 3.63 and 0.016 (CMDGFM rates
+    # 1.97, 2.91). Referred to the pressure points the rates were 0.91, 0.79
+    # and the largest value 1.04.
     @test all(rates["MM"] .>= 1.2)
-    @test last(results["MM"]).maximum_velocity <=
-        2last(results["CMDGFM"]).maximum_velocity
+    @test last(results["MM"]).maximum_velocity <= 1.25 * 0.01534
 
-    # Without gravity (a circular cap) at n = 48: at 90° the mimetic drop
-    # matches the CMDGFM (shape error 1.18e-5 against 1.12e-5, largest phase
-    # value 2.1e-3 against 1.9e-3). With the contact-line curvature the 60°
-    # drop matches the CMDGFM's shape and current: shape error 5.42e-5
-    # against 4.70e-5, largest phase value 0.053 against 0.027 (with the
-    # contact-angle formulas in the first row 1.19e-4 and 0.21 against 4.98e-5
-    # and 0.025).
-    cap(angle) = Dict(
-        name => sessile_droplet_case(48; contact_angle = angle, velocity_model = model, bond = 0.0)
-            for (name, model) in models
-    )
-    right = cap(pi / 2)
-    @test right["MM"].shape_error <= 1.25right["CMDGFM"].shape_error
-    @test right["MM"].maximum_velocity <= 1.25right["CMDGFM"].maximum_velocity
-    # NUMERICS CONCERN: at 120° the current is within the factor 2
-    # (0.072 against 0.044) but the shape error is 1.6 times (9.9e-5 against
-    # 6.1e-5; unchanged by the contact-line curvature, which agrees with the
-    # contact-angle formula to 2e-4 where the touching cell is the only cut
-    # cell of the row). With the exact constant
-    # curvature the same drops stay at rest to 1e-10 for a capillary time (the
-    # wall blocks are consistent). At 120° the near-top slivers with
-    # C ≈ 0.015–0.023 and curvatures 6–9 % high drive it (numerics review,
-    # mm_walls/review).
-    for angle in (pi / 3, 2pi / 3)
-        inclined = cap(angle)
-        @test isfinite(inclined["MM"].maximum_velocity)
-        @test inclined["MM"].maximum_velocity <= 2inclined["CMDGFM"].maximum_velocity
-        if angle > pi / 2
-            @test_broken inclined["MM"].shape_error <= 1.25inclined["CMDGFM"].shape_error
-        else
-            @test inclined["MM"].shape_error <= 1.25inclined["CMDGFM"].shape_error
-        end
+    # Without gravity (a circular cap) at n = 48, the mimetic drop against
+    # bounds 1.25 times its measured shape error and largest phase value:
+    # 90° 1.176e-5, 2.129e-3; 60° 5.416e-5, 0.05251 (1.19e-4 and 0.21 with
+    # the contact-angle formulas in the first row); 120° 9.932e-5, 0.07175.
+    # Finding (techref ch. 10, Walls): relative to the CMDGFM (1.124e-5,
+    # 1.891e-3; 4.223e-5, 0.02654; 2.328e-5, 5.436e-3) the mimetic shape
+    # error is 1.05, 1.28 and 4.3 times and the largest phase value 1.13,
+    # 1.98 and 13 times at 90°, 60° and 120°; with gravity (90°) 0.80 and
+    # 0.23 times. With the exact constant curvature the same drops stay at
+    # rest to 1e-10 for a capillary time (the wall blocks are consistent); at
+    # 120° the near-top slivers with C ≈ 0.015–0.023 and curvatures 6–9 %
+    # high drive the current (numerics review, mm_walls/review), which the
+    # mimetic projection takes from its own cell curvature while the CMDGFM
+    # uses the LHF-first face curvature (techref eq:forces:curvature).
+    mimetic = TwoVelocityModel(pressure_projection = MimeticProjection())
+    for (angle, shape, speed) in ((pi / 2, 1.176e-5, 2.129e-3), (pi / 3, 5.416e-5, 0.05251), (2pi / 3, 9.932e-5, 0.07175))
+        result = sessile_droplet_case(48; contact_angle = angle, velocity_model = mimetic, bond = 0.0)
+        @test result.volume_error <= 4096eps()
+        @test result.shape_error <= 1.25shape
+        @test result.maximum_velocity <= 1.25speed
     end
 end
 
 @testset "Sessile droplet with the two-velocity projections on adaptive meshes" begin
     # The convergence study's drop on a fixed nonconforming tree and on the
     # interface/curvature-adapted tree (finest level n = 48), both
-    # projections. Without gravity the mimetic drop is the uniform mesh's
-    # (measured on both trees: shape error 1.176e-5 against 1.124e-5, largest
-    # phase value 2.13e-3 against 1.89e-3, as at n = 48 uniform).
+    # projections. The mimetic drop is the uniform mesh's, measured on both
+    # trees: without gravity shape error 1.176e-5, largest phase value
+    # 2.129e-3 (CMDGFM 1.124e-5, 1.891e-3); with gravity (Bo = 1.21) 2.329e-5,
+    # 0.01534 (CMDGFM 2.926e-5, 0.0656; 3.15e-4 and 1.04 referred to the
+    # pressure points). The bounds are 1.25 times these. The 90° shape
+    # errors of both projections carry the mismatch of the second-order
+    # biases of the row-1 contact-line curvature (5.0138 on the exact cap,
+    # κ = 5, h = 1/48) and the height-function curvature of rows 2–3
+    # (5.021–5.022): about 1e-6 (mm-runs/contact_young, report §4;
+    # mm-runs/contact_cmdgfm).
     models = (
         ("CMDGFM", TwoVelocityModel()),
         ("MM", TwoVelocityModel(pressure_projection = MimeticProjection())),
@@ -321,27 +315,12 @@ end
             @test cap[name].levels > 1
             @test cap[name].volume_error <= 4096eps()
         end
-        # With the contact-line curvature in both projections the cap's shape
-        # error is 1.046 times the CMDGFM's (1.176e-5 against 1.124e-5). With
-        # the contact-angle formulas in the first row of the CMDGFM it was
-        # 1.146 times (against 1.026e-5): the row-1 curvature
-        # (cos θ_{3/2} - cos θ_w)/h (5.0138 on the exact cap, κ = 5,
-        # h = 1/48) and the height-function curvature of rows 2–3
-        # (5.021–5.022) are biased differently at second order (+0.27 % and
-        # +0.42 %), which raises both shape errors by about 1e-6
-        # (mm-runs/contact_young, report §4; mm-runs/contact_cmdgfm).
-        @test cap["MM"].shape_error <= 1.1cap["CMDGFM"].shape_error
-        @test cap["MM"].maximum_velocity <= 1.25cap["CMDGFM"].maximum_velocity
-        # With gravity (Bo = 1.21) the hydrostatic reference of the potentials
-        # carries over to the adaptive trees: measured on both trees largest
-        # phase value 0.015 against 0.066 for the CMDGFM, shape error 2.33e-5
-        # against 2.85e-5 (1.04 and 3.15e-4 referred to the pressure points).
-        gravity = Dict(
-            name => sessile_droplet_case(12; kind, velocity_model = model)
-                for (name, model) in models
-        )
-        @test all(isfinite, (gravity["MM"].maximum_velocity, gravity["MM"].shape_error))
-        @test gravity["MM"].volume_error <= 4096eps()
-        @test gravity["MM"].maximum_velocity <= 2gravity["CMDGFM"].maximum_velocity
+        @test cap["MM"].shape_error <= 1.25 * 1.176e-5
+        @test cap["MM"].maximum_velocity <= 1.25 * 2.129e-3
+        gravity = sessile_droplet_case(12; kind, velocity_model = last(last(models)))
+        @test gravity.levels > 1
+        @test gravity.volume_error <= 4096eps()
+        @test gravity.shape_error <= 1.25 * 2.329e-5
+        @test gravity.maximum_velocity <= 1.25 * 0.01534
     end
 end

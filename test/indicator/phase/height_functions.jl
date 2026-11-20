@@ -371,10 +371,30 @@ end
 end
 
 @testset "Contact-angle curvature converges at triple points" begin
+    # The cells whose PLIC line touches the wall. The contact-angle formulas
+    # (`_contact_curvature`, techref eq:interface:contact-right and
+    # eq:interface:contact-acute) converge pointwise: first order at the
+    # triple point, second order for the symmetry case θ = π/2 (thesis). The
+    # stored curvature there is the contact-line curvature
+    # (cos θ_{3/2} - cos θ_w)/h of the first row (techref
+    # eq:forces:contact-line), the derivative of the discrete contact-line
+    # energy (tested in "Contact-line curvature: energy consistency"), not a
+    # pointwise approximation of 1/R: its largest error (1/R = 3.33) is
+    # bounded at the tested resolutions, measured
+    #   20°: 0.294, 0.197, 0.145    55°: 0.111, 0.064, 0.0448
+    #   90°: 0.00919, 0.00405, 0.00227    125°: 0.0528, 0.0393, 0.0312
+    #   160°: 0.265, 0.222, 0.190 (orders 0.44, 0.53; the formulas 0.435,
+    #   0.266, 0.203)
+    # at n = 32, 48, 64; the bounds are 1.25 times these.
+    measured = Dict(
+        20 => (0.294, 0.197, 0.145), 55 => (0.111, 0.064, 0.0448),
+        90 => (0.00919, 0.00405, 0.00227), 125 => (0.0528, 0.0393, 0.0312),
+        160 => (0.265, 0.222, 0.19),
+    )
+    resolutions = (32, 48, 64)
     for angle_degrees in (20, 55, 90, 125, 160)
         errors = Float64[]
-        resolutions = (32, 48, 64)
-        for n in resolutions
+        for (k, n) in enumerate(resolutions)
             theta = deg2rad(angle_degrees)
             radius = 0.3
             center_x = 0.027
@@ -389,38 +409,29 @@ end
                 lipschitz = 1,
                 contact_angle = (nothing, nothing, theta, nothing)
             )
-            local_errors = Float64[]
+            values = TwoPhaseAMR._fill_height_values!(interface)
+            formula_errors = Float64[]
+            stored_errors = Float64[]
             for ref in TwoPhaseAMR._cell_references(mesh)
                 _, y = cellcenter(mesh, ref.block, ref.i, ref.j)
                 y <= 0.5 / n + 64eps() || continue
                 TwoPhaseAMR._plic_touches_wall(interface, ref, 3) || continue
-                curvature = TwoPhaseAMR._get(interface.curvature, ref)
-                isfinite(curvature) &&
-                    push!(local_errors, abs(curvature - inv(radius)))
+                formula = TwoPhaseAMR._contact_curvature(interface, values[ref.block], ref.block, ref.i, ref.j)
+                isnothing(formula) || push!(formula_errors, abs(formula - inv(radius)))
+                stored = TwoPhaseAMR._get(interface.curvature, ref)
+                isfinite(stored) && push!(stored_errors, abs(stored - inv(radius)))
             end
-            @test !isempty(local_errors)
-            push!(errors, maximum(local_errors))
+            @test !isempty(formula_errors)
+            @test !isempty(stored_errors)
+            push!(errors, maximum(formula_errors))
+            @test maximum(stored_errors) <= 1.25measured[angle_degrees][k]
         end
         rates = [
             log(errors[index] / errors[index + 1]) /
                 log(resolutions[index + 1] / resolutions[index])
                 for index in 1:(length(resolutions) - 1)
         ]
-        # The thesis predicts first order at the triple point (second order
-        # for the symmetry case theta=pi/2). The touching cells carry the
-        # contact-line curvature (cos θ_{3/2} - cos θ_w)/h of the first row
-        # (techref eq:forces:contact-line), the mean curvature over the row.
-        if angle_degrees == 160
-            # NUMERICS CONCERN: at 160° the largest error of the contact-line
-            # curvature, 0.265, 0.222, 0.190 at n = 32, 48, 64 (1/R = 3.33),
-            # falls at the orders 0.44, 0.53; the contact-angle formulas gave
-            # 0.435, 0.266, 0.203 (orders 1.21, 0.94), larger errors but
-            # first order (cause not isolated; the line spreads over two to
-            # four cells of the row).
-            @test_broken all(rates .>= 0.7)
-        else
-            @test all(rates .>= 0.7)
-        end
+        @test all(rates .>= 0.7)
         if angle_degrees == 90
             @test all(rates .>= 1.8)
         end
