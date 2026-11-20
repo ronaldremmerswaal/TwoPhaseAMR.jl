@@ -683,6 +683,7 @@ function _reconstruct_interface!(field::InterfaceField)
             end
         end
     end
+    _contact_line_curvature!(field)
     _mark_reconstruction_current!(field)
     return field
 end

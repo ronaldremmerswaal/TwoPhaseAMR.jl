@@ -463,6 +463,125 @@ end
     @test curvature_changed
 end
 
+@testset "Contact-line curvature: energy consistency" begin
+    # On the first row along a wall with a contact angle θ_w every cut cell
+    # gets κ = (cos θ_{3/2} - cos θ_w)/h, θ_{3/2} the angle of the chord
+    # between the wall-parallel heights of rows 1 and 2: the derivative of the
+    # contact-line energy σ(|chord| - cos θ_w H₁) by the row's liquid volume
+    # (techref eq:forces:contact-line). Along a closed loop of exact circular
+    # caps (shift by h/2 at 90°, 90° → 60°, shift back, 60° → 90°; 200 steps,
+    # h = 1/48) the trapezoidal work -Σ κ dV of the row of each contact line
+    # vanishes: measured 2.7e-12 against a release of 0.0206 on the open path
+    # 90° → 60°.
+    TP = TwoPhaseAMR
+    n, wall, steps = 48, pi / 3, 200
+    h = 1 / n
+    vertices(angle, x0; area = pi * 0.2^2 / 2) = (
+        radius = sqrt(area / (angle - sin(angle) * cos(angle)));
+        [(x0 + radius * sin(phi), radius * (cos(phi) - cos(angle))) for phi in range(angle, -angle; length = 801)]
+    )
+    cap(angle, x0) = PolygonIndicator(vertices(angle, x0))
+    mesh = BlockTreeMesh(block_size = (n, n), periodic = (false, false))
+    interface = InterfaceField(mesh, cap(pi / 2, 0.5); contact_angle = (nothing, nothing, wall, nothing))
+    references = collect(TP._cell_references(mesh))
+    row = [r for r in references if r.j == 1]
+    sides = (r -> r.i <= n ÷ 2, r -> r.i > n ÷ 2)
+    cut(field, r) = 0 < TP._conditional_fraction(field, r) < 1
+    # Liquid volume and the curvatures of the cut cells of the row of each
+    # contact line.
+    function state(angle, x0)
+        initialize!(interface, cap(angle, x0))
+        reconstruct!(interface; force = true)
+        return map(sides) do side
+            cells = filter(side, row)
+            volume = sum(TP._get(interface.fraction, r) for r in cells) * h^2
+            volume, [TP._get(interface.curvature, r) for r in cells if cut(interface, r)]
+        end
+    end
+    # Trapezoidal work of the rows and the largest relative spread of the
+    # curvatures of a row (one curvature per row).
+    function row_work(path)
+        last = state(first(path)...)
+        total = spread = 0.0
+        for point in path[2:end]
+            next = state(point...)
+            for side in 1:2
+                (before, kappa_before), (after, kappa_after) = last[side], next[side]
+                spread = max(spread, (maximum(kappa_after) - minimum(kappa_after)) / maximum(abs, kappa_after))
+                total -= (first(kappa_before) + first(kappa_after)) / 2 * (after - before)
+            end
+            last = next
+        end
+        return total, spread
+    end
+    angles = range(pi / 2, wall; length = steps + 1)
+    shifts = range(0.5, 0.5 + h / 2; length = steps ÷ 4 + 1)
+    release, release_spread = row_work([(angle, 0.5) for angle in angles])
+    loop, loop_spread = row_work(
+        vcat(
+            [(pi / 2, x) for x in shifts], [(angle, last(shifts)) for angle in angles[2:end]],
+            [(wall, x) for x in reverse(shifts)[2:end]], [(angle, 0.5) for angle in reverse(angles)[2:end]],
+        )
+    )
+    @test max(release_spread, loop_spread) <= 1.0e-12
+    @test 0.02 <= release <= 0.021
+    @test abs(loop) <= 1.0e-10
+    # At the 60° cap the cut cells of the row share one curvature per contact
+    # line, close to the cap's 1/R = 3.13 (measured 3.17, the mean curvature over
+    # the row).
+    initialize!(interface, cap(wall, 0.5))
+    reconstruct!(interface; force = true)
+    cells = [r for r in row if cut(interface, r)]
+    kappa = [TP._get(interface.curvature, r) for r in cells]
+    for side in sides
+        row_kappa = [k for (r, k) in zip(cells, kappa) if side(r)]
+        @test length(row_kappa) == 2
+        @test row_kappa[1] ≈ row_kappa[2] rtol = 1.0e-13
+        @test row_kappa[1] ≈ sqrt(2 * pi / 3 - sqrt(3) / 2) / sqrt(pi * 0.2^2) rtol = 0.02
+    end
+    # Label symmetry: swapping the phases (C → 1 - C, θ_w → π - θ_w) flips the
+    # sign of the row's curvature.
+    function swapped_kappa(field, side, angle, cells)
+        complement = copy(field.fraction)
+        for b in eachindex(mesh.blocks)
+            interior(complement, b) .= 1 .- interior(field.fraction, b)
+        end
+        swapped = InterfaceField(complement; contact_angle = ntuple(w -> w == side ? pi - angle : nothing, 4))
+        return [TP._get(swapped.curvature, r) for r in cells]
+    end
+    @test swapped_kappa(interface, 3, wall, cells) ≈ -kappa rtol = 1.0e-10
+    # Every wall: the cap mapped onto the left, right and top wall gives the
+    # bottom row's curvatures in the first row of that wall (to the round-off
+    # of the mapped vertices, measured 1e-12).
+    function wall_row(points, side, angle)
+        field = InterfaceField(mesh, PolygonIndicator(points); contact_angle = ntuple(w -> w == side ? angle : nothing, 4))
+        in_row(r) = (r.i == 1, r.i == n, r.j == 1, r.j == n)[side]
+        row_cells = [r for r in references if in_row(r) && cut(field, r)]
+        return field, row_cells, [TP._get(field.curvature, r) for r in row_cells]
+    end
+    rotations = (1 => ((x, y),) -> (y, x), 2 => ((x, y),) -> (1 - y, x), 4 => ((x, y),) -> (x, 1 - y))
+    for angle in (pi / 3, 2pi / 3)
+        points = vertices(angle, 0.5 + 0.3h)
+        bottom = sort(last(wall_row(points, 3, angle)))
+        for (side, rotate) in rotations
+            @test sort(last(wall_row(map(rotate, points), side, angle))) ≈ bottom rtol = 1.0e-10
+        end
+    end
+    # At 35° on a smaller cap (area π0.1²/2) the line spreads over four to six
+    # cells of the row and one or two of them have no valid columns (the row-2
+    # transition leaves the window of four cells): they take the cosine of
+    # the nearest valid cell of their run, so the row shares one curvature.
+    small = 35pi / 180
+    small_field, small_cells, small_kappa = wall_row(vertices(small, 0.5; area = pi * 0.1^2 / 2), 3, small)
+    small_values = TP._fill_height_values!(small_field)
+    @test count(small_cells) do r
+        isnothing(TP._wall_row_cosine(small_values[r.block], r.i + 4, r.j + 4, 2, 1))
+    end > 0
+    @test all(isfinite, small_kappa)
+    @test maximum(small_kappa) - minimum(small_kappa) <= 1.0e-12 * maximum(abs, small_kappa)
+    @test swapped_kappa(small_field, 3, small, small_cells) ≈ -small_kappa rtol = 1.0e-10
+end
+
 @testset "Expanded GHF resolves a shallow wall arc" begin
     theta = deg2rad(20)
     radius = 0.2

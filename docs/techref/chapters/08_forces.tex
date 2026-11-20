@@ -231,6 +231,8 @@ $10^{-9}$ on uniform, composite and adapted meshes, density ratios 1 and
 Surface tension needs a curvature on every face with a phase jump. The cell
 curvature $\curv_c$ of \cref{ch:interface} is the LHF or GHF curvature, at
 domain walls the contact-angle formulas of \cref{sec:interface:contact},
+in the first row along a domain wall with a contact angle the contact-line
+curvature~\cref{eq:forces:contact-line} of \cref{sec:forces:contact-line},
 and in a triple cell the GHF fit with the contact
 row~\cref{eq:interface:contact-row}; it is clipped
 by~\cref{eq:interface:clip} and undefined (\code{NaN}) in pure cells and
@@ -327,6 +329,132 @@ Tests: \testsym{test/two_phase/forces.jl}{Unresolved surface-tension curvature}
 counts, summary line, no unresolved face on a resolved drop),
 \testsym{test/two_phase/forces.jl}{Curvature extension agrees with exhaustive search}
 (the block prefilter, periodic and walled composite meshes).
+\end{implnote}
+
+\subsection{Contact-line curvature}\label{sec:forces:contact-line}
+Along a domain wall with a contact angle $\cangle$ (axis not periodic) the cut
+cells of the first row take the curvature of a discrete contact-line energy
+(study \code{mm-runs/contact_young}; every velocity model and projection, the
+cell curvature of the reconstruction). A capillary force whose work is
+$-\sum_c\sigma\kappa_c\dot V_c$ ($V_c=C_ch^2$; the booked carrier of the
+mimetic projection, \cref{sec:projection:mimetic}) is energy consistent where
+$\sigma\kappa_c=\partial E_h/\partial V_c$ for a discrete energy $E_h(V)$;
+then the work around a closed loop of states vanishes. The contact-angle
+formulas of \cref{sec:interface:contact} fail this at the contact line: the
+cell whose PLIC line touches the wall gets the ghost-height
+curvature~\cref{eq:interface:contact-right}
+(or~\cref{eq:interface:contact-acute}), the other cut cells of the same row
+the one-sided wall, local or generalised value (at $60^\circ$, $h=1/48$:
+$5.118$ and $5.009$ in the two cut cells of one row). Volume exchanged within
+the row changes neither the wetted length nor the row's height but releases
+$\sigma\Delta\kappa\,\mathrm dV$, and the selection switches as the line
+crosses a face. Take the wall $y=0$, the liquid on the low-$x$ side of the
+line (orientation $o=1$; $o=-1$ gives the same result) and the wall-parallel
+heights $\hdisc{1}$, $\hdisc{2}$~\cref{eq:interface:height} (in cells) of rows~1
+and~2, both relative to the cell's tangential centre. The volume data define
+the wetted length $W=h\hdisc{1}+\text{const}$ (the liquid volume of row~1
+over $h$), the chord between the two row centres, of slope
+$s=\hdisc{2}-\hdisc{1}$, and the stub between the wall and the row-1 centre.
+The stub's slope $s_0$ is below the resolution: its energy
+$\sigma\frac h2(\sqrt{1+s_0^2}+\cos\cangle\,s_0)$ (its length and the
+correction of the wetted length) is stationary at the angle $\cangle$, Young's
+law, with the minimum $\sigma\frac h2\sin\cangle$, independent of the heights.
+The reduced contact-line energy is therefore
+$\sigma(h\sqrt{1+s^2}-\cos\cangle\,h\hdisc{1})+\text{const}$, and its
+derivative by the row's liquid volume ($\mathrm dV_1=h^2\,\mathrm d\hdisc{1}$)
+gives every cut cell of the row
+\begin{equation}\label{eq:forces:contact-line}
+  \kappa_c=\frac{\cos\theta_{3/2}-\cos\cangle}{h},\qquad
+  \cos\theta_{3/2}=-\frac{o\,s}{\sqrt{1+s^2}},
+\end{equation}
+$\theta_{3/2}$ the angle of the chord ($h$ the cell size normal to the wall;
+the cells are square), not clipped by~\cref{eq:interface:clip}
+($\abs{\kappa_c}\le2/h$). Its
+derivative by the row-2 volume, $-\sigma\cos\theta_{3/2}/h$, is the lower
+flux of the conservative row-2 curvature
+$\sigma(\cos\theta_{5/2}-\cos\theta_{3/2})/h$, which the interior height
+function supplies to $O(h^2)$. The columns reach four cells to either side
+(the padding of the height values); a cut cell of the row without valid
+columns takes the cosine of the nearest cell with valid columns in its
+contiguous run of cut cells along the wall (the slope $s$ is the same along a
+run), so every cut cell of the run shares $\kappa_c$, also where the line
+spreads over several cells of the row ($\cangle\lesssim45^\circ$ or
+$\gtrsim150^\circ$). On caps of area $\pi\,0.2^2/2$ at $h=1/48$ every run has
+such a cell for $25^\circ\le\cangle\le160^\circ$ (10 sub-cell shifts each; with
+radius three and without the run, up to all cells of a run at $25^\circ$ kept
+the formulas of \cref{sec:interface:contact}).
+\emph{Equilibrium.} Row~1 balances the pressure $\sigma\kappa$ of a cap of
+curvature $\kappa$ where $\cos\theta_{3/2}=\cos\cangle+\kappa h$; along the
+cap $\mathrm d\cos\theta/\mathrm dy=\kappa$, so the continuum angle at
+$y=h$ satisfies the same relation when the wall angle is $\cangle$: the
+equilibrium angle is consistent to second order (exact $60^\circ$ cap of
+curvature $5$, $h=1/48$: $\cos\theta_{3/2}=0.6068$ against
+$0.5+5/48=0.6042$). Slaving the stub to the chord ($s_0=s$) instead adds half
+of~\cref{eq:forces:contact-line} and gives
+$\cos\theta_{3/2}=\cos\cangle+\frac23\kappa h$, wrong at first order. Written
+as $(\cos\theta_{3/2}-\cos\theta_0)/h+(\cos\theta_0-\cos\cangle)/h$ for any wall
+angle $\theta_0$, \cref{eq:forces:contact-line} is the conservative
+row-1 curvature plus the Young term, and $\theta_0$ cancels; an angle from the
+cell's PLIC line (biased) made the line recede. The ghost-height
+curvature~\cref{eq:interface:contact-right} is the same formula to third
+order in the slope differences in the cell that gets it (on the exact
+$120^\circ$ cap at $h=1/48$ with the touching cell the only cut cell of the
+row, $4.938$ against $4.939$; depending on the position the row has one or
+two cut cells there): the defect was the
+selection of the cells, not the formula. Swapping the phases ($C\to1-C$,
+$\cangle\to\pi-\cangle$) flips $o$ and the sign of $\kappa_c$, as required.
+The heights come from the padded block values~\cref{eq:interface:height-values}
+at the block's level, their halo values from the final PLIC planes of the
+reconstruction, so the construction carries over to adaptive meshes (the
+adapted and the mixed tree reproduce the uniform $h=1/48$ sessile drop
+exactly).
+\emph{Limitations.} Embedded solids keep the formulas
+of~\cref{sec:interface:contact}: a cut-cell solid has no wall-parallel column
+(its cells are unavailable to the heights); the energy argument carries over,
+$E=\sigma(\meas{\Gamma}-\cos\cangle\,\meas{W})$ with the wetted solid length,
+but needs a solid-aligned pair of heights. A run of cut cells without valid
+columns keeps them too: a thin cap, whose row-2 transition is wider than
+the columns (area $\pi\,0.1^2/2$ at $h=1/48$, 10 shifts: 54 of 70 row-1 cut
+cells at $25^\circ$, 34 of 46 at $155^\circ$, all 50 at $160^\circ$, none at
+$30^\circ$--$45^\circ$), or a run whose columns
+are cut off by a perpendicular wall (a contact line within about two cells of
+it), a solid, the padding or invalid resampled values across a level
+transition. A cut cell in the
+first row of two walls (a corner) takes the first wall, in the order left,
+right, bottom, top, whose run has a cosine.
+\emph{Measured} (sessile drops of the integration suite, $R=0.2$, densities
+$(1,10^{-3})$, La $550$, a quarter capillary time; study
+\code{mm-runs/contact_cmdgfm}). Against the contact-angle formulas
+of~\cref{sec:interface:contact} in the first row, the CMDGFM's shape error at
+$h=1/48$ without gravity is $1.12\times10^{-5}$ against $1.03\times10^{-5}$ at
+$90^\circ$, $4.70\times10^{-5}$ against $4.98\times10^{-5}$ at $60^\circ$ and
+$6.10\times10^{-5}$ at $120^\circ$ (unchanged); at $h=1/24$, $60^\circ$ it is
+$1.6\times10^{-4}$ against $7.2\times10^{-4}$ (largest velocity $0.11$ against
+$0.92$). Under gravity (Bond number $1.21$) the $90^\circ$ errors are
+$8.5\times10^{-4}$, $2.1\times10^{-4}$, $2.9\times10^{-5}$ (rates $2.01$, $2.90$;
+before $2.19$, $2.73$), at $60^\circ$ $2.5\times10^{-4}$ and $4.0\times10^{-5}$ at
+$h=1/24$, $1/48$ (before $1.2\times10^{-3}$, $3.7\times10^{-5}$). At $h=1/48$ the
+one-velocity model's shape errors lie within $5\,\%$ of the CMDGFM's. The
+$90^\circ$ rise is the mismatch of the second-order biases of the row-1 chord
+and the interior height function (exact $90^\circ$ cap of curvature $5$ at
+$h=1/48$: $+0.27\,\%$ and $+0.42\,\%$, the row-1 curvature $5.0138$ against
+$5.021$--$5.022$ in rows~2 and~3). A $90^\circ$ cap ($R=0.2$, no gravity)
+spreading on a $60^\circ$ wall or receding on a $120^\circ$ wall: after twelve
+capillary times the CMDGFM's distance to the equilibrium cap is
+$2.9\times10^{-4}$, $9.8\times10^{-5}$ ($60^\circ$, $h=1/24$, $1/48$) and
+$1.6\times10^{-3}$, $1.1\times10^{-3}$ ($120^\circ$), against
+$3.6\times10^{-4}$, $7.2\times10^{-5}$, $3.5\times10^{-3}$ and $5.3\times10^{-3}$
+before (snapshots of an underdamped relaxation; one-velocity similar, except
+$4.8\times10^{-3}$ against $1.2\times10^{-3}$ at $120^\circ$, $h=1/24$).
+
+\begin{implnote}
+\srcsym{src/interface/height_functions.jl}{_contact_line_curvature!}~\cref{eq:forces:contact-line},
+called at the end of \srcsym{src/interface/interface_field.jl}{_reconstruct_interface!},
+with the chord \srcsym{src/interface/height_functions.jl}{_wall_row_cosine}
+and the run \srcsym{src/interface/height_functions.jl}{_wall_run_cosine}.
+Tests: \testsym{test/indicator/phase/height_functions.jl}{Contact-line curvature: energy consistency}
+(closed loop of exact caps, one curvature per row, label symmetry, every
+wall, the run of a thin cap).
 \end{implnote}
 
 \section{Surface tension}\label{sec:forces:surface-tension}
