@@ -998,10 +998,10 @@ heights takes the cosine of the nearest cell with both in its contiguous run of
 cut cells of the row ([`_wall_run_cosine`](@ref)); a run without any (for
 example next to an embedded solid) keeps the curvature of the reconstruction.
 The heights come from the final PLIC planes (the halo values of the height
-columns use them)."""
+columns use them); they are refilled only if a cut cell lies in a first wall
+row."""
 function _contact_line_curvature!(field)
     all(isnothing, field.contact_angles) && return field
-    values = _fill_height_values!(field)
     mesh = field.mesh
     T = eltype(field)
     nx = mesh.block_size[1]
@@ -1011,6 +1011,8 @@ function _contact_line_curvature!(field)
         theta = field.contact_angles[wall]
         isnothing(theta) ? T(NaN) : cos(T(theta))::T
     end
+    _has_contact_row_cell(field, wall_cosines) || return field
+    values = _fill_height_values!(field)
     _parallel_block_columns(mesh) do b, first_j, last_j
         block = @inbounds mesh.blocks[b]
         height_values = @inbounds values[b]
@@ -1021,15 +1023,11 @@ function _contact_line_curvature!(field)
             for wall in 1:4
                 wall_cosine = wall_cosines[wall]
                 isnan(wall_cosine) && continue
+                _in_wall_row(mesh, block, i, j, wall) || continue
                 axis = wall <= 2 ? 1 : 2
-                mesh.periodic[axis] && continue
-                inward = isodd(wall) ? 1 : -1
                 h = block.spacing[axis]
-                center = block.origin[axis] + ((axis == 1 ? i : j) - T(0.5)) * h
-                boundary = mesh.origin[axis] + (inward == 1 ? zero(T) : mesh.extent[axis])
-                abs(center - boundary) <= h * (T(0.5) + 64eps(T)) || continue
                 ratio = T(block.spacing[3 - axis] / h)
-                cosine = _wall_run_cosine(height_values, i + 4, j + 4, axis, inward, ratio)
+                cosine = _wall_run_cosine(height_values, i + 4, j + 4, axis, isodd(wall) ? 1 : -1, ratio)
                 isnothing(cosine) && continue
                 _set!(field.curvature, (cosine - wall_cosine) / T(h), ref)
                 break
@@ -1037,6 +1035,36 @@ function _contact_line_curvature!(field)
         end
     end
     return field
+end
+
+"""Whether the centre of cell `(i, j)` of `block` lies in the first row along
+domain wall `wall` (left, right, bottom, top) of a non-periodic axis."""
+@inline function _in_wall_row(mesh, block, i, j, wall)
+    axis = wall <= 2 ? 1 : 2
+    mesh.periodic[axis] && return false
+    T = eltype(block.spacing)
+    h = block.spacing[axis]
+    center = block.origin[axis] + ((axis == 1 ? i : j) - T(0.5)) * h
+    boundary = mesh.origin[axis] + (isodd(wall) ? zero(T) : mesh.extent[axis])
+    return abs(center - boundary) <= h * (T(0.5) + 64eps(T))
+end
+
+"""Whether a cut cell lies in the first row along a wall with a contact angle
+(`wall_cosines[wall]` not `NaN`); scans only the wall rows of the blocks."""
+function _has_contact_row_cell(field, wall_cosines)
+    mesh = field.mesh
+    T = eltype(field)
+    for (b, block) in pairs(mesh.blocks), wall in 1:4
+        isnan(wall_cosines[wall]) && continue
+        axis = wall <= 2 ? 1 : 2
+        index = isodd(wall) ? 1 : mesh.block_size[axis]
+        _in_wall_row(mesh, block, index, index, wall) || continue
+        for k in 1:mesh.block_size[3 - axis]
+            i, j = axis == 1 ? (index, k) : (k, index)
+            zero(T) < _conditional_fraction(field, CellRef(b, i, j)) < one(T) && return true
+        end
+    end
+    return false
 end
 
 """`cos θ` of the wall row at the padded index `(i, j)` (first row along a
