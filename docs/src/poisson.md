@@ -101,6 +101,13 @@ normal lines without rescanning every coarse face. Restriction is its adjoint.
 Each coarse matrix contains the single-phase Laplacian and the same wall and
 geometric AMR contact closures as that mesh's fine operator; no Galerkin
 product is used.
+With an embedded solid, pass the `GeometryField` as
+`preconditioner_options = (; geometry)` (the `NavierStokesSystem` does this
+itself, as for the pressure): each coarse mesh then reconstructs the operator
+on the geometrically restricted solid, so the coarse levels keep the walls,
+and the transfers skip completely covered faces, whose algebraic unit volume
+would otherwise outweigh the open volumes of order `h²`. Without it the
+iteration count around a solid grows with the mesh size.
 
 The integrated AMR diffusion operator is symmetric positive definite for a
 positive reaction term, so `StaggeredEllipticSolver` uses preconditioned CG by
