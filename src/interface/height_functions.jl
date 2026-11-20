@@ -403,10 +403,37 @@ end
     )
     return t * t * (3 - 2t) # approved correction to the thesis's printed polynomial
 end
+
+# Height-function coverage of a candidate axis whose normal component is
+# `principal`: one within π/4 of the axis (the principal direction), fading
+# with the same smoothstep over the last π/20 before the quality cutoff
+# 3π/10 of `_height_quality`.
+@inline function _height_coverage(principal)
+    angle = acos(clamp(principal, zero(principal), one(principal)))
+    pi_t = oftype(principal, pi)
+    t = clamp(
+        (pi_t / 4 + pi_t / 20 - angle) / (pi_t / 20),
+        zero(principal), one(principal)
+    )
+    return t * t * (3 - 2t)
+end
+
+# Locality of a height-function candidate whose central height (interface
+# crossing of the cell's own column, in cells from the cell centre) is
+# `height`: one while the crossing lies in the cell (|height| ≤ 1/2), fading
+# with the same smoothstep to zero when it reaches the centre of the
+# neighbouring cell (|height| = 1). A nearly full or empty cell whose column
+# crosses the interface in a neighbour carries that neighbour's curvature.
+@inline function _height_locality(height)
+    t = clamp(2 * (1 - abs(height)), zero(height), one(height))
+    return t * t * (3 - 2t)
+end
+
 function _lhf_geometry(values, i, j, spacing)
     T = promote_type(eltype(values), typeof(spacing[1]), typeof(spacing[2]))
-    candidates = ntuple(_ -> ntuple(_ -> zero(T), 4), 4)
+    candidates = ntuple(_ -> ntuple(_ -> zero(T), 5), 4)
     count = 0
+    has_axis = (false, false)
     for axis in 1:2,orientation in (-1, 1)
         heights = ntuple(3) do k
             offset = k - 2
@@ -426,10 +453,13 @@ function _lhf_geometry(values, i, j, spacing)
         # Outward liquid normal; convex liquid droplets have positive curvature.
         curvature = -orientation * second / norm^3
         count += 1
-        candidates = Base.setindex(candidates, T.((nx, ny, curvature, quality)), count)
+        candidates = Base.setindex(
+            candidates, T.((nx, ny, curvature, quality, _height_locality(h0))), count,
+        )
+        has_axis = Base.setindex(has_axis, true, axis)
     end
     count == 0 && return nothing
-    nx = ny = kappa = weight = zero(T)
+    nx = ny = kappa = locality = weight = zero(T)
     for index in 1:count
         c = candidates[index]
         product = one(T)
@@ -438,10 +468,20 @@ function _lhf_geometry(values, i, j, spacing)
             product *= one(T) - candidates[j][4]
         end
         w = c[4] * product
-        nx += w * c[1]; ny += w * c[2]; kappa += w * c[3]; weight += w
+        nx += w * c[1]; ny += w * c[2]; kappa += w * c[3]; locality += w * c[5]
+        weight += w
     end
     weight > 0 || return nothing
-    return nx, ny, kappa / weight
+    # Height-function coverage at the blended normal: one if an axis with a
+    # candidate is the principal direction (within π/4, always so with both
+    # axes), fading smoothly to zero as a secondary-axis candidate approaches
+    # its cutoff angle; times the blended locality of the candidates.
+    scale = hypot(nx, ny)
+    coverage = max(
+        has_axis[1] ? _height_coverage(abs(nx) / scale) : zero(T),
+        has_axis[2] ? _height_coverage(abs(ny) / scale) : zero(T),
+    )
+    return nx, ny, kappa / weight, coverage * locality / weight
 end
 
 """Return `(valid, filament)` for the thesis curvature-AMR tests.

@@ -236,13 +236,16 @@ curvature~\cref{eq:forces:contact-line} of \cref{sec:forces:contact-line},
 and in a triple cell the GHF fit with the contact
 row~\cref{eq:interface:contact-row}; it is clipped
 by~\cref{eq:interface:clip} and undefined (\code{NaN}) in pure cells and
-where no estimate exists. With the weight $\curvweight{c}=\condfrac{\liq}{c}(1-\condfrac{\liq}{c})$,
-the face curvature is the weighted average over the two cells of the face,
+where no estimate exists. With the weight $\curvweight{c}=\condfrac{\liq}{c}(1-\condfrac{\liq}{c})$
+and the curvature quality $\curvquality{c}$ of~\cref{eq:interface:coverage}
+(the height-function coverage of $\curv_c$, zero for a GHF fit), the face
+curvature is the \emph{LHF-first} weighted average over the cells
+$c\in\cellset{f}$ of the face with $\curvweight{c}>0$ and $\curv_c$ finite,
 \begin{equation}\label{eq:forces:curvature}
-  \curvface_f=\frac{\sum_{c}\curvweight{c}\curv_c}{\sum_{c}\curvweight{c}},
-  \qquad c\in\cellset{f},\ \curvweight{c}>0,\ \curv_c\ \text{finite},
+  \curvface_f=\frac{\sum_{c}\curvfaceweight{c}\curv_c}{\sum_{c}\curvfaceweight{c}},\qquad
+  \curvfaceweight{c}=\curvweight{c}\roundpar{\curvquality{c}+(1-\curvpref{f})(1-\curvquality{c})},\qquad
+  \curvpref{f}=\max_c\curvquality{c},
 \end{equation}
-the thesis' interpolant $\interpolant_{\curv}$~\thesis{\S4.7.1, ``Interpolation''},
 if this set is not empty. Otherwise the curvature is extended from the
 cells around the face: with
 $\extradius{f}=3\max_{c\in\cellset{f}}\cellmax{c}$, $\cellmax{c}=\max_k\cellwidth{c}{k}$,
@@ -289,6 +292,75 @@ The embedded contact angle enters the tension only through the curvature of
 the triple cells, the domain-wall angle through the wall formulas, both via
 \cref{eq:forces:curvature,eq:forces:extension}.
 
+\emph{LHF first.} The face curvature prefers height-function values, the
+principle of the cell curvature (GHF only where no LHF
+exists,~\thesis{\S4.7.1}) applied at the faces. For
+$\curvquality{c}\in\{0,1\}$ it is the thesis' interpolant
+$\interpolant_{\curv}$~\thesis{\S4.7.1, ``Interpolation''} over the
+height-function cells of the face if there is one ($\curvpref{f}=1$), and over
+both cells otherwise ($\curvpref{f}=0$; also in round-off: every
+$\curvfaceweight{c}=\curvweight{c}$). The reason is the
+GHF curvature of nearly empty cells: a cell with
+$\condfrac{\liq}{c}\approx5\cdot10^{-3}$ next to a protruding corner cell has
+no height stencil, its fit is a few percent off and not mirror symmetric
+(the first point within $h/2$ wins in~\cref{eq:interface:ghf}), and the weight
+$\curvweight{c}$ attenuates it without removing it. On the vertex-centred
+floating drop of the thesis ($R=0.2$, periodic unit box, $n=64$; four such
+cells, curvature errors $+2.9\,\%$ and $+3.3\,\%$ on mirror images) the
+$\curvweight{}$-interpolant gives the CGFM jumps of the drop the resultant
+$\sum_f\curvface_f(\jumpmat\stind)_f\abs{f}\unitvec{f}=(3\cdot10^{-15},-1.5\cdot10^{-5})$,
+and $(-1\cdot10^{-14},-2.2\cdot10^{-5})$ at $n=128$, where the cells have
+$\condfrac{\liq}{c}=2\cdot10^{-2}$; with~\cref{eq:forces:curvature} it is at
+round-off ($3\cdot10^{-15}$, $1\cdot10^{-14}$). In time the force couple
+around the corner cell drives a current that grows exponentially and masks the
+mode-4 oscillation (\cref{par:verif:floating-drop}).
+
+\emph{Locality.} The preference needs height-function values that belong to
+the face. A nearly full or empty cell can have a valid height-function
+curvature of its neighbour's interface: its columns cross the interface up to a
+cell away. The coverage~\cref{eq:interface:coverage} therefore fades with the
+distance of the crossing from the cell (locality $\hflocal{}$). On the sessile
+drop of \testsym{test/integration/two_phase_sessile_droplet.jl}{Sessile droplet equilibrium convergence}
+at $90^\circ$, $\mathrm{Bo}=1.21$, $n=24$, the
+curvature varies along the interface with the hydrostatic gradient
+$(\dens^{\liq}-\dens^{\gas})g/\surftens=30.25$, $1.26$ per cell. Two faces of a
+GHF cell ($C=0.415$) near the contact line have nearly full neighbours
+($C=0.990$, $0.987$) whose LHF crossings lie $0.71$--$0.90$ and $0.67$ cells
+away. Exact profile curvatures at the faces: $5.25$ and $5.89$. Without the
+locality the face curvatures are these cells' values $4.55$ and $6.65$; the
+shape error at $T/4$ rises from $1.86\cdot10^{-4}$ (former
+$\curvweight{}$-interpolant: $5.67$, $5.76$) to $4.88\cdot10^{-4}$, and the
+largest velocity from $0.044$ to $0.52$. With the locality (coverages $0.63$,
+$0.75$) the face curvatures are $5.62$ and $5.85$, the shape error is
+$2.15\cdot10^{-4}$ and the largest velocity $0.043$.
+
+The weights are continuous in $\curvquality{}$, so the switch between
+height-function and GHF curvatures follows the coverage: a cell whose
+coverage fades with the angle ($\curvquality{c}\to0$
+in~\cref{eq:interface:coverage}) passes continuously into the interpolant
+before its curvature becomes a GHF fit, and the measured results equal those
+of the hard rule (\cref{par:verif:floating-drop}). They are continuous in the
+fractions while the cells of the face stay mixed. They are not continuous at
+the events at which a cell turns pure or mixed (with the fraction floor of
+\cref{ch:interface}): a height-function cell keeps the preference however small
+its weight, so its curvature gives way to the other cell's when it empties.
+These are the events that switch the cell curvatures between LHF and GHF
+anyway (a pure end cell of a height column turns mixed). The preference does
+not decay with the weight on purpose: with $\curvpref{f}=\max_c
+\curvquality{c}\curvweight{c}/\max_c\curvweight{c}$, which would remove these
+events, a height-function cell of smaller weight than a GHF neighbour keeps
+the share $\curvweight{\mathrm{GHF}}-\curvweight{\mathrm{LHF}}$ of the GHF
+curvature, and on a coarse mesh the GHF fits of cells that are not nearly
+empty are poor too (generic drop position, $n=32$: $C=0.16$, curvature error
+$9\,\%$); that variant left the energy there at the level of the former
+interpolant ($2.6\cdot10^{-4}$ against $1.2\cdot10^{-6}$ with the hard rule).
+The weights are positive: if $\curvpref{f}<1$ every cell has
+$\curvfaceweight{c}\ge\curvweight{c}\min(1,1-\curvpref{f})>0$, and if
+$\curvpref{f}=1$ the cell with $\curvquality{c}=1$ has
+$\curvfaceweight{c}=\curvweight{c}>0$; so \cref{eq:forces:curvature} is a
+convex combination of cell curvatures, and it is symmetric in the two cells of
+the face.
+
 \emph{Checks} (\code{face_curvature_check}, \code{unresolved_check}). An
 independent evaluation of~\cref{eq:forces:curvature,eq:forces:extension}
 over all leaf cells reproduces the code on all \chkForceAllFaces\ faces of
@@ -308,7 +380,10 @@ code's.
 The thesis interpolates the cell curvature with the weights
 $\volfrac^{\liq}_c\volfrac^{\gas}_c$ over the cells of the
 face~\thesis{\S4.7.1}. The code uses the conditional fractions (the same in
-uncut cells), extends the curvature from the cells within
+uncut cells) and prefers the height-function curvatures of the two cells
+(LHF first,~\cref{eq:forces:curvature}): the thesis' interpolant also
+averages the GHF curvature of a nearly empty cell next to an LHF cell. It
+extends the curvature from the cells within
 $\extradius{f}+\cellmax{c'}$ with inverse-square distance
 weights~\cref{eq:forces:extension} when neither cell of the face has one,
 and gives the remaining faces zero curvature while counting
@@ -328,7 +403,11 @@ Tests: \testsym{test/two_phase/forces.jl}{Unresolved surface-tension curvature}
 (zero jumps and force on the unresolved faces, per-step, per-run and total
 counts, summary line, no unresolved face on a resolved drop),
 \testsym{test/two_phase/forces.jl}{Curvature extension agrees with exhaustive search}
-(the block prefilter, periodic and walled composite meshes).
+(the block prefilter, periodic and walled composite meshes),
+\testsym{test/two_phase/forces.jl}{LHF-first face curvature}
+(the limits, continuity in the quality and the fraction, symmetry, and the
+round-off resultant on the vertex-centred drop),
+\testsym{test/integration/static_droplet_stability.jl}{Thesis floating droplet}.
 \end{implnote}
 
 \subsection{Contact-line curvature}\label{sec:forces:contact-line}
