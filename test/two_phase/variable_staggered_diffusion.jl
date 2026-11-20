@@ -1238,13 +1238,11 @@ end
         @test stats.converged
         preconditioner = solver.preconditioner
         if n == 32
-            # Covered and prescribed wall faces neither receive nor restrict
-            # coarse corrections.
-            excluded = iszero.(geometry.face_dual_volumes)
-            excluded[operator.dirichlet_faces] .= true
-            @test any(iszero, geometry.face_dual_volumes)
+            # Covered faces neither receive nor restrict coarse corrections.
+            covered = iszero.(geometry.face_dual_volumes)
+            @test any(covered)
             prolongation = first(preconditioner.levels).prolongation
-            @test all(iszero, sum(abs, prolongation[excluded, :]; dims = 2))
+            @test all(iszero, sum(abs, prolongation[covered, :]; dims = 2))
             # Per-row Jacobi weights, folded into the inverse diagonal.
             @test preconditioner.local_relaxation
             @test all(level -> level.relaxation_weight == 1, preconditioner.levels)

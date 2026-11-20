@@ -770,8 +770,7 @@ With a solid, this hierarchy takes the geometry in the same way as the
 single-phase one (the \code{NavierStokesSystem} passes it, also for the
 two-velocity projections, whose viscous preconditioners use this V-cycle):
 each coarse stress operator is rediscretised on the restricted solid, and the
-transfer drops the covered faces and the prescribed wall faces of the embedded
-stress operator, isolated rows with zero values. In addition its Jacobi
+transfer drops the covered faces. In addition its Jacobi
 smoother uses per-row weights
 $\omega_i=\min\bigl(1,\tfrac43\,a_{ii}/\textstyle\sum_j\abs{a_{ij}}\bigr)$
 instead of the global Gershgorin weight: next to a cut cell a stress row has
@@ -806,7 +805,6 @@ two phases \srcsym{src/two_phase/diffusion/variable_diffusion_solver.jl}{Variabl
 \srcsym{src/two_phase/diffusion/variable_diffusion_preconditioner.jl}{TreeVariableDiffusionPreconditioner},
 \srcsym{src/two_phase/diffusion/variable_diffusion_preconditioner.jl}{_refresh_tree_variable_diffusion_preconditioner!},
 \srcsym{src/two_phase/diffusion/variable_diffusion_preconditioner.jl}{_cell_viscosity_from_log!},
-\srcsym{src/two_phase/diffusion/variable_diffusion_preconditioner.jl}{_remove_prescribed_variable_transfer!},
 \srcsym{src/two_phase/diffusion/variable_diffusion_preconditioner.jl}{_local_jacobi_relaxation!};
 rebuild with the current step \srcsym{src/navier_stokes/flow_simulation.jl}{step!}.
 Tests: \testsym{test/operators/staggered_diffusion.jl}{implicit midpoint staggered elliptic solve},

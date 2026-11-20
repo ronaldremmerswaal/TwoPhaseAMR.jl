@@ -12,8 +12,8 @@ the last operator is factorized directly.
 With an embedded solid, `options = (; geometry)` (the `GeometryField` of the
 fine operator; the `NavierStokesSystem` passes it itself) rediscretizes every
 coarse level on the geometrically restricted solid, so the coarse operators
-keep the walls, the face transfers skip completely covered and prescribed
-wall faces, as in `TreeStaggeredGeometricMultigridPreconditioner`, and the
+keep the walls, the face transfers skip completely covered faces, as in
+`TreeStaggeredGeometricMultigridPreconditioner`, and the
 Jacobi smoother uses per-row weights (`_local_jacobi_relaxation!`).
 """
 
@@ -57,27 +57,6 @@ function _cell_viscosity_from_log!(field::CellField{T}, values) where {T}
         end
     end
     return field
-end
-
-# The embedded wall faces of the stress operator (`dirichlet_faces`) hold
-# prescribed zero values on isolated rows. Like covered faces
-# (`_remove_covered_staggered_transfer!`), they neither restrict a residual nor
-# receive a coarse correction; a prescribed coarse face acts as a zero wall.
-function _remove_prescribed_variable_transfer!(
-        prolongation::SparseMatrixCSC{T, Int}, fine_operator, coarse_operator,
-    ) where {T}
-    values = nonzeros(prolongation)
-    for column in coarse_operator.dirichlet_faces,
-            pointer in nzrange(prolongation, column)
-        values[pointer] = zero(T)
-    end
-    prescribed = falses(size(prolongation, 1))
-    prescribed[fine_operator.dirichlet_faces] .= true
-    rows = rowvals(prolongation)
-    for column in axes(prolongation, 2), pointer in nzrange(prolongation, column)
-        prescribed[rows[pointer]] && (values[pointer] = zero(T))
-    end
-    return dropzeros!(prolongation)
 end
 
 # A cut cell makes a few rows of the stress operator much less diagonally
@@ -213,9 +192,6 @@ function _tree_variable_diffusion_preconditioner(
                 averaging = operator.averaging, geometry = coarse_geometry,
             )
             if !isnothing(geometry)
-                _remove_prescribed_variable_transfer!(
-                    prolongation, last(operators), coarse_operator,
-                )
                 _remove_covered_staggered_transfer!(
                     prolongation, fine_geometry, eachindex(current_mesh.faces),
                     coarse_geometry, eachindex(coarse_mesh.faces),
