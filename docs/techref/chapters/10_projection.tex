@@ -747,10 +747,12 @@ one period, \issue{171}) the rows with the one-donor $\jumpbeta_f$ stopped
 the run at step~844: after a regrid the block-preconditioned BiCGSTAB reached
 its 500 iterations with the residual concentrated at a $\jumpbeta=0$ row
 ($\abs{\normratio{f}}=40$) next to an underresolved gas pocket at the crest
-(the system itself was solvable: whole-system ILU, 4 iterations). With the
-rows~\cref{eq:projection:dominant-slope} the same system converges in 141
-iterations and the period completes; the one-donor rule of
-\apitype{ConstantJumpInference} blows up at step~705.
+(the system itself was solvable: whole-system ILU, 4 iterations). The cause
+was the preconditioner's jump factor, which ignored the pressure's answer:
+with the factor of~\cref{eq:solvers:jump-schur} the period completes with
+either rows (14.4 and 15.0 iterations per projection on average, at most
+38), and so does \apitype{ConstantJumpInference} (13.3, at most 34), which
+with the factor of $\jumpblock$ alone blew up at step~705.
 
 \emph{Checks} (\code{cmdgfm_check}, with \apitype{ConstantJumpInference}). On
 the four fixtures of \cref{tab:projection:counts}, an independent classification
