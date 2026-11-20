@@ -156,117 +156,117 @@ steps = 10
 time = 0.01
 
     [cases.sessile.diagnostics]
-    divergence_norm = 5.602173712498095e-7
-    kinetic_energy = 0.0009567092096320094
+    divergence_norm = 5.896375116381536e-7
+    kinetic_energy = 0.0009679527631436986
     leaf_blocks = 4
-    linear_momentum = [3.480833920266019e-19, -0.00630892543392534]
-    phase_volume = [0.06283185309310285, 0.9371681469068971]
+    linear_momentum = [-2.334289833349384e-18, -0.006467410572698205]
+    phase_volume = [0.06283185308908704, 0.937168146910913]
 
     [cases.sessile.fields.pressure]
     count = 256
     finite_count = 256
-    l2 = 25.038268078218657
-    max = 7.729145263817512
-    sha256 = "6e0a5bc26c3374d00bd08e9742b51e2e4a7052b224b6df5fc5ef6de51c966940"
+    l2 = 25.47858565101732
+    max = 7.828733005450688
+    sha256 = "5f1269c828cbd3748cee7b72b7eae97fd8143866049e80f67d7734a70b28267e"
 
     [cases.sessile.fields.velocity_1]
     count = 240
     finite_count = 240
-    l2 = 0.8238079910672877
-    max = 0.30192348344920544
-    sha256 = "d68d1ea4d52f30f62a1844faa6b4750a978243e6b8067ce84f295e48afa367da"
+    l2 = 0.84250486260277
+    max = 0.32055804550285205
+    sha256 = "6be78f337d56062d40a118d4327eecffff5c5fcbb7fea16c1144d8538862983c"
 
     [cases.sessile.fields.velocity_2]
     count = 240
     finite_count = 240
-    l2 = 0.850267362737154
-    max = 0.22664585992033934
-    sha256 = "b18025c01869c4267f5515ebd0313e297bc029bae593548930b80de7cc759e1c"
+    l2 = 0.8401527077324364
+    max = 0.18061396458283852
+    sha256 = "d8f0970be83d90d7fce2eaf8787d042ebc56ff69316120408d3c739805128d11"
 
     [cases.sessile.fields.volume_fraction]
     count = 256
     finite_count = 256
-    l2 = 3.8330001969993317
+    l2 = 3.8336926807534057
     max = 1.0
-    sha256 = "0d87c66ad392502e0a57433cea43480e5105d9c2abba7f5b47ed4aa918757681"
+    sha256 = "6e89aa1dbb621e0a31fbab557db2440596ed972f1a4bdba8d2a79c523134610b"
 
 [cases.sloped]
 steps = 10
 time = 0.01
 
     [cases.sloped.diagnostics]
-    divergence_norm = 7.919655302122979e-7
-    kinetic_energy = 0.0024916036849668057
+    divergence_norm = 2.2399000680281182e-7
+    kinetic_energy = 0.004175582877970212
     leaf_blocks = 4
-    linear_momentum = [0.002561004666950564, -0.006436454636590597]
-    phase_volume = [0.04022255182735405, 0.739777448172646]
+    linear_momentum = [0.0022811784860840047, -0.007455716134495353]
+    phase_volume = [0.040222551825627284, 0.7397774481743727]
 
     [cases.sloped.fields.pressure]
     count = 256
     finite_count = 256
-    l2 = 31.904064172982007
-    max = 11.752035247471243
-    sha256 = "3dbf19ca83c8c4d737f90310bdf19c6cdd3067acf1d3bbba81022314abfdc127"
+    l2 = 33.157357546583974
+    max = 11.758774545730844
+    sha256 = "d9e52219a9bcfb651c64872b5060627f216c319f13702398bf557a41de43964e"
 
     [cases.sloped.fields.velocity_1]
     count = 240
     finite_count = 240
-    l2 = 2.9981418139288363
-    max = 2.629827725572895
-    sha256 = "ed93fd3fdd374c386369c698ff51aed39a0dfd11146ceb12f45749ce0ce72689"
+    l2 = 4.478572542885738
+    max = 4.1266095160069955
+    sha256 = "22ea4d6654a8f02a9e39321e25ef010a859859a6adc7a6a45961faa79838ec38"
 
     [cases.sloped.fields.velocity_2]
     count = 240
     finite_count = 240
-    l2 = 1.6003537943401178
-    max = 0.7439617553652124
-    sha256 = "ac9f28083cdc6ecda940d5583ddb365e4ba1af24cf92ea6a8ecde52baf838c48"
+    l2 = 1.9829016138723743
+    max = 1.1695398018808387
+    sha256 = "c8648b55768514fb48329dfef4bce8e004bc788ca33e2ca7cfc1b690d81e91b5"
 
     [cases.sloped.fields.volume_fraction]
     count = 256
     finite_count = 256
-    l2 = 2.892311493845078
+    l2 = 2.8885604748548803
     max = 1.0
-    sha256 = "17b0926ca81d531e47c6cbbac28a72cc68f081fcc58cbc812f1e3c626daafe27"
+    sha256 = "454bc852f124062bcee0672d7e21de5001b769ca9e955e63ed0ba7c239644516"
 
 [cases.stokes3]
 steps = 10
 time = 0.01
 
     [cases.stokes3.diagnostics]
-    divergence_norm = 1.2910390509494582e-7
-    kinetic_energy = 0.002048909857526406
+    divergence_norm = 1.2910098148886414e-7
+    kinetic_energy = 0.0020489099798375616
     leaf_blocks = 4
-    linear_momentum = [0.008332912644564134, 9.817290411180529e-6]
-    phase_volume = [0.500000000003172, 0.499999999996828]
+    linear_momentum = [0.008332913311756228, 9.816581479341469e-6]
+    phase_volume = [0.5000000000031712, 0.49999999999682876]
 
     [cases.stokes3.fields.pressure]
     count = 256
     finite_count = 256
-    l2 = 2.5909301928773427
-    max = 0.35224494951480023
-    sha256 = "49ae78c56dcb32a7cf269fa3351279205683bd95110825b046892d676e3ceed2"
+    l2 = 2.590929804961238
+    max = 0.35224490814339127
+    sha256 = "18f92a1a48c1b12e780846e870ff209f895ee7e0a03b34d8b46a93e5b2057d61"
 
     [cases.stokes3.fields.velocity_1]
     count = 256
     finite_count = 256
-    l2 = 1.4536935652268135
-    max = 0.34080623025799656
-    sha256 = "63b00cf267872e6e6a2f1fff1ca5890e038b3230d0d0fdc9669833db5f4340be"
+    l2 = 1.4536936190015344
+    max = 0.340806235488732
+    sha256 = "426dd11a7c8fc4a95f65fc3ddca3bbf1ffb2b1b65c3a24eba4688d9a4907e464"
 
     [cases.stokes3.fields.velocity_2]
     count = 240
     finite_count = 240
-    l2 = 1.2738710591905642
-    max = 0.33915754109241597
-    sha256 = "8282cb4513ad0368c3e32cecbfc8ee36edd59fec04e0e2ec25d6df00ffe63f2c"
+    l2 = 1.2738710865622132
+    max = 0.3391576022431375
+    sha256 = "161bfa383997ca2c336b18296ff94b814eb77ef98baf8d61e783aaf7bb90a74d"
 
     [cases.stokes3.fields.volume_fraction]
     count = 256
     finite_count = 256
-    l2 = 11.188602856690345
+    l2 = 11.18860285690337
     max = 1.0
-    sha256 = "de1baa8c340c56460df6b2b61965e3e4a60b1d353dcd1418c15fc033551de9c6"
+    sha256 = "dc76345ab07b16838c2267a416d9ab7b6804e3c78a8d3fb571757c1d00bc48cc"
 
 [cases.taylor_green]
 steps = 10

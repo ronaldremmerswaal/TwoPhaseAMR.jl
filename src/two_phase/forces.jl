@@ -208,16 +208,41 @@ function _weighted_jump_force!(
     return destination
 end
 
+"""Face curvature of the CGFM/CSF jump on `face`: the LHF-first `c(1-c)`
+interpolant of the two adjacent cell curvatures.
+
+Each cell with a finite curvature has the weight `w = c(1-c)` and the
+curvature quality `q ∈ [0, 1]` of the reconstruction (the height-function
+coverage of its curvature, zero for a GHF fit). The face prefers the
+height-function values with the strength `λ = max q` over its cells with
+`w > 0`, and a cell enters with the weight `w (q + (1 - λ)(1 - q))`. For
+`q ∈ {0, 1}` this is the `c(1-c)` interpolant over the height-function cells
+if there is one, and over both cells otherwise. The weights are continuous in
+`q` and in `c` while the cells stay mixed, so the switch between height-function
+and GHF curvatures follows the smooth coverage of the height functions."""
 function _face_curvature(field, face)
-    total = weight = 0.0
-    for ref in (face.minus, face.plus)
-        c = _conditional_fraction(field, ref);k = _get(field.curvature, ref)
-        w = c * (1 - c)
-        if w > 0 && isfinite(k)
-            total += w * k;weight += w
+    T = eltype(field)
+    km = _get(field.curvature, face.minus)
+    kp = _get(field.curvature, face.plus)
+    cm = _conditional_fraction(field, face.minus)
+    cp = _conditional_fraction(field, face.plus)
+    wm = isfinite(km) ? cm * (1 - cm) : zero(T)
+    wp = isfinite(kp) ? cp * (1 - cp) : zero(T)
+    if wm > 0 || wp > 0
+        qm = wm > 0 ? _get(field.curvature_quality, face.minus) : zero(T)
+        qp = wp > 0 ? _get(field.curvature_quality, face.plus) : zero(T)
+        preference = max(qm, qp)
+        total = weight = zero(T)
+        if wm > 0
+            w = wm * (qm + (1 - preference) * (1 - qm))
+            total += w * km; weight += w
         end
+        if wp > 0
+            w = wp * (qp + (1 - preference) * (1 - qp))
+            total += w * kp; weight += w
+        end
+        return total / weight
     end
-    weight > 0 && return total / weight
 
     # A cut-cell conditional fraction can cross an interface on a face while
     # both cell averages are pure. Extend the same c(1-c)-weighted GHF values
@@ -228,6 +253,7 @@ function _face_curvature(field, face)
         maximum(field.mesh.blocks[face.plus.block].spacing),
     )
     radius = 3local_spacing
+    total = weight = zero(T)
     mesh = field.mesh
     nx, ny = mesh.block_size
     for (b, block) in pairs(mesh.blocks)
