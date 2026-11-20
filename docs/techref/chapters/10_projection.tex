@@ -908,9 +908,22 @@ equivalent to the diagonal-mass one,
 $C^{-1}\mathsf B\Lambda^{-1}\mathsf B^{\transpose}\preceq
 \mathsf B\mathcal M^{-1}\mathsf B^{\transpose}\preceq c^{-1}\mathsf B\Lambda^{-1}\mathsf B^{\transpose}$,
 uniformly in the apertures. That makes $\mathsf B\Lambda^{-1}\mathsf B^{\transpose}$
-a candidate for a uniform preconditioner (future work); the present one is the
-multigrid of $\mathsf B\mathsf W^{-1}\mathsf B^{\transpose}$ with the staggered
-phase masses (\emph{Solver and price} below), which does not use $\Lambda$.
+a preconditioner with condition number at most $C/c$ independent of the cut
+geometry. Measured on assembled systems (static drop, capillary wave, inviscid
+and viscous Kelvin--Helmholtz, impact, drop at a wall; $n=32$, densities
+$(1000,1)$, $c=0.10$--$0.21$, $C=5.8$--$6.4$), the pencil
+$(\mathsf B\mathcal M^{-1}\mathsf B^{\transpose},\mathsf B\Lambda^{-1}\mathsf B^{\transpose})$
+has condition number $9.4$--$20.9$, that with the staggered phase masses
+$\mathsf W$ in place of $\Lambda$ only $6.1$--$11.4$ (with
+$\operatorname{diag}\mathcal M$: $6.6$--$12.6$), and conjugate gradients with an
+exact solve of the preconditioning operator need $18$--$24$ iterations with
+$\Lambda$, $15$--$19$ with $\mathsf W$: the bound $C/c$ is far from sharp
+here, and the operator with $\mathsf W$ is kept. None of the three diagonal
+metrics removes the band defect, since in the band
+$\mathsf B\mathcal M^{-1}\mathsf B^{\transpose}$ couples beyond the face
+neighbours; solved exactly on the band cells around
+the V-cycle, the iteration count drops to that of the V-cycle on its own
+operator, $8$--$10$ (\emph{Solver and price} below).
 
 \emph{The equivalence lemma.} Fix a phase, a threshold $a_G\in(0,\tfrac12]$,
 and call the values with $a_f<a_G$ that have a donor of larger aperture the
@@ -1716,7 +1729,9 @@ drop at $n=32$ for $\dt$ times $1$, $10^2$, $10^4$, $10^6$ of the step of the
 runs: the eigenvalues of $\mathcal B\mathcal S$ lie in $[0.46,1.99]$ (condition
 number at most $4.4$), and conjugate gradients need 1/6/14/15 (KH) and
 2/5/3/2 (drop) iterations. Reductions are serial, so the result does not depend
-on the thread counts; should round-off make $r^{\transpose}z$ or
+on the Julia thread count (it does on the BLAS thread count, through the
+UMFPACK $LU$ of the coarsest level of the mixture solve's multigrid; measured
+on a drop at $n=128$, densities $(1000,1)$); should round-off make $r^{\transpose}z$ or
 $p^{\transpose}\mathcal Sp$ non-positive, the iteration restarts with
 $\mathcal P$ alone.
 
@@ -1751,16 +1766,80 @@ in the cut cells; \code{transported_momentum_change} reports the change.
 
 \emph{Solver and price.} The saddle-point system is solved by conjugate
 gradients on the gauge-reduced Schur complement
-$\mathsf B\mathcal M^{-1}\mathsf B^{\transpose}$, applied matrix-free with a
-sparse LU factorisation (UMFPACK) of the band block of $\mathcal M$ (the
-values coupled by a cut cell or a tie; the rest of $\mathcal M$ is diagonal),
-and preconditioned by one V-cycle of the tree-geometric multigrid of the
-pressure operator $\mathsf B\mathsf W^{-1}\mathsf B^{\transpose}$ of the
-diagonal metric. Away from the interface this operator equals the Schur
-complement; at the interface the Schur complement has 43--67 entries per
-row against 5. On a circle at densities $(1000,1)$, for a smooth predictor
-that differs between the phases and the tolerance $10^{-10}$, the iteration
-counts are $59$, $66$, $67$ for $h=1/32,1/64,1/128$.
+$\mathcal S=\mathsf B\mathcal M^{-1}\mathsf B^{\transpose}
+=\mathsf L+\mathsf B_b\mathcal M_{bb}^{-1}\mathsf B_b^{\transpose}$, applied
+matrix-free: $\mathcal M_{bb}$ is the band block of $\mathcal M$ (the values
+coupled by a cut cell or a tie; the rest of $\mathcal M$ is diagonal),
+factorised by a simplicial sparse $LDL^{\transpose}$ whose symbolic analysis
+is kept while the pattern is unchanged, $\mathsf B_b$ the divergence of the
+band values and $\mathsf L$ the pressure operator of the diagonal values. The
+preconditioner starts from one V-cycle $\mathcal P$ of the tree-geometric
+multigrid of $\mathsf B\mathsf W^{-1}\mathsf B^{\transpose}$, the pressure
+operator of the diagonal metric. It equals $\mathcal S$ except in the rows of
+the \emph{band cells}, the cells with a pressure unknown next to a band value
+with an aperture, where $\mathcal S$ has 43--67 entries per row against 5. On
+the band cells the preconditioner solves $\mathcal S$ exactly up to a
+regularisation, through the saddle-point matrix
+\[
+  K=\begin{bmatrix}\mathcal M_{bb}&-\mathsf B_{bc}^{\transpose}\\
+    -\mathsf B_{bc}&-(\mathsf L_{cc}+\epsilon\Delta)\end{bmatrix},
+\]
+with $\mathsf B_{bc}$ the divergence of the band values on the band cells,
+$\mathsf L_{cc}$ the band-cell block of $\mathsf L$, $\Delta$ the diagonal of
+$\mathsf L+\mathsf B_b\operatorname{diag}(\mathcal M_{bb})^{-1}\mathsf B_b^{\transpose}$
+there and $\epsilon=10^{-4}$: eliminating the band values leaves
+$-(\mathcal S_{cc}+\epsilon\Delta)$. A cell whose sides all carry band values
+makes $\mathsf L_{cc}$ singular, which is common (64 of the 154 band cells of
+a drop at $n=32$, densities $(1000,1)$); with $\epsilon>0$, $K$ is symmetric
+quasi-definite and has an $LDL^{\transpose}$ factorisation for every
+symmetric ordering~\cite{vanderbei1995}. With the extension by zero $E$ from
+the band cells and $C=E(\mathcal S_{cc}+\epsilon\Delta)^{-1}E^{\transpose}$,
+the preconditioner is the symmetric multiplicative combination
+\[
+  z_1=Cr,\qquad z_2=z_1+\mathcal P(r-\mathcal Sz_1),\qquad
+  z=z_2+C(r-\mathcal Sz_2).
+\]
+\emph{It is symmetric positive definite for every symmetric positive definite
+cycle:} from $I-\mathcal B\mathcal S=(I-C\mathcal S)(I-\mathcal P\mathcal S)(I-C\mathcal S)$,
+$\mathcal B=2C-C\mathcal SC+(I-C\mathcal S)\mathcal P(I-\mathcal SC)$; with
+$Y=(\mathcal S_{cc}+\epsilon\Delta)^{-1}$ the first part is
+$EY(\mathcal S_{cc}+2\epsilon\Delta)YE^{\transpose}\succeq0$, positive off the
+kernel of $E^{\transpose}$ since $\mathcal S_{cc}$, a principal block of the
+symmetric positive definite $\mathcal S$, is positive definite; on that kernel
+the second part is $r^{\transpose}\mathcal Pr>0$. The argument holds for
+$\epsilon=0$ as well: $\epsilon>0$ is needed only for the factorisation of
+$K$, not for the definiteness of $\mathcal B$. The band values of the saddle-point solve are
+$\mathcal M_{bb}^{-1}\mathsf B_{bc}^{\transpose}y$, so $\mathcal SEy$ costs two
+sparse products. Conjugate gradients form $\mathcal Sp$ by a Schur product,
+not from the recurrence of the directions with the products $\mathcal Sz$ of
+the preconditioner: the band-cell part of those comes out of the
+quasi-definite factorisation, exact to only round-off times its conditioning
+(up to $6\cdot10^{-12}$ relative measured),
+and the recursive residual drifts from $b-\mathcal Sx$ by as much (a film of
+thickness $0.95h$ on a solid along a grid line, at rest at densities
+$(1000,1)$, then moved its gas at $3\cdot10^{-15}$ instead of $3\cdot10^{-16}$
+and was set in motion within two steps). An iteration costs one V-cycle, two
+Schur products and two band-cell solves, about $1.5$ times an iteration with
+$\mathcal P$ alone (Stokes wave of the gallery: $1.21$ against $0.82$\,ms; the
+Schur product takes $0.11$\,ms of it). The
+stopping rule is that of the Krylov driver (\cref{sec:solvers:krylov}): the
+preconditioned residual norm $(r^{\transpose}\mathcal Br)^{1/2}$ relative to
+its initial value, inside the defect loop of \cref{sec:projection:defects}.
+The dot products are serial and the $LDL^{\transpose}$ factorisations
+simplicial, so the result does not depend on the Julia thread count; it does
+depend on the BLAS thread count through the UMFPACK $LU$ factorisation of the
+coarsest multigrid level, as in the CMDGFM projection. Mean (max)
+iterations per projection over 20 steps at densities $(1000,1)$ unless noted,
+with $\mathcal P$ alone and with the band-cell correction: static drop
+$n=32/64/128$: $14.8/18.8/20.6\ (42)\to5.5/6.5/7.7\ (8)$; capillary wave
+$n=32/64$: $14.9/14.9\to7.3/8.1$; inviscid Kelvin--Helmholtz $n=64$:
+$18.6\to8.9$ (densities $(1,1)$, $n=32$: $14.0\to7.8$); viscous
+Kelvin--Helmholtz \code{r10_thick} (densities $(1,0.1)$) $n=32/64/128$:
+$18.6/17.6/18.9\to9.0/10.7/12.0$; drop at a wall $n=32/64$:
+$17.8/19.7\ (43)\to7.2/8.7\ (10)$; impact $n=32/64$:
+$22.2/26.2\ (41)\to6.7/8.0\ (10)$; Stokes wave of the gallery (adaptive, with
+regrids, densities $(1,1/850)$): $26.2\ (55)\to15.2\ (32)$. The solutions differ by at most
+$2\cdot10^{-6}$ of the largest velocity after the 20 steps.
 
 \begin{implnote}
 Option \srcsym{src/two_phase/projection/methods.jl}{MimeticProjection};
@@ -1783,8 +1862,14 @@ ties to the solid \srcsym{src/two_phase/projection/mimetic_metric.jl}{_mimetic_s
 pressure gauge per open component \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_gauge!};
 grid-line faces \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_gridline_faces!},
 predictor and removed jump energy \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_gather!};
-solve \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_solve!}~\cref{eq:projection:mimetic},
-preconditioner \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_preconditioner!};
+solve \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_solve!}~\cref{eq:projection:mimetic}
+with conjugate gradients \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_pressure_cg!},
+the Schur product \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_schur!},
+the band factorisation \srcsym{src/two_phase/projection/mimetic_projection.jl}{_MimeticLDLT},
+the band-cell saddle-point matrix \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_band_cell_saddle!}
+and its solve \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_band_cell_solve!},
+preconditioner \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_pressure_precondition!}
+around the V-cycle \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_preconditioner!};
 forces \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_capillary_force!}~\cref{eq:projection:mimetic-capillary}
 with \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_cell_curvature!},
 the potential difference~\cref{eq:projection:mimetic-hydrostatic}
@@ -1831,6 +1916,7 @@ Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mi
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic rest states with embedded solids},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic viscous step with embedded solids},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric: uniform equivalence with the aperture-independent mass},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic pressure solver: band-cell correction of the multigrid preconditioner},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic capillary force: booked carrier},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic capillary potential under gravity},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic capillary force: hydrostatic part on the aperture}.
