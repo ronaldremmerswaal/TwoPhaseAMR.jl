@@ -134,10 +134,39 @@ end
     @test_throws ArgumentError AdvectionOptions(:bogus, Upwind())
     @test_throws ArgumentError NavierStokesOptions(
         :bogus, LinearSolverOptions(), LinearSolverOptions(), MultigridOptions(),
-        HarmonicViscosityAveraging(),
+        HarmonicViscosityAveraging(), WallDistanceClosure(),
+    )
+    @test_throws ArgumentError NavierStokesOptions(
+        AdvectionOptions(), LinearSolverOptions(), LinearSolverOptions(), MultigridOptions(),
+        HarmonicViscosityAveraging(), :lsstag,
     )
     @test_throws ArgumentError TwoVelocityModel(CSF())
     @test_throws ArgumentError TwoVelocityModel(:cmdgfm)
+end
+
+@testset "embedded viscous closure option (#110)" begin
+    @test NavierStokesOptions().embedded_viscous_closure isa WallDistanceClosure
+    @test_throws ArgumentError NavierStokesOptions(embedded_viscous_closure = :lsstag)
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
+    geometry = GeometryField(mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.23; lipschitz = 1)
+    @test_throws ArgumentError StaggeredDiffusionOperator(geometry; closure = :lsstag)
+    numerics = NavierStokesOptions(embedded_viscous_closure = LSStagClosure())
+    physics = SinglePhase(density = 1.0, dynamic_viscosity = 0.1)
+    flow = FlowSimulation(mesh, physics; geometry, numerics, dt = 1.0e-3)
+    @test flow.system.options.embedded_viscous_closure isa LSStagClosure
+    lsstag = StaggeredDiffusionOperator(geometry; viscosity = 0.1, closure = LSStagClosure())
+    default = StaggeredDiffusionOperator(geometry; viscosity = 0.1)
+    for axis in 1:2
+        component = axis == 1 ? flow.diffusion_operator.x : flow.diffusion_operator.y
+        @test component.stiffness == (axis == 1 ? lsstag.x : lsstag.y).stiffness
+        @test component.stiffness != (axis == 1 ? default.x : default.y).stiffness
+    end
+    simulate!(flow, 2.0e-3)
+    @test all(isfinite, flow.velocity.interior)
+    # The two-phase stress operator keeps its wall closure.
+    interface = InterfaceField(mesh, (x, y) -> y - 0.8; geometry, lipschitz = 1)
+    two_phase = TwoPhase(interface; density = (1.0, 0.1), dynamic_viscosity = (0.1, 0.01))
+    @test_throws ArgumentError FlowSimulation(mesh, two_phase; geometry, numerics)
 end
 
 @testset "typed two-phase choice matrix constructs" begin

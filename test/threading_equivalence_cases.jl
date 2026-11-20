@@ -134,8 +134,11 @@ function mimetic_amr_flow(; diagnostics = ())
     return flow, 0.5 * stable_timestep(flow)
 end
 
-function cylinder_flow(max_level)
-    run = Cylinder.run_example(; max_level, final_time = 0.0)
+function cylinder_flow(max_level; closure = WallDistanceClosure())
+    run = Cylinder.run_example(;
+        max_level, final_time = 0.0,
+        numerics = NavierStokesOptions(embedded_viscous_closure = closure),
+    )
     return run.flow, stable_timestep(run.flow; cfl = 0.45)
 end
 
@@ -210,6 +213,7 @@ const CASES = (
     ),
     ("stokes3_two", 6, () -> stokes3_flow(3)),
     ("cylinder", 6, () -> cylinder_flow(2)),
+    ("cylinder_lsstag", 6, () -> cylinder_flow(2; closure = LSStagClosure())),
     ("taylor_green", 10, () -> taylor_green_flow(3)),
 )
 

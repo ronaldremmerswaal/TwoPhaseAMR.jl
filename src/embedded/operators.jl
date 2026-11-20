@@ -1565,6 +1565,7 @@ end
 
 function _cut_cell_diffusion_component(
         geometry::GeometryField{T}, ::Val{Axis}, boundary, aligned,
+        closure::AbstractEmbeddedViscousClosure,
     ) where {T, Axis}
     mesh = geometry.mesh
     schedule = _cut_cell_dual_schedule(geometry, Val(Axis), false)
@@ -1584,9 +1585,24 @@ function _cut_cell_diffusion_component(
             geometry, Val(Axis), incidences, global_to_local, aligned,
         ),
     )
+    lsstag = closure isa LSStagClosure ? _ls_stag_closure(
+            geometry, Val(Axis), boundary, incidences, global_to_local,
+            local_to_global, connections, wall_connections,
+        ) : nothing
+    if !isnothing(lsstag)
+        connections = lsstag.connections
+        wall_connections = lsstag.wall_connections
+    end
     stiffness = _geometric_diffusion_stiffness(
         mesh, connections, local_to_global, wall_connections, boundary, Val(Axis), T,
     )
+    if !isnothing(lsstag)
+        stiffness = stiffness + lsstag.stiffness
+        dropzeros!(stiffness)
+        # Their energy is in the LS-STAG stiffness; they only supply the
+        # prescribed boundary values.
+        append!(wall_connections, lsstag.sources)
+    end
     dirichlet_faces = Int[]
     wall_reactions = WallDiffusionReaction{T}[]
     if !isempty(aligned)
@@ -1641,6 +1657,15 @@ function _cut_cell_diffusion_component(
             wall_connections = retained_walls
         end
     end
+    if !isnothing(lsstag)
+        # Wall reactions of the Green rows and of hanging derivatives that end
+        # on the solid, in the retained numbering.
+        for (local_index, global_index) in pairs(local_to_global)
+            coefficient = lsstag.reactions[global_to_local[global_index]]
+            iszero(coefficient) ||
+                push!(wall_reactions, WallDiffusionReaction(local_index, coefficient))
+        end
+    end
     laplacian = sparse(-spdiagm(0 => inv.(volumes)) * stiffness)
     return StaggeredDiffusionComponent{Axis, T}(
         stiffness, laplacian, volumes, local_to_global, dirichlet_faces, wall_connections,
@@ -1651,8 +1676,12 @@ function _cut_cell_diffusion_component(
 end
 
 """
-    StaggeredDiffusionOperator(geometry; viscosity=1, boundary=NoSlip())
+    StaggeredDiffusionOperator(geometry; viscosity=1, boundary=NoSlip(),
+                               closure=WallDistanceClosure())
 
+`closure` selects the cut-cell closure: [`WallDistanceClosure`](@ref), the
+default described here, or [`LSStagClosure`](@ref), which replaces the rows
+of the faces on and next to cut cells and is second order at oblique walls.
 The conservative cut-cell stiffness is symmetric positive semidefinite.
 Embedded walls include surfaces aligned with cell faces as well as PLIC cuts.
 For Cartesian wall segments the tangential closure uses the wall-normal distance
@@ -1676,11 +1705,12 @@ velocities; where no level-matched face is available it keeps the linear-exact
 minimum-norm derivative of the unembedded transition. Domain-wall measures belong only to the dual strips
 that touch the wall.
 Advection flux-star redistribution between sibling faces is not a diffusive
-interface.
+interface. With the default closure the velocity is first order at a wall
+that is not grid aligned (#110).
 """
 function StaggeredDiffusionOperator(
         geometry::GeometryField{T, M}; viscosity = 1,
-        boundary = NoSlip(),
+        boundary = NoSlip(), closure = WallDistanceClosure(),
     ) where {T, M}
     viscosity_value = T(viscosity)
     isfinite(viscosity_value) && viscosity_value > zero(T) || throw(
@@ -1692,9 +1722,12 @@ function StaggeredDiffusionOperator(
                 "VelocityBoundaryConditions"
         ),
     )
+    closure isa AbstractEmbeddedViscousClosure || throw(
+        ArgumentError("closure must be WallDistanceClosure() or LSStagClosure()"),
+    )
     aligned = _embedded_aligned_wall_segments(geometry)
-    x = _cut_cell_diffusion_component(geometry, Val(1), boundary, aligned)
-    y = _cut_cell_diffusion_component(geometry, Val(2), boundary, aligned)
+    x = _cut_cell_diffusion_component(geometry, Val(1), boundary, aligned, closure)
+    y = _cut_cell_diffusion_component(geometry, Val(2), boundary, aligned, closure)
     return StaggeredDiffusionOperator{
         T, M, typeof(x), typeof(y), typeof(boundary),
     }(geometry.mesh, x, y, viscosity_value, boundary)
