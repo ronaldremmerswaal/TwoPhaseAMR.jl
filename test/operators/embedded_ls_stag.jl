@@ -211,7 +211,7 @@ end
     # Measured cycles (largest component) at reaction 1, diffusion 1:
     # 21 and 20, and 22 and 26 (default, LS-STAG); over n = 32 to 256 and the
     # worst offsets of a circle and a slope the LS-STAG count stays within
-    # 1.6 times the default one, and below it where the default closure's
+    # 1.74 times the default one, and below it where the default closure's
     # own small rows lower the smoother weight (0.2 against 0.68).
     fine_width = LS_STAG_EXTENT / 64
     for radius in (1.3, 1.3 + 58 * fine_width / 64 + fine_width / 448)

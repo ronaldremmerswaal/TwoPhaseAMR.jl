@@ -54,6 +54,17 @@ package's geometric V-cycle preconditioner. The V-cycle objects contain no
 Krylov logic. The unchanged operator, preconditioner, and workspaces are reused
 for a fixed `dt`, and LU appears only in the two geometric bottom solves.
 
+Next to an embedded solid ([`GeometryField`](@ref)) the single-phase viscous
+rows of the cut cells use [`WallDistanceClosure`](@ref) by default, which is
+first order at walls that are not grid aligned.
+`NavierStokesOptions(embedded_viscous_closure = LSStagClosure())` selects the
+LS-STAG closure of [Cheny and Botella (2010)](https://doi.org/10.1016/j.jcp.2009.10.007)
+([`LSStagClosure`](@ref)): values at the midpoints of the open face parts,
+cell-Green normal stresses and closed half control volumes for the shear, with
+the same unknowns, mass and symmetric positive-definite structure. It is
+second order at oblique walls on uniform and 2:1 adaptive meshes. Two-phase
+systems with a solid accept only the default.
+
 For two phases, the viscous term is the coupled stress divergence
 `div(2*mu*D(u))`. At cell-centred normal stresses and vertex-centred shear
 stresses, the dynamic viscosity is a mixture of the phase viscosities with the
