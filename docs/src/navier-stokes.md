@@ -200,7 +200,12 @@ tangential phase-velocity jump of order `2U'h` there, issue #171). Where the
 interface moves through a face, a ramp in the crossing speed `w/U` (the normal
 mixture speed over the local mixture speed, `[1/16, 3/16]`) blends the
 extrapolation back to one donor: the values that a sweeping interface leaves
-behind would otherwise accumulate the extrapolation slope. Mixed faces without
+behind would otherwise accumulate the extrapolation slope. The weight is
+evaluated once from the state the projection receives (a step's predictor)
+and kept with the rows of that interface, so projecting a projected state
+again changes nothing; it is also capped, with the interpolation weight `β` of
+the row lowered accordingly, so that the jump block stays weakly diagonally
+dominant. Mixed faces without
 a regular row get a row that removes the interpolated normal jump (or, for a
 normal closer to the transverse axis, a `β = 0` row), and faces with an exactly
 tangential normal get a `β = 0` row imposed as an increment of their own jump.

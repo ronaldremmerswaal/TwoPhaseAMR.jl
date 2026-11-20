@@ -119,13 +119,16 @@ end
         if crossing
             # NUMERICS CONCERN (#171): the shear u = U(y) e_x crosses the
             # interface of slope 0.3 at the normal speed |U n_x|, i.e. at
-            # w/U ≈ |n_x| = 0.29 > 3/16 relative to the local mixture speed,
-            # so the crossing-speed limiter treats these faces as swept and
-            # falls back to the one-donor rule: the created jump is 0.40,
+            # w/U ≈ |n_x| = 0.29 > 3/16 relative to the local mixture speed:
+            # kinematically this flow does move the interface through the
+            # faces, so the crossing-speed limiter correctly sees a crossing
+            # and falls back to the one-donor rule. The created jump is 0.40,
             # 0.25, 0.155 at n = 32, 64, 128 (one-donor 0.50, 0.29, 0.152),
             # first order, where the unlimited extrapolation gives 0.26,
-            # 0.059, 0.010. The limiter does not distinguish a steady shear
-            # across a tilted interface from a sweeping interface.
+            # 0.059, 0.010. The limiter depends on the crossing speed only and
+            # cannot tell a smooth field (where the extrapolation is safe in a
+            # single projection) from the noisy wake of a sweeping interface;
+            # unchanged by freezing θ and by the dominance cap (same values).
             @test_broken log2(linear[2] / linear[3]) >= 2
             @test_broken log2(linear[1] / linear[3]) / 2 >= 2
             @test_broken linear[end] <= 0.1 * created[:constant][end]
@@ -476,7 +479,9 @@ end
             # row; for this uniform jump the interpolated normal jump stays
             # 0.225 (n = 32) and 0.255 (n = 64), against 0.48 for the
             # published rows and 0.057 / 0.099 when these faces keep their
-            # jump. At the slope 0.3 the residual is 0.005.
+            # jump. At the slope 0.3 the residual is 0.005. The β = 0 row
+            # imposes the donors' inferred jump, not the normal-jump condition,
+            # so neither freezing θ nor the dominance cap changes these values.
             @test_broken residuals[2] <= 0.01
             @test_broken residuals[2] <= 0.05 * residuals[1]
             @test residuals[2] <= 0.6 * residuals[1]
