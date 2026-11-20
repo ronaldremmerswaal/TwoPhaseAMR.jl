@@ -965,6 +965,18 @@ tests = [
 ]
 check = "unresolved_check"
 [[claims]]
+label = "eq:forces:contact-line"
+sources = [
+  { file = "src/interface/height_functions.jl", symbol = "_contact_line_curvature!" },
+  { file = "src/interface/height_functions.jl", symbol = "_wall_run_cosine" },
+  { file = "src/interface/height_functions.jl", symbol = "_wall_row_cosine" }
+]
+tests = [
+  { file = "test/indicator/phase/height_functions.jl", testset = "Contact-line curvature: energy consistency" },
+  { file = "test/indicator/phase/height_functions.jl", testset = "Contact-line curvature of a plane on rectangular cells" },
+  { file = "test/indicator/phase/height_functions.jl", testset = "Contact-angle curvature converges at triple points" }
+]
+[[claims]]
 label = "eq:forces:st-jump"
 sources = [
   { file = "src/two_phase/forces.jl", symbol = "_surface_tension_jump" },

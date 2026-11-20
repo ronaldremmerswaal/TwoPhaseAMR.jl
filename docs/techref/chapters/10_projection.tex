@@ -1122,8 +1122,8 @@ weight $\beta\Lambda_f$ to the diagonal, as lumping would, and its negative to
 $\mathsf C$ on the value's axis, so the identity holds on it and gravity gives
 it no increment (lumped, such a value fell freely: $3\,\dt g$ after three
 steps of a floor film at densities $(1000,1)$). The contact angle enters
-through the contact-line curvature~\cref{eq:projection:mimetic-contact} of the
-first wall row (Surface tension, below), the energy-consistent form of the
+through the contact-line curvature~\cref{eq:forces:contact-line} of the
+first wall row (\cref{sec:forces:contact-line}), the energy-consistent form of the
 height-function wall condition (\cref{sec:interface:contact}); the capillary jumps live on interior
 faces, so a constant curvature on a drop at a wall is balanced exactly.
 Measured: a pool between the side walls at densities $(1000,1)$ and a drop on
@@ -1131,12 +1131,13 @@ the floor at equal densities under gravity stay at rest to $10^{-12}$; sessile
 drops at $60^\circ$, $90^\circ$ and $120^\circ$ with the exact constant
 curvature stay at rest to $3\times10^{-10}$ for a capillary time at densities
 $(1,1)$ and $(1000,1)$ ($h=1/32$, full steps with the no-slip viscous step).
-With the height-function curvature and the contact-line curvature (the sessile
+With the height-function curvature and the contact-line curvature in both
+projections (the sessile
 drop of the integration suite, densities $(1,10^{-3})$, $h=1/48$, a quarter
-capillary time) the mimetic shape error is $1.15$, $1.09$ and $1.63$ times
+capillary time) the mimetic shape error is $1.05$, $1.15$ and $1.63$ times
 the CMDGFM's at $90^\circ$, $60^\circ$ and $120^\circ$ without gravity and
-$0.83$ times at $90^\circ$ with gravity (Bond number $1.21$), its largest
-phase value $1.2$, $2.1$, $1.6$ and $0.24$ times (recorded as broken where
+$0.82$ times at $90^\circ$ with gravity (Bond number $1.21$), its largest
+phase value $1.13$, $1.97$, $1.64$ and $0.23$ times (recorded as broken where
 outside the tolerances). A dam break
 at densities $(1000,1)$ runs through the impact on the wall at $h=1/32$ and
 $1/64$ with the liquid at the physical velocity scale; near-empty phase values
@@ -1374,7 +1375,7 @@ and a constant field along a slanted solid is kept to $2\times10^{-11}$
 the closure defect of the averaged open traces of the reconstructed solid,
 which the projection removes through the small apertures of sliver cells.
 With the height-function curvature (embedded solids keep it; the contact-line
-curvature~\cref{eq:projection:mimetic-contact} needs a domain wall) the contact
+curvature~\cref{eq:forces:contact-line} needs a domain wall) the contact
 lines on an embedded solid
 drive much larger currents than on a domain wall, for both projections: a
 drop at $90^\circ$ ($R=0.2$, densities $(1,10^{-3})$, $h=1/32$, no gravity)
@@ -1601,7 +1602,7 @@ $(1,10^{-3})$, $h=1/48$, height-function curvature at the contact line): shape e
 $\max\abs u$ $0.82\to0.018$ at $90^\circ$ ($0.016$ with the hydrostatic part on
 the aperture), $8.2\times10^{-5}\to2.3\times10^{-5}$ and
 $0.27\to0.025$ at $60^\circ$ (CMDGFM $2.8\times10^{-5}$, $0.064$; with the
-contact-line curvature~\cref{eq:projection:mimetic-contact} $2.3\times10^{-5}$
+contact-line curvature~\cref{eq:forces:contact-line} $2.3\times10^{-5}$
 and $0.015$ at $90^\circ$); cost
 Rayleigh--Taylor $3.91\to4.03\times10^{-2}$ (DR 3), $2.32\to2.49\times10^{-2}$
 (DR 1000), combined case $2.94\to2.98\times10^{-2}$ ($h=\lambda/32$). The study's
@@ -1609,7 +1610,7 @@ other reference points (the height-function point itself, its tangential
 shift, the PLIC point on the column) are not ported. Where the curvature comes
 from a wall or contact-angle closure the same rule refers it to the centred
 column point or the PLIC centroid; that is an approximation of the closure's
-own point. The contact-line curvature~\cref{eq:projection:mimetic-contact} is
+own point. The contact-line curvature~\cref{eq:forces:contact-line} is
 the mean curvature over the first row, $\kappa(h/2)+O(h^2)$, and those points
 lie at about $h/2$ from the wall.
 
@@ -1941,7 +1942,7 @@ preconditioner \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_
 around the V-cycle \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_preconditioner!};
 forces \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_capillary_force!}~\cref{eq:projection:mimetic-capillary}
 with \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_cell_curvature!}
-and the contact-line curvature \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_contact_line_curvature!}~\cref{eq:projection:mimetic-contact},
+(the contact-line curvature~\cref{eq:forces:contact-line} of the first wall row comes with the cell curvature, \cref{sec:forces:contact-line}),
 the potential difference~\cref{eq:projection:mimetic-hydrostatic}
 \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_cell_potential!} with
 \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_curvature_point},
@@ -1985,7 +1986,6 @@ Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mi
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric with embedded solids: definiteness, consistency and the Gram moment},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic rest states with embedded solids},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic viscous step with embedded solids},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic contact-line potential: energy consistency},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric: uniform equivalence with the aperture-independent mass},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic pressure solver: band-cell correction of the multigrid preconditioner},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic capillary force: booked carrier},
@@ -1999,7 +1999,7 @@ ties~\cref{eq:projection:mimetic-ties}, booked
 carrier~\cref{eq:projection:mimetic-booked}, hydrostatic
 reference~\cref{eq:projection:mimetic-hydrostatic}, height-function
 curvature and the energy-consistent contact-line
-potential~\cref{eq:projection:mimetic-contact}) the mimetic projection is
+potential~\cref{eq:forces:contact-line}) the mimetic projection is
 recommended for capillary-dominated and moderate flows: drops at rest, sessile
 drops, capillary waves and interfacial instabilities at moderate speeds. The
 CMDGFM (\cref{sec:projection:cmdgfm}) stays the default and is recommended for

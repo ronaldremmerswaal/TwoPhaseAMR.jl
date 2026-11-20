@@ -939,18 +939,19 @@ function _contact_curvature(field, values, b, i, j)
 end
 
 """Set the energy-consistent curvature of the contact-line cells (techref
-ch. 4, Contact line), after the PLIC passes of [`reconstruct!`](@ref).
+ch. 8, Contact-line curvature), after the PLIC passes of [`reconstruct!`](@ref).
 
 A cut cell whose centre lies in the first row along a domain wall with a
 contact angle `θ_w` (axis not periodic) gets `κ = (cos θ - cos θ_w)/h`, `h`
 the cell size normal to the wall, with `cos θ = -o s/√(1 + s²)` the angle of
 the chord between the wall-parallel local heights `H₁` of its own column and
 `H₂` of the column one row inward (both relative to the cell's tangential
-centre), `s` the chord's slope and `o = ±1` the orientation of the columns
-(`o = 1`: liquid on the low side). With the wetted wall length `H₁` (the
-liquid volume of the row over `h`) and the chord between the two row centres,
+centre, in cells), `s = (H₂ - H₁) h_t/h` the chord's slope (`h_t` the cell
+size along the wall) and `o = ±1` the orientation of the columns (`o = 1`:
+liquid on the low side). With the wetted wall length `h_t H₁` (the liquid
+volume of the row over `h`) and the chord between the two row centres,
 `σκ` is the derivative `∂E/∂V₁` of the contact-line energy
-`E = σ(|chord| - cos θ_w H₁)` by the liquid volume of the row, the same for
+`E = σ(|chord| - cos θ_w h_t H₁)` by the liquid volume of the row, the same for
 every cut cell of the row, so that the capillary work of a transport through
 the row is the change of the surface and wall energy. A cell without both
 heights takes the cosine of the nearest cell with both in its contiguous run of
@@ -987,7 +988,8 @@ function _contact_line_curvature!(field)
                 center = block.origin[axis] + ((axis == 1 ? i : j) - T(0.5)) * h
                 boundary = mesh.origin[axis] + (inward == 1 ? zero(T) : mesh.extent[axis])
                 abs(center - boundary) <= h * (T(0.5) + 64eps(T)) || continue
-                cosine = _wall_run_cosine(height_values, i + 4, j + 4, axis, inward)
+                ratio = T(block.spacing[3 - axis] / h)
+                cosine = _wall_run_cosine(height_values, i + 4, j + 4, axis, inward, ratio)
                 isnothing(cosine) && continue
                 _set!(field.curvature, (cosine - wall_cosine) / T(h), ref)
                 break
@@ -1004,8 +1006,8 @@ contiguous run of cut cells (`0 < C < 1`) of the row through `(i, j)`, the
 mean of the two at equal distance (the slope `s` is the same along a run).
 The run is followed through the padded values of the block; `nothing` if it
 has no cell with valid columns there."""
-function _wall_run_cosine(values, i, j, axis, inward)
-    cosine = _wall_row_cosine(values, i, j, axis, inward)
+function _wall_run_cosine(values, i, j, axis, inward, ratio)
+    cosine = _wall_row_cosine(values, i, j, axis, inward, ratio)
     isnothing(cosine) || return cosine
     T = eltype(values)
     di, dj = axis == 1 ? (0, 1) : (1, 0)
@@ -1015,8 +1017,8 @@ function _wall_run_cosine(values, i, j, axis, inward)
     while low || high
         low = low && cut(i - step * di, j - step * dj)
         high = high && cut(i + step * di, j + step * dj)
-        below = low ? _wall_row_cosine(values, i - step * di, j - step * dj, axis, inward) : nothing
-        above = high ? _wall_row_cosine(values, i + step * di, j + step * dj, axis, inward) : nothing
+        below = low ? _wall_row_cosine(values, i - step * di, j - step * dj, axis, inward, ratio) : nothing
+        above = high ? _wall_row_cosine(values, i + step * di, j + step * dj, axis, inward, ratio) : nothing
         isnothing(below) || return isnothing(above) ? below : (below + above) / 2
         isnothing(above) || return above
         step += 1
@@ -1026,10 +1028,10 @@ end
 
 """`cos θ` of the chord between the wall-parallel local heights of the padded
 height values at `(i, j)` (first row along a wall of normal axis `axis`) and
-one row inward (square cells); `nothing` unless both columns are valid with
-one orientation. The columns reach four cells to either side, the padding of
-the height values."""
-function _wall_row_cosine(values, i, j, axis, inward)
+one row inward, `ratio` the cell size along the wall over that normal to it;
+`nothing` unless both columns are valid with one orientation. The columns
+reach four cells to either side, the padding of the height values."""
+function _wall_row_cosine(values, i, j, axis, inward, ratio)
     tangent = 3 - axis
     ii, jj = axis == 1 ? (i + inward, j) : (i, j + inward)
     for orientation in (-1, 1)
@@ -1037,7 +1039,7 @@ function _wall_row_cosine(values, i, j, axis, inward)
         isnothing(first) && continue
         second = _local_height(values, ii, jj, tangent, orientation; radius = 4)
         isnothing(second) && return nothing
-        slope = second - first
+        slope = (second - first) * ratio
         return -orientation * slope / sqrt(1 + slope^2)
     end
     return nothing

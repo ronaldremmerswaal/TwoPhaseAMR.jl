@@ -352,24 +352,25 @@ crosses a face. Take the wall $y=0$, the liquid on the low-$x$ side of the
 line (orientation $o=1$; $o=-1$ gives the same result) and the wall-parallel
 heights $\hdisc{1}$, $\hdisc{2}$~\cref{eq:interface:height} (in cells) of rows~1
 and~2, both relative to the cell's tangential centre. The volume data define
-the wetted length $W=h\hdisc{1}+\text{const}$ (the liquid volume of row~1
-over $h$), the chord between the two row centres, of slope
-$s=\hdisc{2}-\hdisc{1}$, and the stub between the wall and the row-1 centre.
+the wetted length $W=h_t\hdisc{1}+\text{const}$ (the liquid volume of row~1
+over $h$; $h$ and $h_t$ the cell sizes normal to and along the wall), the
+chord between the two row centres, of slope
+$s=(\hdisc{2}-\hdisc{1})h_t/h$, and the stub between the wall and the row-1 centre.
 The stub's slope $s_0$ is below the resolution: its energy
 $\sigma\frac h2(\sqrt{1+s_0^2}+\cos\cangle\,s_0)$ (its length and the
 correction of the wetted length) is stationary at the angle $\cangle$, Young's
 law, with the minimum $\sigma\frac h2\sin\cangle$, independent of the heights.
 The reduced contact-line energy is therefore
-$\sigma(h\sqrt{1+s^2}-\cos\cangle\,h\hdisc{1})+\text{const}$, and its
-derivative by the row's liquid volume ($\mathrm dV_1=h^2\,\mathrm d\hdisc{1}$)
+$\sigma(h\sqrt{1+s^2}-\cos\cangle\,h_t\hdisc{1})+\text{const}$, and its
+derivative by the row's liquid volume ($\mathrm dV_1=hh_t\,\mathrm d\hdisc{1}$)
 gives every cut cell of the row
 \begin{equation}\label{eq:forces:contact-line}
   \kappa_c=\frac{\cos\theta_{3/2}-\cos\cangle}{h},\qquad
   \cos\theta_{3/2}=-\frac{o\,s}{\sqrt{1+s^2}},
 \end{equation}
-$\theta_{3/2}$ the angle of the chord ($h$ the cell size normal to the wall;
-the cells are square), not clipped by~\cref{eq:interface:clip}
-($\abs{\kappa_c}\le2/h$). Its
+$\theta_{3/2}$ the angle of the chord, not clipped by~\cref{eq:interface:clip}
+($\abs{\kappa_c}\le2/h$). A plane meeting the wall at $\cangle$ gets
+$\kappa_c=0$ to round-off, also on rectangular cells. The energy's
 derivative by the row-2 volume, $-\sigma\cos\theta_{3/2}/h$, is the lower
 flux of the conservative row-2 curvature
 $\sigma(\cos\theta_{5/2}-\cos\theta_{3/2})/h$, which the interior height
@@ -454,7 +455,11 @@ with the chord \srcsym{src/interface/height_functions.jl}{_wall_row_cosine}
 and the run \srcsym{src/interface/height_functions.jl}{_wall_run_cosine}.
 Tests: \testsym{test/indicator/phase/height_functions.jl}{Contact-line curvature: energy consistency}
 (closed loop of exact caps, one curvature per row, label symmetry, every
-wall, the run of a thin cap).
+wall, the run of a thin cap),
+\testsym{test/indicator/phase/height_functions.jl}{Contact-line curvature of a plane on rectangular cells}
+(exact $(\cos\cangle_0-\cos\cangle)/h$ for a plane at $\cangle_0$ on $2{:}1$
+cells, bottom and left wall),
+\testsym{test/indicator/phase/height_functions.jl}{Contact-angle curvature converges at triple points}.
 \end{implnote}
 
 \section{Surface tension}\label{sec:forces:surface-tension}
