@@ -654,7 +654,8 @@ and operator of the one-velocity pressure solver are shared. Tests:
 \section{Mimetic cut-cell projection (option)}\label{sec:projection:mimetic}
 \apitype{MimeticProjection} replaces the CMDGFM in
 \apitype{TwoVelocityModel} on request; the CMDGFM stays the default and its
-results are unchanged. It follows the mimetic-projection audit's note
+results are unchanged (which flows each suits:
+\cref{sec:projection:mimetic-scope}). It follows the mimetic-projection audit's note
 \emph{Kinetic metrics for shared apertures that close no region}:
 the kinetic-energy-orthogonal projection of the two phase velocities onto
 vanishing mixture divergence~\cref{eq:projection:mixture-divergence} in a
@@ -1134,8 +1135,8 @@ With the height-function curvature and the contact-line curvature (the sessile
 drop of the integration suite, densities $(1,10^{-3})$, $h=1/48$, a quarter
 capillary time) the mimetic shape error is $1.15$, $1.09$ and $1.63$ times
 the CMDGFM's at $90^\circ$, $60^\circ$ and $120^\circ$ without gravity and
-$0.87$ times at $90^\circ$ with gravity (Bond number $1.21$), its largest
-phase value $1.2$, $2.1$, $1.6$ and $0.53$ times (recorded as broken where
+$0.83$ times at $90^\circ$ with gravity (Bond number $1.21$), its largest
+phase value $1.2$, $2.1$, $1.6$ and $0.24$ times (recorded as broken where
 outside the tolerances). A dam break
 at densities $(1000,1)$ runs through the impact on the wall at $h=1/32$ and
 $1/64$ with the liquid at the physical velocity scale; near-empty phase values
@@ -1615,10 +1616,10 @@ and~3). At $90^\circ$ this makes the integration suite's drop (densities
 $(1,10^{-3})$, a quarter capillary time) worse than with the height-function
 curvature in the contact-line cells: without gravity the shape error rises
 from $1.07\times10^{-5}$ to $1.18\times10^{-5}$ (CMDGFM $1.03\times10^{-5}$); at
-Bond number $1.21$ the largest phase value doubles from $0.018$ to $0.034$
-(CMDGFM $0.064$), the shape error at $h=1/48$ rises from $2.34\times10^{-5}$
-to $2.45\times10^{-5}$ (CMDGFM $2.82\times10^{-5}$) and the rate from $h=1/12$
-to $1/24$ falls from $1.84$ to $1.64$ (the gravity part is attributed to the
+Bond number $1.21$ the shape error at $h=1/48$ rises from $2.27\times10^{-5}$
+to $2.33\times10^{-5}$ (CMDGFM $2.82\times10^{-5}$) and the rate from $h=1/12$
+to $1/24$ falls from $1.66$ to $1.53$, while the largest phase value is
+$0.016$ and $0.015$ (CMDGFM $0.064$; the gravity part is attributed to the
 same mismatch, not isolated). Making rows~2 and~3 consistent with the row-1
 chord (a conservative form of their curvature) is the open follow-up.
 (vi)~A run of cut cells without valid columns keeps the
@@ -1672,8 +1673,8 @@ $(1,10^{-3})$, $h=1/48$, height-function curvature at the contact line): shape e
 $\max\abs u$ $0.82\to0.018$ at $90^\circ$ ($0.016$ with the hydrostatic part on
 the aperture), $8.2\times10^{-5}\to2.3\times10^{-5}$ and
 $0.27\to0.025$ at $60^\circ$ (CMDGFM $2.8\times10^{-5}$, $0.064$; with the
-contact-line curvature~\cref{eq:projection:mimetic-contact} $2.4\times10^{-5}$
-and $0.034$ at $90^\circ$); cost
+contact-line curvature~\cref{eq:projection:mimetic-contact} $2.3\times10^{-5}$
+and $0.015$ at $90^\circ$); cost
 Rayleigh--Taylor $3.91\to4.03\times10^{-2}$ (DR 3), $2.32\to2.49\times10^{-2}$
 (DR 1000), combined case $2.94\to2.98\times10^{-2}$ ($h=\lambda/32$). The study's
 other reference points (the height-function point itself, its tangential
@@ -2063,6 +2064,57 @@ Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mi
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic capillary potential under gravity},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic capillary force: hydrostatic part on the aperture}.
 \end{implnote}
+
+\subsection{Scope and limitations}\label{sec:projection:mimetic-scope}
+With the configuration of this section (uniform
+ties~\cref{eq:projection:mimetic-ties}, booked
+carrier~\cref{eq:projection:mimetic-booked}, hydrostatic
+reference~\cref{eq:projection:mimetic-hydrostatic}, height-function
+curvature and the energy-consistent contact-line
+potential~\cref{eq:projection:mimetic-contact}) the mimetic projection is
+recommended for capillary-dominated and moderate flows: drops at rest, sessile
+drops, capillary waves and interfacial instabilities at moderate speeds. The
+CMDGFM (\cref{sec:projection:cmdgfm}) stays the default and is recommended for
+violent flows: impacts, splashes and thin films.
+
+\emph{Limitation.} In violent flows the near-empty light-phase values next to
+the interface take large velocities. A drop of radius $0.08$ falling at speed
+$2$ onto a pool (densities $(1000,1)$, $\sigma=0.05$, free-slip walls, uniform
+$h=1/32$ and $1/64$): the median over seven runs (drop speed perturbed by $0$,
+$\pm10^{-4}$, $\pm10^{-3}$, $\pm10^{-2}$) of the largest phase value up to
+$t=0.25$ is $50$ and $111$ with the mimetic projection, against $3.5$ and $5.0$
+with the CMDGFM; it grows under refinement and shortens the time steps.
+
+\emph{Structural reason.} Let $\mathcal L$ collect homogeneous linear
+constraints on the phase values (the mixture divergence
+of~\cref{eq:projection:mimetic} and any rows on face jumps) and
+$u^{+}=\operatorname*{arg\,min}_{\mathcal Lu=0}\tfrac12(u-u^{*})^{\transpose}\mathcal M(u-u^{*})$.
+Then $u^{*}-u^{+}$ is $\mathcal M$-orthogonal to $\ker\mathcal L$, so
+$\tfrac12\abs{u^{+}}^2_{\mathcal M}=\tfrac12\abs{u^{*}}^2_{\mathcal M}-\tfrac12\abs{u^{*}-u^{+}}^2_{\mathcal M}$:
+the projection is energy-neutral (the multipliers do no work) and passes every
+admissible field, $\mathcal Lu^{*}=0$, unchanged. Keeping tangential slip needs
+exactly this for the slip fields: a jump of the velocity tangential to the
+interface has to stay admissible, so the jumps of the mixed faces that carry
+it have to stay free (or be inferred from bulk values). Controlling the light
+phase needs the opposite: on a mixed face whose jump is free, the light value
+takes the pressure response with its own compliance, of the order of the
+density ratio times that of the heavy value, so every mixed face's jump has to
+be constrained. With homogeneous constraints in an energy-neutral projection
+the two requirements conflict. The CMDGFM obtains both only through its parts
+that are not energy-neutral: an unresolved mixed face keeps the predictor's
+jump, $\jump{\velo^{\timelevel{n+1}}}_f=\jump{\velo^{\stage{3}}}_f$
+(\cref{eq:projection:unresolved}, an inhomogeneous constraint that carries the
+predicted slip as data), and a resolved row~\cref{eq:projection:cmdgfm-row}
+infers the jump from transverse and inference faces with an update that is
+not the adjoint of the row (the projection is oblique in its own metric and
+can produce energy). Its jump block is weakly diagonally dominant, so the
+projected jumps are bounded by the frozen jumps and the bulk values,
+independently of the density ratio. Measured with jump rows added to the
+mimetic projection: rows on every two-value face bring the impact medians to
+$8.7$ and $9.9$ but lock the slip (a Kelvin--Helmholtz layer at density
+ratio~$1$ no longer grows); the CMDGFM's own row set keeps the slip and leaves
+them at $28$ and $69$. A remedy within the mimetic projection therefore cannot
+be a set of homogeneous constraints on face jumps alone.
 
 \section{Fully discrete projection stage}\label{sec:projection:time}
 The projection is an algebraic problem for the given predictor and $\dt$;
