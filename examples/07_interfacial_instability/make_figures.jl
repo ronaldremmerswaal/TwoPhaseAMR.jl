@@ -9,7 +9,7 @@ function instability_figure_case(model, target_time)
         fields = VisualizationFieldRegistry()
         register_default_fields!(fields, run.flow)
         recorder = Recorder(
-            fields; diagnostics = run.flow, keyframes = EquispacedTimes(41),
+            fields; diagnostics = run.flow, keyframes = EquispacedTimes(81),
             preview = nothing
         )
         result = simulate!(run.flow, target_time; observer = recorder)
@@ -46,7 +46,7 @@ function readme_animations(outdir; level = 5)
     )
     fields = VisualizationFieldRegistry()
     register_default_fields!(fields, run.flow)
-    recorder = Recorder(fields; keyframes = EquispacedTimes(55), preview = nothing)
+    recorder = Recorder(fields; keyframes = EquispacedTimes(81), preview = nothing)
     seconds = @elapsed result = simulate!(run.flow, final_time; observer = recorder)
     println(
         "README animation: level ", level, ", ", result.steps, " steps to t = ",
@@ -54,11 +54,13 @@ function readme_animations(outdir; level = 5)
         seconds, " s; ", TwoPhaseAMR.ncells(run.flow.system.mesh), " final cells"
     )
     levels = 31
+    # One output frame per keyframe: a uniform time step and no held frames.
+    nframes = length(keyframes(snapshot_store(recorder)))
     animation(path, colormap; kwargs...) = export_animation(
         path, recorder;
         field = :velocity_x, camera = (0.0, 1.0, -0.4, 0.4), colorrange = (-0.6, 0.6),
         colormap = cgrad(colormap, levels; categorical = true), blocks = true,
-        title = frame -> @sprintf("t = %.2f", frame.time), fps = 12, duration = 40 / 12,
+        title = frame -> @sprintf("t = %.2f", frame.time), fps = 12, nframes,
         size = (640, 480), kwargs...
     )
     animation(joinpath(outdir, "readme_light.gif"), :balance)
@@ -119,8 +121,8 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     export_animation(
         joinpath(outdir, "instability.gif"), two_store; field = :velocity_x,
         camera = window, diagnostics = [:amplitude],
-        references = Dict(:amplitude => :analytical_amplitude), fps = 10, duration = 5.4,
-        size = (1150, 340)
+        references = Dict(:amplitude => :analytical_amplitude), fps = 10,
+        nframes = length(keyframes(two_store)), size = (1150, 340)
     )
     readme_animations(outdir)
     return nothing

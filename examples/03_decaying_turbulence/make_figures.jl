@@ -19,7 +19,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
         label = "Vorticity", colormap = :balance
     )
     recorder = Recorder(
-        fields; diagnostics = flow, keyframes = EquispacedTimes(41),
+        fields; diagnostics = flow, keyframes = EquispacedTimes(81),
         preview = nothing
     )
     result = simulate!(flow, final_time; observer = recorder)
@@ -38,9 +38,12 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
         direction = :row
     )
     save(joinpath(outdir, "energy_cells.png"), figure)
+    # One output frame per keyframe: a uniform time step and no held frames.
+    # 31 colour levels keep the 81-frame GIF small.
     export_animation(
         joinpath(outdir, "vorticity.gif"), store; field = :vorticity,
-        blocks = true, diagnostics = [:projected_kinetic_energy, :cells], fps = 8, duration = 5.0
+        blocks = true, diagnostics = [:projected_kinetic_energy, :cells], fps = 8,
+        nframes = length(times), colormap = cgrad(:balance, 31; categorical = true)
     )
     println(
         "Setup + simulation: ", simulation_seconds, " s; including figures: ",

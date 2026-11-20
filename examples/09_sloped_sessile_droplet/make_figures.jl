@@ -13,7 +13,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
         register_default_fields!(fields, :volume_fraction, flow.interface)
         register_geometry!(fields, flow.system.geometry)
         recorder = Recorder(
-            fields; diagnostics = flow, keyframes = EquispacedTimes(41),
+            fields; diagnostics = flow, keyframes = EquispacedTimes(81),
             preview = nothing
         )
         result = simulate!(flow, target_time; observer = recorder)
@@ -31,7 +31,8 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     save(joinpath(outdir, "kinetic_energy.png"), energy)
     export_animation(
         joinpath(outdir, "relaxation.gif"), store; field = :volume_fraction,
-        diagnostics = [:kinetic_energy], fps = 10, duration = 4.0, size = (900, 380)
+        diagnostics = [:kinetic_energy], fps = 10, nframes = length(keyframes(store)),
+        size = (900, 380)
     )
     return (; flow, result, recorder)
 end
