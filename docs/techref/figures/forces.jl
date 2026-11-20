@@ -64,21 +64,29 @@ force_operator(field) = isnothing(field.geometry) ?
 
 # --- Independent face curvature (Section "curvature") -------------------------------
 
-# Weighted average over the two cells, else the extension search over all
-# cells in block and cell order; `nothing` if unresolved.
+# LHF-first weighted average over the two cells (height-function and other
+# parts summed separately), else the extension search over all cells in block
+# and cell order; `nothing` if unresolved.
 function face_curvature_independent(field, face)
     mesh = field.mesh
-    total = weight = 0.0
-    for ref in (face.minus, face.plus)
-        c = cond(field, ref)
-        k = AMR._get(field.curvature, ref)
-        w = c * (1 - c)
-        if w > 0 && isfinite(k)
-            total += w * k
-            weight += w
-        end
+    cells = [
+        (
+            AMR._get(field.curvature, ref), cond(field, ref) * (1 - cond(field, ref)),
+            AMR._get(field.curvature_quality, ref),
+        )
+            for ref in (face.minus, face.plus)
+    ]
+    filter!(((k, w, q),) -> w > 0 && isfinite(k), cells)
+    if !isempty(cells)
+        strength = maximum(q for (k, w, q) in cells)
+        height = sum(w * q * k for (k, w, q) in cells)
+        height_weight = sum(w * q for (k, w, q) in cells)
+        other = sum(w * (1 - q) * k for (k, w, q) in cells)
+        other_weight = sum(w * (1 - q) for (k, w, q) in cells)
+        return (height + (1 - strength) * other) / (height_weight + (1 - strength) * other_weight),
+            :neighbours
     end
-    weight > 0 && return total / weight, :neighbours
+    total = weight = 0.0
     radius = 3 * max(maximum(cell_spacing(mesh, face.minus)), maximum(cell_spacing(mesh, face.plus)))
     for ref in all_cells(mesh)
         c = cond(field, ref)
