@@ -67,9 +67,9 @@ from the interface). It
 takes no options and works with either surface-tension formulation; it
 builds its own pressure
 solver, so non-default `pressure_*` solver settings of the system throw
-`ArgumentError`. It runs on uniform meshes of
-square cells without solids, cut cells at the domain walls (contact lines
-included) among them, and throws for adaptive meshes and solids. A cut cell whose Gram tensor admits no consistent block gets
+`ArgumentError`. It runs on uniform and adaptive (2:1 graded) meshes of
+square cells, cut cells at the domain walls (contact lines included) and at
+embedded solids among them, and throws for non-square cells. A cut cell whose Gram tensor admits no consistent block gets
 a least-squares fallback and is counted in
 `MimeticProjectionStats.defective_cells`; the run summary prints the totals of
 a `simulate!` call. Each projection solves a conjugate-gradient system with a
@@ -96,6 +96,26 @@ tangential to the interface is coupled; `InterphaseDrag(component=:full)`
 couples the whole component, and `interphase_drag=nothing` keeps free slip
 between the phases.
 See [Interphase drag](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=eq:viscosity:drag).
+
+### Which projection?
+
+| Flow | Recommended | Why |
+| --- | --- | --- |
+| capillary-dominated and moderate flows: drops at rest, sessile drops, capillary waves, interfacial instabilities at moderate speeds | `MimeticProjection()` | energy-neutral in its metric; the capillary force pays the surface energy and the contact line along domain walls the wall energy |
+| violent flows: impacts, splashes, thin films | `CMDGFMProjection()` (default) | bounds the light-phase values next to the interface independently of the density ratio |
+
+The mimetic projection's limitation is measured on a drop impact at density
+ratio 1000 (a drop of radius 0.08 at speed 2 onto a pool, `n = 32` and 64):
+the median largest velocity is 50 and 111, against 3.5 and 5.0 with the
+CMDGFM, and grows under refinement. It is structural: in an energy-neutral
+projection with homogeneous constraints, controlling the near-empty
+light-phase values and keeping the tangential slip between the phases
+conflict. The CMDGFM obtains both only through parts that are not
+energy-neutral: its unresolved mixed faces keep the predictor's velocity jump,
+and its jump rows infer the jump from neighbouring faces with an update that
+is not their adjoint, so it conserves momentum but not kinetic energy. See
+the technical reference, section
+[Scope and limitations](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:projection:mimetic-scope).
 
 ## Option matrix
 

@@ -337,7 +337,7 @@ function _navier_stokes_elliptic_solver(
         krylov = _diffusion_krylov(solver),
         krylov_options = solver.options.diffusion.krylov_options,
         preconditioner = _diffusion_preconditioner(solver),
-        preconditioner_options = solver.options.diffusion.preconditioner_options,
+        preconditioner_options = _diffusion_preconditioner_options(solver),
         multigrid = _multigrid_options(solver),
         reuse_preconditioner,
     )

@@ -483,6 +483,12 @@
   {Quality transition half-width, $\pi/20$}{\code{_height_quality}}{\S3.3.1}
 \DefineNotation[1]{\fitweight}{w_{#1}}{\fitweight{j}}
   {Weight of a height-function candidate or of a GHF point}{}{(3.61)}
+\DefineNotation[1]{\curvquality}{q^{\curv}_{#1}}{\curvquality{c}}
+  {Height-function coverage of the cell curvature (\cref{eq:interface:coverage})}
+  {\code{curvature_quality}}{new}
+\DefineNotation[1]{\hflocal}{Q^{\mathrm{loc}}_{#1}}{\hflocal{i}}
+  {Locality of a height-function candidate (crossing in the cell, \cref{eq:interface:coverage})}
+  {\code{_height_locality}}{new}
 \DefineNotation[1]{\ghfpoint}{\+p_{#1}}{\ghfpoint{j}}
   {Interface position used by the GHF fit}{\code{points}}{\S4.7.1}
 \DefineNotation{\tcoord}{x_{\tau}}{\tcoord}
@@ -755,6 +761,12 @@
 \DefineNotation[1]{\curvweight}{w^{\curv}_{#1}}{\curvweight{c}}
   {Curvature weight $\condfrac{\liq}{c}(1-\condfrac{\liq}{c})$ of a cell}
   {\code{_face_curvature}}{\S4.7.1}
+\DefineNotation[1]{\curvpref}{\lambda^{\curv}_{#1}}{\curvpref{f}}
+  {Height-function preference of the face curvature (\cref{eq:forces:curvature})}
+  {\code{preference}}{new}
+\DefineNotation[1]{\curvfaceweight}{\omega^{\curv}_{#1}}{\curvfaceweight{c}}
+  {Weight of cell $c$ in the face curvature (\cref{eq:forces:curvature})}
+  {\code{_face_curvature}}{new}
 \DefineNotation[1]{\extradius}{r_{#1}}{\extradius{f}}
   {Radius of the curvature extension around face $f$ (\cref{eq:forces:extension})}
   {\code{radius}}{new}

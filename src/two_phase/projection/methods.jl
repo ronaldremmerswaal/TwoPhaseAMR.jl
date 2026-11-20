@@ -54,6 +54,17 @@ The supported preconditioners are `:block` (the default), `:ilu`, and `nothing`;
 (the default) or the published rows
 [`ConstantJumpInference()`](@ref ConstantJumpInference).
 Unsupported choices are rejected at construction.
+
+# Which projection?
+
+`CMDGFMProjection()` is the default two-velocity projection and the
+recommended one for violent flows (impacts, splashes, thin films): its jump
+rows and the frozen jumps of its unresolved faces bound the light-phase values
+independently of the density ratio (a drop impact at density ratio 1000,
+`n = 32/64`: median largest velocity 3.5/5.0, against 50/111 with
+[`MimeticProjection`](@ref)). It conserves momentum but not kinetic energy.
+For capillary-dominated and moderate flows [`MimeticProjection`](@ref) is
+recommended.
 """
 struct CMDGFMProjection{P, O, J <: AbstractJumpInference} <: AbstractTwoVelocityProjection
     preconditioner::P
@@ -132,7 +143,23 @@ independent of the apertures.
 A cut cell at a domain wall keeps its wall side as a side of the Gram tensor;
 the prescribed wall flux is not a value of the metric, so the block is
 restricted to the interior sides. Supported on uniform and adaptive (2:1
-graded) meshes of square cells without embedded solids; other configurations
-throw `ArgumentError`. [`CMDGFMProjection`](@ref) remains the default.
+graded) meshes of square cells, embedded solids included; non-square cells
+throw `ArgumentError`.
+
+# Which projection?
+
+`MimeticProjection()` is recommended for capillary-dominated and moderate
+flows (drops at rest, sessile drops, capillary waves, interfacial
+instabilities at moderate speeds): it is energy-neutral in its metric, the
+capillary force pays the surface energy and, along domain walls, the contact
+line the wall energy.
+[`CMDGFMProjection`](@ref) remains the default and is recommended for violent
+flows (impacts, splashes, thin films). There the near-empty light-phase
+values of the mimetic projection grow: a drop impact at density ratio 1000,
+`n = 32/64`, has the median largest velocity 50/111, against 3.5/5.0 with the
+CMDGFM. In an energy-neutral projection with homogeneous constraints,
+controlling the light phase and keeping the tangential slip between the phases
+conflict; the CMDGFM obtains both only through parts that are not
+energy-neutral (technical reference, chapter 10, *Scope and limitations*).
 """
 struct MimeticProjection <: AbstractTwoVelocityProjection end
