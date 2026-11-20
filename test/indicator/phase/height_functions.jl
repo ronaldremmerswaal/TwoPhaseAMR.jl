@@ -378,14 +378,13 @@ end
     # stored curvature there is the contact-line curvature
     # (cos θ_{3/2} - cos θ_w)/h of the first row (techref
     # eq:forces:contact-line), the derivative of the discrete contact-line
-    # energy (tested in "Contact-line curvature: energy consistency"), not a
-    # pointwise approximation of 1/R: its largest error (1/R = 3.33) is
-    # bounded at the tested resolutions, measured
+    # energy (tested in "Contact-line curvature: energy consistency"). Both
+    # are checked for the thesis orders; the stored curvature is in addition
+    # bounded by 1.25 times its measured largest errors (1/R = 3.33)
     #   20°: 0.294, 0.197, 0.145    55°: 0.111, 0.064, 0.0448
     #   90°: 0.00919, 0.00405, 0.00227    125°: 0.0528, 0.0393, 0.0312
-    #   160°: 0.265, 0.222, 0.190 (orders 0.44, 0.53; the formulas 0.435,
-    #   0.266, 0.203)
-    # at n = 32, 48, 64; the bounds are 1.25 times these.
+    #   160°: 0.265, 0.222, 0.190
+    # at n = 32, 48, 64.
     measured = Dict(
         20 => (0.294, 0.197, 0.145), 55 => (0.111, 0.064, 0.0448),
         90 => (0.00919, 0.00405, 0.00227), 125 => (0.0528, 0.0393, 0.0312),
@@ -394,6 +393,7 @@ end
     resolutions = (32, 48, 64)
     for angle_degrees in (20, 55, 90, 125, 160)
         errors = Float64[]
+        stored = Float64[]
         for (k, n) in enumerate(resolutions)
             theta = deg2rad(angle_degrees)
             radius = 0.3
@@ -416,24 +416,37 @@ end
                 _, y = cellcenter(mesh, ref.block, ref.i, ref.j)
                 y <= 0.5 / n + 64eps() || continue
                 TwoPhaseAMR._plic_touches_wall(interface, ref, 3) || continue
+                0 < TwoPhaseAMR._get(interface.fraction, ref) < 1 || continue
                 formula = TwoPhaseAMR._contact_curvature(interface, values[ref.block], ref.block, ref.i, ref.j)
                 isnothing(formula) || push!(formula_errors, abs(formula - inv(radius)))
-                stored = TwoPhaseAMR._get(interface.curvature, ref)
-                isfinite(stored) && push!(stored_errors, abs(stored - inv(radius)))
+                curvature = TwoPhaseAMR._get(interface.curvature, ref)
+                isfinite(curvature) && push!(stored_errors, abs(curvature - inv(radius)))
             end
             @test !isempty(formula_errors)
             @test !isempty(stored_errors)
             push!(errors, maximum(formula_errors))
-            @test maximum(stored_errors) <= 1.25measured[angle_degrees][k]
+            push!(stored, maximum(stored_errors))
+            @test last(stored) <= 1.25measured[angle_degrees][k]
         end
-        rates = [
-            log(errors[index] / errors[index + 1]) /
-                log(resolutions[index + 1] / resolutions[index])
+        order(e) = [
+            log(e[index] / e[index + 1]) / log(resolutions[index + 1] / resolutions[index])
                 for index in 1:(length(resolutions) - 1)
         ]
-        @test all(rates .>= 0.7)
+        @test all(order(errors) .>= 0.7)
+        if angle_degrees == 160
+            # NUMERICS CONCERN: at 160° the contact-line curvature's largest
+            # error 0.265, 0.222, 0.190 falls only at the orders 0.44, 0.53
+            # (the contact-angle formulas: 0.435, 0.266, 0.203, orders 1.21,
+            # 0.94): smaller errors at the tested resolutions, but below first
+            # order; cause not isolated (the line spreads over two to four
+            # cells of the row).
+            @test_broken all(order(stored) .>= 0.7)
+        else
+            @test all(order(stored) .>= 0.7)
+        end
         if angle_degrees == 90
-            @test all(rates .>= 1.8)
+            @test all(order(errors) .>= 1.8)
+            @test all(order(stored) .>= 1.8)
         end
     end
 end

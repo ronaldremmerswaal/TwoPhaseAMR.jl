@@ -713,12 +713,12 @@ embedded walls
 Tests:
 \testsym{test/indicator/phase/height_functions.jl}{Contact-angle curvature converges at triple points}
 (sessile drop at $20^\circ$, $55^\circ$, $90^\circ$, $125^\circ$, $160^\circ$:
-the contact-angle formulas converge with order at least $0.7$, at least $1.8$
-for $90^\circ$; the stored curvature of the touching cells, the contact-line
-curvature~\cref{eq:forces:contact-line}, an energy derivative rather than a
-pointwise approximation, is bounded by $1.25$ times its measured errors,
-$0.0023$--$0.29$ for $1/R=3.33$; at $160^\circ$ it falls only at the orders
-$0.44$, $0.53$),
+the contact-angle formulas and the stored curvature of the touching cells, the
+contact-line curvature~\cref{eq:forces:contact-line}, converge with order at
+least $0.7$, at least $1.8$ for $90^\circ$; the stored curvature is in
+addition bounded by $1.25$ times its measured errors, $0.0023$--$0.29$ for
+$1/R=3.33$; at $160^\circ$ it falls only at the orders $0.44$, $0.53$,
+recorded as broken, with errors below those of the formulas),
 \testsym{test/indicator/phase/height_functions.jl}{Contact angle changes curvature but not the PLIC interface},
 \testsym{test/indicator/geometry.jl}{Embedded contact angles do not change PLIC planes},
 \testsym{test/indicator/geometry.jl}{Embedded GHF contact curvature converges on sloped walls}

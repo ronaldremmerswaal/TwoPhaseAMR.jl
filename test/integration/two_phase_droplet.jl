@@ -158,18 +158,28 @@ end
             # Mean energy period over eight energy periods from the peaks of
             # the parabolas through the three samples around each maximum
             # (below the time step 2.3e-4), against the inviscid Lamb period
-            # 0.03629; the former ratio of the sampled errors compared
-            # round-off or single steps. Measured
-            # relative errors: n = 16 1.03e-3 (inviscid), 2.00e-3 (La 1000);
-            # n = 32 4.68e-2, 5.44e-2. The n = 32 drop is the further off: its
-            # perturbation (the curvature error) is smaller and its energy
-            # signal is not a single mode (inviscid peak spacings 0.0356–0.0424,
-            # 0.0374–0.0394 at La 1000), so the error does not fall with the
-            # mesh here. The bounds are 1.5 times the measured errors.
-            @test length(coarse.peak_times) >= 7
-            @test length(fine.peak_times) >= 7
+            # 0.03629 of mode 4 (energy period: half the shape period).
             relative_error(result) = abs(result.measured_period - result.reference_period) /
                 result.reference_period
+            @test length(coarse.peak_times) >= 7
+            @test length(fine.peak_times) >= 7
+            # NUMERICS CONCERN: the period error does not fall from n = 16 to
+            # n = 32. Measured relative errors (La ∞ / La 1000): n = 16
+            # 1.03e-3 / 2.00e-3, n = 32 4.68e-2 / 5.44e-2, n = 64 3.3e-3 /
+            # 7.1e-3, n = 128 6.6e-3 / 2.1e-2 (mm-runs/contact_cmdgfm/lamb2;
+            # beyond n = 32 no pair converges either). The n = 32 drop
+            # oscillates regularly in mode 4 but about 5 % slower: the
+            # zero crossings of its mode-4 moment Σ C V r⁴ cos 4φ are evenly
+            # spaced (half periods 0.0371–0.0394) and give the same 5.2 % /
+            # 5.7 %; its viscous peaks decay steadily. Pre-existing: on main
+            # before the LHF-first face curvature n = 32 was 4.65 % / 5.42 %
+            # with an identical energy history (n = 16 was 27 % off with a
+            # 50 times larger, irregular energy), so neither the LHF-first
+            # curvature nor the contact-line curvature caused it. Cause not
+            # isolated (the estimated oscillation amplitude is below 1 % of a
+            # cell).
+            @test_broken relative_error(fine) < relative_error(coarse) / 4
+            # Supplement: absolute bounds, 1.5 times the measured errors.
             @test relative_error(coarse) <= 1.5 * (isfinite(laplace) ? 2.0e-3 : 1.03e-3)
             @test relative_error(fine) <= 1.5 * (isfinite(laplace) ? 5.44e-2 : 4.68e-2)
             @test fine.maximum_energy < coarse.maximum_energy / 4

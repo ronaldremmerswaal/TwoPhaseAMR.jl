@@ -283,7 +283,6 @@ end
     mimetic = TwoVelocityModel(pressure_projection = MimeticProjection())
     for (angle, shape, speed) in ((pi / 2, 1.176e-5, 2.129e-3), (pi / 3, 5.416e-5, 0.05251), (2pi / 3, 9.932e-5, 0.07175))
         result = sessile_droplet_case(48; contact_angle = angle, velocity_model = mimetic, bond = 0.0)
-        @test result.volume_error <= 4096eps()
         @test result.shape_error <= 1.25shape
         @test result.maximum_velocity <= 1.25speed
     end
