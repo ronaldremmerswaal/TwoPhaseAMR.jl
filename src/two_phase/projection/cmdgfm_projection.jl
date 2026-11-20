@@ -1685,6 +1685,9 @@ function _cmdgfm_same_jump_matrix(reuse, assembled, schur)
 end
 
 
+# `source` copied into `buffer`, resized.
+_cmdgfm_kept!(buffer, source) = copyto!(resize!(buffer, length(source)), source)
+
 function _cmdgfm_block_preconditioner(
         solver::CMDGFMProjectionSolver{T}, assembled, workspace,
     ) where {T}
@@ -1709,16 +1712,23 @@ function _cmdgfm_block_preconditioner(
             schur; drop_tolerance = settings.jump_drop_tolerance,
         )
     end
-    jump_work = jump_reused ? reuse.jump_work :
-        zeros(T, size(assembled.jump_block, 1))
-    jump_column_pointers = jump_reused ? reuse.jump_column_pointers :
-        copy(schur.colptr)
-    jump_row_values = jump_reused ? reuse.jump_row_values :
-        copy(rowvals(schur))
-    jump_values = jump_reused ? reuse.jump_values :
-        copy(nonzeros(schur))
-    mixed_faces = jump_reused ? reuse.mixed_faces :
-        copy(assembled.mixed_faces)
+    # A new factor keeps the previous block's buffers (resized), so a moving
+    # interface reallocates only the ILU itself.
+    previous = reuse isa CMDGFMBlockPreconditioner{T} ? reuse : nothing
+    jump_work, jump_column_pointers, jump_row_values, jump_values, mixed_faces =
+    if jump_reused
+        reuse.jump_work, reuse.jump_column_pointers, reuse.jump_row_values,
+            reuse.jump_values, reuse.mixed_faces
+    elseif isnothing(previous)
+        zeros(T, size(assembled.jump_block, 1)), copy(schur.colptr),
+            copy(rowvals(schur)), copy(nonzeros(schur)), copy(assembled.mixed_faces)
+    else
+        fill!(resize!(previous.jump_work, size(assembled.jump_block, 1)), zero(T)),
+            _cmdgfm_kept!(previous.jump_column_pointers, schur.colptr),
+            _cmdgfm_kept!(previous.jump_row_values, rowvals(schur)),
+            _cmdgfm_kept!(previous.jump_values, nonzeros(schur)),
+            _cmdgfm_kept!(previous.mixed_faces, assembled.mixed_faces)
+    end
     block = CMDGFMBlockPreconditioner{
         T, typeof(pressure), _CMDGFMJumpILU{T}, typeof(assembled.jump_pressure),
     }(
