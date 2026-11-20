@@ -644,12 +644,21 @@ velocities of the axis-$t$ faces of its two cells along $t$), and $U_f$ the
 largest $\abs{\bar{\velo}}$ over $f$ and its four donors (at least the
 smallest normal floating-point number). For a kinematic interface $w_f$ is
 the speed at which it crosses $f$. $\slopeweight_f$ is evaluated from the
-predictor $\velo^{\stage{3}}$ (the current step only, no history), is the same
-for both phases (label symmetric) and is frozen in the row: velocity, jump and
-pressure-gradient columns all use it, so a single-valued gradient is removed
-exactly for any $\slopeweight_f$; without a staggered normal or a mixture
-velocity, $\slopeweight_f=1$. The smoothstep makes $\slopeweight_f$ a
-continuous function of the predictor, so the rows do not switch in time.
+state that the projection receives (in a step the predictor
+$\velo^{\stage{3}}$, after a regrid the transferred state; no history), is
+the same for both phases (label symmetric) and is frozen in the row:
+velocity, jump and pressure-gradient columns all use it, so a single-valued
+gradient is removed exactly for any $\slopeweight_f$; without a staggered
+normal or a mixture velocity, $\slopeweight_f=1$. The workspace keeps
+$\slopeweight_f$ with the rows of the reconstructed interface: a further
+projection with the same interface reuses it, so the projection stays
+idempotent (a projected state is projected onto itself to round-off;
+evaluated again from the projected state, $\slopeweight_f$ changed it by
+$0.36$, $0.12$, $0.024$ of the velocity scale over three repetitions on a
+tilted interface). A flow releases the frozen weights before each of its
+projections, so each step evaluates them from its own predictor. The
+smoothstep makes $\slopeweight_f$ a continuous function of that state, so the
+rows do not switch in time.
 \emph{Why the limiter.} Where an interface sweeps through a row face, the face
 turns single-phase and its last inferred value becomes the first donor of the
 next row, and the face it leaves the second donor. Between rewrites the
@@ -713,9 +722,7 @@ in~\cref{eq:projection:dominance} is at most
 $\jumpbeta_f\abs{\normratio{f}}+(1+\slopeweight_f)(1-\jumpbeta_f)\infersum{f}$,
 which may exceed one by $\slopeweight_f(1-\jumpbeta_f)\infersum{f}$, and by
 $(1+\slopeweight_f)\infersum{f}-1$ in a tangential row: weak dominance is not
-guaranteed for these rows. With the limiter $\slopeweight_f$ depends on the
-predictor, so a second projection of a projected state may use other weights
-than the first.
+guaranteed for these rows.
 
 \emph{Checks} (\code{cmdgfm_check}, with \apitype{ConstantJumpInference}). On
 the four fixtures of \cref{tab:projection:counts}, an independent classification
@@ -812,6 +819,7 @@ normal rows \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_norma
 rows \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_extrapolated_inference!}
 and \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_inferred_jump},
 limiter \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_limit_extrapolation!}
+(frozen weights released by \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_release_crossing!})
 with \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_crossing_slope}
 and the ramp \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_CMDGFM_CROSSING_RAMP}, counts
 \srcsym{src/two_phase/projection/cmdgfm_cache.jl}{CMDGFMInferenceCounts}. Tests:
@@ -825,6 +833,7 @@ and the ramp \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_CMDGFM_CROS
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: flat interface and single-valued gradients are exact},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: crossing-speed limiter}
 (the ramp, rest and label symmetry),
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: the projection is idempotent},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: a translating drop stays at the one-donor level},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{CMDGFM jump inference option}.
 \end{implnote}

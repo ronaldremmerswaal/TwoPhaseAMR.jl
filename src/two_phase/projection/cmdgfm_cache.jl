@@ -155,6 +155,11 @@ mutable struct CMDGFMPressureCache{T, M <: BlockTreeMesh}
     jump_offset::Vector{T}
     pressure_triplets::CMDGFMTriplets{T}
     jump_triplets::CMDGFMTriplets{T}
+    # LinearJumpInference: crossing-speed slope weights θ by face, frozen for
+    # one reconstructed interface (see `_cmdgfm_limit_extrapolation!`).
+    crossing_slope::Vector{T}
+    crossing_reconstructions::UInt
+    crossing_frozen::Bool
 
     function CMDGFMPressureCache{T, M}() where {T, M <: BlockTreeMesh}
         return new{T, M}(
@@ -164,7 +169,7 @@ mutable struct CMDGFMPressureCache{T, M <: BlockTreeMesh}
             nothing, Int[], nothing, nothing, nothing, spzeros(T, 0, 0),
             Int[], T[], spzeros(T, 0, 0), T[], CMDGFMStencilStorage(T), Int[],
             spzeros(T, 0, 0), spzeros(T, 0, 0), spzeros(T, 0, 0), T[], T[],
-            CMDGFMTriplets(T), CMDGFMTriplets(T),
+            CMDGFMTriplets(T), CMDGFMTriplets(T), T[], UInt(0), false,
         )
     end
 end
@@ -252,6 +257,7 @@ function _cmdgfm_pressure_cache!(
     current = cache.initialized && cache.geometry_revision == revision &&
         _cmdgfm_same_topology(cache.keys, mesh)
     if !current
+        cache.crossing_frozen = false
         cache.incidence = _projection_incidence!(cache.incidence, cache.incidence_counts, mesh)
         _cmdgfm_gauge_partition!(cache, mesh, interface.geometry)
         _cmdgfm_vertex_connectivity!(cache.vertex_patches, mesh)

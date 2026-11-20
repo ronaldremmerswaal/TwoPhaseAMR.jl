@@ -1170,21 +1170,40 @@ function _cmdgfm_crossing_slope(
 end
 
 """Set the slope weight `θ` ([`_cmdgfm_crossing_slope`](@ref)) of every row
-of `stencils` with second donors from the predictor `velocity`. `θ` is frozen
-in the row: velocity, jump and pressure-gradient columns all use it, so the
-row stays homogeneous in the projected state and a single-valued gradient is
-still removed exactly."""
+of `stencils` with second donors from `velocity`. `θ` is frozen in the row:
+velocity, jump and pressure-gradient columns all use it, so the row stays
+homogeneous in the projected state and a single-valued gradient is still
+removed exactly.
+
+With the pressure `cache` of a workspace, `θ` is also frozen with the rows of
+the reconstructed interface: the first projection after the interface has
+been reconstructed (or after [`_cmdgfm_release_crossing!`](@ref)) evaluates it
+from the state it projects, and every further projection with the same
+interface reuses it, so that projecting a projected state again changes
+nothing. Without `cache`, `θ` is evaluated from `velocity`."""
 function _cmdgfm_limit_extrapolation!(
         stencils::AbstractVector{CMDGFMJumpStencil{T}}, data,
         velocity::TwoPhaseVelocity, interface;
-        incidence = _cmdgfm_incident_faces(interface.mesh),
+        incidence = _cmdgfm_incident_faces(interface.mesh), cache = nothing,
     ) where {T}
     liquid, gas = velocity[1].interior, velocity[2].interior
     mesh = interface.mesh
+    frozen = !isnothing(cache) && cache.crossing_frozen &&
+        cache.crossing_reconstructions == interface.reconstructions[]
+    if !isnothing(cache) && !frozen
+        resize!(cache.crossing_slope, length(mesh.faces))
+        fill!(cache.crossing_slope, T(NaN))
+        cache.crossing_reconstructions = interface.reconstructions[]
+        cache.crossing_frozen = true
+    end
     for row in eachindex(stencils)
         stencil = stencils[row]
         stencil.gas_extrapolation_face > 0 || continue
-        slope = _cmdgfm_crossing_slope(stencil, data, liquid, gas, mesh, incidence, interface)
+        slope = isnothing(cache) ? T(NaN) : cache.crossing_slope[stencil.face]
+        if isnan(slope)
+            slope = _cmdgfm_crossing_slope(stencil, data, liquid, gas, mesh, incidence, interface)
+            isnothing(cache) || (cache.crossing_slope[stencil.face] = slope)
+        end
         stencils[row] = CMDGFMJumpStencil{T}(
             stencil.face, stencil.transverse_faces, stencil.transverse_weights,
             stencil.ratio, stencil.gas_inference_face, stencil.liquid_inference_face,
@@ -1194,6 +1213,13 @@ function _cmdgfm_limit_extrapolation!(
     end
     return stencils
 end
+
+"""Release the slope weights frozen in `workspace`: its next projection
+evaluates them from the state it projects. A flow releases them before each
+of its projections (the step's predictor, the state transferred by a
+regrid), so that `θ` never outlives the step that evaluated it."""
+_cmdgfm_release_crossing!(workspace::CMDGFMProjectionWorkspace) =
+    (workspace.pressure_cache.crossing_frozen = false; workspace)
 
 function _cmdgfm_jump_blocks(
         stencils, mixed_faces, data, common_gradient, pressure_indices,
@@ -1436,7 +1462,7 @@ function _assemble_cmdgfm_cached!(
         push!(mixed_faces, stencil.face)
     end
     _linear_jump_inference(solver) && _cmdgfm_limit_extrapolation!(
-        stencils, data, velocity, interface; incidence = cache.incidence,
+        stencils, data, velocity, interface; incidence = cache.incidence, cache,
     )
     pressure_positive = cache.reduced_pressure
     pressure_jump = _cmdgfm_pressure_jump(cache, data, mixed_faces, mesh)

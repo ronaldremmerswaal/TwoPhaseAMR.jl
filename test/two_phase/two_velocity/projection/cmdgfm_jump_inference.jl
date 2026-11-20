@@ -496,13 +496,11 @@ end
 
 @testset "Linear jump inference: the projection is idempotent" begin
     # Every row, including the normal rows of the faces that the constant
-    # inference leaves without one, is a condition on the projected state:
-    # projecting a projected state again changes nothing beyond round-off.
-    # NUMERICS CONCERN (#171): only for a fixed slope weight θ. The crossing-
-    # speed limiter evaluates θ from the state it projects, so the second
-    # projection imposes rows with other weights: the change is 0.36, 0.12,
-    # 0.024 of the velocity scale over repetitions 2–4 here (round-off with
-    # θ ≡ 1, measured on the study switches of #171).
+    # inference leaves without one, is a condition on the projected state,
+    # and the slope weights θ of the crossing-speed limiter are frozen with the
+    # rows of the reconstructed interface: projecting a projected state again
+    # changes nothing beyond round-off. (Evaluated from the state it projects,
+    # θ changed the state by 0.36, 0.12, 0.024 over repetitions 2–4, #171.)
     n = 32
     graph = _triangle(0.5 + 0.37 / n, 0.3)
     mesh = BlockTreeMesh(; base_mesh = (n, n), block_size = (8, 8), periodic = (true, false))
@@ -516,6 +514,14 @@ end
         FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ? 1 + sinpi(2y) : 0.0),
     )
     foreach(phase -> fill!(velocity[phase].boundary, 0.0), 1:2)
+    data = CJI._projection_face_data(solver, workspace)
+    stencils = filter(stencil -> stencil.resolved, CJI._cmdgfm_jump_stencils(solver, data))
+    predictor = CJI._cmdgfm_limit_extrapolation!(copy(stencils), data, velocity, interface)
+    @test any(stencil -> 0 < stencil.slope < 1, predictor)
+    weights(rows) = Dict(
+        stencil.face => stencil.slope for stencil in rows if stencil.gas_extrapolation_face > 0
+    )
+    slopes(work) = weights(work.pressure_cache.stencil_storage.resolved)
     tolerance = 1.0e-12
     for repetition in 1:4
         before = (copy(velocity[1].interior), copy(velocity[2].interior))
@@ -525,6 +531,8 @@ end
         )
         @test stats.converged
         @test stats.jump_inference.normal_rows > 0
+        # The weights of the first projection, evaluated from the predictor.
+        @test slopes(workspace) == weights(predictor)
         repetition == 1 && continue
         change = maximum(
             phase -> maximum(
@@ -534,8 +542,18 @@ end
             ),
             1:2,
         )
-        @test_broken change <= 1.0e-10
+        @test change <= 1.0e-10
     end
+    # Released (as a flow does before each projection), the weights are
+    # evaluated again, from the projected state.
+    projected = CJI._cmdgfm_limit_extrapolation!(copy(stencils), data, velocity, interface)
+    CJI._cmdgfm_release_crossing!(workspace)
+    @test project!(
+        velocity, CellField(mesh), solver, 1.0, workspace;
+        tolerance, max_iterations = 4000,
+    ).converged
+    @test slopes(workspace) == weights(projected)
+    @test slopes(workspace) != weights(predictor)
 end
 
 @testset "Linear jump inference: a resolved shear layer stays continuous in a flow" begin
