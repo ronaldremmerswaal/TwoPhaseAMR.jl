@@ -84,7 +84,7 @@ end
 _two_velocity_projection_types(projection::CMDGFMProjection, T, M, F) = (
     CMDGFMProjectionSolver{
         T, F, typeof(projection.preconditioner),
-        typeof(projection.preconditioner_options),
+        typeof(projection.preconditioner_options), typeof(projection.jump_inference),
     },
     CMDGFMProjectionWorkspace{T, M},
 )

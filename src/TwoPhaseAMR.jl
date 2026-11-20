@@ -89,6 +89,7 @@ export incomplete_cholesky_preconditioner
 export ProjectionWorkspace, project!
 export AbstractTwoVelocityProjection
 export CMDGFMProjection, CMDGFMProjectionSolver, CMDGFMProjectionWorkspace
+export AbstractJumpInference, ConstantJumpInference, LinearJumpInference
 export CMDGFMProjectionStats, cmdgfm_gradient!, cmdgfm_jump_interpolant
 export MimeticProjection
 export MimeticProjectionSolver, MimeticProjectionWorkspace, MimeticProjectionStats
