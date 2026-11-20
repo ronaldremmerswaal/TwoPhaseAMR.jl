@@ -327,20 +327,39 @@ end
     end
     first_krylov = workspace.krylov
 
-    repeated = project!(
-        _cmdgfm_projection_velocity(mesh), CellField(mesh), solver, 0.02,
-        workspace; tolerance = 1.0e-8, max_iterations = 2000,
+    # The factored jump matrix J - C D⁻¹ B contains the diagonal D of the
+    # pressure block, whose first refresh in this workspace differs from the
+    # first assembly at round-off (1.7e-18); from then on the system and the
+    # factor repeat.
+    for repetition in 1:2
+        repeated = project!(
+            _cmdgfm_projection_velocity(mesh), CellField(mesh), solver, 0.02,
+            workspace; tolerance = 1.0e-8, max_iterations = 2000,
+        )
+        @test repeated.converged
+        @test repeated.pressure_hierarchy_reused
+        repetition == 2 && @test repeated.jump_factor_reused
+        @test workspace.krylov === first_krylov
+    end
+    # The jump factor is the ILU of the local Schur complement J - C D⁻¹ B
+    # (D the diagonal of the reduced pressure block), not of J alone.
+    cache = workspace.pressure_cache
+    block = workspace.block_preconditioner
+    factored = SparseMatrixCSC(
+        size(cache.jump_block)..., block.jump_column_pointers,
+        block.jump_row_values, block.jump_values,
     )
-    @test repeated.converged
-    @test repeated.pressure_hierarchy_reused
-    @test repeated.jump_factor_reused
-    @test workspace.krylov === first_krylov
-    changed_jump = copy(workspace.jump_block)
+    pressure = Matrix(cache.reduced_pressure)
+    expected = Matrix(cache.jump_block) -
+        Matrix(cache.jump_pressure) * (Matrix(cache.pressure_jump) ./ diag(pressure))
+    @test Matrix(factored) ≈ expected rtol = 1.0e-13 atol = 1.0e-13 * norm(expected, Inf)
+    @test Matrix(factored) != Matrix(cache.jump_block)
+    @test CMD._cmdgfm_same_jump_matrix(block, (mixed_faces = workspace.mixed_faces,), factored)
+    changed_jump = copy(factored)
     if !isempty(nonzeros(changed_jump))
         nonzeros(changed_jump)[1] += 0.01
         @test !CMD._cmdgfm_same_jump_matrix(
-            workspace.block_preconditioner,
-            (mixed_faces = workspace.mixed_faces, jump_block = changed_jump),
+            block, (mixed_faces = workspace.mixed_faces,), changed_jump,
         )
     end
 
@@ -430,7 +449,7 @@ end
     dt, tolerance, budget = 0.01, 1.0e-10, 20_000
     # The published rows (#126) and the default linear inference, whose normal
     # and tangential rows give the faces without a published row an unknown.
-    sizes = Dict(ConstantJumpInference() => (7933, 382, 15:17), LinearJumpInference() => (8151, 600, 18:20))
+    sizes = Dict(ConstantJumpInference() => (7933, 382, 17:19), LinearJumpInference() => (8151, 600, 18:20))
     for preconditioner in (:block, :ilu), jump_inference in (ConstantJumpInference(), LinearJumpInference())
         solver = CMDGFMProjectionSolver(
             interface; density = (1000.0, 1.0), preconditioner, jump_inference,
@@ -449,8 +468,11 @@ end
         @test stats.normal_velocity_defect <= tolerance
         @test 0 < stats.iterations <= budget
         if preconditioner === :block
-            # On the original main fixture the block solve takes 16 iterations
-            # with the published rows, 19 with the linear inference.
+            # On the original main fixture the block solve took 16 iterations
+            # with the published rows and 19 with the linear inference when
+            # the jump factor was the ILU of J; with the ILU of the local
+            # Schur complement J - C D⁻¹ B it takes 18 and 19 (#171).
+            println("cmdgfm_126_block_iterations ", jump_inference, " ", stats.iterations)
             @test stats.iterations in block_iterations
         end
         residual = work.right_hand_side - work.matrix * work.solution

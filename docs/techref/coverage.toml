@@ -2443,6 +2443,17 @@ tests = [
 ]
 check = "solv_cmdgfm_cases"
 [[claims]]
+label = "eq:solvers:jump-schur"
+sources = [
+  { file = "src/two_phase/projection/cmdgfm_cache.jl", symbol = "_cmdgfm_jump_schur!" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_block_preconditioner" }
+]
+tests = [
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_projection.jl", testset = "CMDGFM block-preconditioned BiCGSTAB" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_projection.jl", testset = "CMDGFM AMR whole-system ILU regression (issue #126)" }
+]
+check = "solv_cmdgfm_cases"
+[[claims]]
 label = "tab:solvers:counts"
 sources = [
   { file = "src/solvers/multigrid/elliptic_solver.jl", symbol = "solve!" },

@@ -160,6 +160,14 @@ mutable struct CMDGFMPressureCache{T, M <: BlockTreeMesh}
     crossing_slope::Vector{T}
     crossing_reconstructions::UInt
     crossing_frozen::Bool
+    # Local Schur complement J - C D⁻¹ B of the jump block that the block
+    # preconditioner factorizes (`_cmdgfm_jump_schur!`): the matrix, its
+    # triplets and the rows of D⁻¹ B by pressure unknown.
+    jump_schur::SparseMatrixCSC{T, Int}
+    schur_triplets::CMDGFMTriplets{T}
+    scaled_coupling_offsets::Vector{Int}
+    scaled_coupling_columns::Vector{Int}
+    scaled_coupling_values::Vector{T}
 
     function CMDGFMPressureCache{T, M}() where {T, M <: BlockTreeMesh}
         return new{T, M}(
@@ -170,6 +178,7 @@ mutable struct CMDGFMPressureCache{T, M <: BlockTreeMesh}
             Int[], T[], spzeros(T, 0, 0), T[], CMDGFMStencilStorage(T), Int[],
             spzeros(T, 0, 0), spzeros(T, 0, 0), spzeros(T, 0, 0), T[], T[],
             CMDGFMTriplets(T), CMDGFMTriplets(T), T[], UInt(0), false,
+            spzeros(T, 0, 0), CMDGFMTriplets(T), Int[], Int[], T[],
         )
     end
 end
@@ -522,6 +531,77 @@ function _cmdgfm_sorted_rows_csc!(matrix::SparseMatrixCSC{T}, scratch, m, n) whe
     resize!(rows, cursor - 1)
     resize!(values, cursor - 1)
     return size(matrix) == (m, n) ? matrix : SparseMatrixCSC(m, n, columns, rows, values)
+end
+
+"""Local Schur complement `J - C D⁻¹ B` of the jump block, assembled into
+`cache.jump_schur` from the row-ordered triplets of the last jump assembly:
+`J` the jump block, `C` the jump rows' pressure columns, `B` the pressure
+rows' jump columns (at most two per column) and `D` the diagonal of the
+reduced pressure block. The block preconditioner factorizes it instead of
+`J`: with the V-cycle for the pressure and a factor of `J` alone it ignores
+how the pressure answers a jump, the V-cycle's error reaches the jump rows
+through `C` undamped, and BiCGSTAB stalled on the Stokes-3 wave (322
+iterations to `1e-10` on a post-regrid system with the linear inference, no
+convergence in 2000 on the same state with the published rows). `D` is the
+part of the pressure block's inverse that the local jump rows see; the same
+systems take 16 iterations, as with the exact Schur complement (#171).
+Serial, in reused buffers."""
+function _cmdgfm_jump_schur!(cache::CMDGFMPressureCache{T}) where {T}
+    pressure, coupling = cache.reduced_pressure, cache.pressure_jump
+    np, nx = size(coupling)
+    # Rows of D⁻¹ B by pressure unknown, columns in increasing order.
+    offsets = cache.scaled_coupling_offsets
+    resize!(offsets, np + 1)
+    fill!(offsets, 0)
+    for row in rowvals(coupling)
+        offsets[row + 1] += 1
+    end
+    offsets[1] = 1
+    for row in 1:np
+        offsets[row + 1] += offsets[row]
+    end
+    columns, values = cache.scaled_coupling_columns, cache.scaled_coupling_values
+    resize!(columns, nnz(coupling))
+    resize!(values, nnz(coupling))
+    cursors = cache.schur_triplets.cursors
+    resize!(cursors, np)
+    copyto!(cursors, 1, offsets, 1, np)
+    for column in 1:nx, pointer in nzrange(coupling, column)
+        row = rowvals(coupling)[pointer]
+        diagonal = zero(T)
+        for entry in nzrange(pressure, row)
+            rowvals(pressure)[entry] == row && (diagonal = nonzeros(pressure)[entry])
+        end
+        columns[cursors[row]] = column
+        values[cursors[row]] = nonzeros(coupling)[pointer] / diagonal
+        cursors[row] += 1
+    end
+    # J and C were emitted row by row; emit J - C D⁻¹ B in the same order.
+    rows, schur_columns, schur_values = _cmdgfm_clear_triplets!(cache.schur_triplets)
+    jump, gradient = cache.jump_triplets, cache.pressure_triplets
+    next_jump, next_gradient = 1, 1
+    for row in 1:nx
+        while next_jump <= length(jump.rows) && jump.rows[next_jump] == row
+            push!(rows, row)
+            push!(schur_columns, jump.columns[next_jump])
+            push!(schur_values, jump.values[next_jump])
+            next_jump += 1
+        end
+        while next_gradient <= length(gradient.rows) && gradient.rows[next_gradient] == row
+            pressure_row = gradient.columns[next_gradient]
+            value = gradient.values[next_gradient]
+            for pointer in offsets[pressure_row]:(offsets[pressure_row + 1] - 1)
+                push!(rows, row)
+                push!(schur_columns, columns[pointer])
+                push!(schur_values, -value * values[pointer])
+            end
+            next_gradient += 1
+        end
+    end
+    next_jump > length(jump.rows) && next_gradient > length(gradient.rows) ||
+        error("CMDGFM jump triplets are not ordered by row")
+    cache.jump_schur = _cmdgfm_sorted_rows_csc!(cache.jump_schur, cache.schur_triplets, nx, nx)
+    return cache.jump_schur
 end
 
 function _cmdgfm_cell_flux!(result, data, interface, velocity)

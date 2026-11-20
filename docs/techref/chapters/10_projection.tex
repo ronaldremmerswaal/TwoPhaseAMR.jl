@@ -827,8 +827,9 @@ preconditioner \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{CMDGFMBloc
 one V-cycle of the tree-geometric multigrid hierarchy of $\stifftv$ on the
 full cell space for the pressure, mapped to the gauge by adding the residual
 of a retained cell with opposite sign to its anchor and returning differences
-to the anchor value, then a Crout ILU (drop tolerance $10^{-3}$) of
-$\jumpblock$ applied to the jump residual minus $\jumpblockp$ times the
+to the anchor value, then a Crout ILU (drop tolerance $10^{-3}$) of the
+local Schur complement $\jumpblock-\jumpblockp\operatorname{diag}(\kktS)^{-1}\mathsf B$~\cref{eq:solvers:jump-schur}
+applied to the jump residual minus $\jumpblockp$ times the
 pressure part; \code{:ilu} is a whole-system ILU. Without solid the hierarchy
 and operator of the one-velocity pressure solver are shared. Tests:
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM revised beta and diagonal dominance},

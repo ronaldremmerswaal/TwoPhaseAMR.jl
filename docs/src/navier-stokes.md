@@ -177,12 +177,15 @@ block diagonal equal to one and makes every row weakly diagonally dominant.
 BiCGSTAB uses a lower triangular block preconditioner. The pressure action is
 one application of the existing rediscretized tree-geometric GMG hierarchy,
 mapped between the full compatible pressure space and CMDGFM's gauge-reduced
-unknowns. The jump action is a Crout ILU of the active jump block. A jump is
+unknowns. The jump action is a Crout ILU of the active jump block corrected
+by the local pressure answer, `J - C diag(K)⁻¹ B` (with `C`, `B` the coupling
+blocks and `K` the pressure block); with `J` alone BiCGSTAB could stall after a
+regrid. A jump is
 active only when both staggered phase fractions exceed `fraction_floor` and
 its local interpolation stencil is resolved.
 
 On a fixed pressure space the GMG hierarchy is retained and, by default,
-its coefficients are refreshed when they change. The jump ILU is reused only
+its coefficients are refreshed when they change. The jump factor is reused only
 when the active-face ordering and matrix entries are unchanged. After a mesh
 update, topology-dependent pressure data is rebuilt while reusable hierarchy,
 Krylov, and geometric-template storage is retained where compatible.

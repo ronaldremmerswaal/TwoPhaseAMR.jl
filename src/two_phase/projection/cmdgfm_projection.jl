@@ -58,7 +58,8 @@ struct CMDGFMReducedPressurePreconditioner{T, P}
     geometry_revision::UInt
 end
 
-"""Lower CMDGFM block preconditioner using pressure GMG and jump ILU."""
+"""Lower CMDGFM block preconditioner: pressure GMG, then the ILU of the local
+Schur complement `J - C D⁻¹ B` of the jump block ([`_cmdgfm_jump_schur!`](@ref))."""
 struct CMDGFMBlockPreconditioner{T, P, J, C}
     scalar_type::Type{T}
     pressure_preconditioner::P
@@ -1671,16 +1672,16 @@ function _cmdgfm_reduced_pressure(
     )
 end
 
-function _cmdgfm_same_jump_matrix(reuse, assembled)
+function _cmdgfm_same_jump_matrix(reuse, assembled, schur)
     reuse isa CMDGFMBlockPreconditioner || return false
     settings_match = reuse.mixed_faces == assembled.mixed_faces
     settings_match || return false
     # ILU factors contain numerical values, not just a symbolic pattern.
     # Reusing a factor after a moving interface changes these values can be
     # arbitrarily poor even when the sparsity pattern stays unchanged.
-    return reuse.jump_column_pointers == assembled.jump_block.colptr &&
-        reuse.jump_row_values == rowvals(assembled.jump_block) &&
-        reuse.jump_values == nonzeros(assembled.jump_block)
+    return reuse.jump_column_pointers == schur.colptr &&
+        reuse.jump_row_values == rowvals(schur) &&
+        reuse.jump_values == nonzeros(schur)
 end
 
 
@@ -1694,27 +1695,28 @@ function _cmdgfm_block_preconditioner(
     pressure, pressure_reused = _cmdgfm_pressure_preconditioner(
         solver, assembled, settings, old_pressure,
     )
+    schur = isempty(assembled.jump_block) ? assembled.jump_block :
+        _cmdgfm_jump_schur!(workspace.pressure_cache)
     jump_reused = !isempty(assembled.jump_block) &&
         settings.reuse_jump_factorization &&
-        _cmdgfm_same_jump_matrix(reuse, assembled)
+        _cmdgfm_same_jump_matrix(reuse, assembled, schur)
     jump = if isempty(assembled.jump_block)
         nothing
     elseif jump_reused
         reuse.jump_preconditioner
     else
         incomplete_lu_preconditioner(
-            assembled.jump_block;
-            drop_tolerance = settings.jump_drop_tolerance,
+            schur; drop_tolerance = settings.jump_drop_tolerance,
         )
     end
     jump_work = jump_reused ? reuse.jump_work :
         zeros(T, size(assembled.jump_block, 1))
     jump_column_pointers = jump_reused ? reuse.jump_column_pointers :
-        copy(assembled.jump_block.colptr)
+        copy(schur.colptr)
     jump_row_values = jump_reused ? reuse.jump_row_values :
-        copy(rowvals(assembled.jump_block))
+        copy(rowvals(schur))
     jump_values = jump_reused ? reuse.jump_values :
-        copy(nonzeros(assembled.jump_block))
+        copy(nonzeros(schur))
     mixed_faces = jump_reused ? reuse.mixed_faces :
         copy(assembled.mixed_faces)
     block = CMDGFMBlockPreconditioner{
@@ -1937,8 +1939,10 @@ function _cmdgfm_initial_solution!(
         if nx > 0
             preconditioner isa CMDGFMBlockPreconditioner || continue
             # For a chosen increment, approximately satisfy the current
-            # jump row: J*xi = rhs_jump - jump_pressure*phi. Reuse the current
-            # jump ILU and its scratch, not an old face jump on a moved sheet.
+            # jump rows, xi ≈ (J - C D⁻¹ B)⁻¹ (rhs_jump - C*phi) with the
+            # block preconditioner's factor (the jump rows after the local
+            # pressure answer). Reuse it and its scratch, not an old face
+            # jump on a moved sheet.
             jump_rhs = preconditioner.jump_work
             copyto!(jump_rhs, view(rhs, (np + 1):length(rhs)))
             mul!(
