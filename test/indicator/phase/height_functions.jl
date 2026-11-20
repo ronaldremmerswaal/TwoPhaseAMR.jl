@@ -510,8 +510,9 @@ end
             volume, [TP._get(interface.curvature, r) for r in cells if cut(interface, r)]
         end
     end
-    # Trapezoidal work of the rows and the largest relative spread of the
-    # curvatures of a row (one curvature per row).
+    # Trapezoidal work of the rows and the largest spread of the curvatures of
+    # a row (one curvature per row; they cross zero along the path, measured
+    # 6e-14).
     function row_work(path)
         last = state(first(path)...)
         total = spread = 0.0
@@ -519,7 +520,7 @@ end
             next = state(point...)
             for side in 1:2
                 (before, kappa_before), (after, kappa_after) = last[side], next[side]
-                spread = max(spread, (maximum(kappa_after) - minimum(kappa_after)) / maximum(abs, kappa_after))
+                spread = max(spread, maximum(kappa_after) - minimum(kappa_after))
                 total -= (first(kappa_before) + first(kappa_after)) / 2 * (after - before)
             end
             last = next
@@ -535,7 +536,7 @@ end
             [(wall, x) for x in reverse(shifts)[2:end]], [(angle, 0.5) for angle in reverse(angles)[2:end]],
         )
     )
-    @test max(release_spread, loop_spread) <= 1.0e-12
+    @test max(release_spread, loop_spread) <= 1.0e-12 / h
     @test 0.02 <= release <= 0.021
     @test abs(loop) <= 1.0e-10
     # At the 60° cap the cut cells of the row share one curvature per contact
@@ -613,8 +614,10 @@ end
                 (3, (sin(theta), cos(theta)), sin(theta) * (0.5 + 0.3hx), hy),
                 (1, (cos(theta), sin(theta)), sin(theta) * (0.25 + 0.3hy), hx),
             )
-            field = InterfaceField(mesh, (x, y) -> x - 0.5; lipschitz = 1,
-                contact_angle = ntuple(w -> w == side ? wall_angle : nothing, 4))
+            field = InterfaceField(
+                mesh, (x, y) -> x - 0.5; lipschitz = 1,
+                contact_angle = ntuple(w -> w == side ? wall_angle : nothing, 4)
+            )
             initialize!(field, normal, intercept)
             reconstruct!(field; force = true)
             in_row(r) = side == 3 ? r.j == 1 : r.i == 1
