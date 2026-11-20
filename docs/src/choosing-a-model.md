@@ -50,7 +50,9 @@ objects. The tuple never selects the velocity model implicitly.
 
 The projection decides the pressure and force discretisation; nothing else
 has to be selected. `CMDGFMProjection()` (the default) is the thesis'
-conservative multidimensional ghost-fluid projection.
+conservative multidimensional ghost-fluid projection with a linear jump
+inference (issue #171); `CMDGFMProjection(jump_inference=ConstantJumpInference())`
+restores the thesis' one-donor rows.
 `TwoVelocityModel(pressure_projection=MimeticProjection())` selects the
 mimetic projection: the kinetic-energy-orthogonal projection in a
 non-diagonal metric built, per cut cell and phase, on the Gram tensor of the

@@ -1480,6 +1480,47 @@ tests = [
 ]
 check = "cmdgfm_check"
 [[claims]]
+label = "eq:projection:cmdgfm-row-linear"
+sources = [
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_second_donors!" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_extrapolated_inference!" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_inferred_jump" }
+]
+tests = [
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: smooth shear across tilted and curved interfaces" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: momentum, defects and fallbacks" }
+]
+[[claims]]
+label = "eq:projection:tangential-row"
+sources = [
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_tangential_stencil!" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_incremental_row" }
+]
+tests = [
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: x and t impose the normal jump on all mixed faces" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: flat interface and single-valued gradients are exact" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: near-tangential faces without a regular row" }
+]
+[[claims]]
+label = "eq:projection:crossing-limiter"
+sources = [
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_crossing_slope" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_limit_extrapolation!" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_CMDGFM_CROSSING_RAMP" }
+]
+tests = [
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: crossing-speed limiter" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: a translating drop stays at the one-donor level" }
+]
+[[claims]]
+label = "eq:projection:normal-row"
+sources = [
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_normal_stencil!" }
+]
+tests = [
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: x and t impose the normal jump on all mixed faces" }
+]
+[[claims]]
 label = "eq:projection:unresolved"
 sources = [
   { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_jump_stencils" },

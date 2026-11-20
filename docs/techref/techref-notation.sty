@@ -1087,6 +1087,14 @@
 \DefineNotation[1]{\infersum}{s_{#1}}{\infersum{f}}
   {Sum of the cross-phase mass fractions on the inference faces}
   {\code{inferred_sum}}{new}
+\DefineNotation{\slopeweight}{\theta^{\mathrm{e}}}{\slopeweight_f}
+  {Extrapolation slope weight of the linear jump inference
+   (\cref{eq:projection:crossing-limiter})}
+  {\code{CMDGFMJumpStencil.slope}}{new}
+\DefineNotation{\infer}{\mathcal{I}}{\infer_f(\velo)}
+  {Inferred jump of a row with second donors
+   (\cref{eq:projection:tangential-row})}
+  {\code{_cmdgfm_inferred_jump}}{new}
 \DefineNotation[1]{\normaljump}{\mathcal{N}_{#1}}{\normaljump{f}(\velo^{\liq},\velo^{\gas})}
   {Discrete normal velocity jump of a CMDGFM row (\cref{eq:projection:cmdgfm-row})}
   {\code{_cmdgfm_normal_velocity_defect}}{(7.13)}

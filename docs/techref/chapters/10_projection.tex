@@ -547,8 +547,178 @@ holds for any solution. As in the thesis~\thesis{\S7.4}, the CMDGFM
 conserves momentum but not kinetic energy: its jump rows are not the adjoint
 of its coupling block, and no energy identity is claimed.
 
-\emph{Checks} (\code{cmdgfm_check}). On the four fixtures of
-\cref{tab:projection:counts}, an independent classification
+\emph{Jump inference (\issue{171}).} The inference term of~\cref{eq:projection:cmdgfm-row}
+extrapolates each phase from one donor, a constant extrapolation into the
+mixed band. For a single-valued velocity $U(y)$ (no jump, solenoidal) and an
+$x$-face with the donors at $y_f\pm h$ the inferred jump is
+$U(y_f+h)-U(y_f-h)=\pm2hU'(y_f)+O(h^3)$, and in a resolved shear layer the
+projection creates a tangential phase-velocity jump of that size. The option
+\code{jump_inference} of \apitype{CMDGFMProjection} selects the rule:
+\apitype{LinearJumpInference} (the default) changes four things;
+\apitype{ConstantJumpInference} is the CMDGFM above, the thesis reference.
+(i)~Linear inference: let $\inferface{\gas}_2$ and $\inferface{\liq}_2$ be the
+same-axis faces one step beyond the donors on the line through $f$ (the
+collinear neighbour of $\inferface{\phase}$ other than $f$). A row with
+inference faces uses, with the slope weight $\slopeweight_f\in[0,1]$ of~(iv),
+\begin{equation}\label{eq:projection:cmdgfm-row-linear}
+  \normaljump{f}(\velo^{\liq},\velo^{\gas})=\jump{\velo}_f
+  +\jumpbeta_f\normratio{f}\sum_{h\in\transfaces{f}}\transweight{f}{h}\jump{\velo}_h
+  +(\jumpbeta_f-1)\squarepar{\roundpar{(1+\slopeweight_f)\velo^{\gas}_{\inferface{\gas}}-\slopeweight_f\velo^{\gas}_{\inferface{\gas}_2}}
+  -\roundpar{(1+\slopeweight_f)\velo^{\liq}_{\inferface{\liq}}-\slopeweight_f\velo^{\liq}_{\inferface{\liq}_2}}},
+\end{equation}
+whose inferred jump for $\slopeweight_f=1$ is $-2h^3U'''(y_f)+O(h^5)$ for a
+smooth single-valued field; in the linear row~\cref{eq:projection:cmdgfm-jump-row}
+every donor term (the $\gradjump$ column with its mass fraction and the row of
+$\forcemaptv\jumpmat\pres$) is taken with the weight $1+\slopeweight_f$ at
+$\inferface{\phase}$ and $-\slopeweight_f$ at $\inferface{\phase}_2$.
+(ii)~Tangential rows: a face with a staggered normal and
+$\abs{\normalstag_{f,k}}\le\sqrt{\machineeps}$ (rule~3) gets the limit of the
+row for an interface along a grid line, $\jumpbeta_f=0$ without transverse
+term, with the inference faces of~\cref{eq:projection:beta} (the face keeps
+rule~5), imposed as an increment of the face's own jump,
+\begin{equation}\label{eq:projection:tangential-row}
+  \jump{\velo^{\timelevel{n+1}}}_f-\jump{\velo^{\stage{3}}}_f
+  =\infer_f(\velo^{\timelevel{n+1}})-\infer_f(\velo^{\stage{3}}),
+  \qquad
+  \infer_f(\velo)=\roundpar{(1+\slopeweight_f)\velo^{\gas}_{\inferface{\gas}}-\slopeweight_f\velo^{\gas}_{\inferface{\gas}_2}}
+  -\roundpar{(1+\slopeweight_f)\velo^{\liq}_{\inferface{\liq}}-\slopeweight_f\velo^{\liq}_{\inferface{\liq}_2}},
+\end{equation}
+so that the tangential pressure-gradient jump
+$\jump{\dens^{-1}}\partial_t\pres$ is imposed also on such an interface. The
+matrix row is that of~\cref{eq:projection:cmdgfm-row-linear} with
+$\jumpbeta_f=0$; only its right-hand side differs. The increment form keeps a
+continuous shear across a flat interface between grid lines exactly (the
+absolute form $\jump{\velo^{\timelevel{n+1}}}_f=\infer_f(\velo^{\timelevel{n+1}})$
+replaces the face's jump by the donors' extrapolation and created $0.21$,
+$0.047$, $0.0071$ at $n=32,64,128$ in the laboratory of \issue{171}); it is
+not homogeneous in the projected state, which matters only on exactly
+tangential faces.
+(iii)~Normal rows: every other face of $\facesmix$ without a row that is open
+and has a staggered normal with $\abs{\normratio{f}}\le1$ (in particular
+$\abs{\normalstag_{f,k}}>\sqrt{\machineeps}$) and at least one transverse face with a positive weight gets the unknown
+$\gradjump_f$ and the condition that the interpolated normal jump of the
+projected state vanishes,
+\begin{equation}\label{eq:projection:normal-row}
+  \normalstag_{f,k}\jump{\velo^{\timelevel{n+1}}}_f
+  +\normalstag_{f,t}\sum_{h\in\transfaces{f}}\transweight{f}{h}\jump{\velo^{\timelevel{n+1}}}_h=0,
+  \qquad\text{i.e.}\qquad
+  \gradjump_f+\normratio{f}\sum_{h\in\transfaces{f}}\transweight{f}{h}\gradjump_h
+  =\frac{1}{\dt}\roundpar{\jump{\velo^{\stage{3}}}_f+\normratio{f}\sum_{h\in\transfaces{f}}\transweight{f}{h}\jump{\velo^{\stage{3}}}_h},
+\end{equation}
+with $\transfaces{f}$ and the weights of~\cref{eq:projection:transverse}:
+the row~\cref{eq:projection:cmdgfm-row} with $\jumpbeta_f=1$ and no inference
+term. The audit of \issue{171} prescribed instead the explicit value
+$\gradjump_f=\normalstag_{f,k}(\normalstag_{f,k}\jump{\velo^{\stage{3}}}_f
++\normalstag_{f,t}\sum_h\transweight{f}{h}\jump{\velo^{\stage{3}}}_h)/\dt$
+from the predictor. Because the solve then changes the transverse jumps, the
+projected state does not satisfy that condition, and projecting it again
+changed it again (by $6\times10^{-2}$, $2\times10^{-2}$, \dots\ of the velocity
+scale over repeated projections on a tilted interface). As a row of the
+system the condition is homogeneous in the projected state; momentum is
+conserved for any $\gradjump$ by~\cref{eq:projection:phase-identities}. The
+off-diagonal sum of the row~\cref{eq:projection:normal-row} is at most
+$\abs{\normratio{f}}\sum_h\transweight{f}{h}=\abs{\normratio{f}}$, so the
+restriction $\abs{\normratio{f}}\le1$ keeps it weakly diagonally dominant;
+without it a row of a nearly tangential face has an off-diagonal sum
+$\abs{\normratio{f}}\gg1$, and a Kelvin--Helmholtz case at the density ratio
+$1000$ diverged (smallest diagonal margin $-123$). A face without a row and
+$\abs{\normratio{f}}>1$ gets instead the row~(ii) with $\jumpbeta_f=0$, its
+own ratio and the absolute form
+$\jump{\velo^{\timelevel{n+1}}}_f=\infer_f(\velo^{\timelevel{n+1}})$ (the
+limit of the regular row for a normal along the transverse axis; it keeps
+its jump only without admissible inference faces). On a vortex sheet over
+$y=y_0+\epsilon\cos2\pi x$ with $\epsilon=0.64h$ at $n=128$ such faces lie
+next to the crests: keeping their jump misses the density-driven change of
+the sheet strength there (relative error $0.085$ at the density ratio
+$1000$), the row gives $0.010$ (thesis rows $0.142$).
+(iv)~Crossing-speed limiter: the slope weight of a row with second donors is
+\begin{equation}\label{eq:projection:crossing-limiter}
+  \slopeweight_f=1-s^2(3-2s),\qquad
+  s=\min\curlypar{1,\max\curlypar{0,\frac{w_f/U_f-a}{b-a}}},\qquad
+  w_f=\abs{\bar{\velo}_f\cdot\normalstag_f},\quad
+  (a,b)=\roundpar{\tfrac1{16},\tfrac3{16}},
+\end{equation}
+with the mixture velocity vector $\bar{\velo}_f$ of the face (its own
+mass-weighted mixture velocity along axis $k$, the mean of the mixture
+velocities of the axis-$t$ faces of its two cells along $t$), and $U_f$ the
+largest $\abs{\bar{\velo}}$ over $f$ and its four donors (at least the
+smallest normal floating-point number). For a kinematic interface $w_f$ is
+the speed at which it crosses $f$. $\slopeweight_f$ is evaluated from the
+predictor $\velo^{\stage{3}}$ (the current step only, no history), is the same
+for both phases (label symmetric) and is frozen in the row: velocity, jump and
+pressure-gradient columns all use it, so a single-valued gradient is removed
+exactly for any $\slopeweight_f$; without a staggered normal or a mixture
+velocity, $\slopeweight_f=1$. The smoothstep makes $\slopeweight_f$ a
+continuous function of the predictor, so the rows do not switch in time.
+\emph{Why the limiter.} Where an interface sweeps through a row face, the face
+turns single-phase and its last inferred value becomes the first donor of the
+next row, and the face it leaves the second donor. Between rewrites the
+value is carried with the interface, so only the last write before the face
+turns pure survives, and the recursion runs over the cells crossed ($k$):
+with the slopes $d_k=\velo_k-\velo_{k-1}$, the per-write noise $e_k$ (spurious
+currents, standard deviation $\sigma_e$) and the weight $\slopeweight_k$ at that write,
+\begin{equation}\label{eq:projection:wake-recursion}
+  \velo_{k+1}=\velo_k+\slopeweight_k(\velo_k-\velo_{k-1})+e_k
+  \quad\Longleftrightarrow\quad
+  d_{k+1}=\slopeweight_kd_k+e_k .
+\end{equation}
+For $\slopeweight\equiv1$ this is a double integrator (characteristic root one
+twice): the slope performs a random walk and the value grows like $k^{3/2}$
+with the number of cells crossed (a Monte Carlo check with unit noise gives
+$38.9$, $106$, $294$ for $k=16,32,64$, ratios close to $2^{3/2}$). For
+$\slopeweight_k\le\theta_\ast<1$ the slope stays bounded,
+$\operatorname{var}d\to\sigma_e^2/(1-\theta_\ast^2)$, and the value is a
+random walk like the one-donor rule, $\operatorname{rms}\velo_k\approx\sqrt{k}\,\sigma_e/(1-\theta_\ast)$
+($k=64$: $8.1$, $16.0$, $70.0$ for $\theta_\ast=0$, $0.5$, $0.9$). Since
+$k$ grows with $n$ for a fixed sweep length, the unlimited inference is not
+stable uniformly in $n$: a drop of radius $0.2$ translated at $U=1$ through
+a periodic channel (density ratio $1000$, $\sigma=0.2$, inviscid, $t=1$)
+reaches $\max\abs{\velo-U}=1.09$, $3.85$, $4.14$ at $n=32,64,128$, against
+$0.180$, $0.205$, $0.343$ for the one-donor rule; the error first grows on
+rows with second donors in the wake of the drop. Stability requires only
+$\sup\slopeweight_k<1$ at the last write of every swept face, uniformly in
+$n$; it fixes no threshold. A law in the change of the staggered fraction per
+step cannot provide that bound with a fixed constant: at the exit corner of
+the dual cell the fraction change vanishes with the Courant number, so the
+constant would have to grow like $\sqrt{n}$ under the capillary step
+restriction (measured). The crossing speed $w_f/U_f$ does not degenerate
+there, and $(a,b)$ is a modelling choice that separates interfaces that move
+through the faces ($w/U$ of order one at the front and rear of a translating
+drop and in a standing capillary wave) from quasi-static ones, whose normal
+speed comes only from slow growth (shear layers, Kelvin--Helmholtz), which
+keep the third-order inference. \emph{Sensitivity} (translating drop at
+$n=128$, \issue{171}): $(a,b)=(\frac14,\frac34)$, $(\frac18,\frac38)$,
+$(\frac1{16},\frac3{16})$ give $\max\abs{\velo-U}=0.98$, $0.30$, $0.29$;
+Rayleigh--Taylor at the density ratio $3$ ($n=32$) $0.0151$, $0.0103$,
+$0.0072$ (one-donor $0.0056$); viscous Kelvin--Helmholtz (density ratios $1$
+and $10$, thin layer, $\lambda/h=128$) is the same for $(0,\frac18)$ and
+$(\frac1{16},\frac3{16})$ (growth-rate errors $1.97/1.89\,\%$ and
+$7.64/7.56\,\%$; one-donor $45\,\%$ and $10.2\,\%$).
+
+The audit of \issue{171} specifies rules (i)--(iii) on a uniform mesh without
+solid. Where the stencil of a row of the extension ($f$, its transverse and
+candidate inference faces, and the second donors) contains a face of another
+refinement level or a face whose aperture or open dual volume a solid
+reduces, the face falls back to the constant rule: the one-donor row, or no
+row. Where a second donor is missing, does not carry its phase
+($\clampfrac{\inferface{\gas}_2}\ge1-\ffloor$, resp.\
+$\clampfrac{\inferface{\liq}_2}\le\ffloor$) or is itself mixed, the row
+keeps one donor per phase. A face closed by the solid (rule~1), and a face
+without a staggered normal, with an exactly tangential one and no tangential
+row, or without transverse mixed faces, keep their jump.
+\code{CMDGFMProjectionStats.jump_inference} counts the extended rows and each
+fallback. The second donors of a row with the linear inference are
+single-phase faces without unknowns, so the off-diagonal sum bounded
+in~\cref{eq:projection:dominance} is at most
+$\jumpbeta_f\abs{\normratio{f}}+(1+\slopeweight_f)(1-\jumpbeta_f)\infersum{f}$,
+which may exceed one by $\slopeweight_f(1-\jumpbeta_f)\infersum{f}$, and by
+$(1+\slopeweight_f)\infersum{f}-1$ in a tangential row: weak dominance is not
+guaranteed for these rows. With the limiter $\slopeweight_f$ depends on the
+predictor, so a second projection of a projected state may use other weights
+than the first.
+
+\emph{Checks} (\code{cmdgfm_check}, with \apitype{ConstantJumpInference}). On
+the four fixtures of \cref{tab:projection:counts}, an independent classification
 following~\cref{eq:projection:staggered-normal,eq:projection:transverse,eq:projection:beta,eq:projection:unresolved}
 (own staggered normals, the code's vertex patches) reproduces the code's
 unknown set, transverse and inference faces exactly, and $\normratio{f}$,
@@ -586,10 +756,22 @@ fail the tests~\cref{eq:projection:unresolved} get no unknown and keep their
 jump; the thesis has no such classification.
 \end{deviation}
 
+\begin{deviation}{CMDGFM jump inference}\label{dev:projection:jump-inference}
+The thesis infers each phase from one donor~\thesis{\S7.3.5}, which creates a
+tangential jump $\pm2hU'$ in a resolved shear layer. The default
+\apitype{LinearJumpInference} extrapolates linearly from two donors
+(\cref{eq:projection:cmdgfm-row-linear}), blended back to one donor by the
+crossing-speed limiter~\cref{eq:projection:crossing-limiter} where the
+interface moves through the face, and adds the tangential and normal
+rows~\cref{eq:projection:tangential-row,eq:projection:normal-row} for faces
+the thesis leaves without a condition. \apitype{ConstantJumpInference}
+keeps the thesis' rule.
+\end{deviation}
+
 \begin{implnote}
-\apitype{CMDGFMProjection}\code{(; preconditioner=:block, preconditioner_options=(;))}
+\apitype{CMDGFMProjection}\code{(; preconditioner=:block, preconditioner_options=(;), jump_inference=LinearJumpInference())}
 selects the method in \apitype{TwoVelocityModel}; the solver objects are
-\apitype{CMDGFMProjectionSolver}\code{(interface; density, preconditioner)} and
+\apitype{CMDGFMProjectionSolver}\code{(interface; density, preconditioner, jump_inference)} and
 \apitype{CMDGFMProjectionWorkspace}, and
 \apifun{project!}\code{(velocity, pressure, solver, dt, workspace; tolerance=sqrt(eps(T)), max_iterations=500, warm_start=true)}
 returns \apitype{CMDGFMProjectionStats} and adds the pressure part of the
@@ -622,12 +804,36 @@ and operator of the one-velocity pressure solver are shared. Tests:
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM projection invariants}
 (defects, margin and momentum identity on periodic and cut composite meshes),
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM block-preconditioned BiCGSTAB}.
+\apitype{LinearJumpInference}~\cref{eq:projection:cmdgfm-row-linear,eq:projection:tangential-row,eq:projection:normal-row,eq:projection:crossing-limiter}:
+second donors and fallbacks \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_second_donors!},
+tangential rows \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_tangential_stencil!}
+with the increment form \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_incremental_row},
+normal rows \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_normal_stencil!},
+rows \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_extrapolated_inference!}
+and \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_inferred_jump},
+limiter \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_limit_extrapolation!}
+with \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_crossing_slope}
+and the ramp \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_CMDGFM_CROSSING_RAMP}, counts
+\srcsym{src/two_phase/projection/cmdgfm_cache.jl}{CMDGFMInferenceCounts}. Tests:
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: smooth shear across tilted and curved interfaces}
+(created jump of third order, against first order),
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: a vortex sheet keeps its tangential jump},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: hydrostatic rest on a tilted interface},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: x and t impose the normal jump on all mixed faces},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: momentum, defects and fallbacks},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: near-tangential faces without a regular row},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: flat interface and single-valued gradients are exact},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: crossing-speed limiter}
+(the ramp, rest and label symmetry),
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: a translating drop stays at the one-donor level},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{CMDGFM jump inference option}.
 \end{implnote}
 
 
 \begin{table}
   \centering\small
-  \caption{Unknowns and rows of the CMDGFM projection on the drop
+  \caption{Unknowns and rows of the CMDGFM projection with the published
+    rows (\apitype{ConstantJumpInference}) on the drop
     fixtures (a drop of radius $1.6$ centred at $(4.3,2.3)$ in the walled
     box of \cref{ch:forces}, densities $(1000,1)$; composite: the right half
     refined once; with solid: resting on the sloped solid $y<0.9+0.1x$),
@@ -2215,7 +2421,8 @@ misses its rules (\code{converged=false});
 \begin{implnote}
 Statistics \apitype{CMDGFMProjectionStats} (\code{mixture_volume_defect},
 \code{normal_velocity_defect}, \code{minimum_jump_diagonal_margin},
-\code{momentum_identity_error}, \code{underresolved_jump_rows}); residual
+\code{momentum_identity_error}, \code{underresolved_jump_rows},
+\code{jump_inference}); residual
 defects \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_residual_defects};
 first guess \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_initial_solution!};
 boundary values \srcsym{src/operators/staggered_diffusion.jl}{enforce_velocity_boundary!},

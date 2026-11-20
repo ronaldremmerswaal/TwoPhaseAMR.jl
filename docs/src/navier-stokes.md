@@ -191,6 +191,23 @@ Set `refresh_pressure_coefficients=false` to retain a lagged hierarchy or
 `CMDGFMProjection(preconditioner=:ilu)` remains available as a whole-system
 ILU comparison.
 
+The jump rows infer the phase velocities of a mixed face from neighbouring
+same-axis faces. The default `jump_inference=LinearJumpInference()` extrapolates
+each phase linearly from two donors, so a resolved shear layer keeps its
+velocity continuous across the interface (the published one-donor rule,
+`CMDGFMProjection(jump_inference=ConstantJumpInference())`, creates a
+tangential phase-velocity jump of order `2U'h` there, issue #171). Where the
+interface moves through a face, a ramp in the crossing speed `w/U` (the normal
+mixture speed over the local mixture speed, `[1/16, 3/16]`) blends the
+extrapolation back to one donor: the values that a sweeping interface leaves
+behind would otherwise accumulate the extrapolation slope. Mixed faces without
+a regular row get a row that removes the interpolated normal jump (or, for a
+normal closer to the transverse axis, a `β = 0` row), and faces with an exactly
+tangential normal get a `β = 0` row imposed as an increment of their own jump.
+Where a stencil crosses a refinement level or a solid, or a second donor is
+unavailable, the face falls back to the one-donor rule; the rows and fallbacks
+are counted in `CMDGFMProjectionStats.jump_inference`.
+
 Momentum and pressure-work diagnostics use the weak face inner product induced
 by the same Riesz map. This equals the familiar diagonal dual-volume kinetic
 inner product on a uniform Cartesian mesh; at a coarse--fine interface it
