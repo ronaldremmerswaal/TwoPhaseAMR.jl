@@ -1,4 +1,10 @@
-"""One local CMDGFM normal-jump equation associated with a mixed face."""
+"""One local CMDGFM normal-jump equation associated with a mixed face.
+
+`gas_extrapolation_face` and `liquid_extrapolation_face` are the second donors
+of the linear inference of [`LinearJumpInference`](@ref) (zero for a row with
+one donor per phase); `slope` is the weight `θ` of the extrapolation slope of
+both phases (1: linear, 0: one donor), set per projection by
+[`_cmdgfm_limit_extrapolation!`](@ref)."""
 struct CMDGFMJumpStencil{T}
     face::Int
     transverse_faces::Vector{Int}
@@ -9,6 +15,55 @@ struct CMDGFMJumpStencil{T}
     beta::T
     resolved::Bool
     full_remove::Bool
+    gas_extrapolation_face::Int
+    liquid_extrapolation_face::Int
+    slope::T
+end
+
+# A row with one donor per phase has no second donors.
+CMDGFMJumpStencil(
+    face, transverse_faces, transverse_weights::Vector{T}, ratio, gas_inference_face,
+    liquid_inference_face, beta, resolved, full_remove,
+    gas_extrapolation_face = 0, liquid_extrapolation_face = 0,
+) where {T} = CMDGFMJumpStencil{T}(
+    face, transverse_faces, transverse_weights, ratio, gas_inference_face,
+    liquid_inference_face, beta, resolved, full_remove,
+    gas_extrapolation_face, liquid_extrapolation_face, one(T),
+)
+
+"""Per-projection counts of the extended rows of [`LinearJumpInference`](@ref)
+and of the faces that fall back to the constant inference."""
+mutable struct CMDGFMInferenceCounts
+    extrapolated_rows::Int
+    tangential_rows::Int
+    normal_rows::Int
+    level_fallbacks::Int
+    solid_fallbacks::Int
+    missing_donor_fallbacks::Int
+    mixed_donor_fallbacks::Int
+    normal_fallbacks::Int
+    tangential_fallbacks::Int
+end
+CMDGFMInferenceCounts() = CMDGFMInferenceCounts(0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+const _CMDGFMInferenceSummary = NamedTuple{
+    (
+        :extrapolated_rows, :tangential_rows, :normal_rows, :level_fallbacks,
+        :solid_fallbacks, :missing_donor_fallbacks, :mixed_donor_fallbacks,
+        :normal_fallbacks, :tangential_fallbacks,
+    ),
+    NTuple{9, Int},
+}
+
+function _cmdgfm_inference_summary(counts::CMDGFMInferenceCounts)
+    return _CMDGFMInferenceSummary(
+        (
+            counts.extrapolated_rows, counts.tangential_rows, counts.normal_rows,
+            counts.level_fallbacks, counts.solid_fallbacks,
+            counts.missing_donor_fallbacks, counts.mixed_donor_fallbacks,
+            counts.normal_fallbacks, counts.tangential_fallbacks,
+        ),
+    )
 end
 
 # Connectivity needs face indices only, not the geometric MetricFace objects
@@ -32,10 +87,13 @@ mutable struct CMDGFMStencilStorage{T}
     weights::Vector{Vector{T}}
     parallel::Vector{Int}
     normal::Vector{Int}
+    # LinearJumpInference: second-donor scratch.
+    beyond::Vector{Int}
+    counts::CMDGFMInferenceCounts
 end
 CMDGFMStencilStorage(::Type{T}) where {T} = CMDGFMStencilStorage(
     CMDGFMJumpStencil{T}[], CMDGFMJumpStencil{T}[], Int[], Vector{Int}[],
-    Vector{T}[], Int[], Int[]
+    Vector{T}[], Int[], Int[], Int[], CMDGFMInferenceCounts(),
 )
 
 mutable struct CMDGFMTriplets{T}
@@ -94,8 +152,22 @@ mutable struct CMDGFMPressureCache{T, M <: BlockTreeMesh}
     jump_pressure::SparseMatrixCSC{T, Int}
     jump_block::SparseMatrixCSC{T, Int}
     jump_rhs::Vector{T}
+    jump_offset::Vector{T}
     pressure_triplets::CMDGFMTriplets{T}
     jump_triplets::CMDGFMTriplets{T}
+    # LinearJumpInference: crossing-speed slope weights θ by face, frozen for
+    # one reconstructed interface (see `_cmdgfm_limit_extrapolation!`).
+    crossing_slope::Vector{T}
+    crossing_reconstructions::UInt
+    crossing_frozen::Bool
+    # Local Schur complement J - C D⁻¹ B of the jump block that the block
+    # preconditioner factorizes (`_cmdgfm_jump_schur!`): the matrix, its
+    # triplets and the rows of D⁻¹ B by pressure unknown.
+    jump_schur::SparseMatrixCSC{T, Int}
+    schur_triplets::CMDGFMTriplets{T}
+    scaled_coupling_offsets::Vector{Int}
+    scaled_coupling_columns::Vector{Int}
+    scaled_coupling_values::Vector{T}
 
     function CMDGFMPressureCache{T, M}() where {T, M <: BlockTreeMesh}
         return new{T, M}(
@@ -104,8 +176,9 @@ mutable struct CMDGFMPressureCache{T, M <: BlockTreeMesh}
             EllipticWorkspace(T[], T[], T[], T[]), GradientConstructionCache(T),
             nothing, Int[], nothing, nothing, nothing, spzeros(T, 0, 0),
             Int[], T[], spzeros(T, 0, 0), T[], CMDGFMStencilStorage(T), Int[],
-            spzeros(T, 0, 0), spzeros(T, 0, 0), spzeros(T, 0, 0), T[],
-            CMDGFMTriplets(T), CMDGFMTriplets(T),
+            spzeros(T, 0, 0), spzeros(T, 0, 0), spzeros(T, 0, 0), T[], T[],
+            CMDGFMTriplets(T), CMDGFMTriplets(T), T[], UInt(0), false,
+            spzeros(T, 0, 0), CMDGFMTriplets(T), Int[], Int[], T[],
         )
     end
 end
@@ -193,6 +266,7 @@ function _cmdgfm_pressure_cache!(
     current = cache.initialized && cache.geometry_revision == revision &&
         _cmdgfm_same_topology(cache.keys, mesh)
     if !current
+        cache.crossing_frozen = false
         cache.incidence = _projection_incidence!(cache.incidence, cache.incidence_counts, mesh)
         _cmdgfm_gauge_partition!(cache, mesh, interface.geometry)
         _cmdgfm_vertex_connectivity!(cache.vertex_patches, mesh)
@@ -457,6 +531,77 @@ function _cmdgfm_sorted_rows_csc!(matrix::SparseMatrixCSC{T}, scratch, m, n) whe
     resize!(rows, cursor - 1)
     resize!(values, cursor - 1)
     return size(matrix) == (m, n) ? matrix : SparseMatrixCSC(m, n, columns, rows, values)
+end
+
+"""Local Schur complement `J - C D⁻¹ B` of the jump block, assembled into
+`cache.jump_schur` from the row-ordered triplets of the last jump assembly:
+`J` the jump block, `C` the jump rows' pressure columns, `B` the pressure
+rows' jump columns (at most two per column) and `D` the diagonal of the
+reduced pressure block. The block preconditioner factorizes it instead of
+`J`: with the V-cycle for the pressure and a factor of `J` alone it ignores
+how the pressure answers a jump, the V-cycle's error reaches the jump rows
+through `C` undamped, and BiCGSTAB stalled on the Stokes-3 wave (322
+iterations to `1e-10` on a post-regrid system with the linear inference, no
+convergence in 2000 on the same state with the published rows). `D` is the
+part of the pressure block's inverse that the local jump rows see; the same
+systems take 16 iterations, as with the exact Schur complement (#171).
+Serial, in reused buffers."""
+function _cmdgfm_jump_schur!(cache::CMDGFMPressureCache{T}) where {T}
+    pressure, coupling = cache.reduced_pressure, cache.pressure_jump
+    np, nx = size(coupling)
+    # Rows of D⁻¹ B by pressure unknown, columns in increasing order.
+    offsets = cache.scaled_coupling_offsets
+    resize!(offsets, np + 1)
+    fill!(offsets, 0)
+    for row in rowvals(coupling)
+        offsets[row + 1] += 1
+    end
+    offsets[1] = 1
+    for row in 1:np
+        offsets[row + 1] += offsets[row]
+    end
+    columns, values = cache.scaled_coupling_columns, cache.scaled_coupling_values
+    resize!(columns, nnz(coupling))
+    resize!(values, nnz(coupling))
+    cursors = cache.schur_triplets.cursors
+    resize!(cursors, np)
+    copyto!(cursors, 1, offsets, 1, np)
+    for column in 1:nx, pointer in nzrange(coupling, column)
+        row = rowvals(coupling)[pointer]
+        diagonal = zero(T)
+        for entry in nzrange(pressure, row)
+            rowvals(pressure)[entry] == row && (diagonal = nonzeros(pressure)[entry])
+        end
+        columns[cursors[row]] = column
+        values[cursors[row]] = nonzeros(coupling)[pointer] / diagonal
+        cursors[row] += 1
+    end
+    # J and C were emitted row by row; emit J - C D⁻¹ B in the same order.
+    rows, schur_columns, schur_values = _cmdgfm_clear_triplets!(cache.schur_triplets)
+    jump, gradient = cache.jump_triplets, cache.pressure_triplets
+    next_jump, next_gradient = 1, 1
+    for row in 1:nx
+        while next_jump <= length(jump.rows) && jump.rows[next_jump] == row
+            push!(rows, row)
+            push!(schur_columns, jump.columns[next_jump])
+            push!(schur_values, jump.values[next_jump])
+            next_jump += 1
+        end
+        while next_gradient <= length(gradient.rows) && gradient.rows[next_gradient] == row
+            pressure_row = gradient.columns[next_gradient]
+            value = gradient.values[next_gradient]
+            for pointer in offsets[pressure_row]:(offsets[pressure_row + 1] - 1)
+                push!(rows, row)
+                push!(schur_columns, columns[pointer])
+                push!(schur_values, -value * values[pointer])
+            end
+            next_gradient += 1
+        end
+    end
+    next_jump > length(jump.rows) && next_gradient > length(gradient.rows) ||
+        error("CMDGFM jump triplets are not ordered by row")
+    cache.jump_schur = _cmdgfm_sorted_rows_csc!(cache.jump_schur, cache.schur_triplets, nx, nx)
+    return cache.jump_schur
 end
 
 function _cmdgfm_cell_flux!(result, data, interface, velocity)

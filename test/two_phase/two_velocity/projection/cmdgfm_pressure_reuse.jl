@@ -100,15 +100,23 @@ end
         mesh, (x, y) -> hypot(x - 0.453, y - 0.487) - 0.2637;
         lipschitz = 1
     )
-    solver = CMDGFMProjectionSolver(interface; density = (1000.0, 1.0))
-    work = CMDGFMProjectionWorkspace(solver)
-    data = CPR._projection_face_data(solver, work)
-    CPR._cmdgfm_pressure_cache!(work.pressure_cache, solver, data)
     # Exclude compilation and capacity growth. Allow small Julia-version-
     # dependent closure/sort overhead, but reject the former per-candidate
     # boxing (hundreds of kB on this mesh). ILU is not part of this gate.
-    _pressure_stencil_allocations(solver, work, data)
-    @test _pressure_stencil_allocations(solver, work, data) < 32768
+    # LinearJumpInference adds the second-donor and normal-row candidate
+    # queries: 38_592 B measured on this mesh against 16_704 B (issue #171).
+    for (jump_inference, limit) in (
+            (ConstantJumpInference(), 32768), (LinearJumpInference(), 49152),
+        )
+        solver = CMDGFMProjectionSolver(interface; density = (1000.0, 1.0), jump_inference)
+        work = CMDGFMProjectionWorkspace(solver)
+        data = CPR._projection_face_data(solver, work)
+        CPR._cmdgfm_pressure_cache!(work.pressure_cache, solver, data)
+        _pressure_stencil_allocations(solver, work, data)
+        bytes = _pressure_stencil_allocations(solver, work, data)
+        println("cmdgfm_stencil_allocations ", jump_inference, " bytes=", bytes)
+        @test bytes < limit
+    end
 end
 
 @testset "CMDGFM direct incidence on periodic and bounded meshes" begin
@@ -254,6 +262,8 @@ function _cmdgfm_fresh_reference(solver, work, velocity, dt)
     indices, anchors = _reference_gauge_partition(mesh, active_cells, weights)
     all_stencils = CPR._cmdgfm_jump_stencils(solver, data)
     stencils = filter(s -> s.resolved, all_stencils)
+    CPR._linear_jump_inference(solver) &&
+        CPR._cmdgfm_limit_extrapolation!(stencils, data, velocity, solver.interface)
     mixed = [s.face for s in stencils]
     Ip = incidence[:, indices]
     PP = op.stiffness[indices, indices]

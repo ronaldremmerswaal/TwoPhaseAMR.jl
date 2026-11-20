@@ -351,7 +351,8 @@ end
 function cmdgfm_check(kind::Symbol; solid::Bool)
     field = projection_fixture(kind; solid)
     mesh = field.mesh
-    solver = CMDGFMProjectionSolver(field; density = FORCE_DENSITY)
+    # The independent classification reproduces the published rows (#171).
+    solver = CMDGFMProjectionSolver(field; density = FORCE_DENSITY, jump_inference = ConstantJumpInference())
     work = CMDGFMProjectionWorkspace(solver)
     code_data = AMR._projection_face_data(solver, work)
     stencils = Dict(s.face => s for s in AMR._cmdgfm_jump_stencils(solver, code_data))
@@ -500,7 +501,7 @@ function projection_data()
     for (panel, window) in pairs(PROJ_WINDOWS)
         proj_state_text(io, field, panel, window)
     end
-    solver = CMDGFMProjectionSolver(field; density = FORCE_DENSITY)
+    solver = CMDGFMProjectionSolver(field; density = FORCE_DENSITY, jump_inference = ConstantJumpInference())
     work = CMDGFMProjectionWorkspace(solver)
     data = AMR._projection_face_data(solver, work)
     stencils = Dict(s.face => s for s in AMR._cmdgfm_jump_stencils(solver, data))
