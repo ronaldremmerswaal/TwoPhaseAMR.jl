@@ -101,7 +101,7 @@ _sessile_maximum_velocity(velocity::Tuple) = maximum(
 
 function sessile_droplet_case(
         resolution; contact_angle = pi / 2, kind = :uniform,
-        velocity_model = OneVelocityModel(), bond = 1.21,
+        velocity_model = OneVelocityModel(), bond = 1.21, tolerance = 1.0e-9,
     )
     kind in (:uniform, :mixed, :amr) ||
         throw(ArgumentError("unknown mesh kind $kind"))
@@ -170,7 +170,7 @@ function sessile_droplet_case(
     )
     final_time = capillary_time / 4
     simulate!(
-        flow, final_time; tolerance = 1.0e-9, max_cycles = 200
+        flow, final_time; tolerance, max_cycles = 200
     )
     shape_error = sum(
         mesh.blocks[ref.block].volume * abs(
@@ -303,24 +303,33 @@ end
         ("CMDGFM", TwoVelocityModel()),
         ("MM", TwoVelocityModel(pressure_projection = MimeticProjection())),
     )
+    # The volume check is about the scheme's volume conservation, so these
+    # caps are projected at the tolerance 1e-12. At the default 1e-9 the
+    # first projection from rest may legitimately stop at a volume defect up
+    # to the tolerance (measured 6.25e-10 with the linear jump inference,
+    # drift 1.47e-12 > 4096eps; 6.0e-11 and 4.9e-14 with the constant one), so
+    # the outcome depended on where BiCGSTAB stopped (#171). The published
+    # rows are checked too.
+    conservation = (
+        models..., (
+            "CMDGFM constant",
+            TwoVelocityModel(
+                pressure_projection = CMDGFMProjection(
+                    jump_inference = ConstantJumpInference(),
+                ),
+            ),
+        ),
+    )
     for kind in (:mixed, :amr)
         cap = Dict(
-            name => sessile_droplet_case(12; kind, velocity_model = model, bond = 0.0)
-                for (name, model) in models
+            name => sessile_droplet_case(
+                12; kind, velocity_model = model, bond = 0.0, tolerance = 1.0e-12,
+            )
+                for (name, model) in conservation
         )
-        for (name, _) in models
+        for (name, _) in conservation
             @test cap[name].levels > 1
-            if name == "CMDGFM"
-                # NUMERICS CONCERN (#171): with LinearJumpInference (the
-                # default) the BiCGSTAB solve stops just below the projection
-                # tolerance 1e-9 and the volume drifts by 1.47e-12 on both
-                # trees (ConstantJumpInference: 4.9e-14, mimetic 4.2e-17); at
-                # the tolerance 1e-12 the drift is 2.0e-15, so it is the
-                # tolerance, not a volume defect of the rows.
-                @test_broken cap[name].volume_error <= 4096eps()
-            else
-                @test cap[name].volume_error <= 4096eps()
-            end
+            @test cap[name].volume_error <= 4096eps()
         end
         @test cap["MM"].shape_error <= 1.1cap["CMDGFM"].shape_error
         @test cap["MM"].maximum_velocity <= 1.25cap["CMDGFM"].maximum_velocity
