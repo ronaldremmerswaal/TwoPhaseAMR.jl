@@ -6,50 +6,50 @@ steps = 20
 time = 0.02
 
     [cases.capillary_cmdgfm.diagnostics]
-    amplitude = 0.009687341527278459
+    amplitude = 0.009687331322988602
     analytical_amplitude = 0.009517346104461356
 
     [cases.capillary_cmdgfm.fields.pressure]
     count = 384
     finite_count = 384
-    l2 = 1.145199729983069
-    max = 0.2932287992715522
-    sha256 = "9acb3845726969928da2994d3acfbe9ef65eeefaa30c6e0f36a43f8cf8115eff"
+    l2 = 1.1452151596209947
+    max = 0.2932286867531082
+    sha256 = "d7e45446923f4fcf75fe9d43ad3f78553bf28e1ca33e1377b8553dfd2f3daf98"
 
     [cases.capillary_cmdgfm.fields.velocity_phase1_1]
     count = 384
     finite_count = 265
-    l2 = 0.14930644221084685
-    max = 0.03821701305844834
-    sha256 = "68d9fac269d0ad6e1936728f5c63644e545209f885527ce2079b0109218e171d"
+    l2 = 0.1493283062276472
+    max = 0.03821496088041713
+    sha256 = "d42982af543861a0452ebbd21d342135dd0ed3d19f13cf386b4249c7e74fb440"
 
     [cases.capillary_cmdgfm.fields.velocity_phase1_2]
     count = 384
     finite_count = 272
-    l2 = 0.18275962398751733
-    max = 0.04559183774475577
-    sha256 = "34b2331aebf167739e6e45b52bb52828ebcebd3919fdccb3deb98cc98da7b8c1"
+    l2 = 0.18281323911691943
+    max = 0.04559504717278454
+    sha256 = "c05bd15e3ff43858cc3277adc74d535acd521ff186bddfab74076b5820324651"
 
     [cases.capillary_cmdgfm.fields.velocity_phase2_1]
     count = 384
     finite_count = 137
-    l2 = 0.18648136606602006
-    max = 0.05939582301869439
-    sha256 = "daf680befb960fa2c826203f2038b5e2b8c336361be1bd9456c01add9f308f3f"
+    l2 = 0.18602204962985303
+    max = 0.058901339285734274
+    sha256 = "44b40be0ee7d316d7bc8502e7d613646667f6cfa3055b36297a5d801a39a24a4"
 
     [cases.capillary_cmdgfm.fields.velocity_phase2_2]
     count = 384
     finite_count = 144
-    l2 = 0.17539428714244695
-    max = 0.045726906616629925
-    sha256 = "e8d5f7cb1cad3a42ead3dad398e4a0b0c4658a6dacfb862b08428e3874508720"
+    l2 = 0.17550966797781214
+    max = 0.04572998597364343
+    sha256 = "a3fd98f18eb0944d6ad22488fbc40ed83fed2f73d246c6fc211e54a8a58413da"
 
     [cases.capillary_cmdgfm.fields.volume_fraction]
     count = 384
     finite_count = 384
-    l2 = 15.957061546275545
+    l2 = 15.957061399311986
     max = 1.0
-    sha256 = "921ff934a2dea4ce99b56c2c4bd8b0fa8aa95cbc9ae6614ff02ca77f747aabe5"
+    sha256 = "c1c181e89cb9792222f840726ac8b0f6a39d538766e8e5214b320bc0876c9165"
 
 [cases.capillary_one]
 steps = 20
