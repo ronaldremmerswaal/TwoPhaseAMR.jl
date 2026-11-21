@@ -8,6 +8,13 @@ topology-only staggered interpolation between nested meshes. Below the root
 level, 2×2 root-block agglomeration continues until the target size is reached,
 either root count is odd, or a periodic axis would have fewer than four cells;
 the last operator is factorized directly.
+
+With an embedded solid, `options = (; geometry)` (the `GeometryField` of the
+fine operator; the `NavierStokesSystem` passes it itself) rediscretizes every
+coarse level on the geometrically restricted solid, so the coarse operators
+keep the walls, the face transfers skip completely covered faces, as in
+`TreeStaggeredGeometricMultigridPreconditioner`, and the
+Jacobi smoother uses per-row weights (`_local_jacobi_relaxation!`).
 """
 
 mutable struct TreeVariableDiffusionPreconditioner{T, F, L, C} <:
@@ -26,6 +33,8 @@ mutable struct TreeVariableDiffusionPreconditioner{T, F, L, C} <:
     post_sweeps::Int
     pruning::Symbol
     reused_levels::Int
+    # Per-row Jacobi weights (`_local_jacobi_relaxation!`), with a solid.
+    local_relaxation::Bool
 end
 
 _preconditioner_name(::TreeVariableDiffusionPreconditioner) =
@@ -50,17 +59,53 @@ function _cell_viscosity_from_log!(field::CellField{T}, values) where {T}
     return field
 end
 
+# A cut cell makes a few rows of the stress operator much less diagonally
+# dominant than the bulk (row sum over diagonal up to ≈ 3.9 against 2.4–2.7),
+# and the global Gershgorin weight 4/(3 maxᵢ sᵢ/dᵢ) of `_jacobi_weight!` then
+# damps every row for their sake, so the smoother weakens as the mesh resolves
+# more cut cells. Per-row weights ωᵢ = min(1, 4dᵢ/(3sᵢ)) are folded into the
+# inverse diagonal (the level weight becomes one). The smoother stays
+# symmetric and convergent: 2 diag(d/ω) − A ⪰ diag(s)/2 ≻ 0. Each row is
+# independent, so the result does not depend on the thread count.
+function _local_jacobi_relaxation!(level::MultigridLevel{T}) where {T}
+    matrix_transpose = level.matrix_transpose
+    matrix_transpose isa SparseMatrixCSC || throw(
+        ArgumentError("assembled multigrid level has no sparse row form"),
+    )
+    column_pointers = matrix_transpose.colptr
+    rows = rowvals(matrix_transpose)
+    matrix_values = nonzeros(matrix_transpose)
+    inverse_diagonal = level.inverse_diagonal
+    @_parallel for column in 1:size(matrix_transpose, 2)
+        row_sum = zero(T)
+        diagonal = zero(T)
+        for pointer in column_pointers[column]:(column_pointers[column + 1] - 1)
+            value = @inbounds matrix_values[pointer]
+            row_sum += abs(value)
+            @inbounds rows[pointer] == column && (diagonal = value)
+        end
+        @inbounds inverse_diagonal[column] =
+            min(one(T), T(4) * diagonal / (T(3) * row_sum)) / diagonal
+    end
+    level.relaxation_weight = one(T)
+    return level
+end
+
 function _tree_variable_diffusion_preconditioner(
         operator::VariableStaggeredDiffusionOperator{T}, matrix,
         inertia, dt;
         multigrid::MultigridOptions, options = (;), reuse = nothing,
     ) where {T}
-    all(key -> key === :pruning, keys(options)) || throw(
+    all(key -> key in (:pruning, :geometry), keys(options)) || throw(
         ArgumentError(
-            "tree-geometric diffusion options currently support only pruning",
+            "tree-geometric diffusion options support only pruning and geometry",
         ),
     )
     pruning = get(options, :pruning, :all)
+    geometry = get(options, :geometry, nothing)
+    isnothing(geometry) || geometry.mesh === operator.mesh || throw(
+        ArgumentError("multigrid geometry must share the operator mesh"),
+    )
     (; coarse_size, pre_sweeps, post_sweeps, max_levels) = multigrid
     plan = _TreeCoarseningPlan(
         operator.mesh, pruning, 2coarse_size, max_levels, Val(:variable),
@@ -69,8 +114,10 @@ function _tree_variable_diffusion_preconditioner(
         reuse isa TreeVariableDiffusionPreconditioner{T} || throw(
         ArgumentError("reused diffusion hierarchy has the wrong type"),
     )
-    can_reuse = _tree_can_reuse(plan, reuse) &&
+    # Geometry-dependent coarse operators are rebuilt on every construction.
+    can_reuse = isnothing(geometry) && _tree_can_reuse(plan, reuse) &&
         typeof(reuse.operators[1].boundary) === typeof(operator.boundary)
+    fine_geometry = geometry
 
     operators = VariableStaggeredDiffusionOperator{T}[operator]
     matrices = SparseMatrixCSC{T, Int}[matrix]
@@ -135,11 +182,22 @@ function _tree_variable_diffusion_preconditioner(
             _cell_viscosity_from_log!(
                 coarse_viscosity, coarse_log_viscosity,
             )
+            coarse_geometry = isnothing(geometry) ? nothing :
+                _restrict_geometry_to_mesh(
+                    fine_geometry, coarse_mesh, cell_restriction,
+                )
             coarse_operator = _staggered_diffusion_operator(
                 coarse_mesh; viscosity = coarse_viscosity,
                 boundary = operator.boundary, T, construction_cache,
-                averaging = operator.averaging,
+                averaging = operator.averaging, geometry = coarse_geometry,
             )
+            if !isnothing(geometry)
+                _remove_covered_staggered_transfer!(
+                    prolongation, fine_geometry, eachindex(current_mesh.faces),
+                    coarse_geometry, eachindex(coarse_mesh.faces),
+                )
+                fine_geometry = coarse_geometry
+            end
             coarse_density = zeros(T, length(coarse_mesh.faces))
             _restrict_face_coefficients!(
                 coarse_density, last(densities), density_restriction,
@@ -198,6 +256,8 @@ function _tree_variable_diffusion_preconditioner(
             )
         end
     end
+    local_relaxation = !isnothing(geometry)
+    local_relaxation && foreach(_local_jacobi_relaxation!, levels)
     coarse = last(levels)
     if !iszero(reused_new_start)
         factorization = reuse.coarse_factorization
@@ -215,6 +275,7 @@ function _tree_variable_diffusion_preconditioner(
         pre_sweeps, post_sweeps, pruning,
         iszero(reused_new_start) ? 0 :
             length(operators) - reused_new_start + 1,
+        local_relaxation,
     )
     !iszero(reused_new_start) &&
         _refresh_tree_variable_diffusion_preconditioner!(
@@ -270,6 +331,7 @@ function _refresh_tree_variable_diffusion_preconditioner!(
         _refresh_multigrid_level!(
             level, level.matrix, level.volumes, level.prolongation,
         )
+        preconditioner.local_relaxation && _local_jacobi_relaxation!(level)
     end
     coarse = last(preconditioner.levels)
     preconditioner.coarse_factorization = _refactorize_coarse!(
