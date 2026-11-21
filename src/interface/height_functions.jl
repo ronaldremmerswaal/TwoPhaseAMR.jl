@@ -977,3 +977,138 @@ function _contact_curvature(field, values, b, i, j)
     end
     return nothing
 end
+
+"""Set the energy-consistent curvature of the contact-line cells (techref
+ch. 8, Contact-line curvature), after the PLIC passes of [`reconstruct!`](@ref).
+
+A cut cell whose centre lies in the first row along a domain wall with a
+contact angle `θ_w` (axis not periodic) gets `κ = (cos θ - cos θ_w)/h`, `h`
+the cell size normal to the wall, with `cos θ = -o s/√(1 + s²)` the angle of
+the chord between the wall-parallel local heights `H₁` of its own column and
+`H₂` of the column one row inward (both relative to the cell's tangential
+centre, in cells), `s = (H₂ - H₁) h_t/h` the chord's slope (`h_t` the cell
+size along the wall) and `o = ±1` the orientation of the columns (`o = 1`:
+liquid on the low side). With the wetted wall length `h_t H₁` (the liquid
+volume of the row over `h`) and the chord between the two row centres,
+`σκ` is the derivative `∂E/∂V₁` of the contact-line energy
+`E = σ(|chord| - cos θ_w h_t H₁)` by the liquid volume of the row, the same for
+every cut cell of the row, so that the capillary work of a transport through
+the row is the change of the surface and wall energy. A cell without both
+heights takes the cosine of the nearest cell with both in its contiguous run of
+cut cells of the row ([`_wall_run_cosine`](@ref)); a run without any (for
+example next to an embedded solid) keeps the curvature of the reconstruction.
+The heights come from the final PLIC planes (the halo values of the height
+columns use them); they are refilled only if a cut cell lies in a first wall
+row."""
+function _contact_line_curvature!(field)
+    all(isnothing, field.contact_angles) && return field
+    mesh = field.mesh
+    T = eltype(field)
+    nx = mesh.block_size[1]
+    # `cos θ_w` per wall (`NaN`: none), concrete: indexing the field's tuple of
+    # unions per cell allocated.
+    wall_cosines = ntuple(Val(4)) do wall
+        theta = field.contact_angles[wall]
+        isnothing(theta) ? T(NaN) : cos(T(theta))::T
+    end
+    _has_contact_row_cell(field, wall_cosines) || return field
+    values = _fill_height_values!(field)
+    _parallel_block_columns(mesh) do b, first_j, last_j
+        block = @inbounds mesh.blocks[b]
+        height_values = @inbounds values[b]
+        for j in first_j:last_j, i in 1:nx
+            ref = CellRef(b, i, j)
+            fraction = _conditional_fraction(field, ref)
+            zero(T) < fraction < one(T) || continue
+            for wall in 1:4
+                wall_cosine = wall_cosines[wall]
+                isnan(wall_cosine) && continue
+                _in_wall_row(mesh, block, i, j, wall) || continue
+                axis = wall <= 2 ? 1 : 2
+                h = block.spacing[axis]
+                ratio = T(block.spacing[3 - axis] / h)
+                cosine = _wall_run_cosine(height_values, i + 4, j + 4, axis, isodd(wall) ? 1 : -1, ratio)
+                isnothing(cosine) && continue
+                _set!(field.curvature, (cosine - wall_cosine) / T(h), ref)
+                break
+            end
+        end
+    end
+    return field
+end
+
+"""Whether the centre of cell `(i, j)` of `block` lies in the first row along
+domain wall `wall` (left, right, bottom, top) of a non-periodic axis."""
+@inline function _in_wall_row(mesh, block, i, j, wall)
+    axis = wall <= 2 ? 1 : 2
+    mesh.periodic[axis] && return false
+    T = eltype(block.spacing)
+    h = block.spacing[axis]
+    center = block.origin[axis] + ((axis == 1 ? i : j) - T(0.5)) * h
+    boundary = mesh.origin[axis] + (isodd(wall) ? zero(T) : mesh.extent[axis])
+    return abs(center - boundary) <= h * (T(0.5) + 64eps(T))
+end
+
+"""Whether a cut cell lies in the first row along a wall with a contact angle
+(`wall_cosines[wall]` not `NaN`); scans only the wall rows of the blocks."""
+function _has_contact_row_cell(field, wall_cosines)
+    mesh = field.mesh
+    T = eltype(field)
+    for (b, block) in pairs(mesh.blocks), wall in 1:4
+        isnan(wall_cosines[wall]) && continue
+        axis = wall <= 2 ? 1 : 2
+        index = isodd(wall) ? 1 : mesh.block_size[axis]
+        _in_wall_row(mesh, block, index, index, wall) || continue
+        for k in 1:mesh.block_size[3 - axis]
+            i, j = axis == 1 ? (index, k) : (k, index)
+            zero(T) < _conditional_fraction(field, CellRef(b, i, j)) < one(T) && return true
+        end
+    end
+    return false
+end
+
+"""`cos θ` of the wall row at the padded index `(i, j)` (first row along a
+wall of normal axis `axis`): that of [`_wall_row_cosine`](@ref) if its
+columns are valid, else that of the nearest cell with valid columns in the
+contiguous run of cut cells (`0 < C < 1`) of the row through `(i, j)`, the
+mean of the two at equal distance (the slope `s` is the same along a run).
+The run is followed through the padded values of the block; `nothing` if it
+has no cell with valid columns there."""
+function _wall_run_cosine(values, i, j, axis, inward, ratio)
+    cosine = _wall_row_cosine(values, i, j, axis, inward, ratio)
+    isnothing(cosine) || return cosine
+    T = eltype(values)
+    di, dj = axis == 1 ? (0, 1) : (1, 0)
+    cut(ii, jj) = checkbounds(Bool, values, ii, jj) && zero(T) < values[ii, jj] < one(T)
+    low = high = true
+    step = 1
+    while low || high
+        low = low && cut(i - step * di, j - step * dj)
+        high = high && cut(i + step * di, j + step * dj)
+        below = low ? _wall_row_cosine(values, i - step * di, j - step * dj, axis, inward, ratio) : nothing
+        above = high ? _wall_row_cosine(values, i + step * di, j + step * dj, axis, inward, ratio) : nothing
+        isnothing(below) || return isnothing(above) ? below : (below + above) / 2
+        isnothing(above) || return above
+        step += 1
+    end
+    return nothing
+end
+
+"""`cos θ` of the chord between the wall-parallel local heights of the padded
+height values at `(i, j)` (first row along a wall of normal axis `axis`) and
+one row inward, `ratio` the cell size along the wall over that normal to it;
+`nothing` unless both columns are valid with one orientation. The columns
+reach four cells to either side, the padding of the height values."""
+function _wall_row_cosine(values, i, j, axis, inward, ratio)
+    tangent = 3 - axis
+    ii, jj = axis == 1 ? (i + inward, j) : (i, j + inward)
+    for orientation in (-1, 1)
+        first = _local_height(values, i, j, tangent, orientation; radius = 4)
+        isnothing(first) && continue
+        second = _local_height(values, ii, jj, tangent, orientation; radius = 4)
+        isnothing(second) && return nothing
+        slope = (second - first) * ratio
+        return -orientation * slope / sqrt(1 + slope^2)
+    end
+    return nothing
+end

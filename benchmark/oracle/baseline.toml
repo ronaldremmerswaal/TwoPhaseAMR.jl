@@ -156,39 +156,39 @@ steps = 10
 time = 0.01
 
     [cases.sessile.diagnostics]
-    divergence_norm = 5.896375116381536e-7
-    kinetic_energy = 0.0009679527631436986
+    divergence_norm = 5.851360388303444e-7
+    kinetic_energy = 0.0009917547234088908
     leaf_blocks = 4
-    linear_momentum = [-2.334289833349384e-18, -0.006467410572698205]
-    phase_volume = [0.06283185308908704, 0.937168146910913]
+    linear_momentum = [3.422616948754537e-19, -0.00654284119551736]
+    phase_volume = [0.062831853090338, 0.937168146909662]
 
     [cases.sessile.fields.pressure]
     count = 256
     finite_count = 256
-    l2 = 25.47858565101732
-    max = 7.828733005450688
-    sha256 = "5f1269c828cbd3748cee7b72b7eae97fd8143866049e80f67d7734a70b28267e"
+    l2 = 25.422936378129897
+    max = 7.814817875059558
+    sha256 = "5dd085afdc9b923b5dab7bad240afe87d2d706981e21d73a08ff9e72d923e0dc"
 
     [cases.sessile.fields.velocity_1]
     count = 240
     finite_count = 240
-    l2 = 0.84250486260277
-    max = 0.32055804550285205
-    sha256 = "6be78f337d56062d40a118d4327eecffff5c5fcbb7fea16c1144d8538862983c"
+    l2 = 0.8518160333899959
+    max = 0.3269666414974084
+    sha256 = "edc5689d2e21c5a0e9cc12e16910f107d2aff5f495364773d5185b928150fb1f"
 
     [cases.sessile.fields.velocity_2]
     count = 240
     finite_count = 240
-    l2 = 0.8401527077324364
-    max = 0.18061396458283852
-    sha256 = "d8f0970be83d90d7fce2eaf8787d042ebc56ff69316120408d3c739805128d11"
+    l2 = 0.848536176768807
+    max = 0.18141060302429107
+    sha256 = "b4e9c20471e8b8bfc04cee79c008a6867ac49b48e62defddb234f946aea3edec"
 
     [cases.sessile.fields.volume_fraction]
     count = 256
     finite_count = 256
-    l2 = 3.8336926807534057
+    l2 = 3.8336036380400524
     max = 1.0
-    sha256 = "6e89aa1dbb621e0a31fbab557db2440596ed972f1a4bdba8d2a79c523134610b"
+    sha256 = "0e15f903513818e514e4b1577dbc933b55877ddfda16c12b9036d375ddfc51f6"
 
 [cases.sloped]
 steps = 10

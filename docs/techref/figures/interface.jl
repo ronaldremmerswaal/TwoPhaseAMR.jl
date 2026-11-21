@@ -527,13 +527,17 @@ function contact_data_and_check()
         )
         worst = 0.0; exact = 0.0; cells = 0
         target = nothing
+        # The stored curvature of the first row is the contact-line curvature
+        # (ch. 8); the formulas checked here are those of `_contact_curvature`.
+        values = AMR._fill_height_values!(field)[1]
+        formula(i) = AMR._contact_curvature(field, values, 1, i, 1)
         for i in 1:16
             c = V[i, 1]
             0 < c < 1 || continue
             AMR._plic_touches_wall(field, ref1(i, 1), 3) || continue
             mine = contact_independent(field, V, i, theta)
             isnothing(mine) && continue
-            k = curvature_of(field, i, 1)
+            k = formula(i)
             worst = max(worst, abs(mine.kappa - k))
             exact = max(exact, abs(k - 1 / R))
             cells += 1
@@ -579,7 +583,7 @@ function contact_data_and_check()
                 "\\gdef\\fxSbslope{$(fmt(2mine.A2 * xstar + mine.A1))}"
             )
         end
-        results[panel] = (; worst, exact, cells, kappa = curvature_of(field, i, 1))
+        results[panel] = (; worst, exact, cells, kappa = formula(i))
     end
     return String(take!(io)), results
 end
