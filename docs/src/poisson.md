@@ -108,6 +108,11 @@ on the geometrically restricted solid, so the coarse levels keep the walls,
 and the transfers skip completely covered faces, whose algebraic unit volume
 would otherwise outweigh the open volumes of order `h²`. Without it the
 iteration count around a solid grows with the mesh size.
+The two-phase stress hierarchy of `VariableStaggeredDiffusionSolver` (also the
+preconditioner of the two-velocity viscous steps) takes the solid the same
+way, and the system passes it as well; with a solid its Jacobi smoother also
+uses per-row weights, because a few cut-cell rows would otherwise lower the
+single Gershgorin weight of the whole level.
 
 The integrated AMR diffusion operator is symmetric positive definite for a
 positive reaction term, so `StaggeredEllipticSolver` uses preconditioned CG by

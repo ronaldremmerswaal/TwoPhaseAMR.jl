@@ -202,8 +202,7 @@ function _two_phase_workspace_solver_options(solver)
         diffusion_krylov = _diffusion_krylov(solver),
         diffusion_krylov_options = solver.options.diffusion.krylov_options,
         diffusion_preconditioner = _diffusion_preconditioner(solver),
-        diffusion_preconditioner_options =
-            solver.options.diffusion.preconditioner_options,
+        diffusion_preconditioner_options = _diffusion_preconditioner_options(solver),
         multigrid = _multigrid_options(solver),
         viscosity_averaging = solver.options.viscosity_averaging,
     )
