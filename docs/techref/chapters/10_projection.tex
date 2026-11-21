@@ -2321,6 +2321,18 @@ ratio~$1$ no longer grows); the CMDGFM's own row set keeps the slip and leaves
 them at $28$ and $69$. A remedy within the mimetic projection therefore cannot
 be a set of homogeneous constraints on face jumps alone.
 
+\emph{Limitation: static bubbles.} A static bubble (the light phase inside) at
+densities $(1000,1)$ is not at rest: inviscid, $R=0.2$, $\sigma=1$, free-slip
+walls, $t\in[0.6,1.2]$, the largest phase value on mixed faces reaches $15$ at
+$h=1/32$ with the booked carriers~\cref{eq:projection:mimetic-carriers}, and
+$54$--$212$ with the former carrier (either labelling, $h=1/32$ and $1/64$),
+against $0.011$ and $0.0017$ with the CMDGFM at $h=1/32$ and $1/64$. No
+carrier tried (each value its own carrier, mass-weighted or mixture
+bookings) brings it to rest, so the cause lies outside the booking of the
+difference term; it is not isolated. The static drop (the heavy phase
+inside) keeps late currents of $0.007$--$0.035$ in both labellings
+(\cref{sec:projection:mimetic}).
+
 \section{Fully discrete projection stage}\label{sec:projection:time}
 The projection is an algebraic problem for the given predictor and $\dt$;
 there is no time discretisation inside it. The time step enters as the scale
