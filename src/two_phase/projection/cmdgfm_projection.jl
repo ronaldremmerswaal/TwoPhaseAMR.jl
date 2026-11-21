@@ -1084,19 +1084,32 @@ recursion `u_{k+1} = 2u_k - u_{k-1} + e_k` (`k` the cells crossed), whose
 noise grows like `k^{3/2}`; any `θ ≤ θ* < 1` at the last write turns it into
 a bounded slope with a random walk of the value, like the one-donor rule.
 Stability therefore fixes no threshold: the ramp is a modelling choice that
-separates moving interfaces (`w/U` of order one: the front and rear of a
-translating drop, a standing capillary wave) from quasi-static ones whose
-normal speed is driven only by slow growth (shear layers, Kelvin–Helmholtz),
-which keep the third-order inference. Measured (#171): the
-translating drop at density ratio 1000 needs `b ≤ 3/8` at `n = 128`
-(`[1/4, 3/4]`: max|u - U| 0.98, `[1/8, 3/8]`: 0.30, `[1/16, 3/16]`: 0.29,
-one-donor rule 0.34); viscous Kelvin–Helmholtz is unchanged for `[0, 1/8]`
-and `[1/16, 3/16]`; Rayleigh–Taylor at density ratio 3 prefers the lower
-ramp (error 0.015, 0.010, 0.0072 for the three ramps, one-donor 0.0056). The
-smoothstep keeps `θ` a continuous function of the velocity, so the rows do
-not switch in time.
+separates interfaces that sweep through the faces from quasi-static ones whose
+normal speed comes only from slow growth, which keep the third-order
+inference. Measured populations of `w/U` (rows with second donors, every
+projection): quasi-static — a resolved shear over the tilted interfaces of the
+jump-inference tests (slope 0.06, `cos` amplitude 0.01) at most 0.028,
+viscous and density-ratio-1000 Kelvin–Helmholtz in the linear regime about 97 %
+below 1/128, inviscid Kelvin–Helmholtz at density ratio 1 (`n = 32`) 66 %
+below 1/32, example 07 before roll-up (`t ≤ 0.5`) 89 % below 1/32; sweeping —
+the translating drop and Rayleigh–Taylor at density ratio 3 (medians 0.58 and
+0.37) and example 07 rolling up (inviscid, density ratio 1.2, We 3, level 5,
+`t > 1.5`: median 0.12, 88 % above 1/32). `[1/32, 3/32]` puts `a` above the
+quasi-static rows and `b` below the median of the roll-up. Sensitivity: at
+`a = 1/48` the slope-0.06 shear test loses its third-order jump at `n = 128`
+(0.017 against 0.0076); at `[1/24, 3/24]` the straight part of the rolled-up
+example 07 interface is rough by 0.0083 h RMS at `t = 2.25` and at
+`[1/16, 3/16]` (#199) by 0.135 h with 15 % more steps (one-donor rule 0.0048 h,
+`[1/32, 3/32]` 0.0044 h): there most roll-up rows kept part of the
+extrapolation. The translating drop (density ratio 1000, `n = 128`) gives
+max|u - U| 0.30, 0.28, 0.29, 0.29 for `a = 1/16, 1/32, 1/64, 1/128` (one-donor
+0.34); the viscous Kelvin–Helmholtz growth-rate errors (`λ/h = 128`: 1.89 %,
+0.040 %, 7.56 %) are the same for `a = 1/16` to `1/64`; Rayleigh–Taylor at
+density ratio 3 moves towards the one-donor value (0.0072, 0.0061, 0.0059,
+0.0057; one-donor 0.0056). The smoothstep keeps `θ` a
+continuous function of the velocity, so the rows do not switch in time.
 """
-const _CMDGFM_CROSSING_RAMP = (1 / 16, 3 / 16)
+const _CMDGFM_CROSSING_RAMP = (1 / 32, 3 / 32)
 
 """Mass-weighted mixture velocity on face `index`, or `nothing` on an empty or
 non-finite face."""
