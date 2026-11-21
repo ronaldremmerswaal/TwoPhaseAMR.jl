@@ -2,9 +2,17 @@ using CairoMakie
 using Statistics
 Base.include(@__MODULE__, joinpath(@__DIR__, "cylinder_flow.jl"))
 
-function readme_animations(outdir, store, window)
+# Keyframes requested inside `window`, one per animation frame; the nearest
+# completed step can lie just before the window start.
+window_keyframes(store, window) = [
+    info for info in keyframes(store)
+        if any(time -> window[1] <= time <= window[2], info.requested_times)
+]
+
+# 97 frames at `px_per_unit = 1.25` (950 × 500 pixels) keep each GIF under 2 MB.
+function readme_animations(outdir, store, window; px_per_unit = 1.25)
     camera = (-1.5, 8.0, -2.5, 2.5)
-    frames = [store[info] for info in keyframes(store) if window[1] <= info.time <= window[2]]
+    frames = [store[info] for info in window_keyframes(store, window)]
     magnitudes = Float32[]
     for frame in frames, value in rasterize(frame, :vorticity, camera, (475, 250))
         isfinite(value) && push!(magnitudes, abs(value))
@@ -20,7 +28,7 @@ function readme_animations(outdir, store, window)
             colormap = cgrad(colormap, 31; categorical = true), blocks = true,
             blockcolor, geometrycolor
         )
-        return record(figure, path, frames; framerate = 12) do frame
+        return record(figure, path, frames; framerate = 12, px_per_unit) do frame
             current[] = frame
         end
     end
@@ -52,7 +60,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     )
     register_geometry!(fields, flow.system.geometry)
     recorder = Recorder(
-        fields; diagnostics = flow, keyframes = AtTimes(collect(range(window...; length = 49))),
+        fields; diagnostics = flow, keyframes = AtTimes(collect(range(window...; length = 97))),
         preview = nothing
     )
     result = simulate!(flow, final_time; observer = recorder)
@@ -99,10 +107,12 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     margin = 0.1 * (hi - lo)
     ylims!(axis, lo - margin, hi + margin)
     save(joinpath(outdir, "pressure_drag.png"), figure)
+    shown = window_keyframes(store, window)
     export_animation(
-        joinpath(outdir, "shedding.gif"), store; field = :vorticity, window,
+        joinpath(outdir, "shedding.gif"), store; field = :vorticity,
+        window = (first(shown).time, last(shown).time), nframes = length(shown),
         blocks = true, colorrange = (-3, 3), colormap = cgrad(:balance, 31; categorical = true),
-        fps = 12, duration = 4.0, size = (700, 310)
+        fps = 12, size = (700, 310)
     )
     readme_animations(outdir, store, window)
     println("Including figures: ", (time_ns() - started) / 1.0e9, " s (package loading excluded)")
