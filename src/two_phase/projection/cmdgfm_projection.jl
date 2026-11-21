@@ -1,15 +1,22 @@
-"""Configuration for the nonsymmetric two-block CMDGFM projection."""
-struct CMDGFMProjectionSolver{T, I, P, PO}
+"""Configuration for the nonsymmetric two-block CMDGFM projection.
+
+`jump_inference` selects the inference of the jump rows, see
+[`LinearJumpInference`](@ref) (the default) and the published rows
+[`ConstantJumpInference`](@ref).
+"""
+struct CMDGFMProjectionSolver{T, I, P, PO, J <: AbstractJumpInference}
     interface::I
     density::NTuple{2, T}
     preconditioner::P
     preconditioner_options::PO
+    jump_inference::J
 end
 
 function CMDGFMProjectionSolver(
         interface::InterfaceField{T}; density = (one(T), one(T)),
         preconditioner = :block,
         preconditioner_options = (;),
+        jump_inference = LinearJumpInference(),
     ) where {T}
     rho = (T(density[1]), T(density[2]))
     all(value -> isfinite(value) && value > zero(T), rho) || throw(
@@ -20,11 +27,22 @@ function CMDGFMProjectionSolver(
             "CMDGFM preconditioner must be :block, :ilu, or nothing",
         ),
     )
+    _validate_jump_inference(jump_inference)
     return CMDGFMProjectionSolver{
         T, typeof(interface), typeof(preconditioner),
-        typeof(preconditioner_options),
-    }(interface, rho, preconditioner, preconditioner_options)
+        typeof(preconditioner_options), typeof(jump_inference),
+    }(interface, rho, preconditioner, preconditioner_options, jump_inference)
 end
+
+@inline _linear_jump_inference(solver::CMDGFMProjectionSolver) =
+    solver.jump_inference isa LinearJumpInference
+
+# A row on an exactly tangential face (`ratio = 0`, `β = 0`, only built by the
+# linear inference) imposes the increment of its inferred jump on the face's own
+# jump, `[u⁺]_f - [u*]_f = I(u⁺) - I(u*)`: on a flat interface between grid
+# lines the predictor jump of a continuous shear is then kept exactly, where
+# `[u⁺]_f = I(u⁺)` would replace it by the donors' extrapolation.
+@inline _incremental_row(stencil) = iszero(stencil.ratio) && iszero(stencil.beta)
 
 """Gauge-reduced pressure action backed by one tree-geometric GMG V-cycle."""
 struct CMDGFMReducedPressurePreconditioner{T, P}
@@ -40,7 +58,8 @@ struct CMDGFMReducedPressurePreconditioner{T, P}
     geometry_revision::UInt
 end
 
-"""Lower CMDGFM block preconditioner using pressure GMG and jump ILU."""
+"""Lower CMDGFM block preconditioner: pressure GMG, then the ILU of the local
+Schur complement `J - C D⁻¹ B` of the jump block ([`_cmdgfm_jump_schur!`](@ref))."""
 struct CMDGFMBlockPreconditioner{T, P, J, C}
     scalar_type::Type{T}
     pressure_preconditioner::P
@@ -277,6 +296,21 @@ omitted to fix the gauge, and `dt^2 * max(abs(r_jump) / h_face)`. For a
 shortened step retaining an inherited mixture-flux defect, convergence
 measures the mixture deviation from that target but still requires the
 actual normal defect to be within tolerance.
+
+`jump_inference` counts, for [`LinearJumpInference`](@ref), the rows with
+two donors per phase (`extrapolated_rows`), the `β = 0` rows without
+transverse term on exactly tangential faces and on faces without a regular
+row whose staggered normal is closer to the transverse axis
+(`tangential_rows`), the rows that make the interpolated normal jump vanish
+on the other faces without a regular row (`normal_rows`), and the faces that
+fall back to the constant inference because their stencil crosses a
+refinement-level transition (`level_fallbacks`) or a solid
+(`solid_fallbacks`), because a second donor is missing or does not carry its
+phase (`missing_donor_fallbacks`) or is a mixed face (`mixed_donor_fallbacks`),
+or because a face without a regular row has no normal row (no staggered
+normal, a tangential one, or no transverse mixed face; `normal_fallbacks`) or,
+with `|n_t| > |n_a|`, no tangential row (`tangential_fallbacks`). All are zero
+for [`ConstantJumpInference`](@ref).
 """
 struct CMDGFMProjectionStats{T}
     converged::Bool
@@ -297,6 +331,7 @@ struct CMDGFMProjectionStats{T}
     preconditioner::Symbol
     pressure_hierarchy_reused::Bool
     jump_factor_reused::Bool
+    jump_inference::_CMDGFMInferenceSummary
 end
 
 _dimensionless_residual(stats::CMDGFMProjectionStats) = max(
@@ -324,7 +359,8 @@ function Base.show(io::IO, stats::CMDGFMProjectionStats)
         ", underresolved_jump_rows=", stats.underresolved_jump_rows,
         ", preconditioner=", stats.preconditioner,
         ", pressure_hierarchy_reused=", stats.pressure_hierarchy_reused,
-        ", jump_factor_reused=", stats.jump_factor_reused, ")",
+        ", jump_factor_reused=", stats.jump_factor_reused,
+        ", jump_inference=", stats.jump_inference, ")",
     )
 end
 
@@ -546,10 +582,255 @@ end
     return fraction > floor && fraction < one(fraction) - floor
 end
 
+"""Whether an interior face and both of its cells have the cell `spacing`."""
+@inline function _cmdgfm_level_face(mesh, index, spacing)
+    face = mesh.faces[index]
+    return mesh.blocks[face.minus.block].spacing == spacing &&
+        mesh.blocks[face.plus.block].spacing == spacing
+end
+
+@inline function _cmdgfm_level_faces(mesh, faces, spacing)
+    for index in faces
+        _cmdgfm_level_face(mesh, index, spacing) || return false
+    end
+    return true
+end
+
+"""Whether a solid reduces the aperture or the open dual volume of a face."""
+@inline function _cmdgfm_solid_face(geometry, mesh, index)
+    isnothing(geometry) && return false
+    T = eltype(geometry.aperture)
+    tolerance = sqrt(eps(T))
+    return geometry.aperture[index] < one(T) - tolerance ||
+        geometry.face_dual_volumes[index] <
+        (one(T) - tolerance) * T(mesh.face_dual_volumes[index])
+end
+
+@inline function _cmdgfm_solid_faces(geometry, mesh, faces)
+    isnothing(geometry) && return false
+    for index in faces
+        _cmdgfm_solid_face(geometry, mesh, index) && return true
+    end
+    return false
+end
+
+function _cmdgfm_reset_inference!(storage::CMDGFMStencilStorage)
+    counts = storage.counts
+    counts.extrapolated_rows = counts.tangential_rows = counts.normal_rows = 0
+    counts.level_fallbacks = counts.solid_fallbacks = 0
+    counts.missing_donor_fallbacks = counts.mixed_donor_fallbacks = 0
+    counts.normal_fallbacks = counts.tangential_fallbacks = 0
+    return storage
+end
+
+"""The collinear neighbour of the donor `donor` of `face_index` on the far
+side from `face_index` (the next same-axis face on the same line): 0 if there
+is none, -1 if the vertex patches of `donor` hold more than one candidate."""
+function _cmdgfm_beyond_face(vertex_table, mesh, face_index, donor, buffer)
+    donor_face = mesh.faces[donor]
+    _cmdgfm_vertex_candidates(vertex_table, mesh, donor_face, donor, donor_face.axis, buffer)
+    beyond = 0
+    for index in buffer
+        index == face_index && continue
+        iszero(beyond) || return -1
+        beyond = index
+    end
+    return beyond
+end
+
+"""Second donors `(gas, liquid)` of the linear inference of the row of
+`face_index` with the donors `gas_face`, `liquid_face`, its transverse faces
+and its same-axis candidates `parallel`; `(0, 0)` and one fallback count where
+the stencil crosses a level transition or a solid, or where a second donor is
+missing, does not carry its phase or is itself mixed."""
+function _cmdgfm_second_donors!(
+        storage, interface, vertex_table, data, face, face_index, transverse,
+        parallel, gas_face, liquid_face,
+    )
+    counts = storage.counts
+    mesh = interface.mesh
+    geometry = interface.geometry
+    floor = interface.fraction_floor
+    spacing = mesh.blocks[face.minus.block].spacing
+    if length(parallel) != 2 || !_cmdgfm_level_face(mesh, face_index, spacing) ||
+            !_cmdgfm_level_faces(mesh, transverse, spacing) ||
+            !_cmdgfm_level_faces(mesh, parallel, spacing)
+        counts.level_fallbacks += 1
+        return 0, 0
+    end
+    if _cmdgfm_solid_face(geometry, mesh, face_index) ||
+            _cmdgfm_solid_faces(geometry, mesh, transverse) ||
+            _cmdgfm_solid_faces(geometry, mesh, parallel)
+        counts.solid_fallbacks += 1
+        return 0, 0
+    end
+    gas_second = _cmdgfm_beyond_face(vertex_table, mesh, face_index, gas_face, storage.beyond)
+    liquid_second = _cmdgfm_beyond_face(
+        vertex_table, mesh, face_index, liquid_face, storage.beyond,
+    )
+    if gas_second < 0 || liquid_second < 0 ||
+            (gas_second > 0 && !_cmdgfm_level_face(mesh, gas_second, spacing)) ||
+            (liquid_second > 0 && !_cmdgfm_level_face(mesh, liquid_second, spacing))
+        counts.level_fallbacks += 1
+        return 0, 0
+    end
+    if (gas_second > 0 && _cmdgfm_solid_face(geometry, mesh, gas_second)) ||
+            (liquid_second > 0 && _cmdgfm_solid_face(geometry, mesh, liquid_second))
+        counts.solid_fallbacks += 1
+        return 0, 0
+    end
+    fraction = data.liquid_fraction
+    if iszero(gas_second) || iszero(liquid_second) ||
+            fraction[gas_second] >= one(floor) - floor || fraction[liquid_second] <= floor
+        counts.missing_donor_fallbacks += 1
+        return 0, 0
+    end
+    if fraction[gas_second] > floor || fraction[liquid_second] < one(floor) - floor
+        counts.mixed_donor_fallbacks += 1
+        return 0, 0
+    end
+    counts.extrapolated_rows += 1
+    return gas_second, liquid_second
+end
+
+"""Row of [`LinearJumpInference`](@ref) on a mixed face without a regular row.
+With `|n_t| <= |n_a|` the interpolated normal jump of the projected state
+vanishes, `[u]_f + r sum(w_h [u]_h) = 0` with `r = n_t / n_a`, i.e. the `β = 1`
+row without inference. With `|n_t| > |n_a|` that row would not be weakly
+diagonally dominant, and the face gets the `β = 0` row of
+[`_cmdgfm_tangential_stencil!`](@ref) instead (the limit of the regular row for
+a normal along the transverse axis). Pushes the stencil and returns `true`, or
+counts why the face keeps its jump and returns `false`."""
+function _cmdgfm_normal_stencil!(
+        stencils, storage::CMDGFMStencilStorage{T}, interface, vertex_table, data,
+        face, face_index, normal, transverse, weights,
+    ) where {T}
+    counts = storage.counts
+    if isnothing(normal) || abs(normal[face.axis]) <= sqrt(eps(T))
+        counts.normal_fallbacks += 1
+        return false
+    end
+    # Only |r| <= 1 keeps the normal row weakly diagonally dominant; a face
+    # whose normal is closer to the transverse axis gets the tangential row.
+    if abs(normal[3 - face.axis]) > abs(normal[face.axis])
+        _cmdgfm_tangential_stencil!(
+            stencils, storage, interface, vertex_table, data, face,
+            face_index, transverse, weights, T(normal[3 - face.axis] / normal[face.axis]),
+        ) === :row && return true
+        counts.tangential_fallbacks += 1
+        return false
+    end
+    mesh = interface.mesh
+    geometry = interface.geometry
+    floor = interface.fraction_floor
+    tangent = 3 - face.axis
+    _cmdgfm_vertex_candidates(vertex_table, mesh, face, face_index, tangent, transverse)
+    filter!(transverse) do index
+        _cmdgfm_jump_active(data, index, floor) &&
+            data.liquid_aperture[index] + data.gas_aperture[index] > floor
+    end
+    spacing = mesh.blocks[face.minus.block].spacing
+    if !_cmdgfm_level_face(mesh, face_index, spacing) ||
+            !_cmdgfm_level_faces(mesh, transverse, spacing)
+        counts.level_fallbacks += 1
+        return false
+    end
+    if _cmdgfm_solid_face(geometry, mesh, face_index) ||
+            _cmdgfm_solid_faces(geometry, mesh, transverse)
+        counts.solid_fallbacks += 1
+        return false
+    end
+    resize!(weights, length(transverse))
+    for (local_index, index) in pairs(transverse)
+        weights[local_index] = data.liquid_fraction[index] *
+            (one(T) - data.liquid_fraction[index])
+    end
+    weight_sum = sum(weights)
+    if weight_sum <= zero(T)
+        # Without transverse jumps the condition would remove the whole jump.
+        counts.normal_fallbacks += 1
+        return false
+    end
+    weights ./= weight_sum
+    push!(
+        stencils, CMDGFMJumpStencil(
+            face_index, transverse, weights, T(normal[tangent] / normal[face.axis]),
+            0, 0, one(T), true, false,
+        ),
+    )
+    counts.normal_rows += 1
+    return true
+end
+
+"""Row with `β = 0` and no transverse term of [`LinearJumpInference`](@ref):
+on a face with an exactly tangential staggered normal (`ratio = 0`, imposed
+as an increment, see [`_incremental_row`](@ref)), and on a face without a
+regular row whose normal is closer to the transverse axis (`ratio = n_t/n_a`,
+from [`_cmdgfm_normal_stencil!`](@ref)). Pushes the stencil and returns
+`:row`; otherwise returns `:normal` (no admissible donors: an exactly
+tangential face takes the normal row) or `:fallback`."""
+function _cmdgfm_tangential_stencil!(
+        stencils, storage::CMDGFMStencilStorage{T}, interface, vertex_table, data,
+        face, face_index, transverse, weights, ratio = zero(T),
+    ) where {T}
+    counts = storage.counts
+    mesh = interface.mesh
+    geometry = interface.geometry
+    parallel = _cmdgfm_vertex_candidates(
+        vertex_table, mesh, face, face_index, face.axis, storage.parallel,
+    )
+    spacing = mesh.blocks[face.minus.block].spacing
+    if !_cmdgfm_level_face(mesh, face_index, spacing) ||
+            !_cmdgfm_level_faces(mesh, parallel, spacing)
+        counts.level_fallbacks += 1
+        return :fallback
+    end
+    if _cmdgfm_solid_face(geometry, mesh, face_index) ||
+            _cmdgfm_solid_faces(geometry, mesh, parallel)
+        counts.solid_fallbacks += 1
+        return :fallback
+    end
+    length(parallel) < 2 && return :normal
+    sort!(
+        parallel; by = index -> (
+            data.liquid_mass[index] / data.total_mass[index], index,
+        )
+    )
+    gas_face = first(parallel)
+    liquid_face = last(parallel)
+    if data.gas_mass[gas_face] < data.liquid_mass[gas_face] ||
+            data.liquid_mass[liquid_face] < data.gas_mass[liquid_face]
+        return :normal
+    end
+    empty!(transverse)
+    empty!(weights)
+    gas_second, liquid_second = _cmdgfm_second_donors!(
+        storage, interface, vertex_table, data, face, face_index, transverse,
+        parallel, gas_face, liquid_face,
+    )
+    counts.tangential_rows += 1
+    stencil = CMDGFMJumpStencil(
+        face_index, transverse, weights, ratio, gas_face, liquid_face,
+        zero(T), true, false, gas_second, liquid_second,
+    )
+    push!(
+        stencils,
+        gas_second > 0 ? _cmdgfm_dominant_row(stencil, data, one(T)) : stencil,
+    )
+    return :row
+end
+
 function _cmdgfm_jump_stencils(
         solver::CMDGFMProjectionSolver{T}, data;
         incident_faces = nothing, vertex_patches = nothing, storage = nothing,
     ) where {T}
+    linear = _linear_jump_inference(solver)
+    # The extension records its counts in the storage.
+    linear && isnothing(storage) && return _cmdgfm_jump_stencils(
+        solver, data; incident_faces, vertex_patches,
+        storage = CMDGFMStencilStorage(T),
+    )
+    isnothing(storage) || _cmdgfm_reset_inference!(storage)
     interface = solver.interface
     mesh = interface.mesh
     nx, ny = mesh.block_size
@@ -574,6 +855,8 @@ function _cmdgfm_jump_stencils(
         open_aperture = data.liquid_aperture[face_index] +
             data.gas_aperture[face_index]
         if open_aperture <= floor
+            # Closed by a solid: no row.
+            linear && (storage.counts.solid_fallbacks += 1)
             push!(
                 stencils,
                 _cmdgfm_unresolved_stencil(face_index, transverse, weights, T),
@@ -592,6 +875,10 @@ function _cmdgfm_jump_stencils(
                 # The Fortran reference suppresses a fraction-mixed face when
                 # its phase aperture is closed but a neighbouring pressure
                 # gradient jump is active in the divergence operator.
+                linear && _cmdgfm_normal_stencil!(
+                    stencils, storage, interface, vertex_table, data, face,
+                    face_index, _cmdgfm_face_normal(interface, face), transverse, weights,
+                ) && continue
                 push!(
                     stencils,
                     _cmdgfm_unresolved_stencil(face_index, transverse, weights, T),
@@ -601,6 +888,18 @@ function _cmdgfm_jump_stencils(
         end
         normal = _cmdgfm_face_normal(interface, face)
         if isnothing(normal) || abs(normal[face.axis]) <= sqrt(eps(T))
+            if linear
+                outcome = isnothing(normal) ? :normal :
+                    _cmdgfm_tangential_stencil!(
+                        stencils, storage, interface, vertex_table, data, face,
+                        face_index, transverse, weights,
+                    )
+                outcome === :row && continue
+                outcome === :normal && _cmdgfm_normal_stencil!(
+                    stencils, storage, interface, vertex_table, data, face,
+                    face_index, normal, transverse, weights,
+                ) && continue
+            end
             push!(
                 stencils,
                 _cmdgfm_unresolved_stencil(face_index, transverse, weights, T),
@@ -643,6 +942,10 @@ function _cmdgfm_jump_stencils(
         required_transverse = touches_boundary || crosses_level ? 1 : 2
         if length(transverse) < required_transverse ||
                 weight_sum <= zero(T)
+            linear && _cmdgfm_normal_stencil!(
+                stencils, storage, interface, vertex_table, data, face,
+                face_index, normal, transverse, weights,
+            ) && continue
             push!(
                 stencils,
                 _cmdgfm_unresolved_stencil(face_index, transverse, weights, T),
@@ -653,6 +956,7 @@ function _cmdgfm_jump_stencils(
         ratio_sum = abs(ratio)
         beta = one(T)
         gas_face = liquid_face = 0
+        gas_second = liquid_second = 0
         if ratio_sum > one(T)
             parallel = _cmdgfm_vertex_candidates(
                 vertex_table, mesh, face, face_index, face.axis,
@@ -669,6 +973,10 @@ function _cmdgfm_jump_stencils(
                 )
             end
             if length(parallel) < 2
+                linear && _cmdgfm_normal_stencil!(
+                    stencils, storage, interface, vertex_table, data, face,
+                    face_index, normal, transverse, weights,
+                ) && continue
                 push!(
                     stencils,
                     _cmdgfm_unresolved_stencil(face_index, transverse, weights, T),
@@ -688,6 +996,10 @@ function _cmdgfm_jump_stencils(
                 # gas inference face to be gas dominated and the liquid face
                 # to be liquid dominated. Without both, the row is explicitly
                 # classified as underresolved and xi is extended by zero.
+                linear && _cmdgfm_normal_stencil!(
+                    stencils, storage, interface, vertex_table, data, face,
+                    face_index, normal, transverse, weights,
+                ) && continue
                 push!(
                     stencils,
                     _cmdgfm_unresolved_stencil(face_index, transverse, weights, T),
@@ -706,13 +1018,21 @@ function _cmdgfm_jump_stencils(
             beta = clamp(
                 (one(T) - inferred_sum) / denominator, zero(T), one(T),
             )
+            if linear
+                gas_second, liquid_second = _cmdgfm_second_donors!(
+                    storage, interface, vertex_table, data, face, face_index,
+                    transverse, parallel, gas_face, liquid_face,
+                )
+            end
         end
+        stencil = CMDGFMJumpStencil(
+            face_index, transverse, weights, ratio,
+            gas_face, liquid_face, beta, true, false,
+            gas_second, liquid_second,
+        )
         push!(
             stencils,
-            CMDGFMJumpStencil(
-                face_index, transverse, weights, ratio,
-                gas_face, liquid_face, beta, true, false,
-            ),
+            gas_second > 0 ? _cmdgfm_dominant_row(stencil, data, one(T)) : stencil,
         )
     end
     return stencils
@@ -730,13 +1050,206 @@ end
             (gas.interior[candidate] - liquid.interior[candidate])
     end
     if stencil.gas_inference_face > 0
-        @inbounds value += (stencil.beta - one(T)) * (
-            gas.interior[stencil.gas_inference_face] -
-                liquid.interior[stencil.liquid_inference_face]
-        )
+        @inbounds value += (stencil.beta - one(T)) *
+            _cmdgfm_inferred_jump(liquid.interior, gas.interior, stencil)
     end
     return value
 end
+
+"""Inferred jump of a row: the donor difference `u_g(h_g) - u_l(h_l)`, or with
+second donors the extrapolation `(u_g(h_g) + θ (u_g(h_g) - u_g(h_gg))) -
+(u_l(h_l) + θ (u_l(h_l) - u_l(h_ll)))` with the slope weight `θ` of the row
+(1: linear)."""
+@inline function _cmdgfm_inferred_jump(liquid, gas, stencil)
+    gas_face = stencil.gas_inference_face
+    liquid_face = stencil.liquid_inference_face
+    stencil.gas_extrapolation_face > 0 || return @inbounds gas[gas_face] - liquid[liquid_face]
+    gas_second = stencil.gas_extrapolation_face
+    liquid_second = stencil.liquid_extrapolation_face
+    slope = stencil.slope
+    return @inbounds ((1 + slope) * gas[gas_face] - slope * gas[gas_second]) -
+        ((1 + slope) * liquid[liquid_face] - slope * liquid[liquid_second])
+end
+
+"""
+Ramp `[a, b]` of the crossing-speed limiter of [`LinearJumpInference`](@ref)
+in the crossing ratio `w/U` (see [`_cmdgfm_crossing_slope`](@ref)): the
+extrapolation slope weight is `θ = 1` for `w/U ≤ a`, `θ = 0` for `w/U ≥ b`,
+and the smoothstep `1 - s²(3 - 2s)`, `s = (w/U - a)/(b - a)`, in between.
+
+Where an interface sweeps through a row face, the face turns single-phase and
+its last inferred value becomes the first donor of the next row: with the
+linear extrapolation the values left behind obey the double-integrator
+recursion `u_{k+1} = 2u_k - u_{k-1} + e_k` (`k` the cells crossed), whose
+noise grows like `k^{3/2}`; any `θ ≤ θ* < 1` at the last write turns it into
+a bounded slope with a random walk of the value, like the one-donor rule.
+Stability therefore fixes no threshold: the ramp is a modelling choice that
+separates moving interfaces (`w/U` of order one: the front and rear of a
+translating drop, a standing capillary wave) from quasi-static ones whose
+normal speed is driven only by slow growth (shear layers, Kelvin–Helmholtz),
+which keep the third-order inference. Measured (#171): the
+translating drop at density ratio 1000 needs `b ≤ 3/8` at `n = 128`
+(`[1/4, 3/4]`: max|u - U| 0.98, `[1/8, 3/8]`: 0.30, `[1/16, 3/16]`: 0.29,
+one-donor rule 0.34); viscous Kelvin–Helmholtz is unchanged for `[0, 1/8]`
+and `[1/16, 3/16]`; Rayleigh–Taylor at density ratio 3 prefers the lower
+ramp (error 0.015, 0.010, 0.0072 for the three ramps, one-donor 0.0056). The
+smoothstep keeps `θ` a continuous function of the velocity, so the rows do
+not switch in time.
+"""
+const _CMDGFM_CROSSING_RAMP = (1 / 16, 3 / 16)
+
+"""Mass-weighted mixture velocity on face `index`, or `nothing` on an empty or
+non-finite face."""
+@inline function _cmdgfm_face_mixture(data, liquid, gas, index)
+    T = eltype(liquid)
+    total = data.total_mass[index]
+    total > zero(T) || return nothing
+    mixture = zero(T)
+    data.liquid_mass[index] > zero(T) && (mixture += data.liquid_mass[index] * liquid[index])
+    data.gas_mass[index] > zero(T) && (mixture += data.gas_mass[index] * gas[index])
+    isfinite(mixture) || return nothing
+    return mixture / total
+end
+
+"""Transverse mixture velocity at a face: the mean of the mixture velocities
+of the transverse faces of its two cells (`nothing` without one)."""
+function _cmdgfm_transverse_mixture(face, data, liquid, gas, mesh, incidence)
+    T = eltype(liquid)
+    tangent = 3 - face.axis
+    nx, ny = mesh.block_size
+    speed = zero(T)
+    count = 0
+    for reference in (face.minus, face.plus)
+        for index in _cmdgfm_cell_faces(incidence, _cell_index(reference, nx, ny))
+            mesh.faces[index].axis == tangent || continue
+            mixture = _cmdgfm_face_mixture(data, liquid, gas, index)
+            isnothing(mixture) && continue
+            speed += mixture
+            count += 1
+        end
+    end
+    return iszero(count) ? nothing : speed / count
+end
+
+"""Mixture velocity vector at face `index` (physical axes): the face's own
+mixture velocity along its axis and the transverse mean
+([`_cmdgfm_transverse_mixture`](@ref)) along the other; `nothing` if either is
+unavailable."""
+function _cmdgfm_mixture_vector(index, data, liquid, gas, mesh, incidence)
+    face = mesh.faces[index]
+    along = _cmdgfm_face_mixture(data, liquid, gas, index)
+    isnothing(along) && return nothing
+    across = _cmdgfm_transverse_mixture(face, data, liquid, gas, mesh, incidence)
+    isnothing(across) && return nothing
+    return face.axis == 1 ? (along, across) : (across, along)
+end
+
+"""Extrapolation slope weight `θ` of a row with second donors from the state
+`liquid`, `gas` before the projection. The interface normal speed at the face
+is the normal component of the mixture velocity, `w = |u_mix,f · n_f|` with
+the staggered PLIC normal ([`_cmdgfm_face_normal`](@ref)): the speed at which
+the interface crosses the face for a kinematic interface. `U` is the largest
+mixture speed over the face and its four donors (at least `floatmin`), and `θ`
+follows the ramp [`_CMDGFM_CROSSING_RAMP`](@ref) in `w/U`. Mixture velocities
+and `|·|` make `θ` label symmetric; it uses the current state only. Without a
+normal or a mixture velocity the row keeps `θ = 1`."""
+function _cmdgfm_crossing_slope(
+        stencil::CMDGFMJumpStencil{T}, data, liquid, gas, mesh, incidence, interface,
+    ) where {T}
+    normal = _cmdgfm_face_normal(interface, mesh.faces[stencil.face])
+    velocity = _cmdgfm_mixture_vector(stencil.face, data, liquid, gas, mesh, incidence)
+    (isnothing(normal) || isnothing(velocity)) && return one(T)
+    normal_speed = abs(velocity[1] * normal[1] + velocity[2] * normal[2])
+    scale = hypot(velocity...)
+    for donor in (
+            stencil.gas_inference_face, stencil.gas_extrapolation_face,
+            stencil.liquid_inference_face, stencil.liquid_extrapolation_face,
+        )
+        donor_velocity = _cmdgfm_mixture_vector(donor, data, liquid, gas, mesh, incidence)
+        isnothing(donor_velocity) || (scale = max(scale, hypot(donor_velocity...)))
+    end
+    lower, upper = T.(_CMDGFM_CROSSING_RAMP)
+    s = clamp((normal_speed / max(scale, floatmin(T)) - lower) / (upper - lower), zero(T), one(T))
+    return one(T) - s * s * (3 - 2s)
+end
+
+"""Row `stencil` with second donors, given the slope weight `slope` (`θ`) and
+the `β` that keep its jump-block row weakly diagonally dominant. The first
+donors enter the linear row with the weight `1 + θ`, so its off-diagonal sum is
+at most `β|r| + (1 - β)(1 + θ)s`, `s` the inference sum of the first donors
+(the cross mass fractions, techref `eq:projection:dominance`). `β = 0` gives
+`(1 + θ)s`, so `θ` is capped at `(1 - s)/s` (binding only for `s > 1/2`); a
+row with transverse faces takes the `β` of the published rule for the sum
+`(1 + θ)s`, the largest for which the bound does not exceed one, and a
+tangential row keeps `β = 0`. `θ = 0` gives the one-donor row; `θ` and `β`
+are continuous in the slope weight and the mass fractions."""
+function _cmdgfm_dominant_row(stencil::CMDGFMJumpStencil{T}, data, slope) where {T}
+    gas_face = stencil.gas_inference_face
+    liquid_face = stencil.liquid_inference_face
+    inferred_sum = data.liquid_mass[gas_face] / data.total_mass[gas_face] +
+        data.gas_mass[liquid_face] / data.total_mass[liquid_face]
+    inferred_sum > zero(T) && (slope = min(slope, (one(T) - inferred_sum) / inferred_sum))
+    beta = stencil.beta
+    if !isempty(stencil.transverse_faces)
+        effective = (one(T) + slope) * inferred_sum
+        beta = clamp(
+            (one(T) - effective) / (abs(stencil.ratio) - effective), zero(T), one(T),
+        )
+    end
+    return CMDGFMJumpStencil{T}(
+        stencil.face, stencil.transverse_faces, stencil.transverse_weights,
+        stencil.ratio, gas_face, liquid_face, beta, stencil.resolved,
+        stencil.full_remove, stencil.gas_extrapolation_face,
+        stencil.liquid_extrapolation_face, slope,
+    )
+end
+
+"""Set the slope weight `θ` ([`_cmdgfm_crossing_slope`](@ref), capped by
+[`_cmdgfm_dominant_row`](@ref) with its `β`) of every row of `stencils` with
+second donors from `velocity`. `θ` is frozen in the row: velocity, jump and
+pressure-gradient columns all use it, so the row stays homogeneous in the
+projected state and a single-valued gradient is still removed exactly.
+
+With the pressure `cache` of a workspace, `θ` is also frozen with the rows of
+the reconstructed interface: the first projection after the interface has
+been reconstructed (or after [`_cmdgfm_release_crossing!`](@ref)) evaluates it
+from the state it projects, and every further projection with the same
+interface reuses it, so that projecting a projected state again changes
+nothing. Without `cache`, `θ` is evaluated from `velocity`."""
+function _cmdgfm_limit_extrapolation!(
+        stencils::AbstractVector{CMDGFMJumpStencil{T}}, data,
+        velocity::TwoPhaseVelocity, interface;
+        incidence = _cmdgfm_incident_faces(interface.mesh), cache = nothing,
+    ) where {T}
+    liquid, gas = velocity[1].interior, velocity[2].interior
+    mesh = interface.mesh
+    frozen = !isnothing(cache) && cache.crossing_frozen &&
+        cache.crossing_reconstructions == interface.reconstructions[]
+    if !isnothing(cache) && !frozen
+        resize!(cache.crossing_slope, length(mesh.faces))
+        fill!(cache.crossing_slope, T(NaN))
+        cache.crossing_reconstructions = interface.reconstructions[]
+        cache.crossing_frozen = true
+    end
+    for row in eachindex(stencils)
+        stencil = stencils[row]
+        stencil.gas_extrapolation_face > 0 || continue
+        slope = isnothing(cache) ? T(NaN) : cache.crossing_slope[stencil.face]
+        if isnan(slope)
+            slope = _cmdgfm_crossing_slope(stencil, data, liquid, gas, mesh, incidence, interface)
+            isnothing(cache) || (cache.crossing_slope[stencil.face] = slope)
+        end
+        stencils[row] = _cmdgfm_dominant_row(stencil, data, slope)
+    end
+    return stencils
+end
+
+"""Release the slope weights frozen in `workspace`: its next projection
+evaluates them from the state it projects. A flow releases them before each
+of its projections (the step's predictor, the state transferred by a
+regrid), so that `θ` never outlives the step that evaluated it."""
+_cmdgfm_release_crossing!(workspace::CMDGFMProjectionWorkspace) =
+    (workspace.pressure_cache.crossing_frozen = false; workspace)
 
 function _cmdgfm_jump_blocks(
         stencils, mixed_faces, data, common_gradient, pressure_indices,
@@ -759,6 +1272,9 @@ function _cmdgfm_jump_blocks(
         (Int[], Int[], T[]) : _cmdgfm_clear_triplets!(storage.pressure_triplets)
     right_hand_side = isnothing(storage) ? zeros(T, length(stencils)) : storage.jump_rhs
     resize!(right_hand_side, length(stencils))
+    offset = isnothing(storage) ? zeros(T, length(stencils)) : storage.jump_offset
+    resize!(offset, length(stencils))
+    fill!(offset, zero(T))
     underresolved = 0
     liquid = velocity[1].interior
     gas = velocity[2].interior
@@ -794,7 +1310,13 @@ function _cmdgfm_jump_blocks(
             @inbounds rhs += coefficient *
                 (gas[candidate] - liquid[candidate]) / T(dt)
         end
-        if stencil.gas_inference_face > 0
+        if stencil.gas_inference_face > 0 && stencil.gas_extrapolation_face > 0
+            rhs = _cmdgfm_extrapolated_inference!(
+                rows, columns, values, pressure_rows, pressure_columns,
+                pressure_values, rhs, row, stencil, data, jump_index,
+                gradient_rows, pressure_lookup, liquid, gas, dt,
+            )
+        elseif stencil.gas_inference_face > 0
             gas_face = stencil.gas_inference_face
             liquid_face = stencil.liquid_inference_face
             inference_factor = stencil.beta - one(T)
@@ -825,8 +1347,15 @@ function _cmdgfm_jump_blocks(
                     gradient_face, inference_factor * sign
                 )
             end
-            @inbounds rhs += inference_factor *
-                (gas[gas_face] - liquid[liquid_face]) / T(dt)
+            @inbounds rhs += inference_factor * (
+                _incremental_row(stencil) ? gas[face] - liquid[face] :
+                    gas[gas_face] - liquid[liquid_face]
+            ) / T(dt)
+        end
+        if _incremental_row(stencil) && stencil.gas_inference_face > 0
+            @inbounds offset[row] = (stencil.beta - one(T)) * (
+                _cmdgfm_inferred_jump(liquid, gas, stencil) - (gas[face] - liquid[face])
+            )
         end
         @inbounds right_hand_side[row] = rhs
     end
@@ -850,6 +1379,49 @@ function _cmdgfm_jump_blocks(
         (storage.jump_block, storage.jump_pressure)
     end
     return pressure_block, jump_block, right_hand_side, underresolved
+end
+
+# Inference part of a row with second donors (LinearJumpInference): every donor
+# term of the one-donor row (velocity, xi column, common-gradient row) is taken
+# with the weight 1 + θ at the first donor and -θ at the second (θ = 1: twice
+# and once with the opposite sign).
+function _cmdgfm_extrapolated_inference!(
+        rows, columns, values, pressure_rows, pressure_columns, pressure_values,
+        rhs::T, row, stencil, data, jump_index, gradient_rows, pressure_lookup,
+        liquid, gas, dt,
+    ) where {T}
+    gas_face = stencil.gas_inference_face
+    liquid_face = stencil.liquid_inference_face
+    gas_second = stencil.gas_extrapolation_face
+    liquid_second = stencil.liquid_extrapolation_face
+    inference_factor = stencil.beta - one(T)
+    slope = stencil.slope
+    for (candidate, gamma, weight) in (
+            (gas_face, data.liquid_mass[gas_face] / data.total_mass[gas_face], 1 + slope),
+            (gas_second, data.liquid_mass[gas_second] / data.total_mass[gas_second], -slope),
+            (liquid_face, data.gas_mass[liquid_face] / data.total_mass[liquid_face], 1 + slope),
+            (liquid_second, data.gas_mass[liquid_second] / data.total_mass[liquid_second], -slope),
+        )
+        coefficient = weight * inference_factor * gamma
+        local_index = _cmdgfm_pressure_index(jump_index, candidate)
+        iszero(local_index) && continue
+        push!(rows, row)
+        push!(columns, local_index)
+        push!(values, coefficient)
+    end
+    for (gradient_face, weight) in (
+            (gas_face, 1 + slope), (gas_second, -slope),
+            (liquid_face, -(1 + slope)), (liquid_second, slope),
+        )
+        _cmdgfm_append_gradient_row!(
+            pressure_rows, pressure_columns, pressure_values, gradient_rows,
+            pressure_lookup, row, gradient_face, weight * inference_factor,
+        )
+    end
+    return rhs + inference_factor * (
+        _incremental_row(stencil) ? gas[stencil.face] - liquid[stencil.face] :
+            _cmdgfm_inferred_jump(liquid, gas, stencil)
+    ) / T(dt)
 end
 
 function _assemble_cmdgfm_system!(
@@ -919,6 +1491,9 @@ function _assemble_cmdgfm_cached!(
         push!(stencils, stencil)
         push!(mixed_faces, stencil.face)
     end
+    _linear_jump_inference(solver) && _cmdgfm_limit_extrapolation!(
+        stencils, data, velocity, interface; incidence = cache.incidence, cache,
+    )
     pressure_positive = cache.reduced_pressure
     pressure_jump = _cmdgfm_pressure_jump(cache, data, mixed_faces, mesh)
     common_gradient = _cmdgfm_gradient_rows(cache, interface.geometry)
@@ -954,6 +1529,8 @@ function _assemble_cmdgfm_cached!(
         right_hand_side, pressure_indices, pressure_anchors, mixed_faces,
         stencils, pressure_positive, underresolved, shared_multigrid,
         inherited_cell_flux, inherited_weight,
+        jump_inference = _cmdgfm_inference_summary(cache.stencil_storage.counts),
+        jump_offset = cache.jump_offset,
     )
 end
 
@@ -1095,18 +1672,21 @@ function _cmdgfm_reduced_pressure(
     )
 end
 
-function _cmdgfm_same_jump_matrix(reuse, assembled)
+function _cmdgfm_same_jump_matrix(reuse, assembled, schur)
     reuse isa CMDGFMBlockPreconditioner || return false
     settings_match = reuse.mixed_faces == assembled.mixed_faces
     settings_match || return false
     # ILU factors contain numerical values, not just a symbolic pattern.
     # Reusing a factor after a moving interface changes these values can be
     # arbitrarily poor even when the sparsity pattern stays unchanged.
-    return reuse.jump_column_pointers == assembled.jump_block.colptr &&
-        reuse.jump_row_values == rowvals(assembled.jump_block) &&
-        reuse.jump_values == nonzeros(assembled.jump_block)
+    return reuse.jump_column_pointers == schur.colptr &&
+        reuse.jump_row_values == rowvals(schur) &&
+        reuse.jump_values == nonzeros(schur)
 end
 
+
+# `source` copied into `buffer`, resized.
+_cmdgfm_kept!(buffer, source) = copyto!(resize!(buffer, length(source)), source)
 
 function _cmdgfm_block_preconditioner(
         solver::CMDGFMProjectionSolver{T}, assembled, workspace,
@@ -1118,29 +1698,37 @@ function _cmdgfm_block_preconditioner(
     pressure, pressure_reused = _cmdgfm_pressure_preconditioner(
         solver, assembled, settings, old_pressure,
     )
+    schur = isempty(assembled.jump_block) ? assembled.jump_block :
+        _cmdgfm_jump_schur!(workspace.pressure_cache)
     jump_reused = !isempty(assembled.jump_block) &&
         settings.reuse_jump_factorization &&
-        _cmdgfm_same_jump_matrix(reuse, assembled)
+        _cmdgfm_same_jump_matrix(reuse, assembled, schur)
     jump = if isempty(assembled.jump_block)
         nothing
     elseif jump_reused
         reuse.jump_preconditioner
     else
         incomplete_lu_preconditioner(
-            assembled.jump_block;
-            drop_tolerance = settings.jump_drop_tolerance,
+            schur; drop_tolerance = settings.jump_drop_tolerance,
         )
     end
-    jump_work = jump_reused ? reuse.jump_work :
-        zeros(T, size(assembled.jump_block, 1))
-    jump_column_pointers = jump_reused ? reuse.jump_column_pointers :
-        copy(assembled.jump_block.colptr)
-    jump_row_values = jump_reused ? reuse.jump_row_values :
-        copy(rowvals(assembled.jump_block))
-    jump_values = jump_reused ? reuse.jump_values :
-        copy(nonzeros(assembled.jump_block))
-    mixed_faces = jump_reused ? reuse.mixed_faces :
-        copy(assembled.mixed_faces)
+    # A new factor keeps the previous block's buffers (resized), so a moving
+    # interface reallocates only the ILU itself.
+    previous = reuse isa CMDGFMBlockPreconditioner{T} ? reuse : nothing
+    jump_work, jump_column_pointers, jump_row_values, jump_values, mixed_faces =
+    if jump_reused
+        reuse.jump_work, reuse.jump_column_pointers, reuse.jump_row_values,
+            reuse.jump_values, reuse.mixed_faces
+    elseif isnothing(previous)
+        zeros(T, size(assembled.jump_block, 1)), copy(schur.colptr),
+            copy(rowvals(schur)), copy(nonzeros(schur)), copy(assembled.mixed_faces)
+    else
+        fill!(resize!(previous.jump_work, size(assembled.jump_block, 1)), zero(T)),
+            _cmdgfm_kept!(previous.jump_column_pointers, schur.colptr),
+            _cmdgfm_kept!(previous.jump_row_values, rowvals(schur)),
+            _cmdgfm_kept!(previous.jump_values, nonzeros(schur)),
+            _cmdgfm_kept!(previous.mixed_faces, assembled.mixed_faces)
+    end
     block = CMDGFMBlockPreconditioner{
         T, typeof(pressure), _CMDGFMJumpILU{T}, typeof(assembled.jump_pressure),
     }(
@@ -1361,8 +1949,10 @@ function _cmdgfm_initial_solution!(
         if nx > 0
             preconditioner isa CMDGFMBlockPreconditioner || continue
             # For a chosen increment, approximately satisfy the current
-            # jump row: J*xi = rhs_jump - jump_pressure*phi. Reuse the current
-            # jump ILU and its scratch, not an old face jump on a moved sheet.
+            # jump rows, xi ≈ (J - C D⁻¹ B)⁻¹ (rhs_jump - C*phi) with the
+            # block preconditioner's factor (the jump rows after the local
+            # pressure answer). Reuse it and its scratch, not an old face
+            # jump on a moved sheet.
             jump_rhs = preconditioner.jump_work
             copyto!(jump_rhs, view(rhs, (np + 1):length(rhs)))
             mul!(
@@ -1459,10 +2049,7 @@ function cmdgfm_jump_interpolant(
     face = stencil.face
     normal_jump = @inbounds gas.interior[face] - liquid.interior[face]
     if stencil.gas_inference_face > 0
-        inferred = @inbounds(
-            gas.interior[stencil.gas_inference_face] -
-                liquid.interior[stencil.liquid_inference_face]
-        )
+        inferred = _cmdgfm_inferred_jump(liquid.interior, gas.interior, stencil)
         normal_jump = normal_jump / beta + (one(T) - inv(beta)) * inferred
     end
     tangential_jump = zero(T)
@@ -1477,13 +2064,17 @@ function cmdgfm_jump_interpolant(
         (tangential_jump, normal_jump)
 end
 
-function _cmdgfm_normal_velocity_defect(velocity::TwoPhaseVelocity, stencils, dt)
+# `offsets` are the predictor offsets of the incremental rows (zero elsewhere).
+function _cmdgfm_normal_velocity_defect(
+        velocity::TwoPhaseVelocity, stencils, dt, offsets = nothing,
+    )
     T = eltype(velocity[1])
     mesh = velocity[1].mesh
     defect = zero(T)
-    for stencil in stencils
-        value = abs(_cmdgfm_normal_velocity_row(velocity, stencil))
-        defect = max(defect, T(dt) * value / _projection_face_spacing(mesh, stencil.face))
+    for (row, stencil) in pairs(stencils)
+        value = _cmdgfm_normal_velocity_row(velocity, stencil)
+        isnothing(offsets) || (value -= offsets[row])
+        defect = max(defect, T(dt) * abs(value) / _projection_face_spacing(mesh, stencil.face))
     end
     return defect
 end
@@ -1717,7 +2308,9 @@ function _project_cmdgfm_assembled!(
             mixture_constraint, assembled.pressure_operator.volumes,
         )
     end
-    normal_velocity_defect = _cmdgfm_normal_velocity_defect(velocity, assembled.stencils, dt)
+    normal_velocity_defect = _cmdgfm_normal_velocity_defect(
+        velocity, assembled.stencils, dt, assembled.jump_offset,
+    )
     momentum = zeros(T, 2)
     identity_error = zero(T)
     pressure_jump = assembled.pressure_operator.gradient_operator.pressure_jump
@@ -1758,6 +2351,6 @@ function _project_cmdgfm_assembled!(
         T(tolerance), (momentum[1], momentum[2]), identity_error,
         _cmdgfm_jump_diagonal_margin(assembled.jump_block), np, nx,
         assembled.underresolved, preconditioner_name,
-        pressure_hierarchy_reused, jump_factor_reused,
+        pressure_hierarchy_reused, jump_factor_reused, assembled.jump_inference,
     )
 end

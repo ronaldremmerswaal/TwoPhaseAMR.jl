@@ -45,6 +45,7 @@ _two_velocity_projection_solver(projection::CMDGFMProjection, field, density) =
     field; density,
     preconditioner = projection.preconditioner,
     preconditioner_options = projection.preconditioner_options,
+    jump_inference = projection.jump_inference,
 )
 _two_velocity_projection_solver(projection::MimeticProjection, field, density) =
     MimeticProjectionSolver(field; density)
@@ -113,6 +114,9 @@ function _project_two_velocity!(
     )
     projection = state.projection_solver
     model = solver.two_phase
+    # Every flow projection evaluates the slope weights of its rows from the
+    # state it projects (#171).
+    _cmdgfm_release_crossing!(state.projection_workspace)
     compatible = isnothing(solver.geometry)
     if compatible
         pressure_prepared || _refresh_pressure_substep!(solver, workspace, model)
