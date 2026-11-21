@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><meta name="referrer" content="no-referrer"/><title>Quick start · TwoPhaseAMR.jl</title><meta name="title" content="Quick start · TwoPhaseAMR.jl"/><meta property="og:title" content="Quick start · TwoPhaseAMR.jl"/><meta property="twitter:title" content="Quick start · TwoPhaseAMR.jl"/><meta name="description" content="Documentation for TwoPhaseAMR.jl."/><meta property="og:description" content="Documentation for TwoPhaseAMR.jl."/><meta property="twitter:description" content="Documentation for TwoPhaseAMR.jl."/><meta property="og:url" content="https://ronaldremmerswaal.github.io/TwoPhaseAMR.jl/stable/getting-started/"/><meta property="twitter:url" content="https://ronaldremmerswaal.github.io/TwoPhaseAMR.jl/stable/getting-started/"/><link rel="canonical" href="https://ronaldremmerswaal.github.io/TwoPhaseAMR.jl/stable/getting-started/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.63.2/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">TwoPhaseAMR.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><input class="collapse-toggle" id="menuitem-2" type="checkbox" checked/><label class="tocitem" for="menuitem-2"><span class="docs-label">Getting started</span><i class="docs-chevron"></i></label><ul class="collapsed"><li class="is-active"><a class="tocitem" href>Quick start</a><ul class="internal"><li><a class="tocitem" href="#A-single-phase-simulation"><span>A single-phase simulation</span></a></li><li><a class="tocitem" href="#Mesh-resolution-and-storage-blocks"><span>Mesh resolution and storage blocks</span></a></li><li><a class="tocitem" href="#A-two-phase-simulation"><span>A two-phase simulation</span></a></li><li><a class="tocitem" href="#Numerical-configuration"><span>Numerical configuration</span></a></li></ul></li><li><a class="tocitem" href="../choosing-a-model/">Choosing a model</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3" type="checkbox"/><label class="tocitem" for="menuitem-3"><span class="docs-label">Tutorials</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../single-phase-tutorial/">Single-phase flow</a></li><li><a class="tocitem" href="../adaptive-refinement/">Adaptive refinement</a></li><li><a class="tocitem" href="../diagnostics/">Diagnostics</a></li><li><a class="tocitem" href="../visualization/">Visualization</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4" type="checkbox"/><label class="tocitem" for="menuitem-4"><span class="docs-label">How-to guides</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../how-to/">Common tasks</a></li><li><a class="tocitem" href="../advanced-workflows/">Advanced workflows</a></li><li><a class="tocitem" href="../examples/">Run and extend examples</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5" type="checkbox"/><label class="tocitem" for="menuitem-5"><span class="docs-label">Explanation</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../method/">Method reference</a></li><li><a class="tocitem" href="../two-phase-flow/">Two-phase flow</a></li><li><a class="tocitem" href="../two-velocity-advection/">Two-velocity advection</a></li><li><a class="tocitem" href="../staggered-advection/">Staggered advection</a></li><li><a class="tocitem" href="../pressure-gradient/">Pressure gradient</a></li><li><a class="tocitem" href="../poisson/">Poisson solver</a></li><li><a class="tocitem" href="../navier-stokes/">Navier–Stokes method</a></li><li><a class="tocitem" href="../shared-memory-parallelism/">Shared-memory parallelism</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-6" type="checkbox"/><label class="tocitem" for="menuitem-6"><span class="docs-label">Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../api/">Public API</a></li><li><a class="tocitem" href="../api-functions/">API functions</a></li></ul></li><li><a class="tocitem" href="../migration/">Migration</a></li><li><input class="collapse-toggle" id="menuitem-8" type="checkbox"/><label class="tocitem" for="menuitem-8"><span class="docs-label">Developer guide</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../architecture/">Developer architecture</a></li><li><a class="tocitem" href="../adding-an-equation-system/">Adding an equation system</a></li><li><a class="tocitem" href="../testing/">Testing and validation</a></li><li><a class="tocitem" href="../api-decisions/">API decisions</a></li><li><a class="tocitem" href="../literature-todos/">Literature coverage TODOs</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Getting started</a></li><li class="is-active"><a href>Quick start</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Quick start</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/main/docs/src/getting-started.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Getting-started"><a class="docs-heading-anchor" href="#Getting-started">Getting started</a><a id="Getting-started-1"></a><a class="docs-heading-anchor-permalink" href="#Getting-started" title="Permalink"></a></h1><p>This tutorial builds a flow, advances it, and inspects a diagnostic history. The same sequence applies to single-phase and both two-phase velocity models.</p><h2 id="A-single-phase-simulation"><a class="docs-heading-anchor" href="#A-single-phase-simulation">A single-phase simulation</a><a id="A-single-phase-simulation-1"></a><a class="docs-heading-anchor-permalink" href="#A-single-phase-simulation" title="Permalink"></a></h2><pre><code class="language-julia hljs">using TwoPhaseAMR
+
+mesh = BlockTreeMesh(
+    block_size = (8, 8), extent = (1.0, 1.0),
+)
+physics = SinglePhase(
+    density = 1.0, dynamic_viscosity = 0.02,
+)
+flow = FlowSimulation(
+    mesh, physics;
+    velocity = (x, y, time, axis) -&gt;
+        axis == 1 ? sinpi(2x) * cospi(2y) :
+                    -cospi(2x) * sinpi(2y),
+    boundary = FreeSlip(),
+    dt = 0.01,
+    diagnostics = (KineticEnergy(), DivergenceNorm()),
+)
+
+result = simulate!(flow, 0.01; tolerance = 1e-8, max_cycles = 40)
+(result.time, result.steps, result.pressure.converged)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">(0.01, 1, true)</code></pre><p><code>flow.velocity</code>, <code>flow.pressure</code>, and <code>flow.solver</code> are the same field and equation-system objects used by the lower-level API. <code>flow.workspace</code> is retained between calls. A second call continues the calculation:</p><pre><code class="language-julia hljs">continued = simulate!(flow, 0.02; tolerance = 1e-8, max_cycles = 40)
+(flow.time, continued.steps, continued.total_steps)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">(0.02, 1, 2)</code></pre><p>Diagnostic histories are independent of visualization:</p><pre><code class="language-julia hljs">energy = diagnostic_history(flow, :kinetic_energy)
+(energy.times, energy.steps, energy.values)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">([0.0, 0.01, 0.02], [0, 1, 2], [0.25, 0.242230600091876, 0.23471419948760974])</code></pre><p>Print the complete end-of-run summary with:</p><pre><code class="language-julia hljs">print_simulation_summary(flow, continued)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">TwoPhaseAMR simulation summary
+  model: single phase
+  velocity field: FaceVelocity
+  density: 1.0
+  dynamic viscosity: 0.02
+  boundary: FreeSlip
+  advection: LaxWendroff
+  embedded geometry: false
+  final time: 0.02
+  steps this run: 1
+  total steps: 2
+  mesh updates this run: 0
+  total mesh updates: 0
+  final mesh:
+    leaf blocks: 1
+    active cells: 64
+    levels: [0]
+    block size: (8, 8)
+    refinement criteria: 0
+  pressure projection:
+    converged: true
+    iterations: 1
+    residual: 2.06807 -&gt; 1.42109e-14
+    method: cg
+    preconditioner: tree_geometric_multigrid
+  diagnostics (2):
+    kinetic_energy [3]: 0.25 -&gt; 0.234714  (change -0.0152858)
+    divergence_norm [3]: 6.28037e-16 -&gt; 4.57262e-16  (change -1.70775e-16)</code></pre><h2 id="Mesh-resolution-and-storage-blocks"><a class="docs-heading-anchor" href="#Mesh-resolution-and-storage-blocks">Mesh resolution and storage blocks</a><a id="Mesh-resolution-and-storage-blocks-1"></a><a class="docs-heading-anchor-permalink" href="#Mesh-resolution-and-storage-blocks" title="Permalink"></a></h2><p><code>base_mesh</code> is the physical level-zero resolution. <code>block_size</code> controls storage and scheduling. The base resolution must be divisible by the block size componentwise:</p><pre><code class="language-julia hljs">rectangular_mesh = BlockTreeMesh(
+    extent = (1.0, 3.0),
+    base_mesh = (32, 96),
+    block_size = (8, 8),
+    periodic = (true, false),
+)
+(rectangular_mesh.base_mesh, rectangular_mesh.block_size,
+ nblocks(rectangular_mesh))</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">((32, 96), (8, 8), 48)</code></pre><p>When <code>base_mesh</code> is omitted, it equals <code>block_size</code>. Refinement levels are measured relative to this base mesh.</p><h2 id="A-two-phase-simulation"><a class="docs-heading-anchor" href="#A-two-phase-simulation">A two-phase simulation</a><a id="A-two-phase-simulation-1"></a><a class="docs-heading-anchor-permalink" href="#A-two-phase-simulation" title="Permalink"></a></h2><p>An <a href="../api/#TwoPhaseAMR.InterfaceField"><code>InterfaceField</code></a> stores liquid volume divided by Cartesian cell volume. Construct it from a level set; liquid is the region where <code>phi &lt;= 0</code>. The constructor integrates cut-cell volume rather than sampling the centre.</p><pre><code class="language-julia hljs">mesh = BlockTreeMesh(
+    block_size = (8, 8), periodic = (false, false), max_level = 2,
+)
+interface = InterfaceField(
+    mesh, (x, y) -&gt; hypot(x - 0.5, y - 0.6) - 0.15,
+)
+physics = TwoPhase(
+    interface;
+    density = (1000.0, 1.0),
+    dynamic_viscosity = (1e-3, 1.8e-5),
+    surface_tension = 0.072, # shorthand for SurfaceTension(...; method=CGFM())
+    gravity = (0.0, -9.81),
+)
+flow = FlowSimulation(
+    mesh, physics;
+    velocity_model = OneVelocityModel(),
+    boundary = FreeSlip(),
+    diagnostics = (KineticEnergy(), LinearMomentum(), PhaseVolume()),
+)
+simulate!(flow, 1e-4; dt = 1e-4)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">(time = 0.0001, steps = 1, pressure = LinearSolverStats(cycles=1, converged=true, initial_l2=64.37842872298, initial_linf=162.3991332039502, final_l2=2.65697509625514e-13, final_linf=9.094947017729282e-13, target_linf=1.4901161193847656, residual_scale=1.0e8, removed_rhs_mean=8.881784197001252e-16, method=:cg, preconditioner=:tree_geometric_multigrid), mesh_updates = 0, total_steps = 1, total_mesh_updates = 0)</code></pre><p>Select separate intrinsic phase velocities explicitly:</p><pre><code class="language-julia hljs">two_velocity_flow = FlowSimulation(
+    mesh, physics;
+    velocity_model = TwoVelocityModel(
+        interface_transport = FrozenInterfaceFluxes(),
+        pressure_projection = CMDGFMProjection(),
+    ),
+    boundary = FreeSlip(),
+)
+simulate!(two_velocity_flow, 1e-4; dt = 1e-4)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">(time = 0.0001, steps = 1, pressure = CMDGFMProjectionStats(converged=true, iterations=3, initial_residual=12.6898027297744, final_residual=2.0159158719931707e-10, matrix_asymmetry=6.161107266633053, mixture_divergence=7.012957922714058e-13, mixture_volume_defect=7.012957922714059e-17, normal_velocity_defect=4.0555090481588646e-17, target_defect=1.4901161193847656e-8, momentum_error=(-5.734278922626237e-9, 0.0011769104053008111), momentum_identity_error=9.094947017729282e-13, minimum_jump_diagonal_margin=0.14735338671968823, unknowns=(`p`=63, `xi`=10), underresolved_jump_rows=17, preconditioner=cmdgfm_block, pressure_hierarchy_reused=false, jump_factor_reused=false), mesh_updates = 0, total_steps = 1, total_mesh_updates = 0)</code></pre><p>A shared velocity initializer is copied into both phases. A tuple of liquid and gas callables or <code>FaceVelocity</code> fields initializes them independently.</p><h2 id="Numerical-configuration"><a class="docs-heading-anchor" href="#Numerical-configuration">Numerical configuration</a><a id="Numerical-configuration-1"></a><a class="docs-heading-anchor-permalink" href="#Numerical-configuration" title="Permalink"></a></h2><p>Physics is not mixed into the linear-solver keyword list:</p><pre><code class="language-julia hljs">numerics = NavierStokesOptions(
+    advection = AdvectionOptions(scheme = MC()),
+    pressure = LinearSolverOptions(
+        preconditioner = :tree_geometric,
+        krylov_options = (; rtol = 1e-8),
+    ),
+    diffusion = LinearSolverOptions(preconditioner = :tree_geometric),
+    multigrid = MultigridOptions(
+        coarse_size = 32, pre_sweeps = 2, post_sweeps = 2,
+    ),
+)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">NavierStokesOptions{AdvectionOptions{MonotonizedCentral, MonotonizedCentral}, LinearSolverOptions{Nothing, @NamedTuple{rtol::Float64}, Symbol, @NamedTuple{}}, LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}, MultigridOptions}(AdvectionOptions{MonotonizedCentral, MonotonizedCentral}(MonotonizedCentral(), MonotonizedCentral()), LinearSolverOptions{Nothing, @NamedTuple{rtol::Float64}, Symbol, @NamedTuple{}}(nothing, (rtol = 1.0e-8,), :tree_geometric, NamedTuple()), LinearSolverOptions{Nothing, @NamedTuple{}, Symbol, @NamedTuple{}}(nothing, NamedTuple(), :tree_geometric, NamedTuple()), MultigridOptions(32, 2, 2, 32))</code></pre><p>AMR state is similarly explicit:</p><pre><code class="language-julia hljs">criterion = InterfaceRefinementIndicator(interface; level = 2)
+adaptivity = Adaptivity(criteria = (criterion,))
+flow = FlowSimulation(
+    mesh, physics; numerics, adaptivity,
+    velocity_model = OneVelocityModel(),
+)
+simulate!(flow, 1e-4; dt = 1e-4)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">(time = 0.0001, steps = 1, pressure = LinearSolverStats(cycles=1, converged=true, initial_l2=64.37842872298, initial_linf=162.3991332039502, final_l2=2.65697509625514e-13, final_linf=9.094947017729282e-13, target_linf=1.4901161193847656, residual_scale=1.0e8, removed_rhs_mean=8.881784197001252e-16, method=:cg, preconditioner=:tree_geometric_multigrid), mesh_updates = 1, total_steps = 1, total_mesh_updates = 1)</code></pre><p>See <a href="../api/">Public API</a> for the option matrix, <a href="../adaptive-refinement/">Adaptive refinement</a> for regridding, and <a href="../visualization/">Visualization</a> for live output.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Home</a><a class="docs-footer-nextpage" href="../choosing-a-model/">Choosing a model »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.20.0 on <span class="colophon-date" title="Sunday 8 November 2026 01:34">Sunday 8 November 2026</span>. Using Julia version 1.13.3.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
