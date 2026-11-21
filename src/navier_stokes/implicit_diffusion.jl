@@ -274,20 +274,21 @@ end
 # mass, which then dominates the energy and the restricted residual by 1/h²,
 # and the V-cycle loses mesh independence. Covered faces are therefore left to
 # the smoother, and a covered coarse face acts as a zero wall value.
+# `fine_faces`/`coarse_faces` map the transfer's rows/columns to mesh faces
+# (a component's `local_to_global`, or `eachindex(mesh.faces)` for a
+# full-vector transfer).
 function _remove_covered_staggered_transfer!(
-        prolongation::SparseMatrixCSC{T, Int}, fine_geometry, fine_component,
-        coarse_geometry, coarse_component,
+        prolongation::SparseMatrixCSC{T, Int}, fine_geometry, fine_faces,
+        coarse_geometry, coarse_faces,
     ) where {T}
     rows = rowvals(prolongation)
     values = nonzeros(prolongation)
     fine_volumes = fine_geometry.face_dual_volumes
     coarse_volumes = coarse_geometry.face_dual_volumes
     for column in axes(prolongation, 2)
-        coarse_covered = iszero(
-            coarse_volumes[coarse_component.local_to_global[column]],
-        )
+        coarse_covered = iszero(coarse_volumes[coarse_faces[column]])
         for pointer in nzrange(prolongation, column)
-            fine_face = fine_component.local_to_global[rows[pointer]]
+            fine_face = fine_faces[rows[pointer]]
             (coarse_covered || iszero(fine_volumes[fine_face])) &&
                 (values[pointer] = zero(T))
         end
@@ -318,9 +319,9 @@ function _tree_staggered_component(
             _remove_covered_staggered_transfer!(
                 prolongation,
                 geometry_levels[index],
-                _staggered_component(diffusion_operators[index], Val(Axis)),
+                _staggered_component(diffusion_operators[index], Val(Axis)).local_to_global,
                 geometry_levels[index + 1],
-                _staggered_component(diffusion_operators[index + 1], Val(Axis)),
+                _staggered_component(diffusion_operators[index + 1], Val(Axis)).local_to_global,
             )
         end
         if !iszero(reused_new_start) && index >= reused_new_start
