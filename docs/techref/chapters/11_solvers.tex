@@ -733,6 +733,24 @@ here also requires the same boundary type and the same $s$:
 reuse the coarse levels. Matrix preconditioners (\code{:ilu}, \dots) are built
 from the symmetric shifted stiffness $s\viscstiff{k}+\dualvolmat$.
 
+\emph{Embedded solids.} With a solid, the hierarchy takes the solver's
+geometry as the pressure hierarchy does (\cref{sec:solvers:transfer};
+\code{preconditioner_options=(; geometry)}, which the
+\code{NavierStokesSystem} passes itself): every coarse mesh carries the
+geometrically restricted solid, the cut-cell operator is rediscretised on it,
+so the coarse levels keep the walls, and the transfer drops every entry whose
+fine or coarse face is completely covered. A covered face keeps an algebraic
+unit volume and no flux, against open volumes of order $h^2$; a transfer that
+reaches it puts coarse corrections into this artificial mass, and its residual
+dominates the restriction, by a factor up to $h^{-2}$. Before, the coarse
+levels were rediscretised without the solid and through the covered faces:
+around a circle ($L=8$, $R=1.3$, $s=h^2$) CG took $10/15/29/56$ iterations at
+$n=32/64/128/256$ on a uniform mesh and $15/27/56/115$ on a composite one,
+and after five stand-alone V-cycles all of the error energy at $n=256$ sat on
+covered faces. Now it takes $9/10/10/11$ and $11/12/13/16$ ($13/14/17/17$ and
+$13/17/17/20$ for $s=1$). A hierarchy with geometry rebuilds its coarse levels
+after every regrid instead of reusing them.
+
 \emph{Two phases.} The coupled system~\cref{eq:viscosity:phase-midpoint},
 $(\massmat+\tfrac12\dt\,\strainmat^{\transpose}\stressw\strainmat)\velo^{\stage{2}}=\rhsvec$,
 is symmetric positive definite and solved by CG with the factorised action of
@@ -748,6 +766,24 @@ LU coarse solve are those of \cref{sec:solvers:vcycle}. Because the density,
 the viscosity and $\dt$ change in every step, the hierarchy is refreshed on
 every solve. With two velocities there is one such solve for the mass-weighted
 mixture velocity (\cref{sec:viscosity:time}).
+With a solid, this hierarchy takes the geometry in the same way as the
+single-phase one (the \code{NavierStokesSystem} passes it, also for the
+two-velocity projections, whose viscous preconditioners use this V-cycle):
+each coarse stress operator is rediscretised on the restricted solid, and the
+transfer drops the covered faces. In addition its Jacobi
+smoother uses per-row weights
+$\omega_i=\min\bigl(1,\tfrac43\,a_{ii}/\textstyle\sum_j\abs{a_{ij}}\bigr)$
+instead of the global Gershgorin weight: next to a cut cell a stress row has
+$\sum_j\abs{a_{ij}}/a_{ii}$ up to $3.9$, against $2.4$--$2.7$ in the bulk, and
+the global weight then damps every row for those few, increasingly so as the
+mesh resolves more cut cells. The weighted smoother stays symmetric and
+convergent, $2\operatorname{diag}(a_{ii}/\omega_i)-A\succeq\tfrac12\operatorname{diag}(\sum_j\abs{a_{ij}})$.
+Around a circle ($L=8$, $R=1.3$, interface across the solid, viscosity ratio
+$100$, $\dt/2=h^2$) CG took $20/62/141/209$ iterations at $n=32/64/128/256$
+on a uniform mesh and $71/168/291/541$ on a composite one, and now takes
+$13/15/17/16$ and $21/24/24/26$; without the solid it takes $13$ and
+$19$--$21$. For $\dt/2=1$ the iterations still grow ($25/37/53/68$, uniform),
+as they do without the solid ($25/34/44/59$).
 
 \begin{implnote}
 \apitype{StaggeredEllipticOperator}\code{(diffusion_operator; reaction=1, diffusion=1)},
@@ -761,15 +797,19 @@ and \apifun{solve!}\code{(solution, solver, rhs; tolerance=sqrt(eps(T)), max_cyc
 hierarchy \srcsym{src/navier_stokes/implicit_diffusion.jl}{TreeStaggeredGeometricMultigridPreconditioner},
 \srcsym{src/navier_stokes/implicit_diffusion.jl}{TreeStaggeredMultigridComponent},
 \srcsym{src/navier_stokes/implicit_diffusion.jl}{DenseStaggeredCoarseLU},
-transfer \srcsym{src/solvers/multigrid/tree_coarsening.jl}{_tree_face_prolongation};
+transfer \srcsym{src/solvers/multigrid/tree_coarsening.jl}{_tree_face_prolongation},
+\srcsym{src/navier_stokes/implicit_diffusion.jl}{_remove_covered_staggered_transfer!},
+\srcsym{src/navier_stokes/system.jl}{_diffusion_preconditioner_options};
 matrix preconditioners \srcsym{src/operators/elliptic.jl}{_staggered_stable_matrix};
 two phases \srcsym{src/two_phase/diffusion/variable_diffusion_solver.jl}{VariableStaggeredDiffusionSolver},
 \srcsym{src/two_phase/diffusion/variable_diffusion_preconditioner.jl}{TreeVariableDiffusionPreconditioner},
 \srcsym{src/two_phase/diffusion/variable_diffusion_preconditioner.jl}{_refresh_tree_variable_diffusion_preconditioner!},
-\srcsym{src/two_phase/diffusion/variable_diffusion_preconditioner.jl}{_cell_viscosity_from_log!};
+\srcsym{src/two_phase/diffusion/variable_diffusion_preconditioner.jl}{_cell_viscosity_from_log!},
+\srcsym{src/two_phase/diffusion/variable_diffusion_preconditioner.jl}{_local_jacobi_relaxation!};
 rebuild with the current step \srcsym{src/navier_stokes/flow_simulation.jl}{step!}.
 Tests: \testsym{test/operators/staggered_diffusion.jl}{implicit midpoint staggered elliptic solve},
 \testsym{test/operators/staggered_diffusion.jl}{staggered base-mesh multigrid},
+\testsym{test/operators/embedded_wall_rows.jl}{geometry-aware viscous multigrid is mesh independent around a solid},
 \testsym{test/operators/staggered_diffusion.jl}{external BiCGSTAB and staggered preconditioners},
 \testsym{test/navier_stokes/navier_stokes.jl}{fixed-topology staggered diffusion refresh},
 \testsym{test/navier_stokes/navier_stokes.jl}{zero-shift expansion and non-tree staggered refresh},
@@ -777,6 +817,7 @@ Tests: \testsym{test/operators/staggered_diffusion.jl}{implicit midpoint stagger
 \testsym{test/navier_stokes/navier_stokes.jl}{staggered refresh after AMR hierarchy reuse},
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{Rediscretized variable diffusion on pruned trees},
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable diffusion refactorization with Float32 coefficients},
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{geometry-aware variable diffusion multigrid is mesh independent around a solid},
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable stress shifted solve on fixed and adapted trees},
 \testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Two-phase pressure and diffusion solver configuration}.
 \end{implnote}
@@ -829,8 +870,24 @@ $(\mathsf{G}\mathsf{x})_c=\mathsf{x}_c-\mathsf{x}_{a(c)}$ maps a cell function
 to the retained cells $\cellsret$ with $a(c)$ the anchor of the component of
 $c$ (so $\mathsf{G}^{\transpose}$ adds a residual to its cell and subtracts it
 from the anchor), and $\tilde{\jumpblock}$ is the Crout ILU with drop
-tolerance $10^{-3}$ of the jump block $\jumpblock$. The ILU factor is reused
-while the jump block is unchanged, and without a solid the one-velocity
+tolerance $10^{-3}$ of the local Schur complement
+\begin{equation}\label{eq:solvers:jump-schur}
+  \jumpblock-\jumpblockp\,\mathsf{D}_{\pres}^{-1}\,\mathsf{B},\qquad
+  \mathsf{D}_{\pres}=\operatorname{diag}\kktS,\qquad
+  \mathsf{B}=\jumpmat_{\facesjump\cellsret}^{\transpose}\diag{\apgfm{}}_{\facesjump},
+\end{equation}
+the jump rows after the local answer of the pressure (\issue{171}). With the
+factor of $\jumpblock$ alone the preconditioner ignores that answer, and the
+error of the inexact V-cycle reaches the jump rows through $\jumpblockp$
+undamped: on a post-regrid system of the Stokes-3 wave (6399 pressure and
+654 jump unknowns, linear jump inference) BiCGSTAB needed 322 iterations to
+$10^{-10}$ (2000 without convergence on the same state with the published
+rows; 141 in the flow at its tolerance), against 16 with~\cref{eq:solvers:jump-schur}
+(whole-system ILU: 8; an exact pressure solve with either jump factor: 7).
+The diagonal of $\kktS$ is the part of its inverse that the local jump rows
+see; the exact Schur complement, which needs a pressure solve per jump
+unknown, gave the same 16 iterations. The ILU factor is reused
+while that matrix is unchanged, and without a solid the one-velocity
 operator and hierarchy are shared when their settings agree. The alternatives
 are \code{:ilu}, one ILU with drop tolerance $10^{-3}$ of the whole scaled
 matrix $\hat{\sysmat}$, and no preconditioner. The first guess is zero or the
@@ -850,6 +907,7 @@ scaling \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_krylov_sc
 with \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_ScaledProjectionPreconditioner},
 preconditioner \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{CMDGFMBlockPreconditioner}
 and \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{CMDGFMReducedPressurePreconditioner}~\cref{eq:solvers:block-preconditioner},
+jump factor \srcsym{src/two_phase/projection/cmdgfm_cache.jl}{_cmdgfm_jump_schur!}~\cref{eq:solvers:jump-schur},
 \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_pressure_preconditioner},
 first guess \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_initial_solution!}.
 Tests: \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM block-preconditioned BiCGSTAB},

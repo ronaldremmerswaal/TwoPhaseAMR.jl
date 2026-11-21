@@ -489,6 +489,51 @@ The result is clipped to the mesh,
 and is undefined (\code{NaN}) where no estimate exists and in pure cells; the
 force of \cref{ch:forces} raises an error on a face that needs it.
 
+\emph{Curvature quality.} With the curvature the reconstruction stores its
+height-function coverage $\curvquality{c}\in[0,1]$, which selects the face
+curvature of \cref{sec:forces:curvature}. For an LHF curvature, with the
+blended LHF normal $\inormal$, the set $K_c$ of axes with an LHF candidate and
+the central heights $\hdisc{0}^{(i)}$~\cref{eq:interface:height} of the
+candidates (the interface crossing of the column through $c$, in cells from
+its centre),
+\begin{equation}\label{eq:interface:coverage}
+  \curvquality{c}=\max_{k\in K_c}\smoothstep\roundpar{\frac{\pi/4+\hftol-\arccos(\abs{\inormal\cdot\unitvec{k}}/\abs{\inormal}_2)}{\hftol}}
+  \cdot\frac{\sum_i\fitweight{i}\hflocal{i}}{\sum_i\fitweight{i}},\qquad
+  \hflocal{i}=\smoothstep\roundpar{2\roundpar{1-\abs{\hdisc{0}^{(i)}}}};
+\end{equation}
+$\curvquality{c}=1$ for a domain-wall contact curvature and for a triple-cell
+fit with the contact row, which carry the boundary condition, and
+$\curvquality{c}=0$ for every other GHF fit and in pure cells. The angular
+factor is one if an axis with a candidate lies within $\pi/4$ of $\inormal$, the
+principal direction that every normal has (so always with candidates on both
+axes: the angles of $\inormal$ to $\unitvec{1}$ and $\unitvec{2}$ add up to
+$\pi/2$). With a candidate on the secondary axis only, it fades with the
+smoothstep of~\cref{eq:interface:lhf} over the upper half of that quality's
+transition, from $\pi/4$ to the cutoff $\pi/4+\hftol=3\pi/10$, where the
+candidate drops out and the cell falls back to the GHF fit; it uses only the
+constants of~\cref{eq:interface:lhf}. The angular factor is evaluated at the blended
+normal, whose angles to the two axes add up to $\pi/2$; the candidates' own
+normals are not complementary (in the protruding diagonal cells of the
+floating-drop fixture of~\cref{sec:forces:curvature} their
+qualities~\cref{eq:interface:lhf} add up to $0.967$, not one). The quality
+itself would be a poorer coverage: it is $\frac12$ for a lone principal-axis
+candidate at $\pi/4$, whose curvature the cell uses in full. Its sum over the
+axes at the blended normal as the coverage leaves such GHF shares in the face
+curvature, which on the generic drop position at $n=32$ raised the kinetic
+energy twentyfold (\cref{par:verif:floating-drop}).
+
+The locality $\hflocal{i}$ (blended with the candidate weights of the
+curvature) is one while the candidate's interface crossing lies in the cell,
+$\abs{\hdisc{0}^{(i)}}\le\frac12$, and fades with the same smoothstep to zero
+when the crossing reaches the centre of the neighbouring cell,
+$\abs{\hdisc{0}^{(i)}}\ge1$; both bounds are geometric, no constant is tuned. A
+nearly full or empty cell whose columns cross the interface in a neighbour has
+a valid height-function curvature, but it is the curvature of that
+neighbour's interface, up to a cell away from the face where it would be
+used. Under gravity the curvature varies along the interface (hydrostatic
+gradient $(\dens^{\liq}-\dens^{\gas})g/\surftens$), and such a value displaced the face
+curvature of the sessile drop (\cref{sec:forces:curvature}).
+
 \emph{Checks} (\code{figures/generate.jl}). On the circle fixture (exact
 curvature \chkCircleKappa) the LHF curvatures deviate by at most $\chkLhfExact$ and
 the GHF curvatures of the \chkWyCells\ remaining mixed cells by $\chkGhfExact$;
@@ -511,7 +556,13 @@ the contact row
 \srcsym{src/interface/height_functions.jl}{_embedded_ghf_constraint}~\cref{eq:interface:contact-row};
 choice and clipping
 \srcsym{src/interface/interface_field.jl}{_reconstruct_interface_cell!} and
-\srcsym{src/interface/interface_field.jl}{_clip_curvature_to_mesh}~\cref{eq:interface:clip}.
+\srcsym{src/interface/interface_field.jl}{_clip_curvature_to_mesh}~\cref{eq:interface:clip};
+the coverage \srcsym{src/interface/height_functions.jl}{_lhf_geometry}~\cref{eq:interface:coverage}
+with \srcsym{src/interface/height_functions.jl}{_height_coverage} and
+\srcsym{src/interface/height_functions.jl}{_height_locality},
+stored in \code{curvature_quality} by
+\srcsym{src/interface/interface_field.jl}{_reconstruct_interface_cell!} and
+\srcsym{src/interface/interface_field.jl}{_reconstruct_embedded_triple_cell!}.
 Tests: \testsym{test/indicator/phase/height_functions.jl}{Circular LHF curvature converges}
 (order at least $1.7$),
 \testsym{test/indicator/phase/height_functions.jl}{Curvature is bounded by the local mesh resolution},
@@ -570,7 +621,13 @@ $\coordk{t}=-2\hphys{1}/(\parcoef{1}+\abs{\tan\cangle})<0$, before the first
 column, whereas the other root has it beyond. The slope in the curvature is
 evaluated at the wall cell, $\coordk{t}=-\cellwidth{c}{t}$
 (\cref{dev:interface:contact-acute}). The first wall (left, right, bottom, top)
-whose branch has valid heights determines the curvature.
+whose branch has valid heights determines the curvature. After the last pass
+of the reconstruction every cut cell of the first row along a domain wall with
+a contact angle takes the energy-consistent contact-line
+curvature~\cref{eq:forces:contact-line} of \cref{sec:forces:contact-line} in
+place of these formulas (and of the one-sided, local or generalised value of
+the other cut cells of the row); a run of cut cells of the row without valid
+wall-parallel columns keeps them.
 
 \emph{Embedded walls.} In a triple cell the curvature is the GHF
 fit~\cref{eq:interface:ghf} with one more row~\thesis{eq.~(4.97)}. The triple point
@@ -648,13 +705,20 @@ uniformly smaller.
 \code{contact_angle}, \code{embedded_contact_angle} of
 \apitype{InterfaceField}; domain walls
 \srcsym{src/interface/height_functions.jl}{_wall_height} and
-\srcsym{src/interface/height_functions.jl}{_contact_curvature}~\cref{eq:interface:contact-right,eq:interface:contact-acute};
+\srcsym{src/interface/height_functions.jl}{_contact_curvature}~\cref{eq:interface:contact-right,eq:interface:contact-acute},
+replaced in the first row by
+\srcsym{src/interface/height_functions.jl}{_contact_line_curvature!}~\cref{eq:forces:contact-line};
 embedded walls
 \srcsym{src/interface/height_functions.jl}{_embedded_ghf_constraint}~\cref{eq:interface:contact-row}.
 Tests:
 \testsym{test/indicator/phase/height_functions.jl}{Contact-angle curvature converges at triple points}
 (sessile drop at $20^\circ$, $55^\circ$, $90^\circ$, $125^\circ$, $160^\circ$:
-order at least $0.7$, at least $1.8$ for $90^\circ$),
+the contact-angle formulas and the stored curvature of the touching cells, the
+contact-line curvature~\cref{eq:forces:contact-line}, converge with order at
+least $0.7$, at least $1.8$ for $90^\circ$; the stored curvature is in
+addition bounded by $1.25$ times its measured errors, $0.0023$--$0.29$ for
+$1/R=3.33$; at $160^\circ$ it falls only at the orders $0.44$, $0.53$,
+recorded as broken, with errors below those of the formulas),
 \testsym{test/indicator/phase/height_functions.jl}{Contact angle changes curvature but not the PLIC interface},
 \testsym{test/indicator/geometry.jl}{Embedded contact angles do not change PLIC planes},
 \testsym{test/indicator/geometry.jl}{Embedded GHF contact curvature converges on sloped walls}

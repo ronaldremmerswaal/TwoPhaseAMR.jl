@@ -9,7 +9,7 @@ function capillary_figure_case(model, target_time)
         fields = VisualizationFieldRegistry()
         register_default_fields!(fields, run.flow)
         recorder = Recorder(
-            fields; diagnostics = run.flow, keyframes = EquispacedTimes(41),
+            fields; diagnostics = run.flow, keyframes = EquispacedTimes(81),
             preview = nothing
         )
         result = simulate!(run.flow, target_time; observer = recorder)
@@ -58,8 +58,8 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     export_animation(
         joinpath(outdir, "wave.gif"), store; field = :velocity_magnitude,
         camera = (0.0, 1.0, 0.05, 0.45), diagnostics = [:amplitude],
-        references = Dict(:amplitude => :analytical_amplitude), fps = 10, duration = 4.0,
-        size = (1150, 340)
+        references = Dict(:amplitude => :analytical_amplitude), fps = 10,
+        nframes = length(times), size = (1150, 340)
     )
     return nothing
 end

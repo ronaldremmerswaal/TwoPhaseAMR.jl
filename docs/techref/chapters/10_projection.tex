@@ -547,8 +547,215 @@ holds for any solution. As in the thesis~\thesis{\S7.4}, the CMDGFM
 conserves momentum but not kinetic energy: its jump rows are not the adjoint
 of its coupling block, and no energy identity is claimed.
 
-\emph{Checks} (\code{cmdgfm_check}). On the four fixtures of
-\cref{tab:projection:counts}, an independent classification
+\emph{Jump inference (\issue{171}).} The inference term of~\cref{eq:projection:cmdgfm-row}
+extrapolates each phase from one donor, a constant extrapolation into the
+mixed band. For a single-valued velocity $U(y)$ (no jump, solenoidal) and an
+$x$-face with the donors at $y_f\pm h$ the inferred jump is
+$U(y_f+h)-U(y_f-h)=\pm2hU'(y_f)+O(h^3)$, and in a resolved shear layer the
+projection creates a tangential phase-velocity jump of that size. The option
+\code{jump_inference} of \apitype{CMDGFMProjection} selects the rule:
+\apitype{LinearJumpInference} (the default) changes four things;
+\apitype{ConstantJumpInference} is the CMDGFM above, the thesis reference.
+(i)~Linear inference: let $\inferface{\gas}_2$ and $\inferface{\liq}_2$ be the
+same-axis faces one step beyond the donors on the line through $f$ (the
+collinear neighbour of $\inferface{\phase}$ other than $f$). A row with
+inference faces uses, with the slope weight $\slopeweight_f\in[0,1]$ of~(iv),
+\begin{equation}\label{eq:projection:cmdgfm-row-linear}
+  \normaljump{f}(\velo^{\liq},\velo^{\gas})=\jump{\velo}_f
+  +\jumpbeta_f\normratio{f}\sum_{h\in\transfaces{f}}\transweight{f}{h}\jump{\velo}_h
+  +(\jumpbeta_f-1)\squarepar{\roundpar{(1+\slopeweight_f)\velo^{\gas}_{\inferface{\gas}}-\slopeweight_f\velo^{\gas}_{\inferface{\gas}_2}}
+  -\roundpar{(1+\slopeweight_f)\velo^{\liq}_{\inferface{\liq}}-\slopeweight_f\velo^{\liq}_{\inferface{\liq}_2}}},
+\end{equation}
+whose inferred jump for $\slopeweight_f=1$ is $-2h^3U'''(y_f)+O(h^5)$ for a
+smooth single-valued field; in the linear row~\cref{eq:projection:cmdgfm-jump-row}
+every donor term (the $\gradjump$ column with its mass fraction and the row of
+$\forcemaptv\jumpmat\pres$) is taken with the weight $1+\slopeweight_f$ at
+$\inferface{\phase}$ and $-\slopeweight_f$ at $\inferface{\phase}_2$.
+(ii)~Tangential rows: a face with a staggered normal and
+$\abs{\normalstag_{f,k}}\le\sqrt{\machineeps}$ (rule~3) gets the limit of the
+row for an interface along a grid line, $\jumpbeta_f=0$ without transverse
+term, with the inference faces of~\cref{eq:projection:beta} (the face keeps
+rule~5), imposed as an increment of the face's own jump,
+\begin{equation}\label{eq:projection:tangential-row}
+  \jump{\velo^{\timelevel{n+1}}}_f-\jump{\velo^{\stage{3}}}_f
+  =\infer_f(\velo^{\timelevel{n+1}})-\infer_f(\velo^{\stage{3}}),
+  \qquad
+  \infer_f(\velo)=\roundpar{(1+\slopeweight_f)\velo^{\gas}_{\inferface{\gas}}-\slopeweight_f\velo^{\gas}_{\inferface{\gas}_2}}
+  -\roundpar{(1+\slopeweight_f)\velo^{\liq}_{\inferface{\liq}}-\slopeweight_f\velo^{\liq}_{\inferface{\liq}_2}},
+\end{equation}
+so that the tangential pressure-gradient jump
+$\jump{\dens^{-1}}\partial_t\pres$ is imposed also on such an interface. The
+matrix row is that of~\cref{eq:projection:cmdgfm-row-linear} with
+$\jumpbeta_f=0$; only its right-hand side differs. The increment form keeps a
+continuous shear across a flat interface between grid lines exactly (the
+absolute form $\jump{\velo^{\timelevel{n+1}}}_f=\infer_f(\velo^{\timelevel{n+1}})$
+replaces the face's jump by the donors' extrapolation and created $0.21$,
+$0.047$, $0.0071$ at $n=32,64,128$ in the laboratory of \issue{171}); it is
+not homogeneous in the projected state, which matters only on exactly
+tangential faces.
+(iii)~Normal rows: every other face of $\facesmix$ without a row that is open
+and has a staggered normal with $\abs{\normratio{f}}\le1$ (in particular
+$\abs{\normalstag_{f,k}}>\sqrt{\machineeps}$) and at least one transverse face with a positive weight gets the unknown
+$\gradjump_f$ and the condition that the interpolated normal jump of the
+projected state vanishes,
+\begin{equation}\label{eq:projection:normal-row}
+  \normalstag_{f,k}\jump{\velo^{\timelevel{n+1}}}_f
+  +\normalstag_{f,t}\sum_{h\in\transfaces{f}}\transweight{f}{h}\jump{\velo^{\timelevel{n+1}}}_h=0,
+  \qquad\text{i.e.}\qquad
+  \gradjump_f+\normratio{f}\sum_{h\in\transfaces{f}}\transweight{f}{h}\gradjump_h
+  =\frac{1}{\dt}\roundpar{\jump{\velo^{\stage{3}}}_f+\normratio{f}\sum_{h\in\transfaces{f}}\transweight{f}{h}\jump{\velo^{\stage{3}}}_h},
+\end{equation}
+with $\transfaces{f}$ and the weights of~\cref{eq:projection:transverse}:
+the row~\cref{eq:projection:cmdgfm-row} with $\jumpbeta_f=1$ and no inference
+term. The audit of \issue{171} prescribed instead the explicit value
+$\gradjump_f=\normalstag_{f,k}(\normalstag_{f,k}\jump{\velo^{\stage{3}}}_f
++\normalstag_{f,t}\sum_h\transweight{f}{h}\jump{\velo^{\stage{3}}}_h)/\dt$
+from the predictor. Because the solve then changes the transverse jumps, the
+projected state does not satisfy that condition, and projecting it again
+changed it again (by $6\times10^{-2}$, $2\times10^{-2}$, \dots\ of the velocity
+scale over repeated projections on a tilted interface). As a row of the
+system the condition is homogeneous in the projected state; momentum is
+conserved for any $\gradjump$ by~\cref{eq:projection:phase-identities}. The
+off-diagonal sum of the row~\cref{eq:projection:normal-row} is at most
+$\abs{\normratio{f}}\sum_h\transweight{f}{h}=\abs{\normratio{f}}$, so the
+restriction $\abs{\normratio{f}}\le1$ keeps it weakly diagonally dominant;
+without it a row of a nearly tangential face has an off-diagonal sum
+$\abs{\normratio{f}}\gg1$, and a Kelvin--Helmholtz case at the density ratio
+$1000$ diverged (smallest diagonal margin $-123$). A face without a row and
+$\abs{\normratio{f}}>1$ gets instead the row~(ii) with $\jumpbeta_f=0$, its
+own ratio and the absolute form
+$\jump{\velo^{\timelevel{n+1}}}_f=\infer_f(\velo^{\timelevel{n+1}})$ (the
+limit of the regular row for a normal along the transverse axis; it keeps
+its jump only without admissible inference faces). On a vortex sheet over
+$y=y_0+\epsilon\cos2\pi x$ with $\epsilon=0.64h$ at $n=128$ such faces lie
+next to the crests: keeping their jump misses the density-driven change of
+the sheet strength there (relative error $0.085$ at the density ratio
+$1000$), the row gives $0.010$ (thesis rows $0.142$).
+(iv)~Crossing-speed limiter: the slope weight of a row with second donors is
+\begin{equation}\label{eq:projection:crossing-limiter}
+  \slopeweight_f=1-s^2(3-2s),\qquad
+  s=\min\curlypar{1,\max\curlypar{0,\frac{w_f/U_f-a}{b-a}}},\qquad
+  w_f=\abs{\bar{\velo}_f\cdot\normalstag_f},\quad
+  (a,b)=\roundpar{\tfrac1{16},\tfrac3{16}},
+\end{equation}
+with the mixture velocity vector $\bar{\velo}_f$ of the face (its own
+mass-weighted mixture velocity along axis $k$, the mean of the mixture
+velocities of the axis-$t$ faces of its two cells along $t$), and $U_f$ the
+largest $\abs{\bar{\velo}}$ over $f$ and its four donors (at least the
+smallest normal floating-point number); the row takes the smaller of this
+weight and the diagonal-dominance bound~\cref{eq:projection:dominant-slope}
+below. For a kinematic interface $w_f$ is
+the speed at which it crosses $f$. $\slopeweight_f$ is evaluated from the
+state that the projection receives (in a step the predictor
+$\velo^{\stage{3}}$, after a regrid the transferred state; no history), is
+the same for both phases (label symmetric) and is frozen in the row:
+velocity, jump and pressure-gradient columns all use it, so a single-valued
+gradient is removed exactly for any $\slopeweight_f$; without a staggered
+normal or a mixture velocity, $\slopeweight_f=1$. The workspace keeps
+$\slopeweight_f$ with the rows of the reconstructed interface: a further
+projection with the same interface reuses it, so the projection stays
+idempotent (a projected state is projected onto itself to round-off;
+evaluated again from the projected state, $\slopeweight_f$ changed it by
+$0.36$, $0.12$, $0.024$ of the velocity scale over three repetitions on a
+tilted interface). A flow releases the frozen weights before each of its
+projections, so each step evaluates them from its own predictor. The
+smoothstep makes $\slopeweight_f$ a continuous function of that state, so the
+rows do not switch in time.
+\emph{Why the limiter.} Where an interface sweeps through a row face, the face
+turns single-phase and its last inferred value becomes the first donor of the
+next row, and the face it leaves the second donor. Between rewrites the
+value is carried with the interface, so only the last write before the face
+turns pure survives, and the recursion runs over the cells crossed ($k$):
+with the slopes $d_k=\velo_k-\velo_{k-1}$, the per-write noise $e_k$ (spurious
+currents, standard deviation $\sigma_e$) and the weight $\slopeweight_k$ at that write,
+\begin{equation}\label{eq:projection:wake-recursion}
+  \velo_{k+1}=\velo_k+\slopeweight_k(\velo_k-\velo_{k-1})+e_k
+  \quad\Longleftrightarrow\quad
+  d_{k+1}=\slopeweight_kd_k+e_k .
+\end{equation}
+For $\slopeweight\equiv1$ this is a double integrator (characteristic root one
+twice): the slope performs a random walk and the value grows like $k^{3/2}$
+with the number of cells crossed (a Monte Carlo check with unit noise gives
+$38.9$, $106$, $294$ for $k=16,32,64$, ratios close to $2^{3/2}$). For
+$\slopeweight_k\le\theta_\ast<1$ the slope stays bounded,
+$\operatorname{var}d\to\sigma_e^2/(1-\theta_\ast^2)$, and the value is a
+random walk like the one-donor rule, $\operatorname{rms}\velo_k\approx\sqrt{k}\,\sigma_e/(1-\theta_\ast)$
+($k=64$: $8.1$, $16.0$, $70.0$ for $\theta_\ast=0$, $0.5$, $0.9$). Since
+$k$ grows with $n$ for a fixed sweep length, the unlimited inference is not
+stable uniformly in $n$: a drop of radius $0.2$ translated at $U=1$ through
+a periodic channel (density ratio $1000$, $\sigma=0.2$, inviscid, $t=1$)
+reaches $\max\abs{\velo-U}=1.09$, $3.85$, $4.14$ at $n=32,64,128$, against
+$0.180$, $0.205$, $0.343$ for the one-donor rule; the error first grows on
+rows with second donors in the wake of the drop. Stability requires only
+$\sup\slopeweight_k<1$ at the last write of every swept face, uniformly in
+$n$; it fixes no threshold. A law in the change of the staggered fraction per
+step cannot provide that bound with a fixed constant: at the exit corner of
+the dual cell the fraction change vanishes with the Courant number, so the
+constant would have to grow like $\sqrt{n}$ under the capillary step
+restriction (measured). The crossing speed $w_f/U_f$ does not degenerate
+there, and $(a,b)$ is a modelling choice that separates interfaces that move
+through the faces ($w/U$ of order one at the front and rear of a translating
+drop and in a standing capillary wave) from quasi-static ones, whose normal
+speed comes only from slow growth (shear layers, Kelvin--Helmholtz), which
+keep the third-order inference. \emph{Sensitivity} (translating drop at
+$n=128$, \issue{171}): $(a,b)=(\frac14,\frac34)$, $(\frac18,\frac38)$,
+$(\frac1{16},\frac3{16})$ give $\max\abs{\velo-U}=0.98$, $0.30$, $0.29$;
+Rayleigh--Taylor at the density ratio $3$ ($n=32$) $0.0151$, $0.0103$,
+$0.0072$ (one-donor $0.0056$); viscous Kelvin--Helmholtz (density ratios $1$
+and $10$, thin layer, $\lambda/h=128$) is the same for $(0,\frac18)$ and
+$(\frac1{16},\frac3{16})$ (growth-rate errors $1.97/1.89\,\%$ and
+$7.64/7.56\,\%$; one-donor $45\,\%$ and $10.2\,\%$).
+
+The audit of \issue{171} specifies rules (i)--(iii) on a uniform mesh without
+solid. Where the stencil of a row of the extension ($f$, its transverse and
+candidate inference faces, and the second donors) contains a face of another
+refinement level or a face whose aperture or open dual volume a solid
+reduces, the face falls back to the constant rule: the one-donor row, or no
+row. Where a second donor is missing, does not carry its phase
+($\clampfrac{\inferface{\gas}_2}\ge1-\ffloor$, resp.\
+$\clampfrac{\inferface{\liq}_2}\le\ffloor$) or is itself mixed, the row
+keeps one donor per phase. A face closed by the solid (rule~1), and a face
+without a staggered normal, with an exactly tangential one and no tangential
+row, or without transverse mixed faces, keep their jump.
+\code{CMDGFMProjectionStats.jump_inference} counts the extended rows and each
+fallback. The second donors of a row with the linear inference are
+single-phase faces without unknowns, so the off-diagonal sum bounded
+in~\cref{eq:projection:dominance} is at most
+$\jumpbeta_f\abs{\normratio{f}}+(1-\jumpbeta_f)(1+\slopeweight_f)\infersum{f}$:
+the first donors carry their mass fractions with the weight
+$1+\slopeweight_f$. With $\jumpbeta_f$ of~\cref{eq:projection:beta} this
+exceeded one by $\slopeweight_f(1-\jumpbeta_f)\infersum{f}$ (smallest margins
+$-7.7\times10^{-3}$ and $-2.7\times10^{-5}$ at the density ratios $1$ and
+$1000$ in the invariants test). The rule~\cref{eq:projection:beta} applied to
+the sum $(1+\slopeweight_f)\infersum{f}$ restores weak dominance for every
+$\slopeweight_f$: since $\jumpbeta=0$ gives the off-diagonal sum
+$(1+\slopeweight_f)\infersum{f}$, the slope weight of~(iv) is capped where
+that sum reaches one, and $\jumpbeta_f$ of a row with transverse faces is the
+largest weight for which the bound does not exceed one,
+\begin{equation}\label{eq:projection:dominant-slope}
+  \slopeweight_f\le\frac{1-\infersum{f}}{\infersum{f}},\qquad
+  \jumpbeta_f=\frac{1-(1+\slopeweight_f)\infersum{f}}{\abs{\normratio{f}}-(1+\slopeweight_f)\infersum{f}},
+\end{equation}
+while a tangential row keeps $\jumpbeta_f=0$. The cap binds only where the
+cross fractions of the two first donors sum to more than $\half$,
+$\slopeweight_f=0$
+gives the one-donor row, and both quantities are continuous in
+$\slopeweight_f$ and in the mass fractions; the margin of a row with
+transverse faces is zero, as for the one-donor rule with
+$\abs{\normratio{f}}>1$. On the Stokes-3 wave of the examples (level~5,
+one period, \issue{171}) the rows with the one-donor $\jumpbeta_f$ stopped
+the run at step~844: after a regrid the block-preconditioned BiCGSTAB reached
+its 500 iterations with the residual concentrated at a $\jumpbeta=0$ row
+($\abs{\normratio{f}}=40$) next to an underresolved gas pocket at the crest
+(the system itself was solvable: whole-system ILU, 4 iterations). The cause
+was the preconditioner's jump factor, which ignored the pressure's answer:
+with the factor of~\cref{eq:solvers:jump-schur} the period completes with
+either rows (14.4 and 15.0 iterations per projection on average, at most
+38), and so does \apitype{ConstantJumpInference} (13.3, at most 34), which
+with the factor of $\jumpblock$ alone blew up at step~705.
+
+\emph{Checks} (\code{cmdgfm_check}, with \apitype{ConstantJumpInference}). On
+the four fixtures of \cref{tab:projection:counts}, an independent classification
 following~\cref{eq:projection:staggered-normal,eq:projection:transverse,eq:projection:beta,eq:projection:unresolved}
 (own staggered normals, the code's vertex patches) reproduces the code's
 unknown set, transverse and inference faces exactly, and $\normratio{f}$,
@@ -586,10 +793,22 @@ fail the tests~\cref{eq:projection:unresolved} get no unknown and keep their
 jump; the thesis has no such classification.
 \end{deviation}
 
+\begin{deviation}{CMDGFM jump inference}\label{dev:projection:jump-inference}
+The thesis infers each phase from one donor~\thesis{\S7.3.5}, which creates a
+tangential jump $\pm2hU'$ in a resolved shear layer. The default
+\apitype{LinearJumpInference} extrapolates linearly from two donors
+(\cref{eq:projection:cmdgfm-row-linear}), blended back to one donor by the
+crossing-speed limiter~\cref{eq:projection:crossing-limiter} where the
+interface moves through the face, and adds the tangential and normal
+rows~\cref{eq:projection:tangential-row,eq:projection:normal-row} for faces
+the thesis leaves without a condition. \apitype{ConstantJumpInference}
+keeps the thesis' rule.
+\end{deviation}
+
 \begin{implnote}
-\apitype{CMDGFMProjection}\code{(; preconditioner=:block, preconditioner_options=(;))}
+\apitype{CMDGFMProjection}\code{(; preconditioner=:block, preconditioner_options=(;), jump_inference=LinearJumpInference())}
 selects the method in \apitype{TwoVelocityModel}; the solver objects are
-\apitype{CMDGFMProjectionSolver}\code{(interface; density, preconditioner)} and
+\apitype{CMDGFMProjectionSolver}\code{(interface; density, preconditioner, jump_inference)} and
 \apitype{CMDGFMProjectionWorkspace}, and
 \apifun{project!}\code{(velocity, pressure, solver, dt, workspace; tolerance=sqrt(eps(T)), max_iterations=500, warm_start=true)}
 returns \apitype{CMDGFMProjectionStats} and adds the pressure part of the
@@ -610,8 +829,9 @@ preconditioner \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{CMDGFMBloc
 one V-cycle of the tree-geometric multigrid hierarchy of $\stifftv$ on the
 full cell space for the pressure, mapped to the gauge by adding the residual
 of a retained cell with opposite sign to its anchor and returning differences
-to the anchor value, then a Crout ILU (drop tolerance $10^{-3}$) of
-$\jumpblock$ applied to the jump residual minus $\jumpblockp$ times the
+to the anchor value, then a Crout ILU (drop tolerance $10^{-3}$) of the
+local Schur complement $\jumpblock-\jumpblockp\operatorname{diag}(\kktS)^{-1}\mathsf B$~\cref{eq:solvers:jump-schur}
+applied to the jump residual minus $\jumpblockp$ times the
 pressure part; \code{:ilu} is a whole-system ILU. Without solid the hierarchy
 and operator of the one-velocity pressure solver are shared. Tests:
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM revised beta and diagonal dominance},
@@ -622,12 +842,39 @@ and operator of the one-velocity pressure solver are shared. Tests:
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM projection invariants}
 (defects, margin and momentum identity on periodic and cut composite meshes),
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM block-preconditioned BiCGSTAB}.
+\apitype{LinearJumpInference}~\cref{eq:projection:cmdgfm-row-linear,eq:projection:tangential-row,eq:projection:normal-row,eq:projection:crossing-limiter}:
+second donors and fallbacks \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_second_donors!},
+tangential rows \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_tangential_stencil!}
+with the increment form \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_incremental_row},
+normal rows \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_normal_stencil!},
+rows \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_extrapolated_inference!}
+with the dominance cap and $\jumpbeta_f$ \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_dominant_row}~\cref{eq:projection:dominant-slope}
+and \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_inferred_jump},
+limiter \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_limit_extrapolation!}
+(frozen weights released by \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_release_crossing!})
+with \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_crossing_slope}
+and the ramp \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_CMDGFM_CROSSING_RAMP}, counts
+\srcsym{src/two_phase/projection/cmdgfm_cache.jl}{CMDGFMInferenceCounts}. Tests:
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: smooth shear across tilted and curved interfaces}
+(created jump of third order, against first order),
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: a vortex sheet keeps its tangential jump},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: hydrostatic rest on a tilted interface},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: x and t impose the normal jump on all mixed faces},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: momentum, defects and fallbacks},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: near-tangential faces without a regular row},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: flat interface and single-valued gradients are exact},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: crossing-speed limiter}
+(the ramp, rest and label symmetry),
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: the projection is idempotent},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: a translating drop stays at the one-donor level},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{CMDGFM jump inference option}.
 \end{implnote}
 
 
 \begin{table}
   \centering\small
-  \caption{Unknowns and rows of the CMDGFM projection on the drop
+  \caption{Unknowns and rows of the CMDGFM projection with the published
+    rows (\apitype{ConstantJumpInference}) on the drop
     fixtures (a drop of radius $1.6$ centred at $(4.3,2.3)$ in the walled
     box of \cref{ch:forces}, densities $(1000,1)$; composite: the right half
     refined once; with solid: resting on the sloped solid $y<0.9+0.1x$),
@@ -1122,8 +1369,8 @@ weight $\beta\Lambda_f$ to the diagonal, as lumping would, and its negative to
 $\mathsf C$ on the value's axis, so the identity holds on it and gravity gives
 it no increment (lumped, such a value fell freely: $3\,\dt g$ after three
 steps of a floor film at densities $(1000,1)$). The contact angle enters
-through the contact-line curvature~\cref{eq:projection:mimetic-contact} of the
-first wall row (Surface tension, below), the energy-consistent form of the
+through the contact-line curvature~\cref{eq:forces:contact-line} of the
+first wall row (\cref{sec:forces:contact-line}), the energy-consistent form of the
 height-function wall condition (\cref{sec:interface:contact}); the capillary jumps live on interior
 faces, so a constant curvature on a drop at a wall is balanced exactly.
 Measured: a pool between the side walls at densities $(1000,1)$ and a drop on
@@ -1131,13 +1378,20 @@ the floor at equal densities under gravity stay at rest to $10^{-12}$; sessile
 drops at $60^\circ$, $90^\circ$ and $120^\circ$ with the exact constant
 curvature stay at rest to $3\times10^{-10}$ for a capillary time at densities
 $(1,1)$ and $(1000,1)$ ($h=1/32$, full steps with the no-slip viscous step).
-With the height-function curvature and the contact-line curvature (the sessile
-drop of the integration suite, densities $(1,10^{-3})$, $h=1/48$, a quarter
-capillary time) the mimetic shape error is $1.15$, $1.09$ and $1.63$ times
-the CMDGFM's at $90^\circ$, $60^\circ$ and $120^\circ$ without gravity and
-$0.83$ times at $90^\circ$ with gravity (Bond number $1.21$), its largest
-phase value $1.2$, $2.1$, $1.6$ and $0.24$ times (recorded as broken where
-outside the tolerances). A dam break
+\emph{Finding} (the sessile drop of the integration suite, densities
+$(1,10^{-3})$, $h=1/48$, a quarter capillary time, the contact-line
+curvature~\cref{eq:forces:contact-line} in both projections): without gravity
+the mimetic shape error is $1.18\times10^{-5}$, $5.42\times10^{-5}$ and
+$9.93\times10^{-5}$ at $90^\circ$, $60^\circ$ and $120^\circ$, $1.05$, $1.30$
+and $4.3$ times the CMDGFM's, its largest phase value $2.1\times10^{-3}$,
+$0.053$ and $0.072$, $1.10$, $1.97$ and $13$ times; with gravity (Bond number
+$1.21$, $90^\circ$) $2.33\times10^{-5}$ and $0.015$, $0.78$ and $0.23$ times.
+The mimetic projection takes its own cell curvature, the CMDGFM the LHF-first
+face curvature~\cref{eq:forces:curvature}; at $120^\circ$ the near-top
+slivers with $C\approx0.015$--$0.023$ and curvatures $6$--$9\,\%$ high drive
+the mimetic current (numerics review \code{mm_walls/review}). The
+integration test bounds the mimetic values themselves (1.25 times the
+measured), not their ratio to the CMDGFM's. A dam break
 at densities $(1000,1)$ runs through the impact on the wall at $h=1/32$ and
 $1/64$ with the liquid at the physical velocity scale; near-empty phase values
 reach $10^3$--$10^4$ and shorten single steps, as away from walls.
@@ -1374,7 +1628,7 @@ and a constant field along a slanted solid is kept to $2\times10^{-11}$
 the closure defect of the averaged open traces of the reconstructed solid,
 which the projection removes through the small apertures of sliver cells.
 With the height-function curvature (embedded solids keep it; the contact-line
-curvature~\cref{eq:projection:mimetic-contact} needs a domain wall) the contact
+curvature~\cref{eq:forces:contact-line} needs a domain wall) the contact
 lines on an embedded solid
 drive much larger currents than on a domain wall, for both projections: a
 drop at $90^\circ$ ($R=0.2$, densities $(1,10^{-3})$, $h=1/32$, no gravity)
@@ -1487,9 +1741,9 @@ of both phases, pure cells included: a pure cell carries both where the PLIC
 trace of a cut neighbour gives one of its faces partial apertures, and with
 $\kappa=0$ there a static drop at constant curvature is not at rest (gas
 $4\times10^{-3}$ after one step at densities $(1000,1)$, $h=1/16$; audit
-\code{proof_review/sec-remedies-forcemap/}). A cut cell keeps its
-height-function curvature, in the first row along a wall with a contact angle
-the contact-line curvature~\cref{eq:projection:mimetic-contact} below; every
+\code{proof_review/sec-remedies-forcemap/}). A cut cell keeps its curvature
+(\cref{sec:forces:curvature}; in the first row along a wall with a contact
+angle the contact-line curvature~\cref{eq:forces:contact-line}); every
 other cell, and a cut cell without a finite curvature, takes the
 $C(1-C)$-weighted mean of the curvatures of its cut face
 neighbours, which reproduces a constant curvature. Every cell whose potential
@@ -1504,90 +1758,29 @@ available gets no force and is counted in \code{unresolved_curvature_faces},
 as for the other projections. The projection has no options of its own.
 
 \emph{Contact line.} Along a domain wall with a contact angle $\cangle$ the
-cut cells of the first row take the potential of a discrete surface energy
-(study \code{mm-runs/contact_young}). With the booked carrier the capillary
-force does the work $-\sum_c\sigma\kappa_c\dot V_c$ ($V_c=C_ch^2$, while the
-clamp is inactive), so it is energy consistent where
-$\sigma\kappa_c=\partial E_h/\partial V_c$ for a discrete energy $E_h(V)$;
-then the work around a closed loop of states vanishes. The height-function
-curvature fails this at the contact line: the cell whose PLIC line touches
-the wall gets the ghost-height curvature~\cref{eq:interface:contact-right}
-(or~\cref{eq:interface:contact-acute}), the other cut cells of the same row
-the one-sided wall, local or generalised value (at $60^\circ$, $h=1/48$:
-$5.118$ and $5.009$ in the two cut cells of one row). Volume exchanged within
-the row changes neither the wetted length nor the row's height but releases
-$\sigma\Delta\kappa\,\mathrm dV$, and the selection switches as the line
-crosses a face. Take the wall $y=0$, the liquid on the low-$x$ side of the
-line (orientation $o=1$; $o=-1$ gives the same result) and the wall-parallel
-heights $\hdisc{1}$, $\hdisc{2}$~\cref{eq:interface:height} (in cells) of rows~1
-and~2, both relative to the cell's tangential centre. The volume data define
-the wetted length $W=h\hdisc{1}+\text{const}$ (the liquid volume of row~1
-over $h$), the chord between the two row centres, of slope
-$s=\hdisc{2}-\hdisc{1}$, and the stub between the wall and the row-1 centre.
-The stub's slope $s_0$ is below the resolution: its energy
-$\sigma\frac h2(\sqrt{1+s_0^2}+\cos\cangle\,s_0)$ (its length and the
-correction of the wetted length) is stationary at the angle $\cangle$, Young's
-law, with the minimum $\sigma\frac h2\sin\cangle$, independent of the heights.
-The reduced contact-line energy is therefore
-$\sigma(h\sqrt{1+s^2}-\cos\cangle\,h\hdisc{1})+\text{const}$, and its
-derivative by the row's liquid volume ($\mathrm dV_1=h^2\,\mathrm d\hdisc{1}$)
-gives every cut cell of the row
-\begin{equation}\label{eq:projection:mimetic-contact}
-  \kappa_c=\frac{\cos\theta_{3/2}-\cos\cangle}{h},\qquad
-  \cos\theta_{3/2}=-\frac{o\,s}{\sqrt{1+s^2}},
-\end{equation}
-$\theta_{3/2}$ the angle of the chord ($h$ the cell size normal to the wall;
-the cells are square). Its
-derivative by the row-2 volume, $-\sigma\cos\theta_{3/2}/h$, is the lower
-flux of the conservative row-2 curvature
-$\sigma(\cos\theta_{5/2}-\cos\theta_{3/2})/h$, which the interior height
-function supplies to $O(h^2)$. The columns reach four cells to either side
-(the padding of the height values); a cut cell of the row without valid
-columns takes the cosine of the nearest cell with valid columns in its
-contiguous run of cut cells along the wall (the slope $s$ is the same along a
-run), so every cut cell of the run shares $\kappa_c$, also where the line
-spreads over several cells of the row ($\cangle\lesssim45^\circ$ or
-$\gtrsim150^\circ$). On caps of area $\pi\,0.2^2/2$ at $h=1/48$ every run has
-such a cell for $25^\circ\le\cangle\le160^\circ$ (10 sub-cell shifts each; with
-radius three and without the run, up to all cells of a run at $25^\circ$ kept
-the rule above). A run without any (limitation (vi) below) keeps the rule above.
-\emph{Equilibrium.} Row~1 balances the pressure $\sigma\kappa$ of a cap of
-curvature $\kappa$ where $\cos\theta_{3/2}=\cos\cangle+\kappa h$; along the
-cap $\mathrm d\cos\theta/\mathrm dy=\kappa$, so the continuum angle at
-$y=h$ satisfies the same relation when the wall angle is $\cangle$: the
-equilibrium angle is consistent to second order (exact $60^\circ$ cap of
-curvature $5$, $h=1/48$: $\cos\theta_{3/2}=0.6068$ against
-$0.5+5/48=0.6042$). Slaving the stub to the chord ($s_0=s$) instead adds half
-of~\cref{eq:projection:mimetic-contact} and gives
-$\cos\theta_{3/2}=\cos\cangle+\frac23\kappa h$, wrong at first order. Written
-as $(\cos\theta_{3/2}-\cos\theta_0)/h+(\cos\theta_0-\cos\cangle)/h$ for any wall
-angle $\theta_0$, \cref{eq:projection:mimetic-contact} is the conservative
-row-1 curvature plus the Young term, and $\theta_0$ cancels; an angle from the
-cell's PLIC line (biased) made the line recede. The ghost-height
-curvature~\cref{eq:interface:contact-right} is the same formula to third
-order in the slope differences in the cell that gets it (on the exact
-$120^\circ$ cap at $h=1/48$ with the touching cell the only cut cell of the
-row, $4.938$ against $4.939$; depending on the position the row has one or
-two cut cells there): the defect was the
-selection of the cells, not the formula. Swapping the phases ($C\to1-C$,
-$\cangle\to\pi-\cangle$) flips $o$ and the sign of $\kappa_c$, as required.
-The heights come from the padded block values~\cref{eq:interface:height-values}
-at the block's level, so the construction carries over to adaptive meshes (the
-adapted and the mixed tree reproduce the uniform $h=1/48$ sessile drop
-exactly).
+cut cells of the first row carry the contact-line
+curvature~\cref{eq:forces:contact-line} of all models
+(\cref{sec:forces:contact-line}), the derivative $\partial E_h/\partial V_c$ of
+a discrete contact-line energy by the cell's liquid volume. With the booked
+carrier the capillary force does the work $-\sum_c\sigma\kappa_c\dot V_c$
+($V_c=C_ch^2$, while the clamp is inactive), so in the mimetic projection the
+work of the row around a closed loop of states vanishes (study
+\code{mm-runs/contact_young}).
 \emph{Measured} (study \code{mm-runs/contact_young}). Closed loops of exact
 caps (shift by $h/2$ at $90^\circ$, $90^\circ\to60^\circ$, shift back,
 $60^\circ\to90^\circ$; 200 or 400 steps, $\cangle=60^\circ$): the work of the
 row-1 cells is at most $1.3\times10^{-6}$ at $h=1/32$--$1/64$, against
-$5\times10^{-5}$--$3\times10^{-4}$ with the height-function curvature (the
-unit test pins $1.1\times10^{-7}$ at $h=1/48$). Along the open path
+$5\times10^{-5}$--$3\times10^{-4}$ with the height-function curvature. Along the open path
 $90^\circ\to60^\circ$ all cells release $0.0311$, $0.0326$, $0.0333$
 ($h=1/32,1/48,1/64$) of the exact energy drop $0.0354$ (the first-order
 discrete energy of exact caps; $0.0261$--$0.0289$ before). Sessile drops
 without gravity ($R=0.2$, densities $(1,10^{-3})$, La $550$, five capillary
-times): at $60^\circ$ the final kinetic energy at $h=1/48$ and $1/64$ is
+times; the CMDGFM values in this paragraph and in limitations (ii) and (iii)
+were measured with the former face curvature, before~\cref{eq:forces:curvature}):
+at $60^\circ$ the final kinetic energy at $h=1/48$ and $1/64$ is
 $4.1\times10^{-11}$ and $1.9\times10^{-11}$ (before $9.8\times10^{-5}$ and
-$9.5\times10^{-7}$; CMDGFM $8.9\times10^{-11}$ and $1.2\times10^{-7}$), with the
+$9.5\times10^{-7}$; CMDGFM with the height-function curvature
+$8.9\times10^{-11}$ and $1.2\times10^{-7}$), with the
 shape error below the CMDGFM's and the angle within $0.25^\circ$; at
 $120^\circ$, $h=1/32$, $3.5\times10^{-6}$ (before $5.3\times10^{-4}$); a drop
 spreading from $90^\circ$ on a $60^\circ$ wall moves at the CMDGFM's rate to the
@@ -1595,43 +1788,34 @@ equilibrium, and the booked release equals the surface-energy drop to
 $2.5\,\%$ ($h=1/48$) and $0.3\,\%$ ($h=1/64$), where the height-function
 curvature booked $4$ and $1.4$ times it. Drops off the walls are bitwise
 unchanged.
-\emph{Limitations.} (i)~Embedded solids keep the height-function curvature:
-a cut-cell solid has no wall-parallel column (its cells are unavailable to
-the heights); the energy argument carries over,
-$E=\sigma(\meas{\Gamma}-\cos\cangle\,\meas{W})$ with the wetted solid length,
-but needs a solid-aligned pair of heights. (ii)~A $60^\circ$ cap about three
+\emph{Limitations.} (i)~A $60^\circ$ cap about three
 cells high ($h=1/32$, $R=0.2$) keeps moving (final kinetic energy
 $3.5\times10^{-4}$, before $1.5\times10^{-3}$, CMDGFM $9\times10^{-7}$): there the
-loop work is in the interior height function ($4\times10^{-5}$). (iii)~Under
+loop work is in the interior height function ($4\times10^{-5}$). The drop
+spreading from $90^\circ$ on a $60^\circ$ or receding on a $120^\circ$ wall at
+$h=1/24$ ($R=0.2$, La $550$) does not settle: after twelve capillary times its
+distance to the equilibrium cap is $0.06$ and $0.03$ and growing, the largest
+phase value $6.1$ and $0.85$ (CMDGFM $3\times10^{-4}$ and $1.6\times10^{-3}$,
+$0.03$ and $0.06$); at $h=1/48$ it settles ($7\times10^{-5}$ at $60^\circ$; study
+\code{mm-runs/contact_cmdgfm}). (ii)~Under
 gravity (Bond number $1.21$) the slow rise of the sessile drop's kinetic
 energy is in rows~3 and above (booked release $1.7\times10^{-4}$ there,
 $10^{-6}$ in the contact-line cells) and unchanged; at $90^\circ$, $h=1/64$ it
 levels off at $5.3\times10^{-6}$ by $15$ capillary times (CMDGFM plateau
-$2.9\times10^{-5}$). (iv)~While a line moves the largest phase value reaches
-$1$--$16$ (CMDGFM at most $2.4$) and decays once it settles. (v)~The chord of
+$2.9\times10^{-5}$). (iii)~While a line moves the largest phase value reaches
+$1$--$16$ (CMDGFM at most $2.4$) and decays once it settles. (iv)~The chord of
 row-averaged heights and the interior height function have different
-second-order biases (on the exact $90^\circ$ cap at $h=1/48$: $+0.27\,\%$ and
-$+0.42\,\%$, the row-1 curvature $5.0138$ against $5.021$--$5.022$ in rows~2
-and~3). At $90^\circ$ this makes the integration suite's drop (densities
-$(1,10^{-3})$, a quarter capillary time) worse than with the height-function
-curvature in the contact-line cells: without gravity the shape error rises
-from $1.07\times10^{-5}$ to $1.18\times10^{-5}$ (CMDGFM $1.03\times10^{-5}$); at
+second-order biases (\cref{sec:forces:contact-line}). At $90^\circ$ this makes
+the integration suite's drop (densities $(1,10^{-3})$, a quarter capillary
+time) worse than with the height-function curvature in the contact-line
+cells: without gravity the shape error rises from $1.07\times10^{-5}$ to
+$1.18\times10^{-5}$ (CMDGFM $1.12\times10^{-5}$, before $1.02\times10^{-5}$); at
 Bond number $1.21$ the shape error at $h=1/48$ rises from $2.27\times10^{-5}$
-to $2.33\times10^{-5}$ (CMDGFM $2.82\times10^{-5}$) and the rate from $h=1/12$
+to $2.33\times10^{-5}$ (CMDGFM $2.97\times10^{-5}$) and the rate from $h=1/12$
 to $1/24$ falls from $1.66$ to $1.53$, while the largest phase value is
-$0.016$ and $0.015$ (CMDGFM $0.064$; the gravity part is attributed to the
+$0.016$ and $0.015$ (CMDGFM $0.066$; the gravity part is attributed to the
 same mismatch, not isolated). Making rows~2 and~3 consistent with the row-1
 chord (a conservative form of their curvature) is the open follow-up.
-(vi)~A run of cut cells without valid columns keeps the
-height-function curvature: a thin cap, whose row-2 transition is wider than
-the columns (area $\pi\,0.1^2/2$ at $h=1/48$, 10 shifts: 54 of 70 row-1 cut
-cells at $25^\circ$, 34 of 46 at $155^\circ$, all 50 at $160^\circ$, none at
-$30^\circ$--$45^\circ$), or a run whose columns
-are cut off by a perpendicular wall (a contact line within about two cells of
-it), a solid, the padding or invalid resampled values across a level
-transition: these keep the height-function value as before. A cut cell in the
-first row of two walls (a corner) takes the first wall, in the order left,
-right, bottom, top, whose run has a cosine.
 
 \emph{Hydrostatic reference of the potentials.} Under gravity a per-phase
 potential difference $\sigma\kappa_c$ refers the curvature to the pressure
@@ -1673,7 +1857,7 @@ $(1,10^{-3})$, $h=1/48$, height-function curvature at the contact line): shape e
 $\max\abs u$ $0.82\to0.018$ at $90^\circ$ ($0.016$ with the hydrostatic part on
 the aperture), $8.2\times10^{-5}\to2.3\times10^{-5}$ and
 $0.27\to0.025$ at $60^\circ$ (CMDGFM $2.8\times10^{-5}$, $0.064$; with the
-contact-line curvature~\cref{eq:projection:mimetic-contact} $2.3\times10^{-5}$
+contact-line curvature~\cref{eq:forces:contact-line} $2.3\times10^{-5}$
 and $0.015$ at $90^\circ$); cost
 Rayleigh--Taylor $3.91\to4.03\times10^{-2}$ (DR 3), $2.32\to2.49\times10^{-2}$
 (DR 1000), combined case $2.94\to2.98\times10^{-2}$ ($h=\lambda/32$). The study's
@@ -1681,7 +1865,7 @@ other reference points (the height-function point itself, its tangential
 shift, the PLIC point on the column) are not ported. Where the curvature comes
 from a wall or contact-angle closure the same rule refers it to the centred
 column point or the PLIC centroid; that is an approximation of the closure's
-own point. The contact-line curvature~\cref{eq:projection:mimetic-contact} is
+own point. The contact-line curvature~\cref{eq:forces:contact-line} is
 the mean curvature over the first row, $\kappa(h/2)+O(h^2)$, and those points
 lie at about $h/2$ from the wall.
 
@@ -2013,7 +2197,7 @@ preconditioner \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_
 around the V-cycle \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_preconditioner!};
 forces \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_capillary_force!}~\cref{eq:projection:mimetic-capillary}
 with \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_cell_curvature!}
-and the contact-line curvature \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_contact_line_curvature!}~\cref{eq:projection:mimetic-contact},
+(the contact-line curvature~\cref{eq:forces:contact-line} of the first wall row comes with the cell curvature, \cref{sec:forces:contact-line}),
 the potential difference~\cref{eq:projection:mimetic-hydrostatic}
 \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_cell_potential!} with
 \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_curvature_point},
@@ -2057,7 +2241,6 @@ Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mi
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric with embedded solids: definiteness, consistency and the Gram moment},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic rest states with embedded solids},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic viscous step with embedded solids},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic contact-line potential: energy consistency},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric: uniform equivalence with the aperture-independent mass},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic pressure solver: band-cell correction of the multigrid preconditioner},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic capillary force: booked carrier},
@@ -2071,7 +2254,7 @@ ties~\cref{eq:projection:mimetic-ties}, booked
 carrier~\cref{eq:projection:mimetic-booked}, hydrostatic
 reference~\cref{eq:projection:mimetic-hydrostatic}, height-function
 curvature and the energy-consistent contact-line
-potential~\cref{eq:projection:mimetic-contact}) the mimetic projection is
+potential~\cref{eq:forces:contact-line}) the mimetic projection is
 recommended for capillary-dominated and moderate flows: drops at rest, sessile
 drops, capillary waves and interfacial instabilities at moderate speeds. The
 CMDGFM (\cref{sec:projection:cmdgfm}) stays the default and is recommended for
@@ -2082,8 +2265,9 @@ the interface take large velocities. A drop of radius $0.08$ falling at speed
 $2$ onto a pool (densities $(1000,1)$, $\sigma=0.05$, free-slip walls, uniform
 $h=1/32$ and $1/64$): the median over seven runs (drop speed perturbed by $0$,
 $\pm10^{-4}$, $\pm10^{-3}$, $\pm10^{-2}$) of the largest phase value up to
-$t=0.25$ is $50$ and $111$ with the mimetic projection, against $3.5$ and $5.0$
-with the CMDGFM; it grows under refinement and shortens the time steps.
+$t=0.25$ is $50$ and $111$ with the mimetic projection, against $4.2$ and $4.9$
+with the CMDGFM ($3.5$ and $5.0$ with \apitype{ConstantJumpInference});
+it grows under refinement and shortens the time steps.
 
 \emph{Structural reason.} Let $\mathcal L$ collect homogeneous linear
 constraints on the phase values (the mixture divergence
@@ -2409,7 +2593,8 @@ misses its rules (\code{converged=false});
 \begin{implnote}
 Statistics \apitype{CMDGFMProjectionStats} (\code{mixture_volume_defect},
 \code{normal_velocity_defect}, \code{minimum_jump_diagonal_margin},
-\code{momentum_identity_error}, \code{underresolved_jump_rows}); residual
+\code{momentum_identity_error}, \code{underresolved_jump_rows},
+\code{jump_inference}); residual
 defects \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_residual_defects};
 first guess \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_initial_solution!};
 boundary values \srcsym{src/operators/staggered_diffusion.jl}{enforce_velocity_boundary!},

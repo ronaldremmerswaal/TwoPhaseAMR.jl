@@ -603,3 +603,56 @@ end
         @test isempty(intersect(wall_faces, operator.y.local_to_global))
     end
 end
+
+@testset "geometry-aware viscous multigrid is mesh independent around a solid" begin
+    L = 8.0
+    mesh_for(n, refined) = BlockTreeMesh(;
+        base_mesh = (n, n), block_size = (4, 4), extent = (L, L),
+        periodic = (false, false), max_level = 1,
+        refine = (key, origin, extent) ->
+        refined && key.level == 0 && key.i >= div(n, 8),
+    )
+    function iterations(n, refined, diffusion)
+        mesh = mesh_for(n, refined)
+        geometry = GeometryField(mesh, (x, y) -> hypot(x - 4, y - 4) - 1.3; lipschitz = 1.2)
+        operator = StaggeredDiffusionOperator(geometry; viscosity = 1.0)
+        h = L / n
+        elliptic = StaggeredEllipticOperator(
+            operator; reaction = 1, diffusion = diffusion === :h2 ? h^2 : diffusion,
+        )
+        solver = StaggeredEllipticSolver(
+            elliptic; preconditioner_options = (; geometry),
+        )
+        rhs = FaceVelocity(mesh)
+        rhs.interior .= sinpi.(0.37 .* (1:length(rhs.interior))) # deterministic, rough
+        stats = solve!(FaceVelocity(mesh), solver, rhs; tolerance = 1.0e-10, max_cycles = 500)
+        @test stats.converged
+        preconditioner = solver.x.preconditioner
+        if n == 32
+            # Covered faces neither receive nor restrict coarse corrections.
+            covered = iszero.(geometry.face_dual_volumes[operator.x.local_to_global])
+            @test any(covered)
+            prolongation = first(preconditioner.levels).prolongation
+            @test all(iszero, sum(abs, prolongation[covered, :]; dims = 2))
+            # The V-cycle stays a symmetric positive preconditioner for CG.
+            unknowns = length(operator.x.volumes)
+            first_residual = cospi.(0.21 .* (1:unknowns))
+            second_residual = sinpi.(0.13 .* (1:unknowns) .+ 0.1)
+            first_correction = similar(first_residual)
+            second_correction = similar(second_residual)
+            TwoPhaseAMR.ldiv!(first_correction, preconditioner, first_residual)
+            TwoPhaseAMR.ldiv!(second_correction, preconditioner, second_residual)
+            @test dot(second_residual, first_correction) ≈
+                dot(first_residual, second_correction) rtol = 1.0e-10
+            @test dot(first_residual, first_correction) > 0
+        end
+        return max(stats.x.cycles, stats.y.cycles)
+    end
+    # Before the coarse levels saw the solid, c = h² took 10 → 29 (uniform) and
+    # 15 → 56 (composite) CG iterations from n = 32 to n = 128.
+    for refined in (false, true), diffusion in (:h2, 1.0)
+        coarse = iterations(32, refined, diffusion)
+        fine = iterations(128, refined, diffusion)
+        @test fine <= 1.5 * coarse
+    end
+end

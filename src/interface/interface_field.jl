@@ -49,6 +49,9 @@ struct InterfaceField{T, M <: BlockTreeMesh, G} <: AbstractMeshField{T}
     normal_y::CellField{T, M}
     intercept::CellField{T, M}
     curvature::CellField{T, M}
+    # Height-function coverage of `curvature` in [0, 1] (see
+    # `_reconstruct_interface_cell!`); it selects the face curvature.
+    curvature_quality::CellField{T, M}
     reconstruction::CellField{UInt8, M}
     previous_normal_x::CellField{T, M}
     previous_normal_y::CellField{T, M}
@@ -127,7 +130,8 @@ function InterfaceField(
     field = InterfaceField{T, M, typeof(geometry)}(
         fraction.mesh, fraction, CellField(fraction.mesh, T),
         CellField(fraction.mesh, T), CellField(fraction.mesh, T), CellField(fraction.mesh, T),
-        CellField(fraction.mesh, T; init = NaN), CellField(fraction.mesh, UInt8),
+        CellField(fraction.mesh, T; init = NaN), CellField(fraction.mesh, T),
+        CellField(fraction.mesh, UInt8),
         CellField(fraction.mesh, T), CellField(fraction.mesh, T),
         CellField(fraction.mesh, T), HeightFunctionCache(T),
         CellField(fraction.mesh, T), BlockKey[], Ref(false), Ref(UInt(0)),
@@ -503,7 +507,10 @@ function _reconstruct_embedded_triple_cell!(field, values, b, i, j, ref, c)
     end
     # The contact angle is a curvature boundary condition, not an advection
     # plane constraint. Both fits use the same seed and previous-pass planes.
+    # A contact-constrained curvature carries the boundary condition and is
+    # therefore preferred at the faces like a height-function value.
     raw_curvature = isnothing(plane_fit) ? eltype(field)(NaN) : plane_fit[3]
+    quality = zero(eltype(field))
     if !isnothing(field.embedded_contact_angle)
         curvature_fit = _ghf_geometry(
             field, values, b, i, j,
@@ -512,14 +519,21 @@ function _reconstruct_embedded_triple_cell!(field, values, b, i, j, ref, c)
             enforce_contact = true,
             sample_radius = 3,
         )
-        !isnothing(curvature_fit) && (raw_curvature = curvature_fit[3])
+        if !isnothing(curvature_fit)
+            raw_curvature = curvature_fit[3]
+            quality = one(quality)
+        end
     end
     _set!(field.normal_x, mx, ref)
     _set!(field.normal_y, my, ref)
     _set!(field.intercept, _open_plane_intercept(field.geometry, ref, c, mx, my), ref)
     contact_curvature = _contact_curvature(field, values, b, i, j)
-    !isnothing(contact_curvature) && (raw_curvature = contact_curvature)
+    if !isnothing(contact_curvature)
+        raw_curvature = contact_curvature
+        quality = one(quality)
+    end
     _set!(field.curvature, _clip_curvature_to_mesh(raw_curvature, block.spacing), ref)
+    _set!(field.curvature_quality, quality, ref)
     _set!(field.reconstruction, method, ref)
     return nothing
 end
@@ -531,6 +545,7 @@ function _reconstruct_interface_cell!(field, values, b, i, j)
     if c == 0 || c == 1
         _set!(field.reconstruction, 0, ref)
         _set!(field.curvature, NaN, ref)
+        _set!(field.curvature_quality, 0, ref)
         return nothing
     end
     embedded_triple = !isnothing(field.geometry) &&
@@ -552,6 +567,9 @@ function _reconstruct_interface_cell!(field, values, b, i, j)
         )
         method = 2
     end
+    # The curvature quality is the height-function coverage of the curvature
+    # (`_lhf_geometry`), 1 for a contact-angle curvature and 0 for a GHF fit.
+    quality = zero(eltype(field))
     if isnothing(geometry)
         method = 3
         gx = _get(field.normal_x, ref) / block.spacing[1]
@@ -559,8 +577,9 @@ function _reconstruct_interface_cell!(field, values, b, i, j)
         raw_curvature = eltype(field)(NaN)
     else
         gx, gy = geometry[1], geometry[2]
-        raw_curvature = length(geometry) == 3 ?
+        raw_curvature = length(geometry) >= 3 ?
             geometry[3] : eltype(field)(NaN)
+        method == 1 && (quality = geometry[4])
     end
     # A GHF fit can supply curvature even when its normal is not selected for
     # advection. In :lhf the initial WY plane remains on those cells.
@@ -581,6 +600,7 @@ function _reconstruct_interface_cell!(field, values, b, i, j)
     contact_curvature = _contact_curvature(field, values, b, i, j)
     if !isnothing(contact_curvature)
         raw_curvature = contact_curvature
+        quality = one(quality)
     elseif !isfinite(raw_curvature) && method == 5
         unconstrained = _ghf_geometry(
             field, values, b, i, j,
@@ -591,6 +611,7 @@ function _reconstruct_interface_cell!(field, values, b, i, j)
     end
     kappa = _clip_curvature_to_mesh(raw_curvature, block.spacing)
     _set!(field.curvature, kappa, ref)
+    _set!(field.curvature_quality, quality, ref)
     _set!(field.reconstruction, use_fitted_plane ? method : 3, ref)
     return nothing
 end
@@ -618,7 +639,7 @@ function _reconstruct_interface!(field::InterfaceField)
     field.phase_apertures_valid[] = false
     for cache in (
             field.conditional_fraction, field.normal_x, field.normal_y,
-            field.intercept, field.curvature,
+            field.intercept, field.curvature, field.curvature_quality,
             field.reconstruction, field.previous_normal_x,
             field.previous_normal_y, field.previous_intercept,
         )
@@ -683,6 +704,7 @@ function _reconstruct_interface!(field::InterfaceField)
             end
         end
     end
+    _contact_line_curvature!(field)
     _mark_reconstruction_current!(field)
     return field
 end

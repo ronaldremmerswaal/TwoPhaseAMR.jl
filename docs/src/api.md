@@ -65,6 +65,7 @@ diagnostics, or observer events.
 | velocity formulation | `FlowSimulation` | `OneVelocityModel()`, `TwoVelocityModel(...)` | one velocity |
 | surface-tension force | `SurfaceTension` | `CGFM()`, `CSF()` | CGFM |
 | two-velocity projection | `TwoVelocityModel` | `CMDGFMProjection()`, `MimeticProjection()` | CMDGFM |
+| CMDGFM jump inference | `CMDGFMProjection` | `LinearJumpInference()`, `ConstantJumpInference()` | `LinearJumpInference()` |
 | interphase drag | `TwoVelocityModel` | `InterphaseDrag()`, `nothing` | `InterphaseDrag()` |
 
 The two-velocity projection is meaningful only for `TwoVelocityModel`.

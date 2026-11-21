@@ -97,6 +97,14 @@ end
         _pressure_preconditioner(system) in (:geometric, :tree_geometric) ?
         merge(options, (; geometry = system.geometry)) : options
 end
+# The single- and two-phase viscous hierarchies take the embedded solid the
+# same way.
+@inline function _diffusion_preconditioner_options(system::NavierStokesSystem)
+    options = system.options.diffusion.preconditioner_options
+    return !isnothing(system.geometry) &&
+        _diffusion_preconditioner(system) in (:geometric, :tree_geometric) ?
+        merge(options, (; geometry = system.geometry)) : options
+end
 @inline _single_phase_density(system::NavierStokesSystem) =
     system.single_phase_density
 @inline _multigrid_options(system::NavierStokesSystem) = system.options.multigrid

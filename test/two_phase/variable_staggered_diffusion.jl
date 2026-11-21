@@ -1202,3 +1202,87 @@ end
             for pieces in values(segments) if length(pieces) == 1
     )
 end
+
+@testset "geometry-aware variable diffusion multigrid is mesh independent around a solid" begin
+    L = 8.0
+    mesh_for(n, refined) = BlockTreeMesh(;
+        base_mesh = (n, n), block_size = (4, 4), extent = (L, L),
+        periodic = (false, false), max_level = 1,
+        refine = (key, origin, extent) ->
+        refined && key.level == 0 && key.i >= div(n, 8),
+    )
+    solid(x, y) = hypot(x - 4, y - 4) - 1.3
+    # The interface crosses the solid; viscosity ratio 100.
+    interface_levelset(x, y) = y - 4.3 - 0.1 * (x - 4)
+    function iterations(n, refined)
+        mesh = mesh_for(n, refined)
+        geometry = GeometryField(mesh, solid; lipschitz = 1.2)
+        interface = InterfaceField(
+            mesh, interface_levelset; geometry, lipschitz = hypot(1, 0.1),
+        )
+        operator = TwoPhaseAMR._staggered_diffusion_operator(
+            interface; viscosity = (1.0, 0.01), boundary = NoSlip(),
+        )
+        density = ones(length(operator.volumes))
+        dt = 2 * (L / n)^2
+        solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+            operator, density, dt; preconditioner_options = (; geometry),
+        )
+        unknowns = length(operator.volumes)
+        # deterministic, rough
+        solver.right_hand_side .= solver.inertia .* sinpi.(0.37 .* (1:unknowns))
+        stats = TwoPhaseAMR._solve_variable_diffusion!(
+            FaceVelocity(mesh), solver, operator;
+            tolerance = 1.0e-10, max_cycles = 500,
+        )
+        @test stats.converged
+        preconditioner = solver.preconditioner
+        if n == 32
+            # Covered faces neither receive nor restrict coarse corrections.
+            covered = iszero.(geometry.face_dual_volumes)
+            @test any(covered)
+            prolongation = first(preconditioner.levels).prolongation
+            @test all(iszero, sum(abs, prolongation[covered, :]; dims = 2))
+            # Per-row Jacobi weights, folded into the inverse diagonal.
+            @test preconditioner.local_relaxation
+            @test all(level -> level.relaxation_weight == 1, preconditioner.levels)
+            # The V-cycle stays a symmetric positive preconditioner for CG.
+            first_residual = cospi.(0.21 .* (1:unknowns))
+            second_residual = sinpi.(0.13 .* (1:unknowns) .+ 0.1)
+            first_correction = similar(first_residual)
+            second_correction = similar(second_residual)
+            TwoPhaseAMR.ldiv!(first_correction, preconditioner, first_residual)
+            TwoPhaseAMR.ldiv!(second_correction, preconditioner, second_residual)
+            @test dot(second_residual, first_correction) ≈
+                dot(first_residual, second_correction) rtol = 1.0e-10
+            @test dot(first_residual, first_correction) > 0
+        end
+        return stats.cycles
+    end
+    # Before the coarse levels saw the solid, dt/2 = h² took 20 → 141 (uniform)
+    # and 71 → 291 (composite) CG iterations from n = 32 to n = 128. For
+    # dt/2 = 1 even the solid-free hierarchy grows (25 → 44, uniform), so that
+    # regime cannot carry this bound.
+    for refined in (false, true)
+        coarse = iterations(32, refined)
+        fine = iterations(128, refined)
+        @test fine <= 1.5 * coarse
+    end
+
+    # A two-phase flow passes its solid to the viscous hierarchy itself.
+    mesh = mesh_for(32, false)
+    geometry = GeometryField(mesh, solid; lipschitz = 1.2)
+    interface = InterfaceField(
+        mesh, interface_levelset; geometry, lipschitz = hypot(1, 0.1),
+    )
+    flow = FlowSimulation(
+        mesh, TwoPhase(interface; density = (1.0, 1.0), dynamic_viscosity = (1.0, 0.01));
+        geometry,
+    )
+    hierarchy = flow.workspace.two_phase.diffusion_solver.preconditioner
+    @test hierarchy isa TwoPhaseAMR.TreeVariableDiffusionPreconditioner
+    @test length(hierarchy.levels) > 1
+    @test hierarchy.local_relaxation
+    prolongation = first(hierarchy.levels).prolongation
+    @test all(iszero, sum(abs, prolongation[iszero.(geometry.face_dual_volumes), :]; dims = 2))
+end

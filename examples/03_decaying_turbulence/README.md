@@ -12,7 +12,7 @@ A seeded periodic velocity field decays while pressure-driven adaptation changes
 | **Algorithms** | Initial velocity projection, Lax–Wendroff staggered advection, implicit-midpoint diffusion and pressure projection. Pressure uses CG/tree multigrid; diffusion uses tree multigrid and selects CG or BiCGSTAB by matrix symmetry. Pressure interpolation-error AMR uses refine/coarsen thresholds 0.6/0.2, update interval 5, coarsen delay 25 and minimum level `min(2, max_level)`. Automatic stepping uses CFL 0.45. |
 | **Worth varying** | `reynolds=400` changes viscosity; `max_level=4` changes the finest possible level; `final_time=10` sets the duration; `dt=nothing` selects automatic steps. At `max_level=2` the protected minimum equals the maximum, so no coarsening below level 2 is possible. |
 | **Validated against** | Incompressibility has exact reference zero: the final volume-weighted `:divergence_norm` is `1.08446e-6` at docs size. `:projected_kinetic_energy` decreases from `715.044` to `341.261`; no exact turbulent-flow trajectory is claimed. |
-| **Cost** | Default: level 4, `T=10`, initially 16384 and finally 1024 cells, 18213 steps and 393 mesh updates; setup and simulation took 106.4 s on one thread. Docs: level 3, `T=2`, initially 4096 and finally 2176 cells, 1744 steps and 54 mesh updates; setup and simulation took 19.10 s and the whole figure script 39.27 s, including first-use compilation and rendering. |
+| **Cost** | Default: level 4, `T=10`, initially 16384 and finally 1024 cells, 18213 steps and 393 mesh updates; setup and simulation took 106.4 s on one thread. Docs: level 3, `T=2`, initially 4096 and finally 2176 cells, 1744 steps and 54 mesh updates; setup and simulation took 29.50 s and the whole figure script, with its 81-frame GIF, 63.25 s, including first-use compilation and rendering, measured while other jobs shared the machine. |
 
 The gallery measurement used Julia 1.12.7, one Julia thread and one BLAS thread; compilation depends on earlier examples and package loading is excluded.
 
@@ -60,7 +60,7 @@ The projected energy falls from `715.044` to `341.261`, while active cells fall 
 
 ![Animation of adaptive vorticity](assets/vorticity.gif)
 
-The GIF samples 41 output frames on a uniform simulation-time grid over the two simulated time units, each showing the nearest retained keyframe (the completed step nearest its target time), with one symmetric vorticity range over all frames, next to the kinetic energy and active cell count with a cursor at the shown time.
+The GIF has 81 output frames, one per keyframe, on a uniform simulation-time grid with spacing `0.025` over the two simulated time units; each keyframe is the completed step nearest its requested time. Vorticity uses one symmetric range over all frames in 31 colour levels, next to the kinetic energy and active cell count with a cursor at the shown time.
 
 ## Variations
 

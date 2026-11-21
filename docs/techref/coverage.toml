@@ -965,6 +965,18 @@ tests = [
 ]
 check = "unresolved_check"
 [[claims]]
+label = "eq:forces:contact-line"
+sources = [
+  { file = "src/interface/height_functions.jl", symbol = "_contact_line_curvature!" },
+  { file = "src/interface/height_functions.jl", symbol = "_wall_run_cosine" },
+  { file = "src/interface/height_functions.jl", symbol = "_wall_row_cosine" }
+]
+tests = [
+  { file = "test/indicator/phase/height_functions.jl", testset = "Contact-line curvature: energy consistency" },
+  { file = "test/indicator/phase/height_functions.jl", testset = "Contact-line curvature of a plane on rectangular cells" },
+  { file = "test/indicator/phase/height_functions.jl", testset = "Contact-angle curvature converges at triple points" }
+]
+[[claims]]
 label = "eq:forces:st-jump"
 sources = [
   { file = "src/two_phase/forces.jl", symbol = "_surface_tension_jump" },
@@ -1495,6 +1507,58 @@ tests = [
   { file = "test/two_phase/two_velocity/projection/cmdgfm_projection.jl", testset = "CMDGFM projection invariants" }
 ]
 check = "cmdgfm_check"
+[[claims]]
+label = "eq:projection:cmdgfm-row-linear"
+sources = [
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_second_donors!" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_extrapolated_inference!" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_inferred_jump" }
+]
+tests = [
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: smooth shear across tilted and curved interfaces" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: momentum, defects and fallbacks" }
+]
+[[claims]]
+label = "eq:projection:tangential-row"
+sources = [
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_tangential_stencil!" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_incremental_row" }
+]
+tests = [
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: x and t impose the normal jump on all mixed faces" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: flat interface and single-valued gradients are exact" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: near-tangential faces without a regular row" }
+]
+[[claims]]
+label = "eq:projection:crossing-limiter"
+sources = [
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_crossing_slope" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_limit_extrapolation!" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_CMDGFM_CROSSING_RAMP" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_release_crossing!" }
+]
+tests = [
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: crossing-speed limiter" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: a translating drop stays at the one-donor level" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: the projection is idempotent" }
+]
+[[claims]]
+label = "eq:projection:dominant-slope"
+sources = [
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_dominant_row" }
+]
+tests = [
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_projection.jl", testset = "CMDGFM projection invariants" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: crossing-speed limiter" }
+]
+[[claims]]
+label = "eq:projection:normal-row"
+sources = [
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_normal_stencil!" }
+]
+tests = [
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: x and t impose the normal jump on all mixed faces" }
+]
 [[claims]]
 label = "eq:projection:unresolved"
 sources = [
@@ -2404,6 +2468,17 @@ sources = [
 ]
 tests = [
   { file = "test/two_phase/two_velocity/projection/cmdgfm_projection.jl", testset = "CMDGFM block-preconditioned BiCGSTAB" }
+]
+check = "solv_cmdgfm_cases"
+[[claims]]
+label = "eq:solvers:jump-schur"
+sources = [
+  { file = "src/two_phase/projection/cmdgfm_cache.jl", symbol = "_cmdgfm_jump_schur!" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_block_preconditioner" }
+]
+tests = [
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_projection.jl", testset = "CMDGFM block-preconditioned BiCGSTAB" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_projection.jl", testset = "CMDGFM AMR whole-system ILU regression (issue #126)" }
 ]
 check = "solv_cmdgfm_cases"
 [[claims]]

@@ -403,10 +403,37 @@ end
     )
     return t * t * (3 - 2t) # approved correction to the thesis's printed polynomial
 end
+
+# Height-function coverage of a candidate axis whose normal component is
+# `principal`: one within π/4 of the axis (the principal direction), fading
+# with the same smoothstep over the last π/20 before the quality cutoff
+# 3π/10 of `_height_quality`.
+@inline function _height_coverage(principal)
+    angle = acos(clamp(principal, zero(principal), one(principal)))
+    pi_t = oftype(principal, pi)
+    t = clamp(
+        (pi_t / 4 + pi_t / 20 - angle) / (pi_t / 20),
+        zero(principal), one(principal)
+    )
+    return t * t * (3 - 2t)
+end
+
+# Locality of a height-function candidate whose central height (interface
+# crossing of the cell's own column, in cells from the cell centre) is
+# `height`: one while the crossing lies in the cell (|height| ≤ 1/2), fading
+# with the same smoothstep to zero when it reaches the centre of the
+# neighbouring cell (|height| = 1). A nearly full or empty cell whose column
+# crosses the interface in a neighbour carries that neighbour's curvature.
+@inline function _height_locality(height)
+    t = clamp(2 * (1 - abs(height)), zero(height), one(height))
+    return t * t * (3 - 2t)
+end
+
 function _lhf_geometry(values, i, j, spacing)
     T = promote_type(eltype(values), typeof(spacing[1]), typeof(spacing[2]))
-    candidates = ntuple(_ -> ntuple(_ -> zero(T), 4), 4)
+    candidates = ntuple(_ -> ntuple(_ -> zero(T), 5), 4)
     count = 0
+    has_axis = (false, false)
     for axis in 1:2,orientation in (-1, 1)
         heights = ntuple(3) do k
             offset = k - 2
@@ -426,10 +453,13 @@ function _lhf_geometry(values, i, j, spacing)
         # Outward liquid normal; convex liquid droplets have positive curvature.
         curvature = -orientation * second / norm^3
         count += 1
-        candidates = Base.setindex(candidates, T.((nx, ny, curvature, quality)), count)
+        candidates = Base.setindex(
+            candidates, T.((nx, ny, curvature, quality, _height_locality(h0))), count,
+        )
+        has_axis = Base.setindex(has_axis, true, axis)
     end
     count == 0 && return nothing
-    nx = ny = kappa = weight = zero(T)
+    nx = ny = kappa = locality = weight = zero(T)
     for index in 1:count
         c = candidates[index]
         product = one(T)
@@ -438,10 +468,20 @@ function _lhf_geometry(values, i, j, spacing)
             product *= one(T) - candidates[j][4]
         end
         w = c[4] * product
-        nx += w * c[1]; ny += w * c[2]; kappa += w * c[3]; weight += w
+        nx += w * c[1]; ny += w * c[2]; kappa += w * c[3]; locality += w * c[5]
+        weight += w
     end
     weight > 0 || return nothing
-    return nx, ny, kappa / weight
+    # Height-function coverage at the blended normal: one if an axis with a
+    # candidate is the principal direction (within π/4, always so with both
+    # axes), fading smoothly to zero as a secondary-axis candidate approaches
+    # its cutoff angle; times the blended locality of the candidates.
+    scale = hypot(nx, ny)
+    coverage = max(
+        has_axis[1] ? _height_coverage(abs(nx) / scale) : zero(T),
+        has_axis[2] ? _height_coverage(abs(ny) / scale) : zero(T),
+    )
+    return nx, ny, kappa / weight, coverage * locality / weight
 end
 
 """Return `(valid, filament)` for the thesis curvature-AMR tests.
@@ -934,6 +974,141 @@ function _contact_curvature(field, values, b, i, j)
             scale = sqrt(1 + slope * slope)
             return -orientation * 2A / scale^3
         end
+    end
+    return nothing
+end
+
+"""Set the energy-consistent curvature of the contact-line cells (techref
+ch. 8, Contact-line curvature), after the PLIC passes of [`reconstruct!`](@ref).
+
+A cut cell whose centre lies in the first row along a domain wall with a
+contact angle `θ_w` (axis not periodic) gets `κ = (cos θ - cos θ_w)/h`, `h`
+the cell size normal to the wall, with `cos θ = -o s/√(1 + s²)` the angle of
+the chord between the wall-parallel local heights `H₁` of its own column and
+`H₂` of the column one row inward (both relative to the cell's tangential
+centre, in cells), `s = (H₂ - H₁) h_t/h` the chord's slope (`h_t` the cell
+size along the wall) and `o = ±1` the orientation of the columns (`o = 1`:
+liquid on the low side). With the wetted wall length `h_t H₁` (the liquid
+volume of the row over `h`) and the chord between the two row centres,
+`σκ` is the derivative `∂E/∂V₁` of the contact-line energy
+`E = σ(|chord| - cos θ_w h_t H₁)` by the liquid volume of the row, the same for
+every cut cell of the row, so that the capillary work of a transport through
+the row is the change of the surface and wall energy. A cell without both
+heights takes the cosine of the nearest cell with both in its contiguous run of
+cut cells of the row ([`_wall_run_cosine`](@ref)); a run without any (for
+example next to an embedded solid) keeps the curvature of the reconstruction.
+The heights come from the final PLIC planes (the halo values of the height
+columns use them); they are refilled only if a cut cell lies in a first wall
+row."""
+function _contact_line_curvature!(field)
+    all(isnothing, field.contact_angles) && return field
+    mesh = field.mesh
+    T = eltype(field)
+    nx = mesh.block_size[1]
+    # `cos θ_w` per wall (`NaN`: none), concrete: indexing the field's tuple of
+    # unions per cell allocated.
+    wall_cosines = ntuple(Val(4)) do wall
+        theta = field.contact_angles[wall]
+        isnothing(theta) ? T(NaN) : cos(T(theta))::T
+    end
+    _has_contact_row_cell(field, wall_cosines) || return field
+    values = _fill_height_values!(field)
+    _parallel_block_columns(mesh) do b, first_j, last_j
+        block = @inbounds mesh.blocks[b]
+        height_values = @inbounds values[b]
+        for j in first_j:last_j, i in 1:nx
+            ref = CellRef(b, i, j)
+            fraction = _conditional_fraction(field, ref)
+            zero(T) < fraction < one(T) || continue
+            for wall in 1:4
+                wall_cosine = wall_cosines[wall]
+                isnan(wall_cosine) && continue
+                _in_wall_row(mesh, block, i, j, wall) || continue
+                axis = wall <= 2 ? 1 : 2
+                h = block.spacing[axis]
+                ratio = T(block.spacing[3 - axis] / h)
+                cosine = _wall_run_cosine(height_values, i + 4, j + 4, axis, isodd(wall) ? 1 : -1, ratio)
+                isnothing(cosine) && continue
+                _set!(field.curvature, (cosine - wall_cosine) / T(h), ref)
+                break
+            end
+        end
+    end
+    return field
+end
+
+"""Whether the centre of cell `(i, j)` of `block` lies in the first row along
+domain wall `wall` (left, right, bottom, top) of a non-periodic axis."""
+@inline function _in_wall_row(mesh, block, i, j, wall)
+    axis = wall <= 2 ? 1 : 2
+    mesh.periodic[axis] && return false
+    T = eltype(block.spacing)
+    h = block.spacing[axis]
+    center = block.origin[axis] + ((axis == 1 ? i : j) - T(0.5)) * h
+    boundary = mesh.origin[axis] + (isodd(wall) ? zero(T) : mesh.extent[axis])
+    return abs(center - boundary) <= h * (T(0.5) + 64eps(T))
+end
+
+"""Whether a cut cell lies in the first row along a wall with a contact angle
+(`wall_cosines[wall]` not `NaN`); scans only the wall rows of the blocks."""
+function _has_contact_row_cell(field, wall_cosines)
+    mesh = field.mesh
+    T = eltype(field)
+    for (b, block) in pairs(mesh.blocks), wall in 1:4
+        isnan(wall_cosines[wall]) && continue
+        axis = wall <= 2 ? 1 : 2
+        index = isodd(wall) ? 1 : mesh.block_size[axis]
+        _in_wall_row(mesh, block, index, index, wall) || continue
+        for k in 1:mesh.block_size[3 - axis]
+            i, j = axis == 1 ? (index, k) : (k, index)
+            zero(T) < _conditional_fraction(field, CellRef(b, i, j)) < one(T) && return true
+        end
+    end
+    return false
+end
+
+"""`cos θ` of the wall row at the padded index `(i, j)` (first row along a
+wall of normal axis `axis`): that of [`_wall_row_cosine`](@ref) if its
+columns are valid, else that of the nearest cell with valid columns in the
+contiguous run of cut cells (`0 < C < 1`) of the row through `(i, j)`, the
+mean of the two at equal distance (the slope `s` is the same along a run).
+The run is followed through the padded values of the block; `nothing` if it
+has no cell with valid columns there."""
+function _wall_run_cosine(values, i, j, axis, inward, ratio)
+    cosine = _wall_row_cosine(values, i, j, axis, inward, ratio)
+    isnothing(cosine) || return cosine
+    T = eltype(values)
+    di, dj = axis == 1 ? (0, 1) : (1, 0)
+    cut(ii, jj) = checkbounds(Bool, values, ii, jj) && zero(T) < values[ii, jj] < one(T)
+    low = high = true
+    step = 1
+    while low || high
+        low = low && cut(i - step * di, j - step * dj)
+        high = high && cut(i + step * di, j + step * dj)
+        below = low ? _wall_row_cosine(values, i - step * di, j - step * dj, axis, inward, ratio) : nothing
+        above = high ? _wall_row_cosine(values, i + step * di, j + step * dj, axis, inward, ratio) : nothing
+        isnothing(below) || return isnothing(above) ? below : (below + above) / 2
+        isnothing(above) || return above
+        step += 1
+    end
+    return nothing
+end
+
+"""`cos θ` of the chord between the wall-parallel local heights of the padded
+height values at `(i, j)` (first row along a wall of normal axis `axis`) and
+one row inward, `ratio` the cell size along the wall over that normal to it;
+`nothing` unless both columns are valid with one orientation. The columns
+reach four cells to either side, the padding of the height values."""
+function _wall_row_cosine(values, i, j, axis, inward, ratio)
+    tangent = 3 - axis
+    ii, jj = axis == 1 ? (i + inward, j) : (i, j + inward)
+    for orientation in (-1, 1)
+        first = _local_height(values, i, j, tangent, orientation; radius = 4)
+        isnothing(first) && continue
+        second = _local_height(values, ii, jj, tangent, orientation; radius = 4)
+        isnothing(second) && return nothing
+        slope = (second - first) * ratio
+        return -orientation * slope / sqrt(1 + slope^2)
     end
     return nothing
 end

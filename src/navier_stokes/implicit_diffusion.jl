@@ -268,10 +268,39 @@ function _tree_staggered_component_prolongation(
     return sparse(prolongation[fine_indices, coarse_indices])
 end
 
+# A completely covered face keeps an algebraic unit volume in the cut-cell
+# operator (_cut_cell_dual_schedule), against open volumes of order h². A
+# transfer that reached it would put coarse corrections into this artificial
+# mass, which then dominates the energy and the restricted residual by 1/h²,
+# and the V-cycle loses mesh independence. Covered faces are therefore left to
+# the smoother, and a covered coarse face acts as a zero wall value.
+# `fine_faces`/`coarse_faces` map the transfer's rows/columns to mesh faces
+# (a component's `local_to_global`, or `eachindex(mesh.faces)` for a
+# full-vector transfer).
+function _remove_covered_staggered_transfer!(
+        prolongation::SparseMatrixCSC{T, Int}, fine_geometry, fine_faces,
+        coarse_geometry, coarse_faces,
+    ) where {T}
+    rows = rowvals(prolongation)
+    values = nonzeros(prolongation)
+    fine_volumes = fine_geometry.face_dual_volumes
+    coarse_volumes = coarse_geometry.face_dual_volumes
+    for column in axes(prolongation, 2)
+        coarse_covered = iszero(coarse_volumes[coarse_faces[column]])
+        for pointer in nzrange(prolongation, column)
+            fine_face = fine_faces[rows[pointer]]
+            (coarse_covered || iszero(fine_volumes[fine_face])) &&
+                (values[pointer] = zero(T))
+        end
+    end
+    return dropzeros!(prolongation)
+end
+
 function _tree_staggered_component(
         diffusion_operators, elliptic_operators, prolongations,
         ::Val{Axis}; pre_sweeps, post_sweeps, pruning,
         reuse = nothing, reused_new_start = 0, reused_old_start = 0,
+        geometry_levels = nothing,
     ) where {Axis}
     components = [
         _staggered_component(operator, Val(Axis))
@@ -286,6 +315,15 @@ function _tree_staggered_component(
                 diffusion_operators[index], diffusion_operators[index + 1],
                 prolongations[index], Val(Axis), T,
             ) : spzeros(T, length(component.volumes), 0)
+        if !isnothing(geometry_levels) && index < length(components)
+            _remove_covered_staggered_transfer!(
+                prolongation,
+                geometry_levels[index],
+                _staggered_component(diffusion_operators[index], Val(Axis)).local_to_global,
+                geometry_levels[index + 1],
+                _staggered_component(diffusion_operators[index + 1], Val(Axis)).local_to_global,
+            )
+        end
         if !iszero(reused_new_start) && index >= reused_new_start
             old_index = reused_old_start + index - reused_new_start
             level = reuse.levels[old_index]
@@ -326,7 +364,8 @@ function _tree_staggered_component(
 end
 
 """
-    TreeStaggeredGeometricMultigridPreconditioner(operator; kwargs...)
+    TreeStaggeredGeometricMultigridPreconditioner(operator; geometry=nothing,
+                                                  kwargs...)
 
 Build the two independent single-phase viscous V-cycles by successively
 pruning the block tree, then agglomerating 2×2 root blocks where possible, and
@@ -337,6 +376,13 @@ coarse matrix is formed. Bottom component
 systems with at most 256 unknowns use retained dense LU; larger systems use
 sparse LU. Configure the hierarchy with `multigrid=MultigridOptions(...)` or
 individual keywords.
+
+For an operator built on an embedded `GeometryField`, pass the same
+`geometry` (as the pressure hierarchy takes it): every coarse level is then
+rediscretized on the geometrically restricted solid, so its walls stay in the
+coarse operators, and the face transfers skip completely covered faces.
+Without it the coarse levels see no solid and the iteration count grows with
+the mesh size.
 """
 struct TreeStaggeredGeometricMultigridPreconditioner{T, O, X, Y}
     operator::O
@@ -374,6 +420,7 @@ function TreeStaggeredGeometricMultigridPreconditioner(
         coarse_size = multigrid.coarse_size,
         pre_sweeps = multigrid.pre_sweeps, post_sweeps = multigrid.post_sweeps,
         max_levels = multigrid.max_levels, pruning = :all, reuse = nothing,
+        geometry = nothing,
     ) where {T}
     multigrid = MultigridOptions(; coarse_size, pre_sweeps, post_sweeps, max_levels)
     (; coarse_size, pre_sweeps, post_sweeps, max_levels) = multigrid
@@ -384,11 +431,17 @@ function TreeStaggeredGeometricMultigridPreconditioner(
         reuse isa TreeStaggeredGeometricMultigridPreconditioner{T} || throw(
         ArgumentError("reused staggered hierarchy has the wrong type"),
     )
-    can_reuse = _tree_can_reuse(plan, isnothing(reuse) ? nothing : reuse.x) &&
+    isnothing(geometry) || geometry.mesh === operator.mesh || throw(
+        ArgumentError("multigrid geometry must share the operator mesh"),
+    )
+    # Geometry-dependent coarse operators are rebuilt on every construction.
+    can_reuse = isnothing(geometry) &&
+        _tree_can_reuse(plan, isnothing(reuse) ? nothing : reuse.x) &&
         typeof(reuse.operator.diffusion_operator.boundary) ===
         typeof(operator.diffusion_operator.boundary) &&
         reuse.operator.reaction == operator.reaction &&
         reuse.operator.diffusion == operator.diffusion
+    geometry_levels = isnothing(geometry) ? nothing : Any[geometry]
 
     diffusion_operators = [operator.diffusion_operator]
     elliptic_operators = [operator]
@@ -416,13 +469,26 @@ function TreeStaggeredGeometricMultigridPreconditioner(
             plan, reuse_operators, coarse_mesh, length(diffusion_operators),
         )
         can_append_suffix = !iszero(matching_level)
-        coarse_diffusion = can_append_suffix ?
-            reuse.x.diffusion_operators[matching_level] :
+        coarse_diffusion = if !isnothing(geometry)
+            coarse_geometry = _restrict_geometry_to_mesh(
+                last(geometry_levels), coarse_mesh,
+                _cell_coefficient_restriction(coarse_mesh, current_mesh, T),
+            )
+            push!(geometry_levels, coarse_geometry)
+            StaggeredDiffusionOperator(
+                coarse_geometry;
+                viscosity = operator.diffusion_operator.viscosity,
+                boundary = operator.diffusion_operator.boundary,
+            )
+        elseif can_append_suffix
+            reuse.x.diffusion_operators[matching_level]
+        else
             StaggeredDiffusionOperator(
                 coarse_mesh;
                 viscosity = operator.diffusion_operator.viscosity,
                 boundary = operator.diffusion_operator.boundary, T,
             )
+        end
         push!(diffusion_operators, coarse_diffusion)
         push!(
             elliptic_operators,
@@ -455,13 +521,13 @@ function TreeStaggeredGeometricMultigridPreconditioner(
         diffusion_operators, elliptic_operators, prolongations, Val(1);
         pre_sweeps, post_sweeps, pruning,
         reuse = isnothing(reuse) ? nothing : reuse.x,
-        reused_new_start, reused_old_start,
+        reused_new_start, reused_old_start, geometry_levels,
     )
     y = _tree_staggered_component(
         diffusion_operators, elliptic_operators, prolongations, Val(2);
         pre_sweeps, post_sweeps, pruning,
         reuse = isnothing(reuse) ? nothing : reuse.y,
-        reused_new_start, reused_old_start,
+        reused_new_start, reused_old_start, geometry_levels,
     )
     return TreeStaggeredGeometricMultigridPreconditioner{
         T, typeof(operator), typeof(x), typeof(y),
@@ -538,6 +604,10 @@ may explicitly supply a workspace factory accepting `(matrix, rhs)`.
 and preconditioner placement.
 The solver owns its component matrices; numerical timestep updates do not
 mutate the operator supplied by the caller.
+For an operator on an embedded `GeometryField`, pass
+`preconditioner_options=(; geometry)` to the tree-geometric preconditioner
+(`TreeStaggeredGeometricMultigridPreconditioner`); the `NavierStokesSystem`
+does so itself.
 """
 mutable struct StaggeredEllipticSolver{T, O, X, Y, K, KO, P, Q}
     operator::O
