@@ -98,9 +98,9 @@ end
 # output frame, so the time step is uniform and no frame is held. Light and
 # dark variants share the frames and one vorticity range, the 99.9 % quantile
 # of its magnitude, so that the impact peaks saturate instead of fading the
-# vortex sheets. The dark variant stays muted for GitHub's dark theme:
-# `:berlin` without its lightest ends (a dark neutral), grey text, interface,
-# and faint blocks.
+# vortex sheets; 63 colour levels keep the 81-frame GIFs under 2 MB. The dark
+# variant stays muted for GitHub's dark theme: `:berlin` without its lightest
+# ends (a dark neutral), grey text, interface, and faint blocks.
 function readme_animations(outdir, store, period)
     times = readme_times(period)
     camera = (-0.5, 0.5, -0.2, 0.25)
@@ -111,17 +111,19 @@ function readme_animations(outdir, store, period)
         first(frames).time / period, " to ", last(frames).time / period,
         ", vorticity range ", colorrange
     )
-    animation(path; kwargs...) = export_animation(
+    levels = 63
+    animation(path, colormap; kwargs...) = export_animation(
         path, store; field = :velocity_vorticity,
         window = (first(frames).time, last(frames).time), camera, colorrange, blocks = true,
+        colormap = cgrad(colormap, levels; categorical = true),
         title = frame -> @sprintf("t/T = %.3f", frame.time / period), fps = 12,
         nframes = length(frames), size = (900, 400), kwargs...
     )
-    animation(joinpath(outdir, "readme_light.gif"))
-    muted = [get(CairoMakie.Makie.ColorSchemes.berlin, x) for x in range(0.15, 0.85; length = 256)]
+    animation(joinpath(outdir, "readme_light.gif"), :balance)
+    muted = [get(CairoMakie.Makie.ColorSchemes.berlin, x) for x in range(0.15, 0.85; length = levels)]
     with_theme(theme_dark(); textcolor = :gray80) do
         animation(
-            joinpath(outdir, "readme_dark.gif"); colormap = muted,
+            joinpath(outdir, "readme_dark.gif"), muted;
             interfacecolor = :gray75, blockcolor = (:white, 0.15)
         )
     end
