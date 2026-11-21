@@ -307,7 +307,9 @@ end
         )
         geometry = GeometryField(mesh, (x, y) -> 1.0; lipschitz = 1)
         bare = StaggeredDiffusionOperator(mesh; boundary)
-        open = StaggeredDiffusionOperator(geometry; boundary)
+        open = StaggeredDiffusionOperator(
+            geometry; boundary, closure = WallDistanceClosure(),
+        )
         velocity = FaceVelocity(
             mesh, (x, y, t, axis) -> sin(x + 0.3y + axis),
         )
@@ -330,6 +332,7 @@ end
     bare32 = StaggeredDiffusionOperator(mesh32; viscosity = 1.0f0)
     open32 = StaggeredDiffusionOperator(
         GeometryField(mesh32, (x, y) -> 1.0f0; lipschitz = 1); viscosity = 1.0f0,
+        closure = WallDistanceClosure(),
     )
     for (a, b) in zip((bare32.x, bare32.y), (open32.x, open32.y))
         @test eltype(a.stiffness) === Float32
@@ -346,7 +349,9 @@ end
         key.level == 0 && key.i == 0 && key.j == 0,
     )
     geometry = GeometryField(mesh, (x, y) -> y - 2.3 - 0.1x; lipschitz = 2)
-    operator = StaggeredDiffusionOperator(geometry; viscosity = 1.0)
+    operator = StaggeredDiffusionOperator(
+        geometry; viscosity = 1.0, closure = WallDistanceClosure(),
+    )
     @test operator isa StaggeredDiffusionOperator
 
     # The assembled stiffness also contains stationary-wall penalties.
@@ -440,7 +445,9 @@ end
     end
 
     open_geometry = GeometryField(mesh, (x, y) -> 1.0; lipschitz = 1)
-    open_operator = StaggeredDiffusionOperator(open_geometry; viscosity = 1.0)
+    open_operator = StaggeredDiffusionOperator(
+        open_geometry; viscosity = 1.0, closure = WallDistanceClosure(),
+    )
 
     # The fine-cell transverse face is blocked in both orientations, but the
     # coarse-cell half-strip remains open over x (or y) in [4.1, 5]. Simply
@@ -450,7 +457,9 @@ end
             ((x, y) -> y - 2.55 + 0.5 * (x - 4)) :
             ((x, y) -> x - 2.55 + 0.5 * (y - 4))
         oblique = GeometryField(mesh, levelset; lipschitz = 2)
-        oblique_operator = StaggeredDiffusionOperator(oblique; viscosity = 1.0)
+        oblique_operator = StaggeredDiffusionOperator(
+            oblique; viscosity = 1.0, closure = WallDistanceClosure(),
+        )
         connections, local_to_global = cut_connections(oblique, axis)
         centres = [mesh.faces[i].center for i in local_to_global]
         first_point = axis == 1 ? (4.0, 2.25) : (2.25, 4.0)
@@ -565,7 +574,9 @@ end
     geometry32 = GeometryField(
         mesh32, (x, y) -> y - 2.3 - 0.1x; lipschitz = 2,
     )
-    @test StaggeredDiffusionOperator(geometry32; viscosity = 1.0f0) isa StaggeredDiffusionOperator
+    @test StaggeredDiffusionOperator(
+        geometry32; viscosity = 1.0f0, closure = WallDistanceClosure(),
+    ) isa StaggeredDiffusionOperator
 
     fixture_mesh = BlockTreeMesh(
         base_mesh = (16, 16), block_size = (4, 4), extent = (8.0, 8.0),
@@ -575,7 +586,9 @@ end
     fixture = GeometryField(
         fixture_mesh, (x, y) -> y - 0.9 - 0.1x; lipschitz = hypot(1, 0.1),
     )
-    @test StaggeredDiffusionOperator(fixture; viscosity = 1.0) isa StaggeredDiffusionOperator
+    @test StaggeredDiffusionOperator(
+        fixture; viscosity = 1.0, closure = WallDistanceClosure(),
+    ) isa StaggeredDiffusionOperator
 
     # Discs centered near the level interface exercise many different cut
     # configurations without skipping failed geometry/operator constructions.
@@ -587,7 +600,9 @@ end
             mesh, (x, y) -> hypot(x - cx, y - cy) - radius; lipschitz = 2,
         )
         boundary = isodd(sample) ? NoSlip() : FreeSlip()
-        disc_operator = StaggeredDiffusionOperator(disc; viscosity = 1.0, boundary)
+        disc_operator = StaggeredDiffusionOperator(
+            disc; viscosity = 1.0, boundary, closure = WallDistanceClosure(),
+        )
         for component in (disc_operator.x, disc_operator.y)
             check_core(component, disc_operator.boundary, rng)
         end
@@ -618,7 +633,10 @@ end
         solid = InterfaceField(sample_mesh, PolygonIndicator(vertices))
         geometry = GeometryField(solid)
         boundary = isodd(sample) ? NoSlip() : FreeSlip()
-        random_operator = StaggeredDiffusionOperator(geometry; viscosity = 1.0, boundary)
+        random_operator = StaggeredDiffusionOperator(
+            geometry; viscosity = 1.0, boundary,
+            closure = WallDistanceClosure(),
+        )
         for (axis, component) in enumerate((random_operator.x, random_operator.y))
             @test component.stiffness == transpose(component.stiffness)
             core, _ = check_core(component, random_operator.boundary, mesh_rng)
@@ -680,7 +698,9 @@ end
             periodic_mesh, (x, y) -> hypot(x - 4.0, y - 4.0) - 1.2;
             lipschitz = 2,
         )
-        periodic_operator = StaggeredDiffusionOperator(disc; viscosity = 1.0)
+        periodic_operator = StaggeredDiffusionOperator(
+            disc; viscosity = 1.0, closure = WallDistanceClosure(),
+        )
         for component in (periodic_operator.x, periodic_operator.y)
             check_core(component, periodic_operator.boundary, rng)
         end
@@ -769,7 +789,9 @@ end
             refine = (key, origin, extent) -> key.level == 0 && origin[axis] < 0.5,
         )
         geometry = GeometryField(mesh, (x, y) -> 1.0; lipschitz = 1)
-        operator = StaggeredDiffusionOperator(geometry; boundary = NoSlip())
+        operator = StaggeredDiffusionOperator(
+            geometry; boundary = NoSlip(), closure = WallDistanceClosure(),
+        )
         component = axis == 1 ? operator.x : operator.y
         wall_axis = 3 - axis
         for side in (-1, 1)
@@ -816,7 +838,9 @@ end
     )
     geometry = GeometryField(mesh, (x, y) -> 1.0; lipschitz = 1)
     for boundary in (NoSlip(), FreeSlip())
-        component = StaggeredDiffusionOperator(geometry; boundary).y
+        component = StaggeredDiffusionOperator(
+            geometry; boundary, closure = WallDistanceClosure(),
+        ).y
         for side in (-1, 1)
             wall = side < 0 ? 0.0 : 1.0
             near = (0.5 - h / 4, wall - side * h / 2)
@@ -842,7 +866,10 @@ end
         # A constant positive level set exercises the cut-cell operator while
         # leaving the manufactured domain unobstructed.
         geometry = GeometryField(mesh, (x, y) -> 1.0; lipschitz = 1)
-        diffusion = StaggeredDiffusionOperator(geometry; viscosity = 1.0, boundary)
+        diffusion = StaggeredDiffusionOperator(
+            geometry; viscosity = 1.0, boundary,
+            closure = WallDistanceClosure(),
+        )
         shift = 0.1
         errors = Float64[]
         for (axis, component) in enumerate((diffusion.x, diffusion.y))
@@ -924,7 +951,10 @@ end
             left = side, right = side, bottom = side, top = side,
         )
         return mesh, geometry,
-            StaggeredDiffusionOperator(geometry; viscosity = 1.0, boundary), boundary
+            StaggeredDiffusionOperator(
+                geometry; viscosity = 1.0, boundary,
+                closure = WallDistanceClosure(),
+            ), boundary
     end
 
     # Only the two sides that prescribe no wall value reach this closure; an
@@ -1034,7 +1064,10 @@ end
         boundary = VelocityBoundaryConditions(
             left = side, right = side, bottom = side, top = side,
         )
-        operator = StaggeredDiffusionOperator(geometry; viscosity = 1.0, boundary)
+        operator = StaggeredDiffusionOperator(
+            geometry; viscosity = 1.0, boundary,
+            closure = WallDistanceClosure(),
+        )
         rows = Dict{Tuple{Int, Int}, Tuple{Vector{Int}, Vector{Float64}}}()
         for axis in 1:2
             schedule = TwoPhaseAMR._cut_cell_dual_schedule(
@@ -1083,7 +1116,10 @@ function _inflow_orphan_errors(n, exact, laplacian)
         bottom = Inflow((x, y, time, axis) -> exact(x, y)),
         top = Inflow((x, y, time, axis) -> exact(x, y)),
     )
-    operator = StaggeredDiffusionOperator(geometry; viscosity = 1.0, boundary)
+    operator = StaggeredDiffusionOperator(
+        geometry; viscosity = 1.0, boundary,
+        closure = WallDistanceClosure(),
+    )
     shift = 0.1
     worst = 0.0
     for (axis, component) in enumerate((operator.x, operator.y))
@@ -1183,7 +1219,10 @@ end
         boundary = VelocityBoundaryConditions(
             left = side, right = side, bottom = side, top = side,
         )
-        operator = StaggeredDiffusionOperator(geometry; viscosity = 1.0, boundary)
+        operator = StaggeredDiffusionOperator(
+            geometry; viscosity = 1.0, boundary,
+            closure = WallDistanceClosure(),
+        )
         errors = Float64[]
         for axis in 1:2
             schedule = TwoPhaseAMR._cut_cell_dual_schedule(
@@ -1558,17 +1597,9 @@ end
     end
 end
 
-@testset "domain-wall diffusion uses only uncovered wall segments" begin
-    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
-    solid = InterfaceField(mesh)
-    initialize!(solid, (1.0, 0.0), 0.45)
-    geometry = GeometryField(solid)
-    moving = NoSlip((x, y, time, axis) -> axis == 1 ? 1.0 : -2.0)
-    sides = VelocityBoundaryConditions(
-        left = moving, right = moving, bottom = moving, top = moving,
-    )
-    operator = StaggeredDiffusionOperator(geometry; boundary = moving)
-    side_operator = StaggeredDiffusionOperator(geometry; boundary = sides)
+function check_clipped_domain_wall(mesh, geometry, moving, sides, closure)
+    operator = StaggeredDiffusionOperator(geometry; boundary = moving, closure)
+    side_operator = StaggeredDiffusionOperator(geometry; boundary = sides, closure)
     velocity = FaceVelocity(mesh)
     tendency = FaceVelocity(mesh)
     side_tendency = FaceVelocity(mesh)
@@ -1588,15 +1619,19 @@ end
         )
     end
 
-    # At x=0.5 the upper wall comprises a full half-cell on the right and
-    # 0.05 of the left half-cell. Both component faces are 1/16 from the wall.
+    # At x=0.5 the top has 0.05 open on the left and h/2 on the right.
+    # Wall distance assigns the entire clipped left half-cell to this face.
+    # LS-STAG bisects the open edge between its bounding velocity traces:
+    # this face owns 0.025, the stationary solid trace owns the other 0.025.
+    # Both conductances use the same distance h/2 = 1/16 to the domain wall.
     top_connections = filter(
         c -> c.boundary_axis == 2 && c.boundary_side == 1 &&
             c.tangential && c.point[1] == 0.5,
         operator.x.wall_connections,
     )
     @test length(top_connections) == 2
-    @test sort([c.conductance for c in top_connections]) ≈ [0.8, 1.0] atol = 1.0e-12
+    left = closure isa WallDistanceClosure ? 0.05 : 0.025
+    @test sort([c.conductance for c in top_connections]) ≈ [16left, 1.0] atol = 1.0e-12
 
     # The normal component uses the entire 0.05-long open part of the cut
     # boundary face, with a full-cell distance of 1/8 to its interior face.
@@ -1606,6 +1641,21 @@ end
         operator.y.wall_connections,
     )
     @test [c.conductance for c in bottom_normal] ≈ [0.4] atol = 1.0e-12
+    return nothing
+end
+
+@testset "domain-wall diffusion uses only uncovered wall segments" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
+    solid = InterfaceField(mesh)
+    initialize!(solid, (1.0, 0.0), 0.45)
+    geometry = GeometryField(solid)
+    moving = NoSlip((x, y, time, axis) -> axis == 1 ? 1.0 : -2.0)
+    sides = VelocityBoundaryConditions(
+        left = moving, right = moving, bottom = moving, top = moving,
+    )
+    for closure in (WallDistanceClosure(), LSStagClosure())
+        check_clipped_domain_wall(mesh, geometry, moving, sides, closure)
+    end
 end
 
 @testset "uniform periodic staggered Laplacian convergence" begin

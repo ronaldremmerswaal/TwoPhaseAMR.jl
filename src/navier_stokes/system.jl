@@ -210,13 +210,6 @@ function NavierStokesSystem(
     )
     two_velocity_projection isa MimeticProjection &&
         _reject_mimetic_pressure_options(options.pressure)
-    physics isa TwoPhase && !isnothing(geometry) &&
-        !(options.embedded_viscous_closure isa WallDistanceClosure) && throw(
-        ArgumentError(
-            "embedded_viscous_closure applies to the single-phase viscous " *
-                "operator; a two-phase system with a solid requires WallDistanceClosure()",
-        ),
-    )
     model, configured_density, configured_dynamic_viscosity = if physics isa SinglePhase
         rho = T(physics.density)
         mu = T(physics.dynamic_viscosity)

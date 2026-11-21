@@ -2,9 +2,9 @@
 # (Cheny and Botella 2010, `LSStagClosure`). It replaces, for one velocity
 # component, every contact of the faces of cut cells, of their neighbours on
 # the same grid line and of fine faces whose line ends at a coarse cell with
-# such a face; every other contact keeps the default closure. On uncut cells
-# of one level both closures give the same two-point contacts, so the seam is
-# consistent.
+# such a face; unmodified contacts keep the standard interior stencil. On uncut
+# cells of one level both closures give the same two-point contacts, so the
+# seam is consistent.
 #
 #   value    at the midpoint of the open part of the face
 #   normal   |c| (G_c u)^2 for every cell with a replaced face,
@@ -40,6 +40,9 @@ end
 @inline _ls_stag_open_at(face::_LSStagFace, which) =
     which == 1 ? face.open_at_lo : face.open_at_hi
 
+@inline _ls_stag_sides(face::InteriorFace) = ((face.minus, 1), (face.plus, -1))
+@inline _ls_stag_sides(face::BoundaryFace) = ((face.cell, face.side),)
+
 # The open part of a partially open face lies at the end that the solid planes
 # of its cut cells leave open: the first cut cell whose own trace of the face is
 # partial decides, otherwise any cut cell with a tangential normal component,
@@ -53,7 +56,7 @@ function _ls_stag_open_part(geometry::GeometryField{T}, face, aperture) where {T
     open_length = aperture * T(face.area)
     decision = 0
     fallback = 0
-    for (ref, side) in ((face.minus, 1), (face.plus, -1))
+    for (ref, side) in _ls_stag_sides(face)
         fraction = _get(solid.fraction, ref)
         zero(T) < fraction < one(T) || continue
         tangential = tangent == 1 ? _get(solid.normal_x, ref) : _get(solid.normal_y, ref)

@@ -1679,9 +1679,9 @@ end
     StaggeredDiffusionOperator(geometry; viscosity=1, boundary=NoSlip(),
                                closure=WallDistanceClosure())
 
-`closure` selects the cut-cell closure: [`WallDistanceClosure`](@ref), the
-default described here, or [`LSStagClosure`](@ref), which replaces the rows
-of the faces on and next to cut cells and is second order at oblique walls.
+`closure` selects [`LSStagClosure`](@ref) or the default
+[`WallDistanceClosure`](@ref), whose legacy rows are described below.
+A cell field of dynamic viscosity selects the coupled stress operator.
 The conservative cut-cell stiffness is symmetric positive semidefinite.
 Embedded walls include surfaces aligned with cell faces as well as PLIC cuts.
 For Cartesian wall segments the tangential closure uses the wall-normal distance
@@ -1705,13 +1705,16 @@ velocities; where no level-matched face is available it keeps the linear-exact
 minimum-norm derivative of the unembedded transition. Domain-wall measures belong only to the dual strips
 that touch the wall.
 Advection flux-star redistribution between sibling faces is not a diffusive
-interface. With the default closure the velocity is first order at a wall
+interface. With `WallDistanceClosure()` the velocity is first order at a wall
 that is not grid aligned (#110).
 """
 function StaggeredDiffusionOperator(
         geometry::GeometryField{T, M}; viscosity = 1,
         boundary = NoSlip(), closure = WallDistanceClosure(),
     ) where {T, M}
+    if viscosity isa CellField
+        return _staggered_diffusion_operator(geometry.mesh; viscosity, geometry, boundary, closure, T)
+    end
     viscosity_value = T(viscosity)
     isfinite(viscosity_value) && viscosity_value > zero(T) || throw(
         ArgumentError("viscosity must be finite and strictly positive"),
@@ -1722,13 +1725,13 @@ function StaggeredDiffusionOperator(
                 "VelocityBoundaryConditions"
         ),
     )
-    closure isa AbstractEmbeddedViscousClosure || throw(
+    closure isa Union{WallDistanceClosure, LSStagClosure} || throw(
         ArgumentError("closure must be WallDistanceClosure() or LSStagClosure()"),
     )
     aligned = _embedded_aligned_wall_segments(geometry)
     x = _cut_cell_diffusion_component(geometry, Val(1), boundary, aligned, closure)
     y = _cut_cell_diffusion_component(geometry, Val(2), boundary, aligned, closure)
     return StaggeredDiffusionOperator{
-        T, M, typeof(x), typeof(y), typeof(boundary),
-    }(geometry.mesh, x, y, viscosity_value, boundary)
+        T, M, typeof(x), typeof(y), typeof(boundary), typeof(closure),
+    }(geometry.mesh, x, y, viscosity_value, boundary, closure)
 end

@@ -55,10 +55,10 @@ operator: the two-velocity step diffuses the mass-weighted mixture velocity
 with it and gives both phases the common increment, so the rule applies to
 one- and two-velocity flows alike.
 
-`embedded_viscous_closure` selects the cut-cell closure of the single-phase
-viscous operator next to an embedded solid: [`WallDistanceClosure`](@ref)
-(the default, first order at oblique walls) or [`LSStagClosure`](@ref)
-(second order). Two-phase systems with a solid accept only the default.
+`embedded_viscous_closure` selects the closure at a stationary embedded
+solid, for either velocity model. [`LSStagClosure`](@ref) uses open-face
+midpoints, Green normal stresses and coupled shear for two-phase viscosity.
+[`WallDistanceClosure`](@ref) selects the legacy wall-distance rows (default).
 """
 struct NavierStokesOptions{
         A <: AdvectionOptions,
@@ -94,7 +94,7 @@ struct NavierStokesOptions{
                 "viscosity_averaging must be HarmonicViscosityAveraging() or GeometricViscosityAveraging()",
             ),
         )
-        embedded_viscous_closure isa AbstractEmbeddedViscousClosure || throw(
+        embedded_viscous_closure isa Union{WallDistanceClosure, LSStagClosure} || throw(
             ArgumentError(
                 "embedded_viscous_closure must be WallDistanceClosure() or LSStagClosure()",
             ),

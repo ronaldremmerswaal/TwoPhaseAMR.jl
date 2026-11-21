@@ -54,16 +54,61 @@ package's geometric V-cycle preconditioner. The V-cycle objects contain no
 Krylov logic. The unchanged operator, preconditioner, and workspaces are reused
 for a fixed `dt`, and LU appears only in the two geometric bottom solves.
 
-Next to an embedded solid ([`GeometryField`](@ref)) the single-phase viscous
-rows of the cut cells use [`WallDistanceClosure`](@ref) by default, which is
-first order at walls that are not grid aligned.
-`NavierStokesOptions(embedded_viscous_closure = LSStagClosure())` selects the
-LS-STAG closure of [Cheny and Botella (2010)](https://doi.org/10.1016/j.jcp.2009.10.007)
-([`LSStagClosure`](@ref)): values at the midpoints of the open face parts,
-cell-Green normal stresses and closed half control volumes for the shear, with
-the same unknowns, mass and symmetric positive-definite structure. It is
-second order at oblique walls on uniform and 2:1 adaptive meshes. Two-phase
-systems with a solid accept only the default.
+For a **stationary embedded solid**, the default remains `WallDistanceClosure()`.
+Select LS-STAG with `NavierStokesOptions(embedded_viscous_closure = LSStagClosure())`,
+or with `closure = LSStagClosure()` on `StaggeredDiffusionOperator(geometry; ...)` and
+`StaggeredDiffusionOperator(interface; ...)`. [`LSStagClosure`](@ref) samples
+velocity at the midpoint of the open part of each face and uses the cell
+Green gradient for normal stress. The single-phase scheme of
+[Cheny and Botella (2010)](https://doi.org/10.1016/j.jcp.2009.10.007)
+is second order on the oblique-wall Helmholtz fixtures; this is not an order
+claim for the coupled two-phase equations. Select [`WallDistanceClosure`](@ref)
+to reproduce the legacy, thesis-style wall-distance discretization.
+
+| Stationary-solid configuration | Viscous operator used by LS-STAG |
+|:--|:--|
+| Single phase, including moving *domain* walls | Componentwise cut-cell diffusion; the embedded solid remains at rest |
+| One velocity; two velocities with CMDGFM or Mimetic projection | Coupled `div(2μD)` with positive viscosity mixed at each stress row; viscous domain walls are stationary `NoSlip()` or `FreeSlip()` |
+| Embedded contact angle | The same variable-stress operator; contact-angle reconstruction and capillary forces are independent of the closure |
+| Uniform mesh, fixed composite mesh, adaptive regrid | Open-face metrics and strain stencils are rebuilt from the current solid; geometry-aware coarse viscous levels use the fine closure |
+
+The dynamic regression cases each take a step on the original mesh, refine
+from one block to four, then take a second step with the rebuilt operator.
+The scalar case preserves solid area `0.375`; the two-phase case has 22
+covered faces and 23 constrained faces on the rebuilt mesh.
+In a 96-solve scalar multigrid comparison on uniform and composite meshes
+through 128 cells per side, every solve converged. With geometry-aware coarse
+levels, LS-STAG used `0.54–1.70` times the wall-distance iteration count;
+the largest LS-STAG count at 128 cells was 34, versus 20 for wall distance
+on that offset sloped-wall fixture. Two-phase coarse levels are checked
+against both a fresh assembly and a direct shifted solve.
+
+Moving **embedded** solids have no prescribed-motion API. For single-phase
+oblique free slip, the componentwise approximation has the same consistency
+limitation described in the technical reference.
+
+On the developed Re=100 cylinder at 16 cells per diameter, the measured
+mean drag (pressure + viscous), maximum absolute lift and Strouhal number
+were `1.25876 (0.92661 + 0.33215), 0.2154, 0.1447` for LS-STAG versus
+`1.14227 (0.83327 + 0.30900), 0.1534, 0.1495` for wall distance. The
+reference is `1.24 (0.93 + 0.31), 0.30, 0.165`: pressure drag and lift
+improve, but neither viscous drag nor shedding frequency improves at this
+resolution.
+
+The default is retained because the sloped sessile drop is a trade-off.
+At zero Bond number the reference is a stationary circular cap. After a
+quarter capillary time on a 15° slope, the open-volume-fraction shape
+errors (integrated absolute difference, wall distance → LS-STAG) were:
+
+| Contact angle | 16 cells across domain | 32 cells across domain |
+|:--|--:|--:|
+| 90° | `0.001108927 → 0.001111233` | `0.000439187 → 0.000445946` |
+| 60° | `0.000892837 → 0.000952701` | `0.001510633 → 0.001303159` |
+
+At 90° the two closures took the same number of steps (4 and 11);
+LS-STAG also increased kinetic energy by 2.36% and 3.52%. At 60° the
+shape error was 6.70% higher on the coarse mesh and 13.73% lower on the finer
+one. The 60° data do not establish convergence for either closure.
 
 For two phases, the viscous term is the coupled stress divergence
 `div(2*mu*D(u))`. At cell-centred normal stresses and vertex-centred shear

@@ -52,7 +52,10 @@ function exact_value_forcing(x, y, axis, middle, halfheight, viscosities)
     return value, value - viscosity * laplacian
 end
 
-function fixture(n, refined, embedded, viscosities; match_embedded_domain = false)
+function fixture(
+        n, refined, embedded, viscosities;
+        match_embedded_domain = false, closure = WallDistanceClosure(),
+    )
     matched_open = !embedded && match_embedded_domain
     mesh = BlockTreeMesh(;
         base_mesh = matched_open ? (n, 7n ÷ 8) : (n, n),
@@ -74,7 +77,7 @@ function fixture(n, refined, embedded, viscosities; match_embedded_domain = fals
     interface = InterfaceField(mesh; geometry)
     initialize!(interface, (0.0, 1.0), middle)
     operator = StaggeredDiffusionOperator(
-        interface; viscosity = viscosities, boundary = NoSlip(),
+        interface; viscosity = viscosities, boundary = NoSlip(), closure,
     )
     @test operator isa TwoPhaseAMR.VariableStaggeredDiffusionOperator
     volumes = embedded ? geometry.face_dual_volumes : mesh.face_dual_volumes
@@ -108,8 +111,8 @@ function component_norm(mesh, volumes, values, axis)
     )
 end
 
-function helmholtz_errors(n, refined, embedded, viscosities)
-    data = fixture(n, refined, embedded, viscosities)
+function helmholtz_errors(n, refined, embedded, viscosities; closure = WallDistanceClosure())
+    data = fixture(n, refined, embedded, viscosities; closure)
     (; mesh, geometry, operator, volumes, middle, halfheight) = data
     exact = zeros(length(mesh.faces))
     rhs = similar(exact)
@@ -159,7 +162,10 @@ function operator_difference(n, refined, embedded; match_embedded_domain = false
     end
     velocity.interior[operator.dirichlet_faces] .= 0
     scalar = embedded ?
-        StaggeredDiffusionOperator(geometry; viscosity = 1.0, boundary = NoSlip()) :
+        StaggeredDiffusionOperator(
+            geometry; viscosity = 1.0, boundary = NoSlip(),
+            closure = WallDistanceClosure(),
+        ) :
         StaggeredDiffusionOperator(mesh; viscosity = 1.0, boundary = NoSlip())
     scalar_rate, variable_rate = FaceVelocity(mesh), FaceVelocity(mesh)
     diffusion!(scalar_rate, velocity, scalar)
@@ -226,29 +232,30 @@ rates(errors) = [log2(errors[i] / errors[i + 1]) for i in 1:(length(errors) - 1)
         # uniform grid, even without a solid; resolve it before measuring EOC.
         resolutions = viscosities == (1.0, 1.0) && !refined ?
             (32, 64, 128) : RESOLUTIONS
-        wall = [helmholtz_errors(n, refined, true, viscosities) for n in resolutions]
         open = [helmholtz_errors(n, refined, false, viscosities) for n in resolutions]
-        for axis in 1:2
-            wall_errors = [result.errors[axis] for result in wall]
-            open_errors = [result.errors[axis] for result in open]
-            wall_rates = rates(wall_errors)
-            open_rates = rates(open_errors)
-            println(
-                "embedded_variable_wall_mms viscosity=$viscosities refined=$refined ",
-                "axis=$axis n=$resolutions wall_errors=$wall_errors ",
-                "open_errors=$open_errors wall_eoc=$wall_rates open_eoc=$open_rates",
-            )
-            @test all(isfinite, wall_errors) && all(>(0), wall_errors)
-            @test all(isfinite, open_errors) && all(>(0), open_errors)
-            @test all(diff(wall_errors) .< 0)
-            @test all(diff(open_errors) .< 0)
-            if viscosities == (1.0, 1.0) && !refined
-                @test all(wall_rates .>= 1.9)
-            else
-                # Only three levels and different wall heights are compared:
-                # permit 10% variation in each error-reduction factor, i.e.
-                # log2(1.1) in EOC, not an O(1) loss of convergence order.
-                @test all(wall_rates .+ log2(1.1) .>= open_rates)
+        for closure in (WallDistanceClosure(), LSStagClosure())
+            wall = [helmholtz_errors(n, refined, true, viscosities; closure) for n in resolutions]
+            for axis in 1:2
+                wall_errors = [result.errors[axis] for result in wall]
+                open_errors = [result.errors[axis] for result in open]
+                wall_rates = rates(wall_errors)
+                open_rates = rates(open_errors)
+                println(
+                    "embedded_variable_wall_mms viscosity=$viscosities refined=$refined ",
+                    "closure=$closure axis=$axis n=$resolutions wall_errors=$wall_errors ",
+                    "open_errors=$open_errors wall_eoc=$wall_rates open_eoc=$open_rates",
+                )
+                @test all(isfinite, wall_errors) && all(>(0), wall_errors)
+                @test all(isfinite, open_errors) && all(>(0), open_errors)
+                @test all(diff(wall_errors) .< 0)
+                @test all(diff(open_errors) .< 0)
+                if viscosities == (1.0, 1.0) && !refined
+                    @test all(wall_rates .>= 1.9)
+                else
+                    # Permit 10% variation in error reduction between the two
+                    # channel heights, not an O(1) loss of convergence order.
+                    @test all(wall_rates .+ log2(1.1) .>= open_rates)
+                end
             end
         end
     end
@@ -302,10 +309,12 @@ end
         cached = TwoPhaseAMR._staggered_diffusion_operator(
             interface; viscosity = (2.0, 1.0), boundary = NoSlip(),
             construction_cache = cache,
+            closure = WallDistanceClosure(),
         )
         reused = TwoPhaseAMR._staggered_diffusion_operator(
             interface; viscosity = (2.0, 1.0), boundary = NoSlip(),
             construction_cache = cache, reuse = cached,
+            closure = WallDistanceClosure(),
         )
         @test reused.dirichlet_faces == constrained
         @test reused.wall_reaction_strain == operator.wall_reaction_strain
@@ -474,6 +483,7 @@ end
         @test all(i -> operator.stiffness[i, i] == 1, constrained)
         rebuilt = StaggeredDiffusionOperator(
             interface; viscosity = (6.0, 3.0), boundary = NoSlip(),
+            closure = WallDistanceClosure(),
         )
         @test rebuilt.dirichlet_faces == constrained
         @test rebuilt.wall_reaction_strain == operator.wall_reaction_strain
@@ -500,6 +510,7 @@ end
         end
         changed = StaggeredDiffusionOperator(
             interface; viscosity = (1.5, 4.0), boundary = NoSlip(),
+            closure = WallDistanceClosure(),
         )
         @test changed.dirichlet_faces == constrained
         @test changed.wall_reaction_strain == operator.wall_reaction_strain
@@ -534,6 +545,7 @@ end
 
         free_slip = StaggeredDiffusionOperator(
             interface; viscosity = (2.0, 1.0), boundary = FreeSlip(),
+            closure = WallDistanceClosure(),
         )
         constant = FaceVelocity(
             mesh, (x, y, time, axis) -> axis == 1 && y > 1 ? 1.0 : 0.0,
@@ -585,6 +597,7 @@ end
     initialize!(interface, (zero(T), one(T)), T(6))
     operator = StaggeredDiffusionOperator(
         interface; viscosity = (one(T), one(T)), boundary = NoSlip(),
+        closure = WallDistanceClosure(),
     )
     wall = [
         i for (i, face) in pairs(mesh.faces)
@@ -631,6 +644,7 @@ end
         for boundary in (NoSlip(), FreeSlip())
             operator = TwoPhaseAMR._staggered_diffusion_operator(
                 mesh; viscosity, geometry, boundary,
+                closure = WallDistanceClosure(),
             )
             @test all(i -> i in operator.dirichlet_faces, wall_faces)
             @test operator.stiffness ≈ transpose(operator.stiffness)
@@ -714,6 +728,7 @@ end
         for boundary in (NoSlip(), FreeSlip())
             operator = TwoPhaseAMR._staggered_diffusion_operator(
                 mesh; viscosity, geometry, boundary,
+                closure = WallDistanceClosure(),
             )
             @test all(i -> i in operator.dirichlet_faces, solid_side)
             @test all(i -> !(i in operator.dirichlet_faces), fluid_side)
@@ -741,6 +756,7 @@ end
     original = TwoPhaseAMR._staggered_diffusion_operator(
         interface; viscosity = (2.0, 1.0), boundary = NoSlip(),
         construction_cache = cache,
+        closure = WallDistanceClosure(),
     )
     @test !isempty(original.dirichlet_faces)
     adaptation = AMRWorkspace(mesh, interface, geometry)
@@ -748,8 +764,12 @@ end
     reused = TwoPhaseAMR._staggered_diffusion_operator(
         interface; viscosity = (2.0, 1.0), boundary = NoSlip(),
         construction_cache = cache, reuse = original,
+        closure = WallDistanceClosure(),
     )
-    fresh = StaggeredDiffusionOperator(interface; viscosity = (2.0, 1.0), boundary = NoSlip())
+    fresh = StaggeredDiffusionOperator(
+        interface; viscosity = (2.0, 1.0), boundary = NoSlip(),
+        closure = WallDistanceClosure(),
+    )
     @test !isempty(reused.dirichlet_faces)
     @test reused.dirichlet_faces == fresh.dirichlet_faces
     @test reused.wall_reaction_strain == fresh.wall_reaction_strain
@@ -762,7 +782,7 @@ end
     viscosity = CellField(mesh; init = 1.0)
     unembedded = TwoPhaseAMR._staggered_diffusion_operator(
         mesh; viscosity, boundary = NoSlip(), construction_cache = cache,
-        reuse = reused,
+        reuse = reused, closure = WallDistanceClosure(),
     )
     open_reference = StaggeredDiffusionOperator(mesh; viscosity, boundary = NoSlip())
     @test isempty(unembedded.dirichlet_faces)
@@ -771,6 +791,7 @@ end
     restored = TwoPhaseAMR._staggered_diffusion_operator(
         interface; viscosity = (2.0, 1.0), boundary = NoSlip(),
         construction_cache = cache, reuse = unembedded,
+        closure = WallDistanceClosure(),
     )
     @test restored.dirichlet_faces == fresh.dirichlet_faces
     @test restored.wall_reaction_strain == fresh.wall_reaction_strain

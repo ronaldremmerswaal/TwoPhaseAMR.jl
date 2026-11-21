@@ -207,6 +207,8 @@ function _update_variable_diffusion_solver!(
         solver::VariableStaggeredDiffusionSolver,
         operator, density, dt
     )
+    typeof(operator.closure) === typeof(solver.action.operator.closure) ||
+        throw(ArgumentError("cannot refresh a diffusion solver with a different embedded closure"))
     matrix = _refresh_variable_diffusion_matrix!(solver, operator, density, dt)
     solver.action.operator = operator
     solver.action.half_step = eltype(solver.inertia)(dt) / 2

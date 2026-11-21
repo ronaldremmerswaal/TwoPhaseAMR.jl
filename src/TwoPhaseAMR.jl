@@ -212,6 +212,7 @@ include("two_phase/one_velocity.jl")
 include("two_phase/two_velocity/interphase_drag.jl")
 include("two_phase/two_velocity/model.jl")
 # two_phase/diffusion
+include("two_phase/diffusion/variable_diffusion_ls_stag.jl")
 include("two_phase/diffusion/variable_diffusion_geometry.jl")
 include("two_phase/diffusion/variable_diffusion_operator.jl")
 include("two_phase/diffusion/variable_diffusion_preconditioner.jl")

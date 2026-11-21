@@ -1,5 +1,5 @@
 using SparseArrays: spdiagm
-using LinearAlgebra: Diagonal, Symmetric, diag, eigmin
+using LinearAlgebra: Diagonal, Symmetric, diag, dot, eigmin
 
 # Fixtures of the #110 convergence tests in `embedded_wall_rows.jl`: domain
 # (0, 8)^2, the right half refined once on the composite mesh, manufactured
@@ -139,7 +139,11 @@ end
         h = LS_STAG_EXTENT / n
         mesh = ls_stag_mesh(n, refined)
         geometry = GeometryField(mesh, case.levelset; lipschitz = case.lipschitz)
-        default = StaggeredDiffusionOperator(geometry; viscosity = 1.0)
+        # This test compares the LS-STAG rows with the legacy closure; pin the
+        # reference explicitly so a future default change cannot alter it.
+        default = StaggeredDiffusionOperator(
+            geometry; viscosity = 1.0, closure = WallDistanceClosure(),
+        )
         lsstag = StaggeredDiffusionOperator(
             geometry; viscosity = 1.0, closure = LSStagClosure(),
         )
@@ -202,17 +206,17 @@ end
     end
 end
 
-@testset "LS-STAG viscous multigrid converges like the default closure (#110)" begin
+@testset "LS-STAG viscous multigrid versus wall distance (#110)" begin
     # No distance floor: a small cut cell has the large conductance of its
     # width. The smoother's damping depends on the ratio of a row's absolute
     # sum to its diagonal, not on its size, so the V-cycle copes. A cut circle
     # on the composite mesh, and the radius among 64 offsets within one fine
     # width that leaves the smallest open cut cell (open fraction 6.8e-6).
     # Measured cycles (largest component) at reaction 1, diffusion 1:
-    # 21 and 20, and 22 and 26 (default, LS-STAG); over n = 32 to 256 and the
-    # worst offsets of a circle and a slope the LS-STAG count stays within
-    # 1.74 times the default one, and below it where the default closure's
-    # own small rows lower the smoother weight (0.2 against 0.68).
+    # 21 and 20, and 22 and 26 (wall distance, LS-STAG); over n = 32 to 256
+    # and the worst offsets of a circle and a slope the LS-STAG count stays
+    # within 1.74 times the wall-distance count, and below it where small
+    # wall-distance rows lower the smoother weight (0.2 against 0.68).
     fine_width = LS_STAG_EXTENT / 64
     for radius in (1.3, 1.3 + 58 * fine_width / 64 + fine_width / 448)
         mesh = ls_stag_mesh(32, true)
@@ -230,4 +234,187 @@ end
         end
         @test cycles[2] <= 1.5 * cycles[1]
     end
+end
+
+@testset "LS-STAG keeps moving domain walls off a stationary solid" begin
+    for T in (Float32, Float64)
+        mesh = BlockTreeMesh(
+            block_size = (16, 16), periodic = (false, false),
+            origin = (zero(T), zero(T)), extent = (one(T), one(T)),
+        )
+        geometry = GeometryField(
+            mesh, (x, y) -> hypot(x - T(0.5), y - T(0.5)) - T(0.18);
+            lipschitz = one(T),
+        )
+        time = T(0.375)
+        moving = NoSlip(
+            (x, y, t, axis) -> (axis == 1 ? one(T) : -T(2)) * (one(T) + t),
+        )
+        sides = VelocityBoundaryConditions(
+            left = moving, right = moving, bottom = moving, top = moving,
+        )
+        operator = StaggeredDiffusionOperator(
+            geometry; viscosity = one(T), boundary = moving,
+            closure = LSStagClosure(),
+        )
+        side_operator = StaggeredDiffusionOperator(
+            geometry; viscosity = one(T), boundary = sides,
+            closure = LSStagClosure(),
+        )
+        @test operator.closure isa LSStagClosure
+        velocity = FaceVelocity(mesh)
+        tendency = FaceVelocity(mesh)
+        side_tendency = FaceVelocity(mesh)
+        diffusion!(tendency, velocity, operator; time)
+        diffusion!(side_tendency, velocity, side_operator; time)
+        @test tendency.interior == side_tendency.interior
+        @test all(iszero, tendency.boundary)
+        wall_source = zeros(T, length(mesh.faces))
+        for axis in 1:2
+            component = axis == 1 ? operator.x : operator.y
+            side_component = axis == 1 ? side_operator.x : side_operator.y
+            @test component.stiffness == side_component.stiffness
+            solid = filter(
+                c -> iszero(c.boundary_axis), component.wall_connections,
+            )
+            domain = filter(
+                c -> !iszero(c.boundary_axis) && c.tangential,
+                component.wall_connections,
+            )
+            @test any(c -> c.tangential, solid)
+            @test !isempty(domain)
+            # The moving callback is nonzero on the domain walls but must not
+            # reach the stationary embedded solid.
+            @test all(
+                c -> iszero(TwoPhaseAMR._wall_value(moving, c, time, axis, T)),
+                solid,
+            )
+            solid_indices = [
+                component.local_to_global[c.degree_of_freedom] for c in solid
+            ]
+            domain_indices = [
+                component.local_to_global[c.degree_of_freedom] for c in domain
+            ]
+            @test isempty(intersect(solid_indices, domain_indices))
+            @test all(i -> iszero(tendency.interior[i]), solid_indices)
+            @test any(i -> !iszero(tendency.interior[i]), domain_indices)
+            TwoPhaseAMR._add_wall_source!(
+                wall_source, component, operator, one(T), time, axis,
+            )
+        end
+        @test wall_source == tendency.interior
+    end
+end
+
+@testset "LS-STAG slip conditions at an embedded wall" begin
+    mesh = BlockTreeMesh(
+        block_size = (16, 16), periodic = (true, false),
+        origin = (0.0, 0.0), extent = (1.0, 1.0),
+    )
+    wall = 4.0 / 16.0
+    geometry = GeometryField(mesh, (x, y) -> y - wall; lipschitz = 1.0)
+    no_slip = StaggeredDiffusionOperator(
+        geometry; viscosity = 1.0, boundary = NoSlip(),
+        closure = LSStagClosure(),
+    )
+    free_slip = StaggeredDiffusionOperator(
+        geometry; viscosity = 1.0, boundary = FreeSlip(),
+        closure = LSStagClosure(),
+    )
+    @test no_slip.closure isa LSStagClosure
+    @test free_slip.closure isa LSStagClosure
+    @test no_slip.x.local_to_global == free_slip.x.local_to_global
+    @test no_slip.x.volumes == free_slip.x.volumes
+    @test no_slip.y.local_to_global == free_slip.y.local_to_global
+    @test no_slip.y.volumes == free_slip.y.volumes
+    for component in (no_slip.x, free_slip.x, no_slip.y, free_slip.y)
+        @test component.stiffness == transpose(component.stiffness)
+    end
+
+    velocity = FaceVelocity(
+        mesh, (x, y, time, axis) -> axis == 1 ? 1.0 : 0.0,
+    )
+    for index in eachindex(velocity.interior)
+        geometry.face_dual_volumes[index] > 0 ||
+            (velocity.interior[index] = 0.0)
+    end
+    velocity.interior[no_slip.x.dirichlet_faces] .= 0.0
+    velocity.interior[no_slip.y.dirichlet_faces] .= 0.0
+    xlocal = no_slip.x.local_to_global
+    ux = velocity.interior[xlocal]
+
+    no_tendency = FaceVelocity(mesh)
+    free_tendency = FaceVelocity(mesh)
+    diffusion!(no_tendency, velocity, no_slip)
+    diffusion!(free_tendency, velocity, free_slip)
+    # A constant field tangential to a free-slip wall has no strain at all.
+    @test maximum(abs, free_tendency.interior[xlocal]) <= 256eps()
+    @test any(!iszero, no_tendency.interior[xlocal])
+
+    difference = no_slip.x.stiffness - free_slip.x.stiffness
+    @test difference == transpose(difference)
+    @test eigmin(Symmetric(Matrix(difference))) >=
+        -1024eps() * maximum(abs, difference)
+    @test dot(ux, no_slip.x.stiffness * ux) > 0
+    @test dot(ux, free_slip.x.stiffness * ux) <= 256eps()
+    @test dot(ux, difference * ux) > 0
+
+    h = 1.0 / 16.0
+    drag_face = findfirst(
+        face -> face.axis == 1 &&
+            isapprox(face.center[2], wall + h / 2; atol = 64eps()),
+        mesh.faces,
+    )
+    @test !isnothing(drag_face)
+    @test no_tendency.interior[drag_face] < 0
+end
+
+@testset "LS-STAG wall traction of a linear shear" begin
+    mesh = BlockTreeMesh(
+        block_size = (16, 16), periodic = (true, false),
+        origin = (0.0, 0.0), extent = (1.0, 1.0),
+    )
+    wall = 4.0 / 16.0
+    geometry = GeometryField(mesh, (x, y) -> y - wall; lipschitz = 1.0)
+    viscosity = 0.3
+    operator = StaggeredDiffusionOperator(
+        geometry; viscosity, boundary = NoSlip(),
+        closure = LSStagClosure(),
+    )
+    @test operator.closure isa LSStagClosure
+    # A piecewise-linear profile that vanishes at the wall and is flat zero
+    # well before the opposite (no-slip) boundary: only the embedded wall then
+    # contributes to the total traction, and the kink cancels in the sum.
+    velocity = FaceVelocity(
+        mesh,
+        (x, y, time, axis) -> axis == 1 ?
+            max(0.0, min(y - wall, 0.5 - (y - wall))) : 0.0,
+    )
+    for index in eachindex(velocity.interior)
+        geometry.face_dual_volumes[index] > 0 ||
+            (velocity.interior[index] = 0.0)
+    end
+    velocity.interior[operator.x.dirichlet_faces] .= 0.0
+    velocity.interior[operator.y.dirichlet_faces] .= 0.0
+    local_velocity = velocity.interior[operator.x.local_to_global]
+    # The component stiffness is geometric; `diffusion!` applies the
+    # viscosity. Include it to compare with the physical traction.
+    force = operator.viscosity * (operator.x.stiffness * local_velocity)
+    # The integrated wall traction of the unit-length wall is mu * 1. The
+    # sign depends on the side convention, so pin its magnitude.
+    @test isapprox(abs(sum(force)), viscosity; rtol = 1.0e-8, atol = 1.0e-10)
+
+    tendency = FaceVelocity(mesh)
+    diffusion!(tendency, velocity, operator)
+    h = 1.0 / 16.0
+    first_face = findfirst(
+        face -> face.axis == 1 &&
+            isapprox(face.center[2], wall + h / 2; atol = 64eps()),
+        mesh.faces,
+    )
+    @test !isnothing(first_face)
+    # The profile is affine between the wall and this first fluid face, so the
+    # conservative wall flux and the interior flux cancel there. The nonzero
+    # wall stress is asserted by the integrated traction above.
+    @test abs(tendency.interior[first_face]) <= 1.0e-10
 end

@@ -1166,8 +1166,20 @@ tests = [
   { file = "test/operators/embedded_ls_stag.jl", testset = "LS-STAG closure is second order at oblique walls (#110)" },
   { file = "test/operators/embedded_ls_stag.jl", testset = "LS-STAG closure keeps the unknowns, the mass and an SPD stiffness (#110)" },
   { file = "test/operators/embedded_ls_stag.jl", testset = "LS-STAG rows of an affine field that vanishes on the wall are exact (#110)" },
-  { file = "test/operators/embedded_ls_stag.jl", testset = "LS-STAG viscous multigrid converges like the default closure (#110)" },
+  { file = "test/operators/embedded_ls_stag.jl", testset = "LS-STAG viscous multigrid versus wall distance (#110)" },
   { file = "test/operators/embedded_wall_force.jl", testset = "cut-cell wall force balances viscous momentum loss for both closures (#110)" }
+]
+[[claims]]
+label = "eq:viscosity:lsstress"
+sources = [
+  { file = "src/two_phase/diffusion/variable_diffusion_ls_stag.jl", symbol = "_ls_stress_line" },
+  { file = "src/two_phase/diffusion/variable_diffusion_ls_stag.jl", symbol = "_ls_stress_cell!" },
+  { file = "src/two_phase/diffusion/variable_diffusion_ls_stag.jl", symbol = "_ls_stress_slip!" }
+]
+tests = [
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "LS-STAG two-phase stress rows are exact at a sloping solid" },
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "LS-STAG two-phase affine rows on a fixed composite mesh" },
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "LS-STAG tilted FreeSlip keeps a rigid tangent local null mode" }
 ]
 [[claims]]
 label = "eq:viscosity:viscosity"
@@ -2572,6 +2584,7 @@ check = "solv_cmdgfm_cases"
 "src/two_phase/phase_face_transfer.jl" = { class = "equation", chapters = ["ch:amr-criteria-transfer"] }
 "src/two_phase/phase_face_transport.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
 "src/two_phase/diffusion/variable_diffusion_geometry.jl" = { class = "equation", chapters = ["ch:viscosity"] }
+"src/two_phase/diffusion/variable_diffusion_ls_stag.jl" = { class = "equation", chapters = ["ch:viscosity"] }
 "src/two_phase/diffusion/variable_diffusion_operator.jl" = { class = "equation", chapters = ["ch:viscosity"] }
 "src/two_phase/diffusion/variable_diffusion_preconditioner.jl" = { class = "algebraic", chapters = ["ch:solvers"] }
 "src/two_phase/diffusion/variable_diffusion_solver.jl" = { class = "equation", chapters = ["ch:viscosity", "ch:solvers"] }
