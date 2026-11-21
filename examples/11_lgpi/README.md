@@ -90,10 +90,11 @@ filled bathymetry at three times from the level-3 run.
 
 The GIF shows the same run with block outlines and a synchronized
 kinetic-energy cursor; the energy plot includes the full simulation history.
-It has one output frame per keyframe; 81 equally spaced keyframes were
-requested (spacing `T/80`), each stored as the completed step nearest its
-requested time, but the first solver step (`Δt≈0.025`) spans two of them, so
-the GIF has 80 frames and its first frame (`t=0`) shows twice. Vorticity uses
+The GIF has 80 output frames sampled from 81 equally spaced requested times
+(spacing `T/80`). The first solver step (`Δt≈0.025`) spans two requests, so
+the rendered sequence contains one identical consecutive-frame hold and skips
+one stored keyframe; its first frame (`t=0`) therefore appears twice.
+Vorticity uses
 31 colour levels over a symmetric range of ±448.19, the 99.9th percentile of
 rasterized magnitudes in the displayed frames. Larger values saturate: the
 sampled peak is 5706.08 near `(x,y)=(0.00125,0.33875)` at `t≈0.4807`.
