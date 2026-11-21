@@ -258,10 +258,10 @@ end
     # point (techref eq:projection:mimetic-hydrostatic). Measured with the
     # contact-line curvature (techref eq:forces:contact-line) in both
     # projections: shape errors 8.9e-4, 3.1e-4, 2.3e-5 (rates 1.53, 3.72;
-    # CMDGFM 8.5e-4, 2.4e-4, 2.9e-5, rates 1.81, 3.05), largest phase value
+    # CMDGFM 8.6e-4, 2.5e-4, 3.0e-5, rates 1.81, 3.04), largest phase value
     # 0.0153 at n = 48 (CMDGFM 0.066). With the contact-angle formulas in the
     # first row: 2.8e-4, 2.3e-5, rates 1.66, 3.63 and 0.016 (CMDGFM rates
-    # 1.97, 2.91). Referred to the pressure points the rates were 0.91, 0.79
+    # 1.97, 2.90). Referred to the pressure points the rates were 0.91, 0.79
     # and the largest value 1.04.
     @test all(rates["MM"] .>= 1.2)
     @test last(results["MM"]).maximum_velocity <= 1.25 * 0.01534
@@ -270,10 +270,10 @@ end
     # bounds 1.25 times its measured shape error and largest phase value:
     # 90° 1.176e-5, 2.129e-3; 60° 5.416e-5, 0.05251 (1.19e-4 and 0.21 with
     # the contact-angle formulas in the first row); 120° 9.932e-5, 0.07175.
-    # Finding (techref ch. 10, Walls): relative to the CMDGFM (1.124e-5,
-    # 1.891e-3; 4.223e-5, 0.02654; 2.328e-5, 5.436e-3) the mimetic shape
-    # error is 1.05, 1.28 and 4.3 times and the largest phase value 1.13,
-    # 1.98 and 13 times at 90°, 60° and 120°; with gravity (90°) 0.80 and
+    # Finding (techref ch. 10, Walls): relative to the CMDGFM (1.123e-5,
+    # 1.941e-3; 4.156e-5, 0.02661; 2.330e-5, 5.501e-3) the mimetic shape
+    # error is 1.05, 1.30 and 4.3 times and the largest phase value 1.10,
+    # 1.97 and 13 times at 90°, 60° and 120°; with gravity (90°) 0.78 and
     # 0.23 times. With the exact constant curvature the same drops stay at
     # rest to 1e-10 for a capillary time (the wall blocks are consistent); at
     # 120° the near-top slivers with C ≈ 0.015–0.023 and curvatures 6–9 %
@@ -293,8 +293,8 @@ end
     # interface/curvature-adapted tree (finest level n = 48), both
     # projections. The mimetic drop is the uniform mesh's, measured on both
     # trees: without gravity shape error 1.176e-5, largest phase value
-    # 2.129e-3 (CMDGFM 1.124e-5, 1.891e-3); with gravity (Bo = 1.21) 2.329e-5,
-    # 0.01534 (CMDGFM 2.926e-5, 0.0656; 3.15e-4 and 1.04 referred to the
+    # 2.129e-3 (CMDGFM 1.123e-5, 1.941e-3); with gravity (Bo = 1.21) 2.329e-5,
+    # 0.01534 (CMDGFM 2.974e-5, 0.0658; 3.15e-4 and 1.04 referred to the
     # pressure points). The bounds are 1.25 times these. The 90° shape
     # errors of both projections carry the mismatch of the second-order
     # biases of the row-1 contact-line curvature (5.0138 on the exact cap,
