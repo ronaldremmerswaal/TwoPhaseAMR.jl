@@ -50,7 +50,9 @@ objects. The tuple never selects the velocity model implicitly.
 
 The projection decides the pressure and force discretisation; nothing else
 has to be selected. `CMDGFMProjection()` (the default) is the thesis'
-conservative multidimensional ghost-fluid projection.
+conservative multidimensional ghost-fluid projection with a linear jump
+inference (issue #171); `CMDGFMProjection(jump_inference=ConstantJumpInference())`
+restores the thesis' one-donor rows.
 `TwoVelocityModel(pressure_projection=MimeticProjection())` selects the
 mimetic projection: the kinetic-energy-orthogonal projection in a
 non-diagonal metric built, per cut cell and phase, on the Gram tensor of the
@@ -104,8 +106,9 @@ See [Interphase drag](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=eq:viscos
 
 The mimetic projection's limitation is measured on a drop impact at density
 ratio 1000 (a drop of radius 0.08 at speed 2 onto a pool, `n = 32` and 64):
-the median largest velocity is 50 and 111, against 3.5 and 5.0 with the
-CMDGFM, and grows under refinement. It is structural: in an energy-neutral
+the median largest velocity is 50 and 111, against 4.2 and 4.9 with the
+CMDGFM (3.5 and 5.0 with `jump_inference = ConstantJumpInference()`), and
+grows under refinement. It is structural: in an energy-neutral
 projection with homogeneous constraints, controlling the near-empty
 light-phase values and keeping the tangential slip between the phases
 conflict. The CMDGFM obtains both only through parts that are not

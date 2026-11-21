@@ -870,8 +870,24 @@ $(\mathsf{G}\mathsf{x})_c=\mathsf{x}_c-\mathsf{x}_{a(c)}$ maps a cell function
 to the retained cells $\cellsret$ with $a(c)$ the anchor of the component of
 $c$ (so $\mathsf{G}^{\transpose}$ adds a residual to its cell and subtracts it
 from the anchor), and $\tilde{\jumpblock}$ is the Crout ILU with drop
-tolerance $10^{-3}$ of the jump block $\jumpblock$. The ILU factor is reused
-while the jump block is unchanged, and without a solid the one-velocity
+tolerance $10^{-3}$ of the local Schur complement
+\begin{equation}\label{eq:solvers:jump-schur}
+  \jumpblock-\jumpblockp\,\mathsf{D}_{\pres}^{-1}\,\mathsf{B},\qquad
+  \mathsf{D}_{\pres}=\operatorname{diag}\kktS,\qquad
+  \mathsf{B}=\jumpmat_{\facesjump\cellsret}^{\transpose}\diag{\apgfm{}}_{\facesjump},
+\end{equation}
+the jump rows after the local answer of the pressure (\issue{171}). With the
+factor of $\jumpblock$ alone the preconditioner ignores that answer, and the
+error of the inexact V-cycle reaches the jump rows through $\jumpblockp$
+undamped: on a post-regrid system of the Stokes-3 wave (6399 pressure and
+654 jump unknowns, linear jump inference) BiCGSTAB needed 322 iterations to
+$10^{-10}$ (2000 without convergence on the same state with the published
+rows; 141 in the flow at its tolerance), against 16 with~\cref{eq:solvers:jump-schur}
+(whole-system ILU: 8; an exact pressure solve with either jump factor: 7).
+The diagonal of $\kktS$ is the part of its inverse that the local jump rows
+see; the exact Schur complement, which needs a pressure solve per jump
+unknown, gave the same 16 iterations. The ILU factor is reused
+while that matrix is unchanged, and without a solid the one-velocity
 operator and hierarchy are shared when their settings agree. The alternatives
 are \code{:ilu}, one ILU with drop tolerance $10^{-3}$ of the whole scaled
 matrix $\hat{\sysmat}$, and no preconditioner. The first guess is zero or the
@@ -891,6 +907,7 @@ scaling \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_krylov_sc
 with \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_ScaledProjectionPreconditioner},
 preconditioner \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{CMDGFMBlockPreconditioner}
 and \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{CMDGFMReducedPressurePreconditioner}~\cref{eq:solvers:block-preconditioner},
+jump factor \srcsym{src/two_phase/projection/cmdgfm_cache.jl}{_cmdgfm_jump_schur!}~\cref{eq:solvers:jump-schur},
 \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_pressure_preconditioner},
 first guess \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_initial_solution!}.
 Tests: \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM block-preconditioned BiCGSTAB},

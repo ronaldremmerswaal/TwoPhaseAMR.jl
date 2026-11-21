@@ -178,12 +178,15 @@ block diagonal equal to one and makes every row weakly diagonally dominant.
 BiCGSTAB uses a lower triangular block preconditioner. The pressure action is
 one application of the existing rediscretized tree-geometric GMG hierarchy,
 mapped between the full compatible pressure space and CMDGFM's gauge-reduced
-unknowns. The jump action is a Crout ILU of the active jump block. A jump is
+unknowns. The jump action is a Crout ILU of the active jump block corrected
+by the local pressure answer, `J - C diag(K)⁻¹ B` (with `C`, `B` the coupling
+blocks and `K` the pressure block); with `J` alone BiCGSTAB could stall after a
+regrid. A jump is
 active only when both staggered phase fractions exceed `fraction_floor` and
 its local interpolation stencil is resolved.
 
 On a fixed pressure space the GMG hierarchy is retained and, by default,
-its coefficients are refreshed when they change. The jump ILU is reused only
+its coefficients are refreshed when they change. The jump factor is reused only
 when the active-face ordering and matrix entries are unchanged. After a mesh
 update, topology-dependent pressure data is rebuilt while reusable hierarchy,
 Krylov, and geometric-template storage is retained where compatible.
@@ -191,6 +194,28 @@ Set `refresh_pressure_coefficients=false` to retain a lagged hierarchy or
 `reuse_jump_factorization=false` to force jump-factor rebuilds.
 `CMDGFMProjection(preconditioner=:ilu)` remains available as a whole-system
 ILU comparison.
+
+The jump rows infer the phase velocities of a mixed face from neighbouring
+same-axis faces. The default `jump_inference=LinearJumpInference()` extrapolates
+each phase linearly from two donors, so a resolved shear layer keeps its
+velocity continuous across the interface (the published one-donor rule,
+`CMDGFMProjection(jump_inference=ConstantJumpInference())`, creates a
+tangential phase-velocity jump of order `2U'h` there, issue #171). Where the
+interface moves through a face, a ramp in the crossing speed `w/U` (the normal
+mixture speed over the local mixture speed, `[1/16, 3/16]`) blends the
+extrapolation back to one donor: the values that a sweeping interface leaves
+behind would otherwise accumulate the extrapolation slope. The weight is
+evaluated once from the state the projection receives (a step's predictor)
+and kept with the rows of that interface, so projecting a projected state
+again changes nothing; it is also capped, with the interpolation weight `β` of
+the row lowered accordingly, so that the jump block stays weakly diagonally
+dominant. Mixed faces without
+a regular row get a row that removes the interpolated normal jump (or, for a
+normal closer to the transverse axis, a `β = 0` row), and faces with an exactly
+tangential normal get a `β = 0` row imposed as an increment of their own jump.
+Where a stencil crosses a refinement level or a solid, or a second donor is
+unavailable, the face falls back to the one-donor rule; the rows and fallbacks
+are counted in `CMDGFMProjectionStats.jump_inference`.
 
 Momentum and pressure-work diagnostics use the weak face inner product induced
 by the same Riesz map. This equals the familiar diagonal dual-volume kinetic

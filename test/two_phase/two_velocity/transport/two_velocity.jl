@@ -870,6 +870,7 @@ end
     function make_flow(;
             update_interval = 1, step_size = dt, speed_scale = 1.0,
             t_init = 1.5step_size, t_end = 2.5step_size,
+            jump_inference = ConstantJumpInference(),
         )
         local mesh = BlockTreeMesh(
             block_size = (4, 4), max_level = 2,
@@ -900,7 +901,9 @@ end
                 interface; density = (2.0, 1.0),
                 dynamic_viscosity = (0.0, 0.0),
             );
-            velocity_model = TwoVelocityModel(),
+            velocity_model = TwoVelocityModel(
+                pressure_projection = CMDGFMProjection(; jump_inference),
+            ),
             velocity = (liquid_velocity, gas_velocity), boundary = FreeSlip(),
             dt = step_size, adaptivity = Adaptivity(criteria = (indicator,)),
         )
@@ -1267,27 +1270,34 @@ end
         # This nonzero low-speed case has a regrid defect below the requested
         # tolerance but above a round-off-tightened target, so the projection
         # must accept the zero correction.
-        case = make_flow(; speed_scale = 1.0e-10)
-        reference = make_flow(; update_interval = 3, speed_scale = 1.0e-10)
-        @test project!(case.flow; dt, tolerance, max_cycles = 500).converged
-        @test project!(reference.flow; dt, tolerance, max_cycles = 500).converged
-        result = simulate!(case.flow, 2dt; dt, tolerance, max_cycles = 500)
-        @test result.steps == 2
-        @test result.mesh_updates == 1
-        @test result.pressure.converged
-        reference_result = simulate!(
-            reference.flow, 2dt; dt, tolerance, max_cycles = 500,
-        )
-        @test reference_result.steps == 2
-        @test reference_result.mesh_updates == 0
-        @test reference_result.pressure.converged
-        transfer_reference!(reference, 2dt, 2)
-        initial_defect = check_regrid_projection(
-            case.flow, reference, dt, tolerance; max_cycles = 500,
-        )
-        @test 128eps() < initial_defect <= tolerance
-        work = case.flow.workspace.two_phase.two_velocity[].projection_workspace
-        @test all(iszero, work.solution)
+        # Both jump inferences of the CMDGFM rows (issue #171): every row is a
+        # condition on the projected state, so a regrid defect within the
+        # tolerance needs no correction with either.
+        for jump_inference in (ConstantJumpInference(), LinearJumpInference())
+            case = make_flow(; speed_scale = 1.0e-10, jump_inference)
+            reference = make_flow(;
+                update_interval = 3, speed_scale = 1.0e-10, jump_inference,
+            )
+            @test project!(case.flow; dt, tolerance, max_cycles = 500).converged
+            @test project!(reference.flow; dt, tolerance, max_cycles = 500).converged
+            result = simulate!(case.flow, 2dt; dt, tolerance, max_cycles = 500)
+            @test result.steps == 2
+            @test result.mesh_updates == 1
+            @test result.pressure.converged
+            reference_result = simulate!(
+                reference.flow, 2dt; dt, tolerance, max_cycles = 500,
+            )
+            @test reference_result.steps == 2
+            @test reference_result.mesh_updates == 0
+            @test reference_result.pressure.converged
+            transfer_reference!(reference, 2dt, 2)
+            initial_defect = check_regrid_projection(
+                case.flow, reference, dt, tolerance; max_cycles = 500,
+            )
+            @test 128eps() < initial_defect <= tolerance
+            work = case.flow.workspace.two_phase.two_velocity[].projection_workspace
+            @test all(iszero, work.solution)
+        end
     end
 end
 
