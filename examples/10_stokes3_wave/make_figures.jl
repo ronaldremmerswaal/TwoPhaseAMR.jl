@@ -194,10 +194,11 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
         joinpath(outdir, "vorticity.png"), store; field = :velocity_vorticity,
         title = frame -> "Vorticity at t = $(round(frame.time; sigdigits = 4))"
     )
+    # One output frame per keyframe; 31 colour levels keep the 81-frame GIF small.
     export_animation(
         joinpath(outdir, "wave.gif"), store; field = :velocity_vorticity,
         blocks = true, diagnostics = [:kinetic_energy], fps = 8,
-        nframes = length(keyframes(store))
+        nframes = length(keyframes(store)), colormap = cgrad(:balance, 31; categorical = true)
     )
     return (; flow, result, recorder, errors)
 end
