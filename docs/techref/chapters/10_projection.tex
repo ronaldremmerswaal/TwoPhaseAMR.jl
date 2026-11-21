@@ -1282,7 +1282,7 @@ and the jump unknowns remove the interface-normal slip (a plastic collision);
 per step the projection takes back the force's unpaid work to 1--5\,\%,
 including that stored in nearly empty values. The mimetic projection is
 $\mathcal M$-orthogonal and removes only the gradient part, so it needs both
-properties separately: energy stability from the force (the booked carrier)
+properties separately: energy stability from the force (the booked carriers)
 and boundedness from the metric (the uniform ties). It gains a projection that
 is exactly energy-conserving in one norm, a pressure response bounded by
 $3/(2c)$ for every value (uniform mesh, no solid, no grid-line values), and, to $t=1.2$ in the static drop, no energy creep
@@ -1652,27 +1652,23 @@ section~3). Each phase has its own capillary potential on the cells,
   \varphi^{\liq}_c=\sigma\kappa_cI_c-\sigma\kappa_c,\qquad
   J^{\phase}_f=\meas{f}\bigl(\varphi^{\phase}_{\cplus{f}}-\varphi^{\phase}_{\cminus{f}}\bigr),
 \end{equation}
-with the Heaviside $I_c=[C_c>\tfrac12]$ (\apitype{CGFM}) or the liquid
-fraction $I_c=C_c$ (\apitype{CSF}). A value alone on its face gets the
-increment $\dt\,\mathcal M^{-1}(\phaseaperture{\phase}{f}J^{\phase}_f)$; on a face
-with both values the gas value gets $\phaseaperture{\gas}{f}J^{\gas}_f$ and the
-liquid value
+with the Heaviside $I_c=[C_c>\tfrac12]$ ($\tfrac12$ at $C_c=\tfrac12$;
+\apitype{CGFM}) or the liquid fraction $I_c=C_c$ (\apitype{CSF}). A
+value alone on its face gets the increment
+$\dt\,\mathcal M^{-1}(\phaseaperture{\phase}{f}J^{\phase}_f)$; on a face with
+both values the value of phase $\phase$ gets
 \begin{equation}\label{eq:projection:mimetic-booked}
-  f^{\liq}_f=\phaseaperture{\liq}{f}J^{\gas}_f+c_f\,(J^{\liq}_f-J^{\gas}_f-H_f)+\phaseaperture{\liq}{f}H_f,\qquad
-  c_f=\operatorname{clamp}\Bigl(\frac{c^{\liq}_f\velo^{\liq}_f+c^{\gas}_f\velo^{\gas}_f}{\velo^{\liq}_f},\,0,\,o_f\Bigr),
+  f^{\phase}_f=\phaseaperture{\phase}{f}J^{\gas}_f+b^{\phase}_f\,(J^{\liq}_f-J^{\gas}_f-H_f)+[\phase=\liq]\,\phaseaperture{\liq}{f}H_f,
 \end{equation}
-the \emph{booked carrier}, with
+with the \emph{booked carriers} $b^{\phase}_f$ below, built from
 $c^{\phase}_f=\meas{S^{\phase}_f\cap T^{d(\velo^{\phase})}_f}$ (relative to the
-face): $S^{\liq}_f$, $S^{\gas}_f$ the subfaces of widths
+face), the liquid that the value of $\phase$ moves: $S^{\liq}_f$, $S^{\gas}_f$ the subfaces of widths
 $\phaseaperture{\liq}{f}$, $\phaseaperture{\gas}{f}$ of the VOF transport in the
 open part of the face (the liquid one at the end of the averaged tangential
 PLIC normal, \cref{eq:vof:subface}), $T^{\mp}_f$ the liquid traces of the PLIC
 lines of the two cells on the face (on a split side on the face's segment, at
-a solid of the open part), $d(\velo)$ the upstream cell of the value,
-$o_f=\phaseaperture{\liq}{f}+\phaseaperture{\gas}{f}$ the open aperture, and
-$c_f=c^{\liq}_f$ for $\abs{\velo^{\liq}_f}\le10^{-10}\abs{\velo^{\gas}_f}$ (a
-relative threshold, so that $c_f$ is homogeneous of degree zero in the two
-values; also for two zero values). Where the trace of the
+a solid of the open part), $d(\velo)$ the upstream cell of the value, and
+$o_f=\phaseaperture{\liq}{f}+\phaseaperture{\gas}{f}$ the open aperture. Where the trace of the
 upstream cell starts at the end of the liquid subface (resolved interfaces),
 $c^{\liq}_f=\min(\phaseaperture{\liq}{f},t^{d}_f)$ and
 $c^{\gas}_f=\max(t^{d}_f-\phaseaperture{\liq}{f},0)$ with the trace width
@@ -1684,40 +1680,70 @@ $0.9h$), the overlaps by $<2\times10^{-7}\meas{f}$ (test, $\dt=10^{-9}$);
 $H_f$ is the hydrostatic part of the difference term under gravity
 (\cref{eq:projection:mimetic-hydrostatic} below, $H_f=0$ without gravity).
 For $\dt\to0$ the VOF transport moves the liquid volume
-$\meas{f}(c^{\liq}\velo^{\liq}+c^{\gas}\velo^{\gas})$ through the face, so the work
-$c_f\velo^{\liq}_f(J^{\liq}_f-J^{\gas}_f-H_f)$ of the capillary difference term is the
-surface-energy release $-\sigma\sum\Delta\kappa\,\Phi$ of the transport while the
-clamp is inactive: the booked carrier closes the duality defect of force
-versus transport in the semi-discrete limit (audit note \emph{Static drop
-energy}). With equal phase values it is the upstream trace (at a solid its
-part on the open part of the face, which the transport moves); it is
-homogeneous of degree zero in the two values (it depends on their ratio, with
-equal values on their sign only) and is not Galilean invariant (translating drop at
-densities $(1,1000)$: $\times1.8$ in the kinetic-energy error). With the mean
-aperture $\phaseaperture{\liq}{f}$ as carrier (before) the inviscid static drop
-grew $\times35$, $\times83$, $\times4300$ at DR 1, 3, 1000 by $t=0.4$ ($h=1/64$);
-with the booked carrier and the uniform ties its energy is flat to $t=1.2$
-(measured in this branch: $\times0.73$, $\times1.06$, $\times1.01$ from the first to
-the last third, late currents $0.023$--$0.028$) and the residual motion is the
-capillary mode-4 oscillation.
-The booked carrier is not symmetric in the phase labels: it books the gas
-value's share of the transported liquid volume on the liquid value, so
-exchanging the labels (the level set and the densities; $\kappa\to-\kappa$, the
-two potentials exchanged) moves the capillary difference term between the
-values of a face, by $(c'_f-\phaseaperture{\gas}{f})\meas{f}\Delta_f\Psi$ on the
-value of one physical phase ($c'_f$ the booked carrier of the exchanged
-labels). Measured on a drop of radius $0.2$, $h=1/32$, with smooth unequal
-phase values, without gravity: the increments of the swapped runs differ by
-$9.4\times10^{-4}$ and $7.0\times10^{-4}$ of their maximum, after the projection
-by $1.6\times10^{-2}$ and $2.1\times10^{-2}$ at DR 1, by $9.8\times10^{-3}$ for the
-heavy and $1.1$ for the light phase at DR 1000; with gravity at DR 1000, where
-$\Delta\Psi$ contains the variation of $(\dens^{\liq}-\dens^{\gas})g\cdot x_\Gamma$
-along the interface, the increments differ by $0.63$ and $0.30$. Derived but
-not measured: the form
-$f^{\phase}_f=\phaseaperture{\phase}{f}J^{\gas}_f+c^{\phase}_fD_f+\phaseaperture{\phase}{f}H_f[\phase=\liq]$,
-$D_f=J^{\liq}_f-J^{\gas}_f-H_f$, has the same work
-$D_f(c^{\liq}\velo^{\liq}+c^{\gas}\velo^{\gas})$, needs no clamp and is exactly
-label-symmetric, but gives the gas value a capillary force.
+$\meas{f}(c^{\liq}\velo^{\liq}+c^{\gas}\velo^{\gas})$ through the face, so any
+carriers with $b^{\liq}\velo^{\liq}+b^{\gas}\velo^{\gas}=c^{\liq}\velo^{\liq}+c^{\gas}\velo^{\gas}$
+make the work of the capillary difference term the surface-energy release
+$-\sigma\sum\Delta\kappa\,\Phi$ of the transport: they close the duality
+defect of force versus transport in the semi-discrete limit (audit note
+\emph{Static drop energy}). The phase roles follow the densities, never the
+labels. With the heavy phase $\mathrm H$ (the liquid at equal densities), the
+light phase $\mathrm L$, $\lambda=\dens^{\mathrm L}/\dens^{\mathrm H}\le1$ and
+the volume $h^{\phase}_f$ of the heavy phase that value $\phase$ moves
+($c^{\phase}_f$ for a heavy liquid, $\phaseaperture{\phase}{f}-c^{\phase}_f$ for
+a heavy gas), the light value keeps the fraction $\lambda$ of its share and the
+heavy value books the rest,
+\begin{equation}\label{eq:projection:mimetic-carriers}
+  \hat b^{\mathrm L}_f=\lambda h^{\mathrm L}_f,\qquad
+  \hat b^{\mathrm H}_f=\operatorname{clamp}\Bigl(h^{\mathrm H}_f+(1-\lambda)h^{\mathrm L}_f\frac{\velo^{\mathrm L}_f}{\velo^{\mathrm H}_f},\,0,\,o_f\Bigr),
+\end{equation}
+$b^{\phase}_f=\hat b^{\phase}_f$ for a heavy liquid and
+$b^{\phase}_f=\phaseaperture{\phase}{f}-\hat b^{\phase}_f$ for a heavy gas
+($\hat b^{\mathrm H}_f=h^{\mathrm H}_f$ for
+$\abs{\velo^{\mathrm H}_f}\le10^{-10}\abs{\velo^{\mathrm L}_f}$, a relative threshold, so
+that the carriers are homogeneous of degree zero in the two values; also for
+two zero values). At equal densities each value keeps its own carrier,
+$b^{\phase}=c^{\phase}$, without a clamp; at a large density ratio the light
+value gets almost no difference term, which would accelerate it
+$\dens^{\mathrm H}/\dens^{\mathrm L}$ times more than the heavy value (the
+carriers $c^{\phase}$ at densities $(1000,1)$: static drop currents
+$0.66$ and $1.3$ at $h=1/32$, $1/64$, against $0.007$ and $0.035$). The
+carriers depend on the ratio of the two values, with equal values on their
+sign only, and are not Galilean invariant (translating drop at densities
+$(1,1000)$: $\times1.8$ in the kinetic-energy error, with the former carrier).
+With the mean aperture $\phaseaperture{\liq}{f}$ as carrier (before) the
+inviscid static drop grew $\times35$, $\times83$, $\times4300$ at DR 1, 3, 1000
+by $t=0.4$ ($h=1/64$); with booked carriers and the uniform ties its energy
+stays bounded to $t=1.2$ and the residual motion is the capillary mode-4
+oscillation (measurements below).
+
+\emph{Label symmetry.} Exchanging the phase labels (the level set, the
+densities and viscosities, contact angles $\cangle\to\pi-\cangle$) gives
+$\psi\to-\psi$, $I\to1-I$, $H_f\to-H_f$, $c^{\phase}\to\phaseaperture{\phase}{f}-c^{\phase}$
+and $b^{\phase}\to\phaseaperture{\phase}{f}-b^{\phase}$, so every value gets the
+same right-hand side~\cref{eq:projection:mimetic-booked}; with the symmetric
+metric, ties, gravity moment, viscous step and VOF transport whole steps are
+symmetric to round-off (test \emph{label symmetry}: static drop, sessile drop
+and capillary wave at densities $(1,1)$ and $(1000,1)$, phase values within
+$3\times10^{-14}$--$2\times10^{-10}$ of their maximum after eight steps, with
+the former carrier $2.5\times10^{-4}$--$5.8$). The former carrier booked the
+gas value's share on the liquid value whatever the densities (issue~\#200):
+with the labels exchanged (light liquid outside, heavy gas drop) the inviscid
+static drop reached late currents of $0.023$ and $3.7$ (DR 1) and $34$ and
+$95$ (DR 1000) at $h=1/32$, $1/64$ ($t\in[0.6,1.2]$), against $0.007$--$0.028$ with the usual labels. Measured
+with the carriers~\cref{eq:projection:mimetic-carriers}, the same in both
+labellings, $t\in[0.6,1.2]$ (the former carrier with the usual labels in parentheses): DR 1:
+$0.0025$, $0.107$ ($0.0071$, $0.023$); DR 3: $0.0059$, $0.021$ ($0.0063$,
+$0.026$); DR 1000: $0.0069$, $0.035$ ($0.0094$, $0.028$). At DR 1, $h=1/64$
+the drop starts to oscillate more strongly at $t\approx0.7$ (energy
+$4\times10^{-7}\to6\times10^{-5}$ by $t=1.2$); the former carrier does the same
+from $t\approx1.4$, and both reach currents of $0.2$ by $t=2.4$. With the
+interphase drag at La $1200$, DR 3, $h=1/32$ the liquid current does not
+decay to $t=0.4$ ($5.3\times10^{-3}\to6.2\times10^{-3}$ from the first to the
+second half; former carrier $7.3\times10^{-3}\to5.9\times10^{-3}$; recorded as
+broken in the static-drop test). Observed, not adopted: the light value
+keeping $\lambda^2$ instead of $\lambda$ makes it decay
+($1.1\times10^{-2}\to1.5\times10^{-3}$) with unchanged inviscid currents; there
+is no physical argument for the square and it is otherwise untested.
 The two potentials differ by the capillary pressure jump $\sigma\kappa_c$. One
 pressure per cell absorbs both exactly where that difference is the same on
 the neighbouring cells that carry values of both phases (the audit's balance
@@ -1726,15 +1752,15 @@ $\sigma\kappa\jump{I}_f\meas{f}$, the face jump of the cell potential
 $\sigma\kappa I$, which the projection removes exactly at any density ratio,
 whatever the carrier.
 For a varying curvature the force is, up to such a gradient,
-$-\sigma c_f\meas{f}(\kappa_{\cplus{f}}-\kappa_{\cminus{f}})$
-on the liquid alone. The common jump $\sigma\kappa_f\jump{I}_f\meas{f}$ on both
+$-\sigma b^{\phase}_f\meas{f}(\kappa_{\cplus{f}}-\kappa_{\cminus{f}})$
+on value $\phase$, at a large density ratio almost only on the heavy value. The common jump $\sigma\kappa_f\jump{I}_f\meas{f}$ on both
 phases, used before, gave the gas value of a face between two cells with
 $I=1$ (a thin gas layer over liquid-dominated cells) the variation of the
 liquid's capillary pressure, $\dens^{\liq}/\dens^{\gas}$ times the liquid's
-tangential acceleration: after the projection $0.64$--$0.69$ of
+tangential acceleration: after the projection $0.40$--$0.47$ of
 $\sigma\abs{\Delta\kappa}\dt/(\dens^{\gas}h)$ on such faces of a wave at
-densities $(1000,1)$, $h=1/16$ and $1/32$, against $10^{-3}$--$4\times10^{-3}$
-per phase. Changing the indicator changes both potentials by one cell field,
+densities $(1000,1)$, $h=1/16$ and $1/32$, against $8\times10^{-4}$--$9\times10^{-4}$
+with the booked carriers. Changing the indicator changes both potentials by one cell field,
 so CGFM and CSF give the same velocities and differ in the pressure. The
 curvature $\kappa_c$ must be a cell field on every cell that carries values
 of both phases, pure cells included: a pure cell carries both where the PLIC
@@ -1843,10 +1869,10 @@ $J^{\liq}_f-J^{\gas}_f=-\meas{f}\Delta_f\psi$, then has the hydrostatic part
 $H_f=-\meas{f}(\dens^{\liq}-\dens^{\gas})\,g\cdot(x^{*}_{\cplus{f}}-x^{*}_{\cminus{f}})$,
 which~\cref{eq:projection:mimetic-booked} keeps on the liquid aperture, the
 carrier of gravity's Gram moment: a hydrostatic $\psi$ ($\Psi$ the same on the
-cells) is balanced by one pressure per cell whatever the booked carrier, which
-carries only the capillary part $-\meas{f}\Delta_f\Psi$. With the whole
-difference term on the booked carrier the residual
-$\meas{f}(\phaseaperture{\liq}{f}-c_f)(\dens^{\liq}-\dens^{\gas})\,g\cdot\Delta_fx^{*}$
+cells) is balanced by one pressure per cell whatever the booked carriers, which
+carry only the capillary part $-\meas{f}\Delta_f\Psi$. With the whole
+difference term on the booked carrier of the liquid the residual
+$\meas{f}(\phaseaperture{\liq}{f}-b^{\liq}_f)(\dens^{\liq}-\dens^{\gas})\,g\cdot\Delta_fx^{*}$
 remained: with an exactly hydrostatic $\psi$ on a drop of radius $0.2$
 ($h=1/32$, a moving state for the carrier) the phases moved by
 $0.066$--$61\,\dt g$ after one projection at densities $(1000,1)$, $(3,1)$,
@@ -1894,7 +1920,7 @@ bounded) with a mass-proportional restoration of the $\mathcal M$-momentum
 $\mathsf Z^{\transpose}\mathcal Mu$ and mass-matched pressure points (slides
 along the symmetry lines, $O(h^3)$, making $\mathsf Z^{\transpose}\mathcal M\mathsf Z$
 the VOF phase mass away from walls; the free stream stayed exact to
-$3\times10^{-15}$). With the uniform ties, the booked carrier and the
+$3\times10^{-15}$). With the uniform ties, the former booked carrier and the
 hydrostatic reference it made the inviscid static drop at $h=1/64$ grow again
 (energy $\times1.12$/$\times1.33$ at DR 1/3 by $t=1.2$, against $\times0.73$/$\times1.06$,
 currents $0.033$ against $0.023$), Kelvin--Helmholtz ($0.118$ against $0.103$) and
@@ -2205,8 +2231,9 @@ the potential difference~\cref{eq:projection:mimetic-hydrostatic}
 \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_hydrostatic} and
 \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_hydrostatic_potential},
 the right-hand side~\cref{eq:projection:mimetic-booked}
-\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_capillary_rhs!} with the booked carrier
-\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_booked_carrier} and
+\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_capillary_rhs!} with the booked carriers~\cref{eq:projection:mimetic-carriers}
+\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_booked_carriers},
+\srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_heavy_booking} and
 \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_carried_liquid}
 (subfaces \srcsym{src/two_phase/two_velocity/interface_transport.jl}{_phase_subface_interval},
 traces \srcsym{src/two_phase/forces.jl}{_face_liquid_trace}),
@@ -2225,7 +2252,7 @@ Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mi
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection under a uniform acceleration (T3)}
 (the audit laboratory's numbers on exact geometry),
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic forces balance constant curvature and gravity},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic per-phase surface tension drives the liquid only},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic per-phase surface tension drives the values on their booked carriers},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic viscous step in the metric},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Two-value model of the viscous step and the projection},
 \testsym{test/two_phase/two_velocity/interphase_drag.jl}{Interphase drag in the mimetic viscous step},
@@ -2243,15 +2270,16 @@ Tests: \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mi
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic viscous step with embedded solids},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic metric: uniform equivalence with the aperture-independent mass},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic pressure solver: band-cell correction of the multigrid preconditioner},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic capillary force: booked carrier},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic capillary force: booked carriers},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic capillary potential under gravity},
-\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic capillary force: hydrostatic part on the aperture}.
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic capillary force: hydrostatic part on the aperture},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection.jl}{Mimetic projection: label symmetry}.
 \end{implnote}
 
 \subsection{Scope and limitations}\label{sec:projection:mimetic-scope}
 With the configuration of this section (uniform
 ties~\cref{eq:projection:mimetic-ties}, booked
-carrier~\cref{eq:projection:mimetic-booked}, hydrostatic
+carriers~\cref{eq:projection:mimetic-carriers}, hydrostatic
 reference~\cref{eq:projection:mimetic-hydrostatic}, height-function
 curvature and the energy-consistent contact-line
 potential~\cref{eq:forces:contact-line}) the mimetic projection is
@@ -2299,6 +2327,18 @@ $8.7$ and $9.9$ but lock the slip (a Kelvin--Helmholtz layer at density
 ratio~$1$ no longer grows); the CMDGFM's own row set keeps the slip and leaves
 them at $28$ and $69$. A remedy within the mimetic projection therefore cannot
 be a set of homogeneous constraints on face jumps alone.
+
+\emph{Limitation: static bubbles.} A static bubble (the light phase inside) at
+densities $(1000,1)$ is not at rest: inviscid, $R=0.2$, $\sigma=1$, free-slip
+walls, $t\in[0.6,1.2]$, the largest phase value on mixed faces reaches $15$ at
+$h=1/32$ with the booked carriers~\cref{eq:projection:mimetic-carriers}, and
+$54$--$212$ with the former carrier (either labelling, $h=1/32$ and $1/64$),
+against $0.011$ and $0.0017$ with the CMDGFM at $h=1/32$ and $1/64$. No
+carrier tried (each value its own carrier, mass-weighted or mixture
+bookings) brings it to rest, so the cause lies outside the booking of the
+difference term; it is not isolated. The static drop (the heavy phase
+inside) keeps late currents of $0.007$--$0.035$ in both labellings
+(\cref{sec:projection:mimetic}).
 
 \section{Fully discrete projection stage}\label{sec:projection:time}
 The projection is an algebraic problem for the given predictor and $\dt$;
