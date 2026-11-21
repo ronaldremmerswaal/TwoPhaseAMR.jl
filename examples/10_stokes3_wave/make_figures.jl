@@ -53,19 +53,24 @@ function keyframe_run(level, final_time, times)
     return store, [store[info] for info in keyframes(store)]
 end
 
+# Requested times of the repository README animation, one per output frame:
+# evenly spaced over `t/T = 0.475–1`, plunging, impact, and splash-up.
+readme_times(period) = collect(range(0.475period, period; length = 81))
+
 # The first state of a level-`level` run within the first period in which the
 # plunging jet has reconnected with the free surface (a trapped gas region).
 # Keyframes of a first-period run bracket it; a second run up to the bracket
 # stores every state inside it as keyframes, which are never skipped or
-# thinned. Also returns the store of the first-period run, whose keyframes
-# are sparse while the wave steepens and dense and evenly spaced from
-# `t = T/2` on, over plunging, impact, and splash-up.
+# thinned. The first-period run also stores the README animation keyframes
+# (`readme_times`); it is returned with the impact.
 function breaking_impact(level, period)
-    period_store, coarse = keyframe_run(
-        level, period, vcat(
-            range(0, 0.5period; length = 11), range(0.5period, period; length = 49),
-        )
+    bracket_times = vcat(
+        range(0, 0.5period; length = 11), range(0.5period, period; length = 49),
     )
+    period_store, period_frames = keyframe_run(
+        level, period, vcat(bracket_times, readme_times(period))
+    )
+    coarse = filter(frame -> any(in(bracket_times), frame.requested_times), period_frames)
     bracket = findfirst(frame -> length(gas_regions(frame)) >= 2, coarse)
     (isnothing(bracket) || bracket == 1) &&
         error("no entrapped gas pocket found in the first period")
@@ -88,34 +93,37 @@ function quantile_range(frames, field, view, fraction)
     return (-limit, limit)
 end
 
-# Repository README animation of a first-period run: its keyframes from
-# `t = T/2` on, evenly spaced and each stored within a step of its requested
-# time, over plunging, impact, and splash-up. Light and dark variants share
-# the frames and one vorticity range, the 99.9 % quantile of its magnitude,
-# so that the impact peaks saturate instead of fading the vortex sheets. The
-# dark variant stays muted for GitHub's dark theme: `:berlin` without its
-# lightest ends (a dark neutral), grey text, interface, and faint blocks.
+# Repository README animation of a first-period run: its `readme_times`
+# keyframes, each stored within a step of its requested time and shown as one
+# output frame, so the time step is uniform and no frame is held. Light and
+# dark variants share the frames and one vorticity range, the 99.9 % quantile
+# of its magnitude, so that the impact peaks saturate instead of fading the
+# vortex sheets; 63 colour levels keep the 81-frame GIFs under 2 MB. The dark
+# variant stays muted for GitHub's dark theme: `:berlin` without its lightest
+# ends (a dark neutral), grey text, interface, and faint blocks.
 function readme_animations(outdir, store, period)
-    window = (0.475period, period)
+    times = readme_times(period)
     camera = (-0.5, 0.5, -0.2, 0.25)
-    frames = [store[info] for info in keyframes(store) if window[1] <= info.time <= window[2]]
+    frames = [store[info] for info in keyframes(store) if any(in(times), info.requested_times)]
     colorrange = quantile_range(frames, :velocity_vorticity, camera, 0.999)
     println(
         "README animation: ", length(frames), " keyframes, t/T = ",
         first(frames).time / period, " to ", last(frames).time / period,
         ", vorticity range ", colorrange
     )
-    animation(path; kwargs...) = export_animation(
+    levels = 63
+    animation(path, colormap; kwargs...) = export_animation(
         path, store; field = :velocity_vorticity,
-        window, camera, colorrange, blocks = true,
-        title = frame -> @sprintf("t/T = %.3f", frame.time / period), fps = 12, duration = 80 / 12,
-        size = (900, 400), kwargs...
+        window = (first(frames).time, last(frames).time), camera, colorrange, blocks = true,
+        colormap = cgrad(colormap, levels; categorical = true),
+        title = frame -> @sprintf("t/T = %.3f", frame.time / period), fps = 12,
+        nframes = length(frames), size = (900, 400), kwargs...
     )
-    animation(joinpath(outdir, "readme_light.gif"))
-    muted = [get(CairoMakie.Makie.ColorSchemes.berlin, x) for x in range(0.15, 0.85; length = 256)]
+    animation(joinpath(outdir, "readme_light.gif"), :balance)
+    muted = [get(CairoMakie.Makie.ColorSchemes.berlin, x) for x in range(0.15, 0.85; length = levels)]
     with_theme(theme_dark(); textcolor = :gray80) do
         animation(
-            joinpath(outdir, "readme_dark.gif"); colormap = muted,
+            joinpath(outdir, "readme_dark.gif"), muted;
             interfacecolor = :gray75, blockcolor = (:white, 0.15)
         )
     end
@@ -140,7 +148,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
         )
         register_default_fields!(fields, :volume_fraction, flow.interface)
         recorder = Recorder(
-            fields; diagnostics = flow, keyframes = EquispacedTimes(41),
+            fields; diagnostics = flow, keyframes = EquispacedTimes(81),
             preview = nothing
         )
         result = simulate!(flow, target_time; observer = recorder)
@@ -188,7 +196,8 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     )
     export_animation(
         joinpath(outdir, "wave.gif"), store; field = :velocity_vorticity,
-        blocks = true, diagnostics = [:kinetic_energy], fps = 8, duration = 5.0
+        blocks = true, diagnostics = [:kinetic_energy], fps = 8,
+        nframes = length(keyframes(store))
     )
     return (; flow, result, recorder, errors)
 end

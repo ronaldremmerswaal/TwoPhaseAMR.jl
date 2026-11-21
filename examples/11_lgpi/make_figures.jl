@@ -23,7 +23,7 @@ function make_figures(;
         register_interface!(fields, flow.interface)
         register_geometry!(fields, flow.system.geometry)
         recorder = Recorder(
-            fields; diagnostics = flow, keyframes = EquispacedTimes(41),
+            fields; diagnostics = flow, keyframes = EquispacedTimes(81),
             preview = nothing
         )
         result = simulate!(flow, target_time; observer = recorder)
@@ -70,10 +70,12 @@ function make_figures(;
         colorrange = (-limit, limit)
     )
     CairoMakie.activate!(px_per_unit = 2)
+    # One output frame per keyframe; 31 colour levels keep the 81-frame GIF small.
     export_animation(
         joinpath(outdir, "impact.gif"), store; field = :velocity_vorticity,
         window = (first(times), last(times)), blocks = true, diagnostics = [:kinetic_energy],
-        fps = 8, duration = 5.0, size = (900, 355), colorrange = (-limit, limit)
+        fps = 8, nframes = length(times), size = (900, 355), colorrange = (-limit, limit),
+        colormap = cgrad(:balance, 31; categorical = true)
     )
     return (; flow, result, recorder, store)
 end

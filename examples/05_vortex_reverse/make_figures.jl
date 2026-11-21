@@ -20,9 +20,14 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     level = size === :docs ? 3 : 5
     # This prescribed-velocity example owns its time loop and its recorder; it does not return a FlowSimulation to pass to simulate!.
     local run
-    elapsed = @elapsed run = run_example(max_level = level, final_time = 8.0)
+    # 81 keyframes, one per GIF frame; the snapshots and the volume-error plot
+    # use every fourth, the 21 times of the example's default schedule.
+    elapsed = @elapsed run = run_example(
+        max_level = level, final_time = 8.0,
+        recorder_options = (; keyframes = EquispacedTimes(81))
+    )
     store = snapshot_store(run.recorder)
-    frames = [store[info] for info in keyframes(store)]
+    frames = [store[info] for info in keyframes(store)][1:4:end]
     times = [frame.time for frame in frames]
     volumes = [frame_volume(frame) for frame in frames]
     errors = abs.(volumes .- first(volumes))
@@ -63,7 +68,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     save(joinpath(outdir, "recovery.png"), figure)
     export_animation(
         joinpath(outdir, "reversal.gif"), store; field = :volume_fraction,
-        fps = 10, duration = 2.0, size = (520, 450)
+        fps = 10, nframes = length(keyframes(store)), size = (520, 450)
     )
     return nothing
 end
