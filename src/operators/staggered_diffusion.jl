@@ -282,12 +282,19 @@ tangential Dirichlet data; pass `NoSlip(f)` for a moving wall or `FreeSlip()`
 for zero tangential shear. The component matrices and dual volumes are stored
 explicitly and are reused by the implicit viscous solve.
 """
-struct StaggeredDiffusionOperator{T, M <: BlockTreeMesh, X, Y, B <: AbstractWallBoundaryCondition}
+struct StaggeredDiffusionOperator{
+        T, M <: BlockTreeMesh, X, Y,
+        B <: AbstractWallBoundaryCondition,
+        C <: AbstractEmbeddedViscousClosure,
+    }
     mesh::M
     x::X
     y::Y
     viscosity::T
     boundary::B
+    # Cut-cell closure used to assemble `x` and `y`. A mesh-only operator
+    # carries the default because it has no embedded cut cells.
+    closure::C
 end
 
 function _component_local_to_global(mesh::BlockTreeMesh, axis::Int)
@@ -748,6 +755,7 @@ function _staggered_diffusion_operator(
         mesh::M, viscosity, boundary, T;
         construction_cache = nothing, reuse = nothing,
         geometry = nothing,
+        closure::AbstractEmbeddedViscousClosure = WallDistanceClosure(),
         averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     ) where {M <: BlockTreeMesh}
     isnothing(geometry) || throw(
@@ -767,8 +775,10 @@ function _staggered_diffusion_operator(
         throw(ArgumentError("boundary must be NoSlip() or FreeSlip()"))
     x = _staggered_diffusion_component(mesh, Val(1), boundary, T)
     y = _staggered_diffusion_component(mesh, Val(2), boundary, T)
-    return StaggeredDiffusionOperator{T, M, typeof(x), typeof(y), typeof(boundary)}(
-        mesh, x, y, viscosity_value, boundary
+    return StaggeredDiffusionOperator{
+        T, M, typeof(x), typeof(y), typeof(boundary), typeof(closure),
+    }(
+        mesh, x, y, viscosity_value, boundary, closure,
     )
 end
 

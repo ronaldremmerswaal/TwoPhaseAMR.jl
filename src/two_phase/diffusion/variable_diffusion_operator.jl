@@ -2,13 +2,14 @@ function _staggered_diffusion_operator(
         mesh::BlockTreeMesh, viscosity::CellField, boundary, T;
         construction_cache = nothing, reuse = nothing,
         geometry = nothing,
+        closure = WallDistanceClosure(),
         averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     )
     cache = isnothing(construction_cache) ?
         VariableDiffusionConstructionCache(T) : construction_cache
     return _variable_staggered_diffusion(
         mesh, viscosity, boundary, T;
-        cache, reuse, geometry, averaging,
+        cache, reuse, geometry, closure, averaging,
     )
 end
 
@@ -16,9 +17,13 @@ function _variable_staggered_diffusion(
         mesh, viscosity::CellField, boundary, ::Type{T};
         cache = VariableDiffusionConstructionCache(T), reuse = nothing,
         geometry = nothing,
+        closure = WallDistanceClosure(),
         averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     ) where {T}
     viscosity.mesh === mesh || throw(ArgumentError("viscosity field must share the operator mesh"))
+    closure isa Union{WallDistanceClosure, LSStagClosure} || throw(
+        ArgumentError("closure must be WallDistanceClosure() or LSStagClosure()"),
+    )
     boundary isa FreeSlip || (boundary isa NoSlip && boundary.velocity isa StationaryWall) ||
         throw(ArgumentError("variable stress diffusion currently supports stationary NoSlip or FreeSlip walls"))
     all(c -> isfinite(c)&&c > 0, (v for b in eachindex(mesh.blocks) for v in interior(viscosity, b))) ||
@@ -98,11 +103,25 @@ function _variable_staggered_diffusion(
             )
         end
     end
-    _shear_rows!(
-        measures, rows, cols, vals, interpolation_rows, interpolation_columns,
-        interpolation_values, cache, mesh, boundary, geometry, T,
-    )
-    if !isnothing(geometry)
+    ls_solid = closure isa LSStagClosure && !isnothing(geometry) &&
+        any(ref -> !isone(_get(geometry.open_fraction, ref)), refs)
+    if ls_solid
+        _ls_stress_rows!(measures, cache, geometry, boundary)
+        # A completely closed face carries no physical shear. Isolate the
+        # background extension; aligned-wall constraints are handled below.
+        for i in eachindex(geometry.aperture)
+            iszero(geometry.aperture[i]) || continue
+            !isempty(dirichlet_faces) && !iszero(reaction_column[i]) && continue
+            push!(measures, one(T))
+            push!(rows, length(measures)); push!(cols, i); push!(vals, one(T))
+        end
+    else
+        _shear_rows!(
+            measures, rows, cols, vals, interpolation_rows, interpolation_columns,
+            interpolation_values, cache, mesh, boundary, geometry, T,
+        )
+    end
+    if closure isa WallDistanceClosure && !isnothing(geometry)
         for (face_index, conductance, cell_index) in
             _embedded_variable_wall_stresses(
                 geometry; include_cut_wall = boundary isa NoSlip,
@@ -193,7 +212,7 @@ function _variable_staggered_diffusion(
         copyto!(volumes, _geometry_face_dual_volumes(geometry))
     end
     return VariableStaggeredDiffusionOperator(
-        mesh, stiffness, volumes, boundary, averaging, strain, strain_transpose,
+        mesh, stiffness, volumes, boundary, closure, averaging, strain, strain_transpose,
         wall_reaction_strain, dirichlet_faces, interpolation, interpolation_transpose,
         measures, weights, cell_work, cell_inverse_work, stress_work,
         stiffness_pointers, stiffness_stresses, stiffness_factors,
@@ -341,12 +360,13 @@ end
 function _staggered_diffusion_operator(
         field::InterfaceField; viscosity::NTuple{2}, boundary = NoSlip(),
         construction_cache = nothing, reuse = nothing,
+        closure = WallDistanceClosure(),
         averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     )
     mu = dynamic_viscosity(field; viscosity, averaging)
     return _staggered_diffusion_operator(
         field.mesh; viscosity = mu, boundary, construction_cache, reuse,
-        geometry = field.geometry, averaging,
+        geometry = field.geometry, closure, averaging,
     )
 end
 
@@ -354,18 +374,22 @@ end
 """
     StaggeredDiffusionOperator(field::InterfaceField;
                                viscosity, boundary=NoSlip(),
-                               averaging=HarmonicViscosityAveraging())
+                               averaging=HarmonicViscosityAveraging(),
+                               closure=WallDistanceClosure())
 
 Assemble the two-phase stress operator `div(2 mu D(u))` of an interface field.
 `viscosity` is the `(liquid, gas)` dynamic-viscosity tuple and `averaging` the
 phase-viscosity mixture rule, see [`HarmonicViscosityAveraging`](@ref).
+For a stationary embedded solid, `closure` selects the legacy wall rows or
+the coupled open-face Green and vertex rows of [`LSStagClosure`](@ref).
 """
 function StaggeredDiffusionOperator(
         field::InterfaceField; viscosity::NTuple{2}, boundary = NoSlip(),
+        closure = WallDistanceClosure(),
         averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     )
     return _staggered_diffusion_operator(
-        field; viscosity, boundary, averaging,
+        field; viscosity, boundary, averaging, closure,
     )
 end
 

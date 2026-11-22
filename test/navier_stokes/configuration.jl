@@ -134,10 +134,67 @@ end
     @test_throws ArgumentError AdvectionOptions(:bogus, Upwind())
     @test_throws ArgumentError NavierStokesOptions(
         :bogus, LinearSolverOptions(), LinearSolverOptions(), MultigridOptions(),
-        HarmonicViscosityAveraging(),
+        HarmonicViscosityAveraging(), WallDistanceClosure(),
+    )
+    @test_throws ArgumentError NavierStokesOptions(
+        AdvectionOptions(), LinearSolverOptions(), LinearSolverOptions(), MultigridOptions(),
+        HarmonicViscosityAveraging(), :lsstag,
     )
     @test_throws ArgumentError TwoVelocityModel(CSF())
     @test_throws ArgumentError TwoVelocityModel(:cmdgfm)
+end
+
+@testset "embedded viscous closure option (#110)" begin
+    @test NavierStokesOptions().embedded_viscous_closure isa WallDistanceClosure
+    @test_throws ArgumentError NavierStokesOptions(embedded_viscous_closure = :lsstag)
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
+    geometry = GeometryField(mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.23; lipschitz = 1)
+    @test_throws ArgumentError StaggeredDiffusionOperator(geometry; closure = :lsstag)
+    @test StaggeredDiffusionOperator(geometry).closure isa WallDistanceClosure
+    numerics = NavierStokesOptions(embedded_viscous_closure = LSStagClosure())
+    physics = SinglePhase(density = 1.0, dynamic_viscosity = 0.1)
+    flow = FlowSimulation(mesh, physics; geometry, numerics, dt = 1.0e-3)
+    @test flow.system.options.embedded_viscous_closure isa LSStagClosure
+    lsstag = StaggeredDiffusionOperator(geometry; viscosity = 0.1, closure = LSStagClosure())
+    wall_distance = StaggeredDiffusionOperator(
+        geometry; viscosity = 0.1, closure = WallDistanceClosure(),
+    )
+    for axis in 1:2
+        component = axis == 1 ? flow.diffusion_operator.x : flow.diffusion_operator.y
+        @test component.stiffness == (axis == 1 ? lsstag.x : lsstag.y).stiffness
+        @test component.stiffness != (axis == 1 ? wall_distance.x : wall_distance.y).stiffness
+    end
+    simulate!(flow, 2.0e-3)
+    @test all(isfinite, flow.velocity.interior)
+    # The two-phase stress operator consumes the same selected closure; the
+    # option is not a single-phase-only setting.
+    interface = InterfaceField(mesh, (x, y) -> y - 0.8; geometry, lipschitz = 1)
+    @test StaggeredDiffusionOperator(interface; viscosity = (0.1, 0.01)).closure isa WallDistanceClosure
+    two_phase = TwoPhase(
+        interface; density = (1.0, 0.1),
+        dynamic_viscosity = (0.1, 0.01),
+    )
+    two_phase_flow = FlowSimulation(mesh, two_phase; geometry, numerics)
+    two_phase_operator = two_phase_flow.workspace.two_phase.diffusion
+    @test two_phase_flow.system.options.embedded_viscous_closure isa
+        LSStagClosure
+    @test two_phase_operator.closure isa LSStagClosure
+    legacy = FlowSimulation(
+        mesh, two_phase; geometry,
+        numerics = NavierStokesOptions(
+            embedded_viscous_closure = WallDistanceClosure(),
+        ),
+    )
+    legacy_operator = legacy.workspace.two_phase.diffusion
+    @test legacy_operator.closure isa WallDistanceClosure
+    @test legacy_operator.volumes == two_phase_operator.volumes
+    @test legacy_operator.dirichlet_faces == two_phase_operator.dirichlet_faces
+    # The selected closure changes the cut-cell rows, not just the label.
+    @test Matrix(two_phase_operator.stiffness) !=
+        Matrix(legacy_operator.stiffness)
+    @test_throws ArgumentError StaggeredDiffusionOperator(
+        interface; viscosity = (0.1, 0.01), closure = :lsstag,
+    )
 end
 
 @testset "typed two-phase choice matrix constructs" begin
@@ -234,4 +291,59 @@ end
     @test_throws ArgumentError TwoVelocityModel(pressure_projection = CGFM())
     @test_throws ArgumentError SurfaceTension(1.0; method = CMDGFMProjection())
     @test_throws ArgumentError SurfaceTension(-1.0)
+end
+
+@testset "single-phase LS-STAG dynamic solid regrid" begin
+    mesh = BlockTreeMesh(
+        block_size = (4, 4), max_level = 1, periodic = (false, false),
+        adaptation = MeshAdaptationOptions(update_interval = 1),
+    )
+    geometry = GeometryField(mesh, (x, y) -> y - 0.375; lipschitz = 1)
+    indicator = GeometryRefinementIndicator(geometry; level = 1)
+    flow = FlowSimulation(
+        mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.1);
+        geometry, boundary = NoSlip(),
+        numerics = NavierStokesOptions(embedded_viscous_closure = LSStagClosure()),
+        adaptivity = Adaptivity(criteria = (indicator,)),
+    )
+    before = flow.diffusion_operator
+    revision = geometry.revision
+    solid_area = integrate(geometry.solid)
+    # The stationary planar solid occupies exactly 3/8 of the unit square;
+    # transfer of its cell averages preserves this area to round-off.
+    @test isapprox(solid_area, 0.375; atol = 1.0e-12, rtol = 0)
+    @test before.closure isa LSStagClosure
+    result = simulate!(
+        flow, 1.0e-4; dt = 1.0e-4, tolerance = 1.0e-9, max_cycles = 200,
+    )
+    @test result.mesh_updates > 0
+    @test result.steps > 0
+    # Regridding happens after the physical step; advance once more so the
+    # rebuilt diffusion operator and solver are actually used.
+    after_regrid = simulate!(
+        flow, 2.0e-4; dt = 1.0e-4, tolerance = 1.0e-9, max_cycles = 200,
+    )
+    @test after_regrid.steps == 1
+    @test nblocks(mesh) > 1
+    @test flow.system.geometry === geometry
+    @test geometry.revision > revision
+    @test isapprox(integrate(geometry.solid), solid_area; atol = 1.0e-12, rtol = 0)
+    rebuilt = flow.diffusion_operator
+    @test rebuilt !== before
+    @test rebuilt.closure isa LSStagClosure
+    fresh = StaggeredDiffusionOperator(
+        geometry; viscosity = flow.system.kinematic_viscosity,
+        boundary = NoSlip(), closure = LSStagClosure(),
+    )
+    @test rebuilt.x.stiffness == fresh.x.stiffness
+    @test rebuilt.y.stiffness == fresh.y.stiffness
+    @test all(isfinite, flow.velocity.interior)
+    @test all(isfinite, flow.velocity.boundary)
+    @test all(block -> all(isfinite, block), flow.pressure.blocks)
+    println(
+        "single-phase LS-STAG regrid witness: mesh_updates=",
+        result.mesh_updates + after_regrid.mesh_updates,
+        " steps=", result.steps + after_regrid.steps, " blocks=", nblocks(mesh),
+        " solid_area=", integrate(geometry.solid),
+    )
 end

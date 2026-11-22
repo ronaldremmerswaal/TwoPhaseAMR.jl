@@ -134,15 +134,22 @@ function mimetic_amr_flow(; diagnostics = ())
     return flow, 0.5 * stable_timestep(flow)
 end
 
-function cylinder_flow(max_level)
-    run = Cylinder.run_example(; max_level, final_time = 0.0)
+function cylinder_flow(max_level; closure = WallDistanceClosure())
+    run = Cylinder.run_example(;
+        max_level, final_time = 0.0,
+        numerics = NavierStokesOptions(embedded_viscous_closure = closure),
+    )
     return run.flow, stable_timestep(run.flow; cfl = 0.45)
 end
 
 """Droplet on an embedded sloped wall (example 09's physics without its
 recorder): CMDGFM (or `model`), gravity, contact angle, interface, curvature
-and geometry refinement."""
-function droplet_flow(max_level; diagnostics = (), model = CMDGFM)
+and geometry refinement. The closure is explicit; its default is the legacy
+wall-distance assembly."""
+function droplet_flow(
+        max_level; diagnostics = (), model = CMDGFM,
+        closure = WallDistanceClosure(),
+    )
     wall_angle = pi / 12
     bond = 1.21
     laplace = 5.5e2
@@ -185,8 +192,39 @@ function droplet_flow(max_level; diagnostics = (), model = CMDGFM)
     flow = FlowSimulation(
         mesh, physics; velocity_model = model, geometry, diagnostics,
         boundary = FreeSlip(), adaptivity = Adaptivity(criteria = refinement),
+        numerics = NavierStokesOptions(embedded_viscous_closure = closure),
     )
     return flow, 0.1 * stable_timestep(flow)
+end
+
+"""Compare thread counts at an embedded circle with a hundred-fold viscosity
+jump and a nonzero velocity. Use the same initial field in both phases."""
+function solid_lsstag_flow(; diagnostics = (), model = OneVelocityModel())
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
+    geometry = GeometryField(
+        mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.22;
+        lipschitz = 1.0,
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> y - 0.85; geometry, lipschitz = 1.0,
+    )
+    shared = (x, y, time, axis) -> 0.15 * (
+        axis == 1 ? sinpi(x) * cospi(y) : -cospi(x) * sinpi(y)
+    )
+    flow = FlowSimulation(
+        mesh,
+        TwoPhase(
+            interface; density = (4.0, 1.0),
+            dynamic_viscosity = (0.2, 0.002),
+        );
+        geometry, velocity_model = model,
+        velocity = model isa OneVelocityModel ? shared : (shared, shared),
+        boundary = FreeSlip(), diagnostics,
+        numerics = NavierStokesOptions(
+            embedded_viscous_closure = LSStagClosure(),
+        ),
+    )
+    return flow, 0.5 * stable_timestep(flow)
 end
 
 function stokes3_flow(max_level)
@@ -208,8 +246,20 @@ const CASES = (
             model = TwoVelocityModel(pressure_projection = MimeticProjection()),
         ),
     ),
+    (
+        "solid_lsstag", 6,
+        () -> solid_lsstag_flow(diagnostics = TWO_PHASE_DIAGNOSTICS),
+    ),
+    (
+        "solid_lsstag_mimetic", 6,
+        () -> solid_lsstag_flow(;
+            diagnostics = TWO_PHASE_DIAGNOSTICS,
+            model = TwoVelocityModel(pressure_projection = MimeticProjection()),
+        ),
+    ),
     ("stokes3_two", 6, () -> stokes3_flow(3)),
     ("cylinder", 6, () -> cylinder_flow(2)),
+    ("cylinder_lsstag", 6, () -> cylinder_flow(2; closure = LSStagClosure())),
     ("taylor_green", 10, () -> taylor_green_flow(3)),
 )
 

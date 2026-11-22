@@ -56,6 +56,7 @@ export VelocityBoundaryConditions, Inflow, Outflow, ZeroGradientVelocity
 export enforce_velocity_boundary!
 export StaggeredDiffusionOperator, diffusion!
 export AbstractViscosityAveraging, HarmonicViscosityAveraging, GeometricViscosityAveraging
+export AbstractEmbeddedViscousClosure, WallDistanceClosure, LSStagClosure
 export LinearSolverOptions, MultigridOptions
 export AdvectionOptions, NavierStokesOptions, Adaptivity
 export SinglePhase, TwoPhase, SurfaceTension
@@ -141,6 +142,7 @@ include("operators/advection/staggered_fluxes.jl")
 include("operators/advection/staggered_update.jl")
 # operators
 include("operators/viscosity_averaging.jl")
+include("operators/embedded_viscous_closure.jl")
 # navier_stokes
 include("navier_stokes/options.jl")
 # operators
@@ -170,6 +172,7 @@ include("embedded/geometry.jl")
 include("interface/polygon_initialization.jl")
 # embedded
 include("embedded/operators.jl")
+include("embedded/ls_stag.jl")
 # visualization
 include("visualization/plic_geometry.jl")
 # mesh/adaptivity
@@ -209,6 +212,7 @@ include("two_phase/one_velocity.jl")
 include("two_phase/two_velocity/interphase_drag.jl")
 include("two_phase/two_velocity/model.jl")
 # two_phase/diffusion
+include("two_phase/diffusion/variable_diffusion_ls_stag.jl")
 include("two_phase/diffusion/variable_diffusion_geometry.jl")
 include("two_phase/diffusion/variable_diffusion_operator.jl")
 include("two_phase/diffusion/variable_diffusion_preconditioner.jl")

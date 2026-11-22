@@ -382,7 +382,9 @@ For an operator built on an embedded `GeometryField`, pass the same
 rediscretized on the geometrically restricted solid, so its walls stay in the
 coarse operators, and the face transfers skip completely covered faces.
 Without it the coarse levels see no solid and the iteration count grows with
-the mesh size.
+the mesh size. When the geometry is passed, every coarse operator copies the
+fine operator's cut-cell closure, and a hierarchy cached for the other
+closure is not reused.
 """
 struct TreeStaggeredGeometricMultigridPreconditioner{T, O, X, Y}
     operator::O
@@ -439,6 +441,8 @@ function TreeStaggeredGeometricMultigridPreconditioner(
         _tree_can_reuse(plan, isnothing(reuse) ? nothing : reuse.x) &&
         typeof(reuse.operator.diffusion_operator.boundary) ===
         typeof(operator.diffusion_operator.boundary) &&
+        typeof(reuse.operator.diffusion_operator.closure) ===
+        typeof(operator.diffusion_operator.closure) &&
         reuse.operator.reaction == operator.reaction &&
         reuse.operator.diffusion == operator.diffusion
     geometry_levels = isnothing(geometry) ? nothing : Any[geometry]
@@ -479,14 +483,16 @@ function TreeStaggeredGeometricMultigridPreconditioner(
                 coarse_geometry;
                 viscosity = operator.diffusion_operator.viscosity,
                 boundary = operator.diffusion_operator.boundary,
+                closure = operator.diffusion_operator.closure,
             )
         elseif can_append_suffix
             reuse.x.diffusion_operators[matching_level]
         else
-            StaggeredDiffusionOperator(
+            _staggered_diffusion_operator(
                 coarse_mesh;
                 viscosity = operator.diffusion_operator.viscosity,
                 boundary = operator.diffusion_operator.boundary, T,
+                closure = operator.diffusion_operator.closure,
             )
         end
         push!(diffusion_operators, coarse_diffusion)

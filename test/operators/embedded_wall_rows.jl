@@ -14,7 +14,9 @@ using LinearAlgebra: Symmetric, dot, isposdef
             refined && key.level == 0 && key.i >= div(n, 8),
         )
         geometry = GeometryField(mesh, (x, y) -> y - 1; lipschitz = 1)
-        operator = StaggeredDiffusionOperator(geometry; viscosity = 1.0)
+        operator = StaggeredDiffusionOperator(
+            geometry; viscosity = 1.0, closure = WallDistanceClosure(),
+        )
         wall_faces = [
             i for (i, face) in pairs(mesh.faces)
                 if face.axis == 2 && face.center[2] == 1
@@ -82,8 +84,8 @@ end
                 if face.axis == normal && face.center[normal] == 4
         ]
         @test !isempty(wall_faces)
-        for boundary in (NoSlip(), FreeSlip())
-            operator = StaggeredDiffusionOperator(geometry; boundary)
+        for boundary in (NoSlip(), FreeSlip()), closure in (WallDistanceClosure(), LSStagClosure())
+            operator = StaggeredDiffusionOperator(geometry; boundary, closure)
             component = normal == 1 ? operator.x : operator.y
             @test isempty(intersect(wall_faces, component.local_to_global))
             @test component.stiffness ≈ transpose(component.stiffness) atol = 1.0e-12
@@ -158,7 +160,9 @@ end
             mesh, (x, y) -> T(side) * ((normal == 1 ? x : y) - wall);
             lipschitz = one(T),
         )
-        operator = StaggeredDiffusionOperator(geometry; viscosity = one(T))
+        operator = StaggeredDiffusionOperator(
+            geometry; viscosity = one(T), closure = WallDistanceClosure(),
+        )
         component = tangent == 1 ? operator.x : operator.y
         face_index = findfirst(
             face -> face.axis == tangent &&
@@ -213,7 +217,9 @@ end
         geometry = GeometryField(
             mesh, (x, y) -> y - 1 - slope * x; lipschitz = hypot(1, slope),
         )
-        operator = StaggeredDiffusionOperator(geometry; viscosity = 1.0)
+        operator = StaggeredDiffusionOperator(
+            geometry; viscosity = 1.0, closure = WallDistanceClosure(),
+        )
         errors = NTuple{3, Float64}[]
         fluid_errors = NTuple{3, Float64}[]
         for component in (operator.x, operator.y)
@@ -308,6 +314,9 @@ end
     # therefore pin the positive, energy-stable behaviour of this change; the
     # remaining first-order error of the open contacts also contributes: the
     # normal rows keep an h/(2|grad d|) residual, 0.091 rms at 32 cells.
+    # `LSStagClosure()` resolves both sources (values at the open midpoints,
+    # cell-Green normal stresses) and is second order on these fixtures; its
+    # gates are in `embedded_ls_stag.jl`. These gates pin the default closure.
     margin = 0.2
     for slope in (0.1, 0.5), refined in (false, true)
         history = [oblique_errors(n, refined, slope) for n in (16, 32, 64)]
@@ -349,7 +358,9 @@ end
         geometry = GeometryField(
             mesh, (x, y) -> y - 1 - slope * x; lipschitz = hypot(1, slope),
         )
-        operator = StaggeredDiffusionOperator(geometry; viscosity = 1.0)
+        operator = StaggeredDiffusionOperator(
+            geometry; viscosity = 1.0, closure = WallDistanceClosure(),
+        )
         scale = hypot(1.0, slope)
         for (axis, component) in enumerate((operator.x, operator.y))
             stiffness = component.stiffness
@@ -521,7 +532,9 @@ end
     )
     levelset(x, y) = y - 2.3 - 0.1x
     geometry = GeometryField(mesh, levelset; lipschitz = hypot(1.0, 0.1))
-    operator = StaggeredDiffusionOperator(geometry; viscosity = 1.0)
+    operator = StaggeredDiffusionOperator(
+        geometry; viscosity = 1.0, closure = WallDistanceClosure(),
+    )
     for axis in 1:2
         component = axis == 1 ? operator.x : operator.y
         schedule = TwoPhaseAMR._cut_cell_dual_schedule(geometry, Val(axis), false)
@@ -596,7 +609,9 @@ end
                 if face.axis == 2 && face.center[2] == T(4)
         ]
         @test !isempty(wall_faces)
-        operator = StaggeredDiffusionOperator(geometry; viscosity = one(T))
+        operator = StaggeredDiffusionOperator(
+            geometry; viscosity = one(T), closure = WallDistanceClosure(),
+        )
         @test isempty(intersect(wall_faces, operator.y.local_to_global))
     end
 end

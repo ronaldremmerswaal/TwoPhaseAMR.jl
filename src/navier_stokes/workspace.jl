@@ -153,6 +153,7 @@ function _rebuild_topology_dependent_state!(
         ) : StaggeredDiffusionOperator(
             geometry; viscosity = solver.kinematic_viscosity,
             boundary = solver.boundary,
+            closure = solver.options.embedded_viscous_closure,
         )
     _resize_zero_velocity!(workspace.old_velocity, solver.mesh)
     _resize_zero_velocity!(workspace.convected, solver.mesh)
@@ -205,6 +206,7 @@ function _two_phase_workspace_solver_options(solver)
         diffusion_preconditioner_options = _diffusion_preconditioner_options(solver),
         multigrid = _multigrid_options(solver),
         viscosity_averaging = solver.options.viscosity_averaging,
+        closure = solver.options.embedded_viscous_closure,
     )
 end
 
