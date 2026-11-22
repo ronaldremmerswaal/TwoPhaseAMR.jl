@@ -233,10 +233,9 @@ end
 # rows the minimum of sum_i m_i (E_i u - b_i s)^2 is obtained by projecting
 # E orthogonally to b in the m metric. No global wall unknown or indefinite
 # Schur term is introduced; at a Cartesian wall this just deletes wall shear.
-function _ls_stress_slip!(cache, cell, wall_row, volume, remainder, tangent, normal_flux, shear_flux)
+function _ls_stress_slip!(cache, cell, wall_row, measures, b)
     rows = (2cell - 1, 2cell, wall_row)
-    m = (2volume, 2volume, remainder)
-    b = (tangent[1] * normal_flux[1] / volume, tangent[2] * normal_flux[2] / volume, shear_flux / remainder)
+    m = map(row -> measures[row], rows)
     scale = maximum(abs, b)
     iszero(scale) && return nothing
     u = b ./ scale
@@ -297,6 +296,7 @@ function _ls_stress_cell!(cache, geometry::GeometryField{T}, ref, cell, measures
     rows, cols, vals = construction.strain_rows, construction.strain_columns, construction.strain_values
     ir, ic, iv = construction.interpolation_rows, construction.interpolation_columns, construction.interpolation_values
     cell_row = 0
+    slip = nothing
     if complete
         push!(measures, remainder)
         cell_row = length(measures)
@@ -324,7 +324,19 @@ function _ls_stress_cell!(cache, geometry::GeometryField{T}, ref, cell, measures
                 _ls_stress_line_row!(rows, cols, vals, cell_row, line.columns, line.trace, coefficient)
             end
         end
-        tilted_slip && _ls_stress_slip!(cache, cell, cell_row, volume, remainder, tangent, normal_flux, shear_flux)
+        if tilted_slip
+            # The unit wall trace is precisely E applied to constant t: the
+            # shared vertex derivatives annihilate constants, and the cell
+            # shear retains the same endpoint traces as its Green integral.
+            slip = (
+                cell_row,
+                (
+                    tangent[1] * normal_flux[1] / volume,
+                    tangent[2] * normal_flux[2] / volume,
+                    shear_flux / remainder,
+                ),
+            )
+        end
     end
     for pos in eachindex(vertices)
         a, b = lengths[pos]
@@ -349,7 +361,7 @@ function _ls_stress_cell!(cache, geometry::GeometryField{T}, ref, cell, measures
             end
         end
     end
-    return nothing
+    return slip
 end
 
 function _ls_stress_rows!(measures, construction, geometry::GeometryField{T}, boundary) where {T}
@@ -363,7 +375,11 @@ function _ls_stress_rows!(measures, construction, geometry::GeometryField{T}, bo
     ir, iv = construction.interpolation_rows, construction.interpolation_values
     first_entry = length(iv) + 1
     for (cell, ref) in pairs(construction.cell_references)
-        _ls_stress_cell!(cache, geometry, ref, cell, measures, construction, boundary)
+        slip = _ls_stress_cell!(cache, geometry, ref, cell, measures, construction, boundary)
+        if !isnothing(slip)
+            wall_row, b = slip
+            _ls_stress_slip!(cache, cell, wall_row, measures, b)
+        end
     end
     if !isempty(cache.slip_columns)
         rows, cols, vals = construction.strain_rows, construction.strain_columns, construction.strain_values

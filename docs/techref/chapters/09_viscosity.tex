@@ -678,11 +678,17 @@ four vertex rows already give the Green flux. In the Cartesian free-slip
 limit there is no wall-shear row. If a slip wall ends at a grid vertex,
 an adjacent full cell uses the one-sided fluid trace extrapolated from open
 midpoints; setting it to zero would damp even a constant translation
-tangent to the wall. At an oblique free-slip PLIC segment a
-scalar tangential trace is free, with normal velocity fixed to zero. Its
-local elimination minimizes the two normal and remaining shear squares
-over this trace, retaining the positive factorization. There is no
-wall-distance penalty in either LS-STAG slip condition.
+tangent to the wall. At an oblique free-slip PLIC segment a scalar
+tangential trace $s$ is free, with normal velocity fixed to zero. If $E_c$
+collects the two normal rows and the remaining shear row before elimination,
+their strain is $E_c u-b_c s$. On a planar wall admitting a rigid unit
+tangent $u_t$, the wall column satisfies $b_c=E_c u_t$: the shared
+derivatives $D_v$ annihilate constants, and $b_c$ uses the same endpoint
+traces as $Q_c$. The local minimum of the three weighted strain squares over
+$s$ therefore preserves this motion and the positive factorization, without
+a wall-distance penalty. The uncondensed identity is checked in every cut
+cell of uniform and composite periodic planar bands in
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{Uncondensed LS-STAG FreeSlip rows reproduce the PLIC tangent}.
 
 This PLIC extension to variable stress is implemented in
 \srcsym{src/two_phase/diffusion/variable_diffusion_ls_stag.jl}{_ls_stress_rows!}.

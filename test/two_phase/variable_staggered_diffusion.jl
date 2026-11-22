@@ -2059,3 +2059,106 @@ end
     end
     @test damped > 0
 end
+
+# Manufacture the exact volume fractions AND exact PLICs of a periodic
+# planar band. This isolates the viscous identity from the error in estimating
+# a normal from neighboring fractions across a 2:1 transition.
+function _ls2p_exact_slip_band(mesh, slope, offset)
+    refs = TwoPhaseAMR._cached_cell_references!(TwoPhaseAMR.CellRef[], mesh)
+    function plane(ref)
+        x, y = cellcenter(mesh, ref.block, ref.i, ref.j)
+        d = mod(y - slope * x - offset + 0.25, 0.5) - 0.25
+        dx, dy = mesh.blocks[ref.block].spacing
+        side = copysign(1.0, d)
+        return -side * slope * dx, side * dy, 0.125 - abs(d)
+    end
+    fractions = CellField(mesh)
+    for ref in refs
+        TwoPhaseAMR._set!(fractions, TwoPhaseAMR._plane_fraction(plane(ref)...), ref)
+    end
+    solid = InterfaceField(fractions)
+    for ref in refs
+        0 < TwoPhaseAMR._get(fractions, ref) < 1 || continue
+        nx, ny, a = plane(ref)
+        norm = hypot(nx, ny)
+        TwoPhaseAMR._set!(solid.normal_x, nx / norm, ref)
+        TwoPhaseAMR._set!(solid.normal_y, ny / norm, ref)
+        TwoPhaseAMR._set!(solid.intercept, a / norm, ref)
+    end
+    return GeometryField(solid)
+end
+
+@testset "Uncondensed LS-STAG FreeSlip rows reproduce the PLIC tangent" begin
+    for composite in (false, true), (slope, offset) in ((0.5, 0.0), (-0.5, 1 / 128))
+        # Straight parallel walls on a torus: every cut cell, including ones
+        # at the box seam and at hanging vertices, admits a rigid tangent.
+        mesh = BlockTreeMesh(;
+            base_mesh = (32, 32), block_size = (8, 8), max_level = 1,
+            periodic = (true, true),
+            refine = (key, origin, _) -> composite && key.level == 0 && origin[1] >= 0.5,
+        )
+        geometry = _ls2p_exact_slip_band(mesh, slope, offset)
+        phase = InterfaceField(mesh, (x, _) -> abs(x - 0.5) - 0.25; geometry, lipschitz = 1.0)
+        noslip = StaggeredDiffusionOperator(
+            phase; viscosity = (1.0, 0.3), boundary = NoSlip(), closure = LSStagClosure(),
+        )
+
+        # Both boundary types start with the same unprojected normal rows.
+        # Assemble the actual slip shear/vertex rows, but do not apply the
+        # local wall-velocity elimination: its input b is what we check.
+        n = ncells(mesh)
+        measures = noslip.stress_measures[1:(2n)]
+        construction = TwoPhaseAMR.VariableDiffusionConstructionCache(Float64)
+        refs = TwoPhaseAMR._cached_cell_references!(construction.cell_references, mesh)
+        topology = TwoPhaseAMR._ls_stress_topology!(
+            TwoPhaseAMR._LSStressCache(Float64), geometry, FreeSlip(),
+        )
+        sites = Tuple{Int, Int, NTuple{3, Float64}}[]
+        for (c, ref) in pairs(refs)
+            slip = TwoPhaseAMR._ls_stress_cell!(topology, geometry, ref, c, measures, construction, FreeSlip())
+            isnothing(slip) || push!(sites, (c, slip...))
+        end
+        @test length(sites) == count(ref -> 0 < TwoPhaseAMR._get(geometry.open_fraction, ref) < 1, refs)
+        @test !isempty(sites)
+        shear = sparse(
+            construction.strain_rows, construction.strain_columns, construction.strain_values,
+            length(measures), length(mesh.faces),
+        )
+        strain = vcat(noslip.strain[1:(2n), :], shear[(2n + 1):end, :])
+        basis = zeros(length(mesh.faces), 2)
+        for (i, f) in pairs(mesh.faces)
+            geometry.aperture[i] > 0 && (basis[i, f.axis] = 1)
+        end
+        response = strain * basis
+        magnitude = abs.(strain) * basis
+        row_max = zeros(3)
+        max_scaled = 0.0
+        tangent = (1.0, slope) ./ hypot(1.0, slope)
+        for (c, wall, b) in sites
+            ref = refs[c]
+            # One constant tangent throughout the mesh. The scalar wall
+            # velocity (and hence its column b) points the other way on
+            # the opposite side of the band.
+            orient = -sign(TwoPhaseAMR._get(geometry.solid.normal_y, ref))
+            for (j, r) in pairs((2c - 1, 2c, wall))
+                residual = abs(tangent[1] * response[r, 1] + tangent[2] * response[r, 2] - orient * b[j])
+                scale = max(1.0, abs(b[j]), abs(tangent[1]) * magnitude[r, 1] + abs(tangent[2]) * magnitude[r, 2])
+                row_max[j] = max(row_max[j], residual)
+                max_scaled = max(max_scaled, residual / scale)
+                @test residual <= 128eps() * scale
+            end
+        end
+        # The shared shear derivative of either Cartesian constant must be
+        # zero before any cut-cell condensation or cancellation in E'WE.
+        shared = filter(!iszero, topology.vertex_rows)
+        @test !isempty(shared)
+        for r in shared, axis in 1:2
+            @test abs(response[r, axis]) <= 128eps() * max(1.0, magnitude[r, axis])
+        end
+        println(
+            "Uncondensed E*u_t=b: composite=$composite slope=$slope cut_cells=$(length(sites)) ",
+            "shared_vertices=$(length(shared)) max_abs_normal_shear=$(Tuple(row_max)) ",
+            "max_scaled=$max_scaled",
+        )
+    end
+end
