@@ -258,7 +258,7 @@ velocity continuous across the interface (the published one-donor rule,
 `CMDGFMProjection(jump_inference=ConstantJumpInference())`, creates a
 tangential phase-velocity jump of order `2U'h` there, issue #171). Where the
 interface moves through a face, a ramp in the crossing speed `w/U` (the normal
-mixture speed over the local mixture speed, `[1/16, 3/16]`) blends the
+mixture speed over the local mixture speed, `[1/32, 3/32]`) blends the
 extrapolation back to one donor: the values that a sweeping interface leaves
 behind would otherwise accumulate the extrapolation slope. The weight is
 evaluated once from the state the projection receives (a step's predictor)

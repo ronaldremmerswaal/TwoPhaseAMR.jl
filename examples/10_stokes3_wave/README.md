@@ -4,7 +4,7 @@ A steep, finite-depth wave propagates for two nominal periods on an adaptively r
 
 ![Plunging breaker just after its jet hits the forward face and traps a gas pocket: vorticity and PLIC interface](assets/hero.png)
 
-The wave breaks within the first period. The snapshot comes from a separate level-5 run of the first period (finest `dx = dy = 1/256`): the first state with an entrapped gas pocket (`t/T≈0.624`), located by re-running the bracketing keyframe interval with every step stored as a keyframe; half a wavelength wide, vorticity with a symmetric range. The animation and profile below come from the level-4 docs run.
+The wave breaks within the first period. The snapshot comes from a separate level-5 run of the first period (finest `dx = dy = 1/256`): the first state with an entrapped gas pocket (`t/T≈0.626`), located by re-running the bracketing keyframe interval with every step stored as a keyframe; half a wavelength wide, vorticity with a symmetric range. The animation and profile below come from the level-4 docs run.
 
 ## At a glance
 
@@ -13,8 +13,8 @@ The wave breaks within the first period. The snapshot comes from a separate leve
 | **Physics** | Two phases, density ratio `850`, `g=1`, Bond number `1000`, Reynolds number `4×10⁴`, steepness `0.55` and depth `0.5`. The domain is `[-0.5,0.5]²`, periodic in `x` with free-slip `y` boundaries. |
 | **Algorithms** | One velocity by default; WY geometric VOF, `:lhf` PLIC with WY fallback, CGFM surface tension, Lax–Wendroff momentum advection and implicit-midpoint viscosity. Pressure and two-phase diffusion use CG with tree-geometric multigrid. AMR combines the interface indicator through `t=0.01`, curvature at 8 cells per radius, and vorticity thresholds `0.2` and `0.2/3`; adaptation is attempted every step with coarsen delay 2. |
 | **Worth varying** | `steepness=0.55` changes the initialized wave and frequency; `bond=1000` changes surface tension; `reynolds=4e4` changes viscosity; `density_ratio=850` changes gas density; `max_level=5` sets the refinement ceiling; `final_time=nothing` selects one nominal period. |
-| **Validated against** | At docs size, the final interface after two periods, at 200 evenly spaced `x` positions, differs from the analytical third-order *initial* profile by sample RMS `0.0401907` and maximum `0.0768548`. This approximate Stokes profile is not an exact solution of the viscous, capillary, two-phase problem. |
-| **Cost** | `run_example` default: `max_level=5`, one period, runtime and final cells unmeasured. Gallery `:docs`: `max_level=4`, two periods (`T≈4.39705`), 2460 steps and 5632 final cells; setup and simulation took 228.2 s on one thread, including first-use compilation, and the separate level-5 first-period hero and impact-location runs took 276.5 s. The whole figure script took 582.5 s wall clock, including package loading. Gallery `:default` uses `max_level=6`, two periods. |
+| **Validated against** | At docs size, the final interface after two periods, at 200 evenly spaced `x` positions, differs from the analytical third-order *initial* profile by sample RMS `0.0436195` and maximum `0.0880803`. This approximate Stokes profile is not an exact solution of the viscous, capillary, two-phase problem. |
+| **Cost** | `run_example` default: `max_level=5`, one period, runtime and final cells unmeasured. Gallery `:docs`: `max_level=4`, two periods (`T≈4.39705`), 2482 steps and 6592 final cells; setup and simulation took 171.9 s on one thread, including first-use compilation, and the separate level-5 first-period hero and impact-location runs took 223.3 s. The whole figure script, with its 81-frame GIFs, took 548.7 s, excluding package loading, measured while other jobs shared the machine. Gallery `:default` uses `max_level=6`, two periods. |
 
 Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded unless stated.
 
@@ -52,7 +52,7 @@ press Ctrl+C to close Studio after the run.
 
 ![Computed interface after two periods and the third-order initial profile](assets/profile.png)
 
-After two nominal periods, the sampled interface differs from the third-order initialization by RMS `0.0401907` and maximum `0.0768548`; the wave has broken, so these differences include physical model differences as well as numerical error.
+After two nominal periods, the sampled interface differs from the third-order initialization by RMS `0.0436195` and maximum `0.0880803`; the wave has broken, so these differences include physical model differences as well as numerical error.
 
 ![Final vorticity with interface](assets/vorticity.png)
 
@@ -60,7 +60,7 @@ Vorticity at the final retained state, with the PLIC interface. The signed vorti
 
 ![Vorticity animation over two periods with the kinetic energy](assets/wave.gif)
 
-The animation contains 41 retained states nearest equally spaced requested times over two periods, with one symmetric vorticity range over all frames and the kinetic energy with a cursor at the shown time. The summary also prints kinetic energy, phase volumes, divergence, momentum, regrids, final cell count and elapsed setup/simulation time.
+The animation has 81 output frames, one per keyframe, on a uniform simulation-time grid over two periods (spacing `T_end/80`; each keyframe is the completed step nearest its requested time), with one symmetric vorticity range over all frames in 31 colour levels and the kinetic energy with a cursor at the shown time. The committed GIF is frame-optimized after export with `convert wave.gif -coalesce -background white -alpha remove -layers Optimize wave.gif` (ImageMagick; same frames and durations, the transparent padding column filled with the figure's white, 2.37 MB → 0.66 MB). The summary also prints kinetic energy, phase volumes, divergence, momentum, regrids, final cell count and elapsed setup/simulation time.
 
 ## Variations
 
@@ -76,4 +76,4 @@ The two-velocity option uses the script's phase-specific initializer; the displa
 
 - [stokes3_wave.jl](stokes3_wave.jl): analytical initialization and simulation.
 - [make_figures.jl](make_figures.jl): profile, vorticity, animation, and repository README animation generation.
-- `assets/`: generated PNGs (breaking snapshot, profile, final vorticity), the docs-run GIF, and the light and dark repository README GIFs (`readme_light.gif`, `readme_dark.gif`): 81 output frames on a uniform simulation-time grid over `t/T=0.475–1`, each showing the nearest of 49 level-5 keyframes, over plunging, impact and splash-up, with one vorticity range (the 99.9 % quantile of its magnitude) for all frames.
+- `assets/`: generated PNGs (breaking snapshot, profile, final vorticity), the docs-run GIF, and the light and dark repository README GIFs (`readme_light.gif`, `readme_dark.gif`): 81 output frames, one per level-5 keyframe, on a uniform simulation-time grid over `t/T=0.475–1` (spacing `0.525T/80≈0.0066T`), over plunging, impact and splash-up, with one vorticity range (the 99.9 % quantile of its magnitude) in 63 colour levels for all frames.

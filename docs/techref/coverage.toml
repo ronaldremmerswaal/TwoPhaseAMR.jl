@@ -1552,7 +1552,8 @@ sources = [
 tests = [
   { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: crossing-speed limiter" },
   { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: a translating drop stays at the one-donor level" },
-  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: the projection is idempotent" }
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: the projection is idempotent" },
+  { file = "test/integration/two_velocity_instabilities.jl", testset = "Two-velocity Kelvin--Helmholtz roll-up stays free of grid-scale ripples" }
 ]
 [[claims]]
 label = "eq:projection:dominant-slope"

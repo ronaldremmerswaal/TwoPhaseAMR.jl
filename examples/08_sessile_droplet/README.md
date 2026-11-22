@@ -11,8 +11,8 @@ A circular liquid cap relaxes under gravity and surface tension while maintainin
 | **Physics** | Two phases in the nonperiodic unit square with no-slip walls; liquid/gas density ratio `1000`, radius `0.2`, surface tension `1`, Bond number `1.21`, Laplace number `550`, and bottom-wall contact angle `π/2`. Gravity points downward, and `μ_g=0.0175 μ_l`. There is no embedded solid. |
 | **Algorithms** | Default `OneVelocityModel()` with WY geometric VOF, LHF PLIC normals and WY fallback, CGFM surface tension, Lax–Wendroff momentum transport, implicit-midpoint diffusion and pressure projection with CG/tree-multigrid solvers. Interface and curvature AMR use minimum level 1 (clamped to `max_level`), 8 cells per radius, update interval 5 and coarsening delay 2. The prescribed wall angle enters the curvature approximation, not the PLIC advection plane. |
 | **Worth varying** | `bond=1.21` changes gravity; `laplace=550` changes viscosity; `density_ratio=1000` changes phase density and derived gravity; `contact_angle=π/2` changes the initial circular cap and bottom-wall curvature condition; `max_level=3` sets the AMR ceiling; `final_time=nothing` selects eight capillary times. The forwarded `velocity_model` defaults to `OneVelocityModel()`. |
-| **Validated against** | `:phase_volume` should remain constant. At docs size the initial discrete liquid area is `0.0628318530718`, matching the continuum semicircle area `π(0.2)^2/2`; the final change and maximum sampled absolute change are `-3.49632e-10` and `3.49632e-10`, respectively. |
-| **Cost** | Default and docs: level 3 (square cells, `dx = dy = 1/8` on level 0 and `1/64` at level 3, 12.8 cells per radius), `T≈0.716`, 1299 steps and 1024 final cells; setup and simulation took 32.11 s and the whole figure script 83.1 s on one thread, including first-use compilation and rendering. |
+| **Validated against** | `:phase_volume` should remain constant. At docs size the initial discrete liquid area is `0.0628318530718`, matching the continuum semicircle area `π(0.2)^2/2`; the final change and maximum sampled absolute change are `4.31491e-11` and `3.35175e-10`, respectively. |
+| **Cost** | Default and docs: level 3 (square cells, `dx = dy = 1/8` on level 0 and `1/64` at level 3, 12.8 cells per radius), `T≈0.716`, 1299 steps and 1024 final cells; setup and simulation took 40.74 s and the whole figure script, with its 81-frame GIF, 106.0 s on one thread, including first-use compilation and rendering, measured while other jobs shared the machine. |
 
 Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded.
 
@@ -59,9 +59,9 @@ The hero shows volume fraction and reconstructed interface near `0`, `4t_c` and 
 
 ![Speed and droplet interface during relaxation, with the kinetic energy](assets/relaxation.gif)
 
-The GIF samples 41 output frames on a uniform simulation-time grid, each showing the nearest retained keyframe: speed and interface in the lower half of the domain, next to the kinetic energy with a cursor at the shown time.
+The GIF has 81 output frames, one per keyframe, on a uniform simulation-time grid with spacing `T/80≈0.0089`; each keyframe is the completed step nearest its requested time. It shows speed and interface in the lower half of the domain, next to the kinetic energy with a cursor at the shown time. The drop stays a cap; during the first oscillations the speed is largest in the cells next to the wall at the two contact lines, just outside the interface, and these corner peaks decay with the kinetic energy.
 
-The final kinetic energy is `3.39393e-5` (peak `0.00786202`), and liquid volume changes by `-3.49632e-10` from its initial discrete value. These diagnose motion and conservation; no contact-angle error is claimed.
+The final kinetic energy is `5.86435e-5` (peak `0.00791894`), and liquid volume changes by `4.31491e-11` from its initial discrete value. These diagnose motion and conservation; no contact-angle error is claimed.
 
 ## Variations
 
