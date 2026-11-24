@@ -2088,6 +2088,28 @@ function _ls2p_exact_slip_band(mesh, slope, offset)
     return GeometryField(solid)
 end
 
+@testset "LS-STAG free-slip energy nests at terminating grid lines" begin
+    for composite in (false, true), (slope, offset) in ((0.5, 0.0), (-0.5, 1 / 128))
+        mesh = BlockTreeMesh(;
+            base_mesh = (8, 8), block_size = (4, 4), max_level = 1, periodic = (true, true),
+            refine = (key, origin, _) -> composite && key.level == 0 && origin[1] >= 0.5,
+        )
+        # The first band has walls through vertices. The second misses the
+        # vertices, but cuts the coarse partner of a hanging grid line.
+        geometry = _ls2p_exact_slip_band(mesh, slope, offset)
+        phase = InterfaceField(mesh, (x, _) -> abs(x - 0.5) - 0.25; geometry, lipschitz = 1.0)
+        no_slip = StaggeredDiffusionOperator(phase; viscosity = (0.2, 0.03), boundary = NoSlip())
+        free_slip = StaggeredDiffusionOperator(phase; viscosity = (0.2, 0.03), boundary = FreeSlip())
+        loss = no_slip.stiffness - free_slip.stiffness
+        @test eigmin(Symmetric(Matrix(loss))) >= -1024eps()
+        # Unlike in a closed box, this rigid translation is admissible on
+        # the whole periodic band. Releasing the trace must remove its work.
+        u = [geometry.aperture[i] > 0 ? (1.0, slope)[f.axis] : 0.0 for (i, f) in pairs(mesh.faces)]
+        @test dot(u, loss * u) > 0
+        @test maximum(abs, free_slip.strain * u) <= 1024eps()
+    end
+end
+
 @testset "Uncondensed LS-STAG FreeSlip rows reproduce the PLIC tangent" begin
     for composite in (false, true), (slope, offset) in ((0.5, 0.0), (-0.5, 1 / 128))
         # Straight parallel walls on a torus: every cut cell, including ones
@@ -2111,7 +2133,7 @@ end
         construction = TwoPhaseAMR.VariableDiffusionConstructionCache(Float64)
         refs = TwoPhaseAMR._cached_cell_references!(construction.cell_references, mesh)
         topology = TwoPhaseAMR._ls_stress_topology!(
-            TwoPhaseAMR._LSStressCache(Float64), geometry, FreeSlip(),
+            TwoPhaseAMR._LSStressCache(Float64), geometry,
         )
         sites = Tuple{Int, Int, NTuple{3, Float64}}[]
         for (c, ref) in pairs(refs)

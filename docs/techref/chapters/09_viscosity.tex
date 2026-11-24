@@ -667,9 +667,12 @@ The normal rows are the open Green gradients in \cref{eq:viscosity:rows}.
 At an open vertex $v$, let $D_v u$ denote the \emph{sum}
 $\partial_y u_x+\partial_x u_y$, formed from the two open-midpoint
 differences. Where a fine grid line ends, the directional derivative uses
-the affine stencil through the neighbouring coarse faces. The same stencil
-interpolates the component to the vertex. A clipped endpoint on a no-slip
-solid instead has the prescribed value zero.
+the affine stencil through the neighbouring coarse faces if both are open.
+When a coarse partner is covered, or the fluid line ends exactly at a grid
+vertex on the solid, both boundary conditions instead take the endpoint
+trace from the fluid side; no shared shear rectangle straddles a missing
+sample. An endpoint clipped in the interior of a face has zero prescribed
+value in the uncondensed Green map.
 
 For an open cell of area $V_c$, define $Q_c$ as the outward flux of
 $(u_y,u_x)$ through its boundary. Each Cartesian edge uses its open length
@@ -686,8 +689,9 @@ and $R_c=V_c-\sum_v a_{cv}>0$, its additional shear row is
     \frac{Q_c(u)-\sum_v a_{cv}D_vu}{R_c}.
     \label{eq:viscosity:lsstress}
 \end{equation}
-Thus the area-weighted shear of the cell is exactly its Green flux, and
-the stress work remains a sum of positive squares. The $a_{cv}$ also give
+Thus the area-weighted sum of the fluid-reconstructed strains equals the
+cell Green flux, and the stress work remains a sum of positive squares.
+The separate box-wall quadrature is described below. The $a_{cv}$ also give
 the viscosity interpolation weights of the shared vertex; the remaining
 row uses the cell viscosity. For an uncut uniform cell $R_c=0$ and the
 four vertex rows already give the Green flux. In the Cartesian free-slip
@@ -706,6 +710,26 @@ a wall-distance penalty. The uncondensed identity is checked in every cut
 cell of uniform and composite periodic planar bands in
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{Uncondensed LS-STAG FreeSlip rows reproduce the PLIC tangent}.
 
+At a Cartesian box wall the cell Green completion uses the same fluid-side
+endpoint trace and derivative for both boundary conditions: extrapolate
+linearly through the nearest two open face midpoints, or extend the single
+available sample as a constant. The wall-touching vertex quarter, not the
+interior remainder, carries the boundary shear. If $u_f$ is the tangential
+sample a distance $d$ from the wall, its normal derivative there is
+$\pm u_f/d$ for stationary no slip and zero for free slip. Thus releasing
+the box trace removes a square rather than changing the strain of a
+neighbouring cell. Equivalently, the area-weighted sum of \emph{physical}
+strains differs from $Q_c$ only by the box boundary flux correction
+$\sum_{v\in\partial\domain}a_{cv}(D_v^{\mathrm{wall}}-D_v^{\mathrm{fluid}})u$.
+For the common cut-cell map $E_c$ and positive diagonal stress weights $W_c$,
+the loss of stiffness when the local trace is released is the positive
+rank-one term $(E_c^\top W_c b_c)(E_c^\top W_c b_c)^\top/(b_c^\top W_c b_c)$
+when $E_c^\top W_c b_c\ne0$. Consequently $K_{\mathrm{no\ slip}}-K_{\mathrm{free\ slip}}$
+is positive semidefinite. The rank-one identity is checked in
+\testsym{test/indicator/geometry.jl}{Embedded free slip omits only physical wall-shear stresses};
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{LS-STAG free-slip energy nests at terminating grid lines}
+checks the stiffness ordering on uniform and composite planar bands.
+
 This PLIC extension to variable stress is implemented in
 \srcsym{src/two_phase/diffusion/variable_diffusion_ls_stag.jl}{_ls_stress_rows!}.
 One-velocity flow and both two-velocity projections support it with either
@@ -716,7 +740,7 @@ The two-layer manufactured channel of
 has an aligned no-slip wall and continuous tangential traction across its
 $2:1$ viscosity jump. From $n=16$ to $32$ to $64$, the volume-weighted
 $L^2$ orders for LS-STAG are $1.88,1.97$ and $1.97,2.00$ for the two
-components on the uniform mesh, and $1.94,1.99$ and $2.02,2.03$ with
+components on the uniform mesh, and $1.96,2.00$ and $2.02,2.03$ with
 the right half refined. This is not an order result for an oblique liquid
 contact line.
 

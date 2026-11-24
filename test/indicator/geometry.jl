@@ -1729,6 +1729,47 @@ end
     @test maximum(abs, velocity.interior) < 2.0e-12
 end
 
+# On this off-vertex oblique cut the box-wall squares and one local
+# tangential PLIC trace per cut cell account for the entire stiffness loss.
+function _check_ls_stag_free_trace_projection(mesh, geometry, no_slip, free_slip)
+    construction = TwoPhaseAMR.VariableDiffusionConstructionCache(Float64)
+    refs = TwoPhaseAMR._cached_cell_references!(construction.cell_references, mesh)
+    measures = no_slip.stress_measures[1:(2 * length(refs))]
+    cache = TwoPhaseAMR._ls_stress_topology!(TwoPhaseAMR._LSStressCache(Float64), geometry)
+    loss = zeros(size(no_slip.stiffness))
+    ncut = 0
+    for (c, ref) in pairs(refs)
+        slip = TwoPhaseAMR._ls_stress_cell!(cache, geometry, ref, c, measures, construction, FreeSlip())
+        isnothing(slip) && continue
+        ncut += 1
+        wall, column = slip
+        rows = [2c - 1, 2c, wall]
+        A = Matrix(no_slip.strain[rows, :])
+        E = Matrix(free_slip.strain[rows, :])
+        W = Diagonal(free_slip.stress_weights[rows])
+        b = collect(column)
+        g = A' * (W * b)
+        @test any(!iszero, g)
+        released = (g * g') / dot(b, W * b)
+        @test maximum(abs, A' * W * A - E' * W * E - released) <= 1024eps()
+        loss .+= released
+    end
+    @test ncut == count(ref -> 0 < TwoPhaseAMR._get(geometry.open_fraction, ref) < 1, refs)
+    @test ncut > 0
+    for (v, lines) in pairs(cache.lines)
+        r = cache.vertex_rows[v]
+        iszero(r) && continue
+        any(line -> !iszero(line.box_derivative), lines) || continue
+        # The normal velocity is prescribed along the wall. The only active
+        # contribution to this vertex is its tangential no-slip quotient.
+        @test all(iszero, free_slip.strain[r, :])
+        a = Array(no_slip.strain[r, :])
+        loss .+= no_slip.stress_weights[r] .* (a * a')
+    end
+    @test maximum(abs, Matrix(no_slip.stiffness - free_slip.stiffness) - loss) <= 1024eps()
+    return nothing
+end
+
 @testset "Embedded free slip omits only physical wall-shear stresses" begin
     mesh = BlockTreeMesh(
         block_size = (8, 8), periodic = (false, false),
@@ -1740,25 +1781,57 @@ end
         mesh, (x, y) -> hypot(x - 0.5, y - 0.45) - 0.2;
         geometry, contact_angle = pi / 2, lipschitz = 1,
     )
+
+    # Legacy wall-distance closure. It deletes the cut-wall shear rows, so
+    # FreeSlip has strictly fewer stress rows; name the closure so a change
+    # of default cannot silently change the reference.
+    legacy_no_slip = StaggeredDiffusionOperator(
+        interface; viscosity = (0.2, 0.03), boundary = NoSlip(),
+        closure = WallDistanceClosure(),
+    )
+    legacy_free_slip = StaggeredDiffusionOperator(
+        interface; viscosity = (0.2, 0.03), boundary = FreeSlip(),
+        closure = WallDistanceClosure(),
+    )
+    @test legacy_no_slip.closure isa WallDistanceClosure
+    @test legacy_free_slip.closure isa WallDistanceClosure
+    @test issymmetric(legacy_free_slip.stiffness)
+    @test size(legacy_free_slip.strain, 1) < size(legacy_no_slip.strain, 1)
+    legacy_wall_shear = legacy_no_slip.stiffness - legacy_free_slip.stiffness
+    @test any(value -> !iszero(value), legacy_wall_shear)
+    @test minimum(eigvals(Symmetric(Matrix(legacy_wall_shear)))) >= -1024eps()
+
+    # Default LS-STAG closure. Both stiffnesses are individually PSD, and
+    # releasing the wall tangential trace cannot add dissipation: the actual
+    # K_NoSlip - K_FreeSlip is PSD on this nonperiodic tilted wall. The
+    # released trace is also checked cell by cell on the uncondensed
+    # FreeSlip reconstruction below. Do not loosen these bounds.
     no_slip = StaggeredDiffusionOperator(
         interface; viscosity = (0.2, 0.03), boundary = NoSlip(),
     )
     free_slip = StaggeredDiffusionOperator(
         interface; viscosity = (0.2, 0.03), boundary = FreeSlip(),
     )
+    @test no_slip.closure isa LSStagClosure
+    @test free_slip.closure isa LSStagClosure
     @test issymmetric(free_slip.stiffness)
-    @test size(free_slip.strain, 1) < size(no_slip.strain, 1)
+    for operator in (no_slip, free_slip)
+        @test minimum(eigvals(Symmetric(Matrix(operator.stiffness)))) >=
+            -1024eps()
+    end
     wall_shear = no_slip.stiffness - free_slip.stiffness
     @test any(value -> !iszero(value), wall_shear)
     @test minimum(eigvals(Symmetric(Matrix(wall_shear)))) >= -1024eps()
+    _check_ls_stag_free_trace_projection(mesh, geometry, no_slip, free_slip)
 
-    constant_free_slip = StaggeredDiffusionOperator(
-        geometry; viscosity = 0.2, boundary = FreeSlip(),
-    )
-    for component in (constant_free_slip.x, constant_free_slip.y)
-        @test issymmetric(component.stiffness)
-        @test minimum(eigvals(Symmetric(Matrix(component.stiffness)))) >=
-            -1024eps()
+    for closure in (WallDistanceClosure(), LSStagClosure())
+        constant_free_slip = StaggeredDiffusionOperator(
+            geometry; viscosity = 0.2, boundary = FreeSlip(), closure,
+        )
+        for component in (constant_free_slip.x, constant_free_slip.y)
+            @test issymmetric(component.stiffness)
+            @test minimum(eigvals(Symmetric(Matrix(component.stiffness)))) >= -1024eps()
+        end
     end
 end
 

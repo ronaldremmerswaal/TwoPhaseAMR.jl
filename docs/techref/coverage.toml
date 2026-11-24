@@ -1180,6 +1180,8 @@ tests = [
   { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "LS-STAG two-phase stress rows are exact at a sloping solid" },
   { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "LS-STAG two-phase affine rows on a fixed composite mesh" },
   { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "LS-STAG tilted FreeSlip keeps a rigid tangent local null mode" },
+  { file = "test/indicator/geometry.jl", testset = "Embedded free slip omits only physical wall-shear stresses" },
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "LS-STAG free-slip energy nests at terminating grid lines" },
   { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Uncondensed LS-STAG FreeSlip rows reproduce the PLIC tangent" }
 ]
 [[claims]]
