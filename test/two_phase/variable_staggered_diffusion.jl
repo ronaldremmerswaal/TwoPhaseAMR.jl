@@ -1020,17 +1020,23 @@ end
                     iszero(geometry.face_dual_volumes[index]) &&
                         (velocity.interior[index] = 0.0)
                 end
+                # This test calibrates the legacy closure's cut-wall limit;
+                # pin it so a default change cannot alter the reference.
                 scalar_no_slip = StaggeredDiffusionOperator(
                     geometry; viscosity = 1.0, boundary = NoSlip(),
+                    closure = WallDistanceClosure(),
                 )
                 scalar_free_slip = StaggeredDiffusionOperator(
                     geometry; viscosity = 1.0, boundary = FreeSlip(),
+                    closure = WallDistanceClosure(),
                 )
                 variable_no_slip = TwoPhaseAMR._staggered_diffusion_operator(
                     mesh; viscosity, boundary = NoSlip(), geometry,
+                    closure = WallDistanceClosure(),
                 )
                 variable_free_slip = TwoPhaseAMR._staggered_diffusion_operator(
                     mesh; viscosity, boundary = FreeSlip(), geometry,
+                    closure = WallDistanceClosure(),
                 )
                 scalar_no_rate = FaceVelocity(mesh)
                 scalar_free_rate = FaceVelocity(mesh)
@@ -1052,6 +1058,7 @@ end
                     initialize!(interface, phase_normal, 4.25)
                     phase_operator = StaggeredDiffusionOperator(
                         interface; viscosity = (1.0, 0.2), boundary = NoSlip(),
+                        closure = WallDistanceClosure(),
                     )
                     phase_rate = FaceVelocity(mesh)
                     diffusion!(phase_rate, velocity, phase_operator)
@@ -1115,6 +1122,7 @@ end
                         geometry;
                         viscosity = 1.0,
                         boundary = NoSlip((x, y, time, axis) -> 3.0),
+                        closure = WallDistanceClosure(),
                     )
                     moving_rate = FaceVelocity(mesh)
                     diffusion!(moving_rate, velocity, moving)
@@ -1285,4 +1293,872 @@ end
     @test hierarchy.local_relaxation
     prolongation = first(hierarchy.levels).prolongation
     @test all(iszero, sum(abs, prolongation[iszero.(geometry.face_dual_volumes), :]; dims = 2))
+end
+
+# --- LS-STAG two-phase analytic and structural tests -------------------------
+#
+# The fixture puts a straight solid wall of slope 1/2 inside the unit square,
+# with the two-phase interface above it. An affine velocity that vanishes on
+# the wall has a constant strain tensor, so every LS-STAG stress row next to
+# the wall must reproduce one tensor component exactly. LS-STAG places a cut
+# face's value at the midpoint of its open part, not at the face centre, so the
+# tests sample the analytic field at that midpoint. The open part is computed
+# here from the level set (an independent geometric expectation), not from the
+# closure's PLIC tables. The PLIC reconstruction of the straight line agrees
+# with the analytic trace to its quadrature tolerance; `rtol = 1e-7` on the
+# row residuals is far above that and far below an O(1) sign or factor error.
+
+const _LS2P_WALL_INTERCEPT = 0.25
+const _LS2P_WALL_SLOPE = 0.5
+
+function _ls2p_mesh(n = 16; T = Float64, periodic = (false, false))
+    return BlockTreeMesh(;
+        block_size = (n, n),
+        origin = (zero(T), zero(T)), extent = (one(T), one(T)),
+        periodic,
+    )
+end
+
+_ls2p_wall_levelset(x, y) = y - (_LS2P_WALL_INTERCEPT + _LS2P_WALL_SLOPE * x)
+_ls2p_phase_levelset(x, y) = y - 0.85
+
+function _ls2p_geometry(mesh; T = eltype(mesh.origin))
+    return GeometryField(
+        mesh,
+        (x, y) -> y - (T(_LS2P_WALL_INTERCEPT) + T(_LS2P_WALL_SLOPE) * x);
+        lipschitz = hypot(one(T), T(_LS2P_WALL_SLOPE)),
+    )
+end
+
+"""Open part of an axis-aligned face against a level set linear along it.
+Returns `(length, midpoint)`. A face lying in the solid returns length zero."""
+function _ls2p_open_segment(face, levelset)
+    center = face.center
+    half = face.area / 2
+    tangent = 3 - face.axis
+    lower = center[tangent] - half
+    upper = center[tangent] + half
+    value(t) = face.axis == 1 ? levelset(center[1], t) : levelset(t, center[2])
+    flow = value(lower)
+    fhigh = value(upper)
+    if flow >= 0 && fhigh >= 0
+        return face.area, center
+    elseif flow < 0 && fhigh < 0
+        return zero(face.area), center
+    end
+    crossing = lower + (upper - lower) * flow / (flow - fhigh)
+    open_lower, open_upper = flow >= 0 ? (lower, crossing) : (crossing, upper)
+    midpoint = face.axis == 1 ?
+        (center[1], (open_lower + open_upper) / 2) :
+        ((open_lower + open_upper) / 2, center[2])
+    return open_upper - open_lower, midpoint
+end
+
+"""Sample a component of `component[axis] * scalar` at the LS-STAG value
+point of every active face; constraints and covered faces are zero."""
+function _ls2p_sample(
+        mesh, geometry, operator, component, scalar, ::Type{T},
+    ) where {T}
+    values = zeros(T, length(mesh.faces))
+    for (index, face) in pairs(mesh.faces)
+        open_length, midpoint = _ls2p_open_segment(face, scalar)
+        active = open_length > T(64) * eps(T) * T(face.area) &&
+            geometry.face_dual_volumes[index] > zero(T)
+        active || continue
+        @inbounds values[index] =
+            T(component[face.axis]) * T(scalar(midpoint...))
+    end
+    for index in operator.dirichlet_faces
+        values[index] = zero(T)
+    end
+    return values
+end
+
+@inline function _ls2p_cell_index(ref, mesh)
+    nx, ny = mesh.block_size
+    return (ref.block - 1) * nx * ny + (ref.j - 1) * nx + ref.i
+end
+
+"""Rows of the strain map that couple both velocity components: the shear
+rows of the stress representation, as opposed to normal and wall rows."""
+function _ls2p_shear_rows(mesh, operator)
+    number_of_faces = length(mesh.faces)
+    xface = falses(number_of_faces)
+    yface = falses(number_of_faces)
+    for (index, face) in pairs(mesh.faces)
+        face.axis == 1 ? (xface[index] = true) : (yface[index] = true)
+    end
+    rows = Int[]
+    for row in 1:length(operator.stress_measures)
+        columns = findall(!iszero, operator.strain[row, :])
+        isempty(columns) && continue
+        any(xface[columns]) && any(yface[columns]) && push!(rows, row)
+    end
+    return rows
+end
+
+"""The normalized wall normal, tangent and signed distance field of the
+sloping-wall fixture."""
+function _ls2p_affine_fields()
+    weight = hypot(1.0, _LS2P_WALL_SLOPE)
+    normal = (-_LS2P_WALL_SLOPE / weight, 1.0 / weight)
+    tangent = (1.0 / weight, _LS2P_WALL_SLOPE / weight)
+    scalar(x, y) = normal[1] * x + normal[2] * (y - _LS2P_WALL_INTERCEPT)
+    return normal, tangent, scalar
+end
+
+"""Check the analytic normal and mixed-shear rows of an affine velocity that
+vanishes on the sloping wall. `inside(center)` decides whether a row's cell
+support is far enough from the domain walls. Returns the checked row counts."""
+function _ls2p_check_affine_rows(
+        mesh, geometry, operator;
+        inside, rtol = 1.0e-7, atol = 1.0e-8,
+    )
+    normal, tangent, scalar = _ls2p_affine_fields()
+    refs = TwoPhaseAMR._cell_references(mesh)
+    shear_rows = _ls2p_shear_rows(mesh, operator)
+    checked_cut = 0
+    checked_shear = 0
+    for component in (normal, tangent)
+        values = _ls2p_sample(
+            mesh, geometry, operator, component, scalar, Float64,
+        )
+        stresses = operator.strain * values
+        expected_normal = (
+            component[1] * normal[1], component[2] * normal[2],
+        )
+        expected_shear =
+            component[1] * normal[2] + component[2] * normal[1]
+        values_x = copy(values)
+        values_y = copy(values)
+        for (index, face) in pairs(mesh.faces)
+            face.axis == 1 ? (values_y[index] = 0.0) : (values_x[index] = 0.0)
+        end
+        strain_x = operator.strain * values_x
+        strain_y = operator.strain * values_y
+
+        for ref in refs
+            inside(cellcenter(mesh, ref.block, ref.i, ref.j)) || continue
+            fraction = TwoPhaseAMR._get(geometry.open_fraction, ref)
+            # Skip measure-zero slivers: their PLIC reconstruction error is
+            # not the signal this analytic-row test measures.
+            1.0e-4 < fraction < 1 - 1.0e-4 || continue
+            cell = _ls2p_cell_index(ref, mesh)
+            @test isapprox(
+                stresses[2 * (cell - 1) + 1], expected_normal[1];
+                rtol, atol,
+            )
+            @test isapprox(
+                stresses[2 * cell], expected_normal[2]; rtol, atol,
+            )
+            checked_cut += 1
+        end
+
+        for row in shear_rows
+            cells = findall(!iszero, operator.stress_interpolation[row, :])
+            isempty(cells) && continue
+            near = any(
+                cell -> begin
+                    fraction = TwoPhaseAMR._get(
+                        geometry.open_fraction, refs[cell],
+                    )
+                    1.0e-4 < fraction < 1 - 1.0e-4
+                end, cells,
+            )
+            near || continue
+            all(
+                cell -> begin
+                    ref = refs[cell]
+                    inside(cellcenter(mesh, ref.block, ref.i, ref.j))
+                end, cells,
+            ) || continue
+            # A shear row is the sum of both mixed derivatives. The split
+            # checks that neither component is lost and that their signs add.
+            @test isapprox(stresses[row], expected_shear; rtol, atol)
+            @test isapprox(
+                strain_x[row], component[1] * normal[2]; rtol, atol,
+            )
+            @test isapprox(
+                strain_y[row], component[2] * normal[1]; rtol, atol,
+            )
+            checked_shear += 1
+        end
+    end
+    return checked_cut, checked_shear
+end
+
+@testset "LS-STAG two-phase stress rows are exact at a sloping solid" begin
+    mesh = _ls2p_mesh()
+    geometry = _ls2p_geometry(mesh)
+    interface = InterfaceField(
+        mesh, _ls2p_phase_levelset; geometry, lipschitz = 1.0,
+    )
+    # Uniform phase viscosity: the affine field has a constant stress
+    # tensor, so its interior viscous force is exactly zero. Variable phase
+    # viscosity is covered by the assembly and refresh tests below.
+    operator = StaggeredDiffusionOperator(
+        interface; viscosity = (1.0, 1.0), boundary = NoSlip(),
+        closure = LSStagClosure(),
+    )
+    @test operator isa TwoPhaseAMR.VariableStaggeredDiffusionOperator
+    @test operator.closure isa LSStagClosure
+    @test operator.mesh === mesh
+
+    _, tangent, scalar = _ls2p_affine_fields()
+    h = 1.0 / mesh.block_size[1]
+    checked_cut, checked_shear = _ls2p_check_affine_rows(
+        mesh, geometry, operator;
+        inside = center ->
+        1.5h < center[1] < 1 - 1.5h &&
+            1.5h < center[2] < 1 - 1.5h,
+    )
+    @test checked_cut > 2
+    @test checked_shear > 2
+
+    # The independent open-part geometry agrees with the closure's apertures.
+    validated = 0
+    for (index, face) in pairs(mesh.faces)
+        open_length, _ = _ls2p_open_segment(face, _ls2p_wall_levelset)
+        aperture = geometry.aperture[index]
+        if aperture > 64eps()
+            @test isapprox(
+                open_length, aperture * face.area;
+                rtol = 1.0e-7, atol = 1.0e-8 * face.area,
+            )
+            validated += 1
+        else
+            @test open_length <= 1.0e-6 * face.area
+        end
+    end
+    @test validated > 10
+
+    stiffness = operator.stiffness
+    scale = maximum(abs, nonzeros(stiffness))
+    @test stiffness ≈ transpose(stiffness) rtol = 256eps() atol = 256eps() * scale
+    @test operator.strain_transpose == copy(transpose(operator.strain))
+    # E'WE is a sum of squares; only the accumulation of its rows separates
+    # the smallest eigenvalue from zero.
+    @test eigmin(Symmetric(Matrix(stiffness))) >= -1.0e-10 * scale
+    for probe_index in 1:4
+        probe = [
+            sin(0.73 * probe_index * index) + cos(0.31 * index^2)
+                for index in eachindex(operator.volumes)
+        ]
+        @test dot(probe, stiffness * probe) >=
+            -1.0e-10 * scale * dot(probe, probe)
+        # The LS rows must stay inside the symmetric E'WE representation, not
+        # be added as an unrelated non-conservative correction.
+        stress = operator.strain * probe
+        @test isapprox(
+            dot(probe, stiffness * probe),
+            dot(stress, operator.stress_weights .* stress);
+            rtol = 4096eps(),
+            atol = 4096eps() * scale * dot(probe, probe),
+        )
+    end
+
+    # A linear field with constant stress has zero viscous force. At the solid
+    # this is a nontrivial balance of the Green rows and the physical mixed
+    # shear rows, including their one-sided stationary-wall partners; it
+    # catches a missing mixed component, a wrong wall quotient or a lost
+    # factor of two near the cut cells.
+    force = stiffness * _ls2p_sample(
+        mesh, geometry, operator, tangent, scalar, Float64,
+    )
+    row_magnitude = abs.(transpose(stiffness)) *
+        abs.(_ls2p_sample(mesh, geometry, operator, tangent, scalar, Float64))
+    largest = maximum(row_magnitude)
+    nx, ny = mesh.block_size
+    checked_force = 0
+    for index in eachindex(force)
+        geometry.face_dual_volumes[index] > 0 || continue
+        index in operator.dirichlet_faces && continue
+        face = mesh.faces[index]
+        x, y = face.center
+        2h < x < 1 - 2h && 2h < y < 1 - 2h || continue
+        minus_ref, plus_ref = face.minus, face.plus
+        (
+            1 < minus_ref.i < nx && 1 < minus_ref.j < ny &&
+                1 < plus_ref.i < nx && 1 < plus_ref.j < ny
+        ) || continue
+        scale_force = max(row_magnitude[index], 1.0e-12 * largest)
+        @test abs(force[index]) <= 1.0e-7 * scale_force
+        checked_force += 1
+    end
+    @test checked_force > 20
+end
+
+@testset "LS-STAG two-phase affine rows on a fixed composite mesh" begin
+    mesh = BlockTreeMesh(;
+        base_mesh = (16, 16), block_size = (8, 8), max_level = 1,
+        periodic = (false, false),
+        refine = (key, origin, extent) ->
+        key.level == 0 && origin[1] >= 0.5,
+    )
+    geometry = _ls2p_geometry(mesh)
+    interface = InterfaceField(
+        mesh, _ls2p_phase_levelset; geometry, lipschitz = 1.0,
+    )
+    operator = StaggeredDiffusionOperator(
+        interface; viscosity = (2.5, 0.4), boundary = NoSlip(),
+        closure = LSStagClosure(),
+    )
+    @test operator.closure isa LSStagClosure
+    # Skip rows whose support reaches the domain boundary; the coarse block
+    # width bounds the distance on both levels.
+    spacing = maximum(maximum(block.spacing) for block in mesh.blocks)
+    checked_cut, checked_shear = _ls2p_check_affine_rows(
+        mesh, geometry, operator;
+        inside = center ->
+        2spacing < center[1] < 1 - 2spacing &&
+            2spacing < center[2] < 1 - 2spacing,
+        rtol = 1.0e-6, atol = 1.0e-7,
+    )
+    @test checked_cut > 2
+    @test checked_shear > 2
+end
+
+@testset "LS-STAG factorized two-phase action matches the assembled operator" begin
+    mesh = _ls2p_mesh()
+    geometry = _ls2p_geometry(mesh)
+    interface = InterfaceField(
+        mesh, _ls2p_phase_levelset; geometry, lipschitz = 1.0,
+    )
+    operator = StaggeredDiffusionOperator(
+        interface; viscosity = (2.5, 0.4), boundary = NoSlip(),
+        closure = LSStagClosure(),
+    )
+    density = TwoPhaseAMR.mixture_density(interface, (1.0, 0.25))
+    inertia = density .* operator.volumes
+    dt = 0.05
+    action = TwoPhaseAMR.FactorizedVariableDiffusionOperator(
+        operator, inertia, dt,
+    )
+    matrix = Diagonal(inertia) + (dt / 2) * operator.stiffness
+    x = [sin(0.7index) for index in eachindex(operator.volumes)]
+    y = [cos(0.3index) for index in eachindex(operator.volumes)]
+    action_x = similar(x)
+    action_y = similar(y)
+    mul!(action_x, action, x)
+    mul!(action_y, action, y)
+    @test action_x ≈ matrix * x rtol = 256eps() atol = 256eps() * norm(matrix * x)
+    symmetry_scale = max(
+        norm(x) * norm(action_y), norm(action_x) * norm(y), 1.0,
+    )
+    @test abs(dot(x, action_y) - dot(action_x, y)) <=
+        512eps() * symmetry_scale
+    @test dot(x, action_x) > 0
+end
+
+@testset "LS-STAG phase relabel and viscosity refresh around a solid" begin
+    mesh = _ls2p_mesh()
+    geometry = _ls2p_geometry(mesh)
+    liquid_below = InterfaceField(
+        mesh, _ls2p_phase_levelset; geometry, lipschitz = 1.0,
+    )
+    liquid_above = InterfaceField(
+        mesh, (x, y) -> -_ls2p_phase_levelset(x, y);
+        geometry, lipschitz = 1.0,
+    )
+    phases = (2.5, 0.4)
+    original = StaggeredDiffusionOperator(
+        liquid_below; viscosity = phases, boundary = NoSlip(),
+        closure = LSStagClosure(),
+    )
+    swapped = StaggeredDiffusionOperator(
+        liquid_above; viscosity = reverse(phases), boundary = NoSlip(),
+        closure = LSStagClosure(),
+    )
+    @test original.closure isa LSStagClosure
+    @test swapped.closure isa LSStagClosure
+    # Relabelling the phases and exchanging their viscosities is a symmetry of
+    # the assembly; the harmonic mixture is invariant under `c -> 1-c`. The two
+    # fractions come from independent level-set quadratures (atol 1e-10), so
+    # the comparison is quadrature-limited rather than round-off-limited.
+    @test original.strain == swapped.strain
+    @test original.stress_measures ≈ swapped.stress_measures rtol = 64eps()
+    @test original.stress_weights ≈ swapped.stress_weights rtol = 1.0e-8
+    @test original.stiffness ≈ swapped.stiffness rtol = 1.0e-8
+
+    # Moving the interface then refreshing the mixture must be identical to a
+    # fresh assembly, including the LS wall rows in cut cells.
+    initialize!(liquid_below, (x, y) -> y - 0.84; lipschitz = 1.0)
+    TwoPhaseAMR._update_dynamic_viscosity!(original, liquid_below, phases)
+    fresh = StaggeredDiffusionOperator(
+        liquid_below; viscosity = phases, boundary = NoSlip(),
+        closure = LSStagClosure(),
+    )
+    @test original.strain == fresh.strain
+    @test original.stress_measures == fresh.stress_measures
+    # The refresh stores log-viscosity and recomputes the weights in place;
+    # a fresh assembly takes the same logarithms through the public mixture.
+    @test original.cell_work ≈ fresh.cell_work rtol = 1.0e-10
+    @test original.stress_weights ≈ fresh.stress_weights rtol = 1.0e-10
+    @test original.stiffness ≈ fresh.stiffness rtol = 1.0e-10
+    @test original.closure isa LSStagClosure
+
+    velocity = FaceVelocity(
+        mesh,
+        (x, y, time, axis) -> axis == 1 ? sinpi(2x) * cospi(2y) :
+            -cospi(2x) * sinpi(2y),
+    )
+    refreshed_force = FaceVelocity(mesh)
+    fresh_force = FaceVelocity(mesh)
+    diffusion!(refreshed_force, velocity, original)
+    diffusion!(fresh_force, velocity, fresh)
+    @test refreshed_force.interior ≈ fresh_force.interior rtol = 1.0e-9 atol = 1.0e-10
+
+    # The solver matrix and the factorized action are refreshed from the same
+    # in-place stress weights.
+    density = TwoPhaseAMR.mixture_density(liquid_below, (1.0, 0.25))
+    dt = 0.02
+    solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        original, density, dt; preconditioner = nothing,
+    )
+    TwoPhaseAMR._update_variable_diffusion_solver!(
+        solver, original, density, dt,
+    )
+    reference = Diagonal(solver.inertia) + (dt / 2) * original.stiffness
+    @test solver.matrix ≈ reference rtol = 64eps()
+end
+
+@testset "LS-STAG two-phase variable stress in Float32" begin
+    T = Float32
+    mesh = _ls2p_mesh(12; T)
+    geometry = GeometryField(
+        mesh,
+        (x, y) -> y - (T(_LS2P_WALL_INTERCEPT) + T(_LS2P_WALL_SLOPE) * x);
+        lipschitz = hypot(one(T), T(_LS2P_WALL_SLOPE)),
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> y - T(0.85); geometry, lipschitz = one(T),
+    )
+    operator = StaggeredDiffusionOperator(
+        interface; viscosity = (T(2.5), T(0.4)), boundary = NoSlip(),
+        closure = LSStagClosure(),
+    )
+    @test operator.closure isa LSStagClosure
+    @test eltype(operator.stiffness) == T
+    @test eltype(operator.volumes) == T
+    @test eltype(operator.stress_weights) == T
+    @test isapprox(
+        operator.stiffness, transpose(operator.stiffness);
+        rtol = T(32) * eps(T),
+    )
+    scale = maximum(abs, nonzeros(operator.stiffness))
+    x = T[sin(T(0.7) * index) for index in eachindex(operator.volumes)]
+    stress = operator.strain * x
+    @test isapprox(
+        dot(x, operator.stiffness * x),
+        dot(stress, operator.stress_weights .* stress);
+        rtol = T(1024) * eps(T),
+        atol = T(1024) * eps(T) * scale * dot(x, x),
+    )
+    @test eigmin(Symmetric(Matrix(operator.stiffness))) >=
+        -T(4096) * eps(T) * scale
+
+    density = TwoPhaseAMR.mixture_density(interface, (one(T), T(0.25)))
+    inertia = density .* operator.volumes
+    dt = T(0.05)
+    action = TwoPhaseAMR.FactorizedVariableDiffusionOperator(
+        operator, inertia, dt,
+    )
+    matrix = Diagonal(inertia) + (dt / 2) * operator.stiffness
+    action_x = similar(x)
+    mul!(action_x, action, x)
+    @test isapprox(
+        action_x, matrix * x;
+        rtol = T(512) * eps(T),
+        atol = T(512) * eps(T) * norm(matrix * x),
+    )
+
+    # The Green normal row is the analytic derivative for the affine field,
+    # sampled at the open midpoints. Float32 reconstruction and round-off
+    # broaden the tolerance, but an O(1) sign or factor error is still caught.
+    weight = hypot(one(T), T(_LS2P_WALL_SLOPE))
+    normal = (-T(_LS2P_WALL_SLOPE) / weight, one(T) / weight)
+    scalar(x, y) = normal[1] * x +
+        normal[2] * (y - T(_LS2P_WALL_INTERCEPT))
+    values = _ls2p_sample(mesh, geometry, operator, normal, scalar, T)
+    stresses = operator.strain * values
+    refs = TwoPhaseAMR._cell_references(mesh)
+    nx, ny = mesh.block_size
+    checked = 0
+    for ref in refs
+        1 < ref.i < nx && 1 < ref.j < ny || continue
+        fraction = TwoPhaseAMR._get(geometry.open_fraction, ref)
+        T(1.0e-4) < fraction < 1 - T(1.0e-4) || continue
+        cell = _ls2p_cell_index(ref, mesh)
+        @test isapprox(
+            stresses[2 * (cell - 1) + 1], normal[1]^2;
+            rtol = T(2) * T(1.0e-3), atol = T(1.0e-3),
+        )
+        @test isapprox(
+            stresses[2 * cell], normal[2]^2;
+            rtol = T(2) * T(1.0e-3), atol = T(1.0e-3),
+        )
+        checked += 1
+    end
+    @test checked > 2
+end
+
+@testset "LS-STAG coarse hierarchy keeps the closure and matches a rebuild" begin
+    mesh = BlockTreeMesh(;
+        base_mesh = (16, 16), block_size = (4, 4), max_level = 1,
+        periodic = (false, false),
+        refine = (key, origin, extent) -> key.level == 0 && origin[1] >= 0.5,
+    )
+    geometry = _ls2p_geometry(mesh)
+    interface = InterfaceField(
+        mesh, _ls2p_phase_levelset; geometry, lipschitz = 1.0,
+    )
+    operator = StaggeredDiffusionOperator(
+        interface; viscosity = (2.5, 0.4), boundary = NoSlip(),
+        closure = LSStagClosure(),
+    )
+    density = TwoPhaseAMR.mixture_density(interface, (1.0, 0.25))
+    dt = 0.02
+    multigrid = MultigridOptions(coarse_size = 32)
+    solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        operator, density, dt;
+        multigrid, preconditioner_options = (; geometry),
+    )
+    hierarchy = solver.preconditioner
+    @test hierarchy isa TwoPhaseAMR.TreeVariableDiffusionPreconditioner
+    @test length(hierarchy.operators) > 1
+    @test hierarchy.local_relaxation
+    # Every rediscretized level consumes the fine operator's closure, not the
+    # legacy default.
+    @test all(
+        level_operator -> level_operator.closure isa LSStagClosure,
+        hierarchy.operators,
+    )
+    @test all(
+        level_operator -> isapprox(
+            level_operator.stiffness,
+            transpose(level_operator.stiffness);
+            rtol = 256eps(),
+        ),
+        hierarchy.operators,
+    )
+    # The solid is present on the coarse levels: their open volumes differ
+    # from the uncut mesh cache.
+    @test any(
+        level_operator ->
+        level_operator.volumes != level_operator.mesh.face_dual_volumes,
+        hierarchy.operators[2:end],
+    )
+
+    fresh = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        operator, density, dt;
+        multigrid, preconditioner_options = (; geometry),
+    )
+    rebuilt = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        operator, density, dt;
+        multigrid, preconditioner_options = (; geometry),
+        reuse_preconditioner = hierarchy,
+    )
+    @test length(rebuilt.preconditioner.operators) ==
+        length(fresh.preconditioner.operators)
+    for (reused, reference) in zip(
+            rebuilt.preconditioner.operators, fresh.preconditioner.operators,
+        )
+        @test reused.closure isa LSStagClosure
+        @test reused.volumes == reference.volumes
+        @test reused.stiffness ≈ reference.stiffness rtol = 64eps()
+    end
+    for (reused, reference) in zip(
+            rebuilt.preconditioner.levels, fresh.preconditioner.levels,
+        )
+        @test reused.matrix ≈ reference.matrix rtol = 64eps()
+    end
+
+    # The hierarchy result equals the direct shifted solve, so the closure is
+    # exercised end to end and not only during construction.
+    source = FaceVelocity(
+        mesh,
+        (x, y, time, axis) -> axis == 1 ? sinpi(2x) * cospi(2y) :
+            -cospi(2x) * sinpi(2y),
+    )
+    source.interior[operator.dirichlet_faces] .= 0.0
+    reference_rhs = solver.inertia .* source.interior -
+        (dt / 2) * (operator.stiffness * source.interior)
+    TwoPhaseAMR._zero_variable_diffusion_constraints!(reference_rhs, operator)
+    reference = (
+        Diagonal(solver.inertia) + (dt / 2) * operator.stiffness
+    ) \ reference_rhs
+    for current in (rebuilt, fresh)
+        destination = FaceVelocity(mesh)
+        implicit_midpoint_diffusion!(
+            destination, source, operator, dt, current;
+            density, tolerance = 1.0e-10, max_cycles = 500,
+        )
+        @test current.stats.converged
+        @test destination.interior ≈ reference rtol = 1.0e-7 atol = 1.0e-9
+    end
+
+    # A cached hierarchy of the other closure must not be reused. Without a
+    # solid the coarse sparsity is closure independent, so only the explicit
+    # closure key prevents an LS solve from running on WallDistance levels.
+    fluid = InterfaceField(mesh, _ls2p_phase_levelset)
+    fluid_density = TwoPhaseAMR.mixture_density(fluid, (1.0, 0.25))
+    legacy = StaggeredDiffusionOperator(
+        fluid; viscosity = (2.5, 0.4), boundary = NoSlip(),
+        closure = WallDistanceClosure(),
+    )
+    legacy_solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        legacy, fluid_density, dt; multigrid,
+    )
+    ls_fluid = StaggeredDiffusionOperator(
+        fluid; viscosity = (2.5, 0.4), boundary = NoSlip(),
+        closure = LSStagClosure(),
+    )
+    ls_solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        ls_fluid, fluid_density, dt;
+        multigrid, reuse_preconditioner = legacy_solver.preconditioner,
+    )
+    @test typeof(legacy_solver.preconditioner.operators[1].closure) ===
+        WallDistanceClosure
+    @test all(
+        level_operator -> level_operator.closure isa LSStagClosure,
+        ls_solver.preconditioner.operators,
+    )
+    # A refresh cannot silently retarget an LS hierarchy to the other closure.
+    @test_throws ArgumentError TwoPhaseAMR._update_variable_diffusion_solver!(
+        ls_solver, legacy, fluid_density, dt,
+    )
+end
+
+@testset "LS-STAG two-phase slip at an embedded wall" begin
+    mesh = _ls2p_mesh(16; periodic = (true, false))
+    wall = 4.0 / 16.0
+    geometry = GeometryField(mesh, (x, y) -> y - wall; lipschitz = 1.0)
+    viscosity = CellField(mesh; init = 1.0)
+    no_slip = TwoPhaseAMR._staggered_diffusion_operator(
+        mesh; viscosity, boundary = NoSlip(), geometry,
+        closure = LSStagClosure(),
+    )
+    free_slip = TwoPhaseAMR._staggered_diffusion_operator(
+        mesh; viscosity, boundary = FreeSlip(), geometry,
+        closure = LSStagClosure(),
+    )
+    @test no_slip.closure isa LSStagClosure
+    @test free_slip.closure isa LSStagClosure
+    @test no_slip.volumes == free_slip.volumes
+    @test no_slip.dirichlet_faces == free_slip.dirichlet_faces
+
+    velocity = FaceVelocity(
+        mesh, (x, y, time, axis) -> axis == 1 ? 1.0 : 0.0,
+    )
+    for index in eachindex(velocity.interior)
+        geometry.face_dual_volumes[index] > 0 ||
+            (velocity.interior[index] = 0.0)
+    end
+    velocity.interior[no_slip.dirichlet_faces] .= 0.0
+
+    no_tendency = FaceVelocity(mesh)
+    free_tendency = FaceVelocity(mesh)
+    diffusion!(no_tendency, velocity, no_slip)
+    diffusion!(free_tendency, velocity, free_slip)
+    # A constant field tangential to a free-slip wall has no strain at all.
+    @test maximum(abs, free_tendency.interior) <= 256eps()
+    @test any(!iszero, no_tendency.interior)
+    difference = no_slip.stiffness - free_slip.stiffness
+    @test difference ≈ transpose(difference) rtol = 256eps()
+    @test eigmin(Symmetric(Matrix(difference))) >=
+        -1024eps() * maximum(abs, nonzeros(difference))
+    @test dot(velocity.interior, no_slip.stiffness * velocity.interior) > 0
+    @test dot(velocity.interior, free_slip.stiffness * velocity.interior) <=
+        256eps()
+    @test dot(velocity.interior, difference * velocity.interior) > 0
+
+    h = 1.0 / 16.0
+    drag_face = findfirst(
+        face -> face.axis == 1 &&
+            isapprox(face.center[2], wall + h / 2; atol = 64eps()),
+        mesh.faces,
+    )
+    @test !isnothing(drag_face)
+    @test no_tendency.interior[drag_face] < 0
+end
+
+@testset "LS-STAG tilted FreeSlip keeps a rigid tangent local null mode" begin
+    mesh = _ls2p_mesh()
+    geometry = _ls2p_geometry(mesh)
+    interface = InterfaceField(
+        mesh, _ls2p_phase_levelset; geometry, lipschitz = 1.0,
+    )
+    normal, tangent, _ = _ls2p_affine_fields()
+    @test isapprox(
+        normal[1] * tangent[1] + normal[2] * tangent[2], 0.0;
+        atol = 128eps(),
+    )
+    free_slip = StaggeredDiffusionOperator(
+        interface; viscosity = (1.0, 1.0), boundary = FreeSlip(),
+        closure = LSStagClosure(),
+    )
+    no_slip = StaggeredDiffusionOperator(
+        interface; viscosity = (1.0, 1.0), boundary = NoSlip(),
+        closure = LSStagClosure(),
+    )
+    @test free_slip.closure isa LSStagClosure
+    @test no_slip.closure isa LSStagClosure
+    @test free_slip.volumes == no_slip.volumes
+    @test free_slip.dirichlet_faces == no_slip.dirichlet_faces
+
+    # A constant velocity tangent to the planar wall, hence a steady rigid
+    # tangential motion. A free tangential wall trace leaves it strain-free;
+    # only the domain walls it crosses can sense it, so the local check stays
+    # two cells inside the box.
+    velocity = zeros(length(mesh.faces))
+    for (index, face) in pairs(mesh.faces)
+        # Positive dual volume does not imply an open face: a velocity
+        # degree at a zero-length aperture is only the isolated algebraic
+        # extension, not a sample of the fluid's rigid translation.
+        geometry.aperture[index] > 0 && (velocity[index] = tangent[face.axis])
+    end
+    velocity[free_slip.dirichlet_faces] .= 0.0
+    h = 1.0 / mesh.block_size[1]
+    inside(center) =
+        1.5h < center[1] < 1 - 1.5h && 1.5h < center[2] < 1 - 1.5h
+
+    free_force = free_slip.stiffness * velocity
+    free_magnitude = abs.(transpose(free_slip.stiffness)) * abs.(velocity)
+    free_largest = maximum(free_magnitude)
+    closed = findall(iszero, geometry.aperture)
+    @test !isempty(closed)
+    @test all(iszero, free_force[closed])
+    checked = 0
+    for index in eachindex(free_force)
+        geometry.face_dual_volumes[index] > 0 || continue
+        index in free_slip.dirichlet_faces && continue
+        face = mesh.faces[index]
+        inside(face.center) || continue
+        scale = max(free_magnitude[index], 1.0e-12 * free_largest)
+        @test abs(free_force[index]) <= 1.0e-9 * scale
+        checked += 1
+    end
+    @test checked > 20
+
+    # The same rigid tangent motion is damped by the no-slip tilted wall, so
+    # the free-slip elimination is not vacuous.
+    no_velocity = copy(velocity)
+    no_velocity[no_slip.dirichlet_faces] .= 0.0
+    no_force = no_slip.stiffness * no_velocity
+    no_magnitude = abs.(transpose(no_slip.stiffness)) * abs.(no_velocity)
+    no_largest = maximum(no_magnitude)
+    damped = 0
+    for index in eachindex(no_force)
+        geometry.face_dual_volumes[index] > 0 || continue
+        index in no_slip.dirichlet_faces && continue
+        inside(mesh.faces[index].center) || continue
+        abs(no_force[index]) >
+            1.0e-6 * max(no_magnitude[index], 1.0e-12 * no_largest) ||
+            continue
+        damped += 1
+    end
+    @test damped > 0
+end
+
+# Manufacture the exact volume fractions AND exact PLICs of a periodic
+# planar band. This isolates the viscous identity from the error in estimating
+# a normal from neighboring fractions across a 2:1 transition.
+function _ls2p_exact_slip_band(mesh, slope, offset)
+    refs = TwoPhaseAMR._cached_cell_references!(TwoPhaseAMR.CellRef[], mesh)
+    function plane(ref)
+        x, y = cellcenter(mesh, ref.block, ref.i, ref.j)
+        d = mod(y - slope * x - offset + 0.25, 0.5) - 0.25
+        dx, dy = mesh.blocks[ref.block].spacing
+        side = copysign(1.0, d)
+        return -side * slope * dx, side * dy, 0.125 - abs(d)
+    end
+    fractions = CellField(mesh)
+    for ref in refs
+        TwoPhaseAMR._set!(fractions, TwoPhaseAMR._plane_fraction(plane(ref)...), ref)
+    end
+    solid = InterfaceField(fractions)
+    for ref in refs
+        0 < TwoPhaseAMR._get(fractions, ref) < 1 || continue
+        nx, ny, a = plane(ref)
+        norm = hypot(nx, ny)
+        TwoPhaseAMR._set!(solid.normal_x, nx / norm, ref)
+        TwoPhaseAMR._set!(solid.normal_y, ny / norm, ref)
+        TwoPhaseAMR._set!(solid.intercept, a / norm, ref)
+    end
+    return GeometryField(solid)
+end
+
+@testset "Uncondensed LS-STAG FreeSlip rows reproduce the PLIC tangent" begin
+    for composite in (false, true), (slope, offset) in ((0.5, 0.0), (-0.5, 1 / 128))
+        # Straight parallel walls on a torus: every cut cell, including ones
+        # at the box seam and at hanging vertices, admits a rigid tangent.
+        mesh = BlockTreeMesh(;
+            base_mesh = (32, 32), block_size = (8, 8), max_level = 1,
+            periodic = (true, true),
+            refine = (key, origin, _) -> composite && key.level == 0 && origin[1] >= 0.5,
+        )
+        geometry = _ls2p_exact_slip_band(mesh, slope, offset)
+        phase = InterfaceField(mesh, (x, _) -> abs(x - 0.5) - 0.25; geometry, lipschitz = 1.0)
+        noslip = StaggeredDiffusionOperator(
+            phase; viscosity = (1.0, 0.3), boundary = NoSlip(), closure = LSStagClosure(),
+        )
+
+        # Both boundary types start with the same unprojected normal rows.
+        # Assemble the actual slip shear/vertex rows, but do not apply the
+        # local wall-velocity elimination: its input b is what we check.
+        n = ncells(mesh)
+        measures = noslip.stress_measures[1:(2n)]
+        construction = TwoPhaseAMR.VariableDiffusionConstructionCache(Float64)
+        refs = TwoPhaseAMR._cached_cell_references!(construction.cell_references, mesh)
+        topology = TwoPhaseAMR._ls_stress_topology!(
+            TwoPhaseAMR._LSStressCache(Float64), geometry, FreeSlip(),
+        )
+        sites = Tuple{Int, Int, NTuple{3, Float64}}[]
+        for (c, ref) in pairs(refs)
+            slip = TwoPhaseAMR._ls_stress_cell!(topology, geometry, ref, c, measures, construction, FreeSlip())
+            isnothing(slip) || push!(sites, (c, slip...))
+        end
+        @test length(sites) == count(ref -> 0 < TwoPhaseAMR._get(geometry.open_fraction, ref) < 1, refs)
+        @test !isempty(sites)
+        shear = sparse(
+            construction.strain_rows, construction.strain_columns, construction.strain_values,
+            length(measures), length(mesh.faces),
+        )
+        strain = vcat(noslip.strain[1:(2n), :], shear[(2n + 1):end, :])
+        basis = zeros(length(mesh.faces), 2)
+        for (i, f) in pairs(mesh.faces)
+            geometry.aperture[i] > 0 && (basis[i, f.axis] = 1)
+        end
+        response = strain * basis
+        magnitude = abs.(strain) * basis
+        row_max = zeros(3)
+        max_scaled = 0.0
+        tangent = (1.0, slope) ./ hypot(1.0, slope)
+        for (c, wall, b) in sites
+            ref = refs[c]
+            # One constant tangent throughout the mesh. The scalar wall
+            # velocity (and hence its column b) points the other way on
+            # the opposite side of the band.
+            orient = -sign(TwoPhaseAMR._get(geometry.solid.normal_y, ref))
+            for (j, r) in pairs((2c - 1, 2c, wall))
+                residual = abs(tangent[1] * response[r, 1] + tangent[2] * response[r, 2] - orient * b[j])
+                scale = max(1.0, abs(b[j]), abs(tangent[1]) * magnitude[r, 1] + abs(tangent[2]) * magnitude[r, 2])
+                row_max[j] = max(row_max[j], residual)
+                max_scaled = max(max_scaled, residual / scale)
+                @test residual <= 128eps() * scale
+            end
+        end
+        # The shared shear derivative of either Cartesian constant must be
+        # zero before any cut-cell condensation or cancellation in E'WE.
+        shared = filter(!iszero, topology.vertex_rows)
+        @test !isempty(shared)
+        for r in shared, axis in 1:2
+            @test abs(response[r, axis]) <= 128eps() * max(1.0, magnitude[r, axis])
+        end
+        println(
+            "Uncondensed E*u_t=b: composite=$composite slope=$slope cut_cells=$(length(sites)) ",
+            "shared_vertices=$(length(shared)) max_abs_normal_shear=$(Tuple(row_max)) ",
+            "max_scaled=$max_scaled",
+        )
+    end
 end

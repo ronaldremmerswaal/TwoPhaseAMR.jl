@@ -90,7 +90,11 @@ end
 @testset "Linear jump inference: smooth shear across tilted and curved interfaces" begin
     # A single-valued, solenoidal shear u = U(y) with a resolved layer is a
     # fixed point of the exact projection. The constant inference creates a
-    # jump of order 2U'h; the linear one of order 2h³U'''.
+    # jump of order 2U'h; the linear one of order 2h³U'''. On the wavy and the
+    # slope-0.06 interfaces the rows see crossing ratios w/U ≤ 0.028 (largest
+    # at n = 128), below the lower end 1/32 of the crossing-speed ramp, so they
+    # keep θ = 1; with the lower end 1/48 the slope-0.06 jump at n = 128 rises
+    # from 0.0076 to 0.017 and the comparison with the constant rows fails.
     delta = 0.05
     shear = (x, y, axis, phase) -> axis == 1 ? 0.5tanh((y - 0.5) / delta) : 0.0
     for (graph, window, crossing) in (
@@ -119,11 +123,11 @@ end
         if crossing
             # NUMERICS CONCERN (#171): the shear u = U(y) e_x crosses the
             # interface of slope 0.3 at the normal speed |U n_x|, i.e. at
-            # w/U ≈ |n_x| = 0.29 > 3/16 relative to the local mixture speed:
+            # w/U ≈ |n_x| = 0.29 > 3/32 relative to the local mixture speed:
             # kinematically this flow does move the interface through the
             # faces, so the crossing-speed limiter correctly sees a crossing
-            # and falls back to the one-donor rule. The created jump is 0.40,
-            # 0.25, 0.155 at n = 32, 64, 128 (one-donor 0.50, 0.29, 0.152),
+            # and falls back to the one-donor rule. The created jump is 0.60,
+            # 0.29, 0.171 at n = 32, 64, 128 (published rows 0.50, 0.29, 0.152),
             # first order, where the unlimited extrapolation gives 0.26,
             # 0.059, 0.010. The limiter depends on the crossing speed only and
             # cannot tell a smooth field (where the extrapolation is safe in a
@@ -215,13 +219,13 @@ end
 @testset "Linear jump inference: crossing-speed limiter" begin
     # A uniform translation u = (1, 0) of both phases through a circle: the
     # interface crosses each face at w/U = |n_x|, so the slope weight is one
-    # minus the smoothstep of |n_x| over the ramp [1/16, 3/16]; at rest every
+    # minus the smoothstep of |n_x| over the ramp [1/32, 3/32]; at rest every
     # row keeps the linear extrapolation. Exchanging the phase labels (the
     # complement of the circle, densities swapped) gives the same weights.
     n = 32
     mesh = BlockTreeMesh(; base_mesh = (n, n), block_size = (8, 8), periodic = (true, true))
     lower, upper = CJI._CMDGFM_CROSSING_RAMP
-    @test (lower, upper) == (1 / 16, 3 / 16)
+    @test (lower, upper) == (1 / 32, 3 / 32)
     ramp(r) = (s = clamp((r - lower) / (upper - lower), 0.0, 1.0); 1 - s^2 * (3 - 2s))
     weights = map((1, -1)) do label
         interface = InterfaceField(
@@ -268,7 +272,7 @@ end
     # 1000, σ = 0.2, inviscid, n = 32, t = 1. Without the crossing-speed limiter
     # the second donors left behind by the sweeping interface form a double
     # integrator and max|u - U| grows to 1.09 (3.85 at n = 64); the published
-    # rows give 0.180, the limited linear inference 0.162 (#171).
+    # rows give 0.176, the limited linear inference 0.133.
     function drift(inference)
         n = 32
         mesh = BlockTreeMesh(; block_size = (8, 8), base_mesh = (n, n), periodic = (true, false))

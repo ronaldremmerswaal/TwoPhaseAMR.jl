@@ -110,6 +110,7 @@ function TwoPhaseFlowWorkspace(
         multigrid::MultigridOptions = MultigridOptions(),
         viscosity_averaging::AbstractViscosityAveraging =
             HarmonicViscosityAveraging(),
+        closure = WallDistanceClosure(),
         diffusion_cache = VariableDiffusionConstructionCache(T),
         reuse_diffusion = nothing,
         reuse_diffusion_preconditioner = nothing,
@@ -118,11 +119,17 @@ function TwoPhaseFlowWorkspace(
         reuse_workspace = nothing,
     ) where {T, M}
     field = model.interface
+    # Reuse is keyed to the cut-cell closure: a cached operator or hierarchy
+    # built for the other closure would alias coarse rows assembled the other
+    # way.
+    reusable = isnothing(reuse_diffusion) ||
+        typeof(reuse_diffusion.closure) === typeof(closure)
     diffusion = all(iszero, model.dynamic_viscosity) ? nothing :
         _staggered_diffusion_operator(
             field; viscosity = model.dynamic_viscosity, boundary,
             construction_cache = diffusion_cache,
-            reuse = reuse_diffusion, averaging = viscosity_averaging,
+            reuse = reusable ? reuse_diffusion : nothing,
+            averaging = viscosity_averaging, closure,
         )
     density = if reuse_density isa Vector{T}
         resize!(reuse_density, length(field.mesh.faces))
@@ -145,8 +152,8 @@ function TwoPhaseFlowWorkspace(
             preconditioner = diffusion_preconditioner,
             preconditioner_options = diffusion_preconditioner_options,
             multigrid,
-            reuse_preconditioner = reuse_diffusion_preconditioner,
-            reuse_solver = reuse_diffusion_solver,
+            reuse_preconditioner = reusable ? reuse_diffusion_preconditioner : nothing,
+            reuse_solver = reusable ? reuse_diffusion_solver : nothing,
         )
     end
     # The same WY scratch serves the shared- and intrinsic-velocity paths.

@@ -269,7 +269,8 @@ exactly. A node whose centre lies inside the solid gets the same positive
 conductance, hence the opposite row contribution to the one its open dual
 volume requires: it has no fluid on the wall side, and prescribing it would
 remove a face that the cut-cell projection updates. Its rows therefore stay
-first order, which is the remaining defect of \issue{110}.
+first order with wall distance (\issue{110}); the open-midpoint LS-STAG
+closure of \cref{sec:viscosity:lsstag} removes this defect.
 Where a grid-aligned wall coincides with a normal component face, that face is
 prescribed zero and removed from the diffusion unknowns. The mid-plane contact
 of the adjacent cell is fully open there and carries the whole Dirichlet flux
@@ -388,6 +389,126 @@ and \testsym{test/operators/staggered_diffusion.jl}{inflow wall-contact closure 
 and \testsym{test/operators/staggered_diffusion.jl}{orphan transverse rows converge on a manufactured field (#99)},
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{Grid-aligned embedded walls have the cut-wall limit}
 (\issue{79}, also for the operator of \cref{sec:viscosity:stress}).
+\end{implnote}
+
+\subsection{LS-STAG closure from PLIC data}\label{sec:viscosity:lsstag}
+With \code{closure=LSStagClosure()} of the operator, or
+\code{NavierStokesOptions(embedded_viscous_closure=LSStagClosure())} for a
+flow, the rows of the faces next to cut cells are replaced by the LS-STAG
+closure of Cheny and Botella~\cite{cheny2010} (\issue{110}, \issue{13}),
+assembled from the PLIC data of the \apitype{GeometryField}. The explicit
+\code{WallDistanceClosure()} selects the legacy closure described above.
+For a single-phase component $k$ the \emph{replaced faces} are the faces of the cut cells (solid fraction
+strictly between zero and one), their neighbours on the same grid line (the
+line $x_k=\text{const}$ through the face) and, recursively, the fine faces
+whose grid line ends at a coarse cell with a replaced face; a cell with a
+replaced face is a \emph{Green cell}. Every connection with a replaced end,
+every normal connection inside a Green cell, and the wall and boundary
+connections of replaced faces are removed and replaced by the terms below.
+The unknowns, the mass $\dualvolmat$ (the open staggered volumes), the
+divergence and the gradient are unchanged, and on uncut cells of one level
+both closures give the same two-point terms, so the seam between them is
+consistent.
+
+\emph{Values.} A face with an open staggered volume and an aperture
+$a_f>10^{-10}$ is open. Its open part has the length $\ell_f=a_f\meas{f}$ and
+lies at the end that the solid planes of its cut cells leave open: the first
+cut cell whose own trace of the face is partial decides by the sign of the
+tangential component of its normal. The value $\velo_f$ is the velocity at
+the midpoint $\mathbf m_f$ of the open part, which lies in the fluid also
+when the face centre does not.
+
+\emph{Normal stress.} A Green cell $c$ with open area $\abs{c}$ has the Green
+gradient and energy
+\begin{equation}\label{eq:viscosity:lsstag}
+  G_c\velo=\frac{1}{\abs{c}}\sum_{f\in\partial c}o_{c,f}\,\ell_f\,\velo_f ,
+  \qquad
+  E^{\mathrm n}_c=\abs{c}\,\roundpar{G_c\velo}^2 ,
+\end{equation}
+with $o_{c,f}=\pm1$ the side of $f$ and the wall value zero; $G_c$ is the
+open divergence applied to one component. A side of $c$ on the domain
+boundary enters with its prescribed normal velocity as a source; an outflow or
+zero-gradient side leaves the cell without a normal term, as before. The wall
+closes the sum: its reaction $o_{c,f}\ell_f\sum_{f'}o_{c,f'}\ell_{f'}/\abs{c}$
+per unit $\velo_f$ is stored with the wall reactions and enters the viscous
+force on the solid.
+
+\emph{Shear stress.} Along the grid line of $f$, the half control volume of
+$f$ in each adjacent cell owns half of the open length of the lower and upper
+edge of its strip in that cell, $T^{\mathrm{lo}}$ and $T^{\mathrm{hi}}$ (the
+bisection by measure that also defines the open volumes). An open end of $f$
+that meets an open end of the next face $f'$ on the line is a link with
+area $A=\sum_{\text{sides}}\min(T^{\mathrm{hi}}_f,T^{\mathrm{lo}}_{f'})$ and
+energy $A\,d\,((\velo_{f'}-\velo_f)/d)^2$, $d$ the distance of the two
+midpoints. A line that ends at a coarse cell takes the derivative along the
+line that is exact for affine functions through $\mathbf m_f$ and the faces of
+the coarse cell on the two neighbouring lines (a closed face contributes a
+point of the wall with value zero, a domain boundary its prescribed normal
+velocity) with the energy $A\abs{w_f}^{-1}(D\velo)^2$, $w_f$ the weight of
+$\velo_f$, so the partners receive their share of the flux. The wall, or the
+domain boundary at an open end on it, carries what the links leave of the
+projected extent $\max(T^{\mathrm{lo}},T^{\mathrm{hi}})$ of each half control
+volume, by the one-sided quotient to the wall value at $\delta=\ell_f/2$ at a
+closed end and at the distance along the line to the PLIC plane beyond an open
+end. Every half control volume is then closed, $\oint n_t\,\mathrm dS=0$, and
+an affine velocity that vanishes on the wall has zero residual (largest
+relative residual $10^{-10}$ in the tests). As in~\cref{eq:viscosity:cut} the
+embedded quotients are omitted for \code{FreeSlip()}. A face of a cut cell
+without an open part but with an open volume (next to a covered cell) keeps the
+wall value through the diagonal $\stagvol{f}(2/h_k^2+2/h_t^2)$.
+
+Every term is a non-negative weighted square, so $\viscstiff{k}$ stays
+symmetric positive semidefinite, and definite with a wall; no face is removed
+and no distance floor is used: the open midpoint lies in the fluid, and its
+distance along the line to a closed end is exactly $\ell_f/2$. On the \#110
+Helmholtz fixture of \cref{eq:viscosity:cut} (wall $y=1+0.1x$, $n=16$ to
+$128$, errors at the open midpoints over every open face) the largest error
+of component~1 at $n=128$ drops from $2.2\times10^{-2}$ (orders
+$0.97/0.91/0.99$) to $1.8\times10^{-5}$ (orders $2.00/2.00/2.00$). On the
+slopes $0.1$ and $0.5$ and on a circle, uniform and with the right half
+refined, the $L^2$ and $L^1$ orders are $1.91$ to $2.07$ and the maximum-norm
+orders $1.68$ to $2.00$, except in the corner where the slope-$0.5$ wall
+meets the boundary $x=8$ under an interior angle of $116.6^\circ$
+($1.31/1.54/1.77$, $\pi/\omega=1.54$).
+
+\emph{Small cells.} Without a floor a thin layer has the conductance of its
+width: $h^2$ times the largest absolute row sum of $\lapstag{k}$ reaches
+$7.8\times10^{5}$ for an open cell fraction of $3\times10^{-8}$, against
+$3.1\times10^{4}$ with the floor of~\cref{eq:viscosity:cut}. The flow step is
+implicit, so this bounds no time step. The damped-Jacobi weight of the
+viscous V-cycle depends on the ratio of a row's absolute sum to its diagonal,
+not on its size, and stays at $0.66$ to $0.73$ on all fixtures (the wall-distance
+closure drops to $0.20$ where its own floored rows are small). Over
+$n=32$ to $256$, uniform and composite, diffusion numbers $\dt\visc/(2h^2)$
+from $0.16$ to $10^3$, a cut circle and a slope and the offsets of each that
+leave the smallest open cell within one cell width (open fractions down to
+$1.6\times10^{-8}$), the preconditioned CG iterations with the LS-STAG closure
+are $0.15$ to $1.74$ times those of the wall-distance closure: at most $1.74$ on the
+smallest cells (circle, composite, $n=64$: $54$ against $31$) and as low as
+$0.15$ where the wall-distance smoother weight drops ($15$ against $99$). A floor
+would bound these rows at the price of an $O(1)$ relative flux error in
+exactly the cells it touches.
+
+\emph{Scope.} These componentwise rows apply to single-phase diffusion.
+Variable viscosity uses the coupled rows below. The solid itself is
+stationary: a moving domain wall does not prescribe motion to an embedded
+wall. With a free-slip solid the single-phase componentwise operator is not
+consistent at an oblique wall for either closure. The wall reaction of a
+single-phase Green cell on an inflow side omits the prescribed inflow term.
+
+\begin{implnote}
+\code{LSStagClosure} and \code{WallDistanceClosure}
+(\srcsym{src/operators/embedded_viscous_closure.jl}{LSStagClosure});
+assembly \srcsym{src/embedded/ls_stag.jl}{_ls_stag_closure}~\cref{eq:viscosity:lsstag}
+with the open parts \srcsym{src/embedded/ls_stag.jl}{_ls_stag_open_part} and
+the owned strip edges \srcsym{src/embedded/ls_stag.jl}{_ls_stag_strip_edges},
+called from \srcsym{src/embedded/operators.jl}{_cut_cell_diffusion_component}.
+Tests:
+\testsym{test/operators/embedded_ls_stag.jl}{LS-STAG closure is second order at oblique walls (#110)},
+\testsym{test/operators/embedded_ls_stag.jl}{LS-STAG closure keeps the unknowns, the mass and an SPD stiffness (#110)},
+\testsym{test/operators/embedded_ls_stag.jl}{LS-STAG rows of an affine field that vanishes on the wall are exact (#110)},
+\testsym{test/operators/embedded_ls_stag.jl}{LS-STAG viscous multigrid versus wall distance (#110)}
+and \testsym{test/operators/embedded_wall_force.jl}{cut-cell wall force balances viscous momentum loss for both closures (#110)}.
 \end{implnote}
 
 \section{Two-phase stress operator}\label{sec:viscosity:stress}
@@ -525,8 +646,66 @@ the solution converged at first order. At the corners of a refined region
 the regions of the two components differ, so no measure per vertex is
 consistent for both, and the rows are their intersections.
 
+\paragraph{Two-phase LS-STAG at a stationary solid.}
+The normal rows are the open Green gradients in \cref{eq:viscosity:rows}.
+At an open vertex $v$, let $D_v u$ denote the \emph{sum}
+$\partial_y u_x+\partial_x u_y$, formed from the two open-midpoint
+differences. Where a fine grid line ends, the directional derivative uses
+the affine stencil through the neighbouring coarse faces. The same stencil
+interpolates the component to the vertex. A clipped endpoint on a no-slip
+solid instead has the prescribed value zero.
+
+For an open cell of area $V_c$, define $Q_c$ as the outward flux of
+$(u_y,u_x)$ through its boundary. Each Cartesian edge uses its open length
+times the average of the two endpoint traces. Its two adjacent cells
+therefore receive opposite fluxes, including at a split side. A complete
+regular cell has four vertex contributions of area $V_c/4$. Elsewhere the
+raw corner area is the product of the incident open half-edge lengths; a
+hanging or closed corner without both lengths has no such rectangle.
+Scale the areas together, if necessary, to leave at least $V_c/2$ for the
+remaining part of a cut or transition cell. With the resulting areas $a_{cv}$
+and $R_c=V_c-\sum_v a_{cv}>0$, its additional shear row is
+\begin{equation}
+    D_c^{\mathrm{rem}}u =
+    \frac{Q_c(u)-\sum_v a_{cv}D_vu}{R_c}.
+    \label{eq:viscosity:lsstress}
+\end{equation}
+Thus the area-weighted shear of the cell is exactly its Green flux, and
+the stress work remains a sum of positive squares. The $a_{cv}$ also give
+the viscosity interpolation weights of the shared vertex; the remaining
+row uses the cell viscosity. For an uncut uniform cell $R_c=0$ and the
+four vertex rows already give the Green flux. In the Cartesian free-slip
+limit there is no wall-shear row. If a slip wall ends at a grid vertex,
+an adjacent full cell uses the one-sided fluid trace extrapolated from open
+midpoints; setting it to zero would damp even a constant translation
+tangent to the wall. At an oblique free-slip PLIC segment a scalar
+tangential trace $s$ is free, with normal velocity fixed to zero. If $E_c$
+collects the two normal rows and the remaining shear row before elimination,
+their strain is $E_c u-b_c s$. On a planar wall admitting a rigid unit
+tangent $u_t$, the wall column satisfies $b_c=E_c u_t$: the shared
+derivatives $D_v$ annihilate constants, and $b_c$ uses the same endpoint
+traces as $Q_c$. The local minimum of the three weighted strain squares over
+$s$ therefore preserves this motion and the positive factorization, without
+a wall-distance penalty. The uncondensed identity is checked in every cut
+cell of uniform and composite periodic planar bands in
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{Uncondensed LS-STAG FreeSlip rows reproduce the PLIC tangent}.
+
+This PLIC extension to variable stress is implemented in
+\srcsym{src/two_phase/diffusion/variable_diffusion_ls_stag.jl}{_ls_stress_rows!}.
+One-velocity flow and both two-velocity projections support it with either
+viscosity mixing rule. Adaptive topology changes rebuild the rows; coarse
+levels with restricted geometry use the same closure.
+The two-layer manufactured channel of
+\testsym{test/operators/embedded_variable_wall_mms.jl}{two-phase embedded-wall manufactured Helmholtz (#106)}
+has an aligned no-slip wall and continuous tangential traction across its
+$2:1$ viscosity jump. From $n=16$ to $32$ to $64$, the volume-weighted
+$L^2$ orders for LS-STAG are $1.88,1.97$ and $1.97,2.00$ for the two
+components on the uniform mesh, and $1.94,1.99$ and $2.02,2.03$ with
+the right half refined. This is not an order result for an oblique liquid
+contact line.
+
 \begin{sloppypar}
-Let $q_{c,v}$ be the quarter of cell $c$ at its corner $v$, and let
+For the legacy wall-distance closure, let $q_{c,v}$ be the quarter of cell $c$ at its corner $v$, and let
 $\mathcal W_r$ contain the quarters $(c,v)$ for which $c$ has a Cartesian wall
 segment with $v$ on its solid side and the contact of row $r$ for the
 wall-tangential component crosses the line through $v$ parallel to the wall:
@@ -660,8 +839,9 @@ intersections of the contact regions of the two velocity components
 vertex-centred dual cells with the open quarter-cell volumes, at level
 transitions they keep the contact fluxes of both components consistent,
 with the anchored fine--coarse derivatives of~\cref{eq:viscosity:shear}
-(\issue{112}). The code closes no-slip walls by one-sided differences and
-adds wall rows for the embedded solid. The cell and row mixtures are harmonic (series) by default,
+(\issue{112}). At stationary solids, LS-STAG combines shared vertex shear
+with the Green completion of \cref{eq:viscosity:lsstress}; the legacy closure
+adds wall-distance rows instead. The cell and row mixtures are harmonic (series) by default,
 \cref{eq:viscosity:viscosity,eq:viscosity:weights}; the thesis'
 volume-fraction-weighted geometric mean remains available as
 \apitype{GeometricViscosityAveraging} through the \code{viscosity_averaging}

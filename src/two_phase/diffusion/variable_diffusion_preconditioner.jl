@@ -15,6 +15,8 @@ coarse level on the geometrically restricted solid, so the coarse operators
 keep the walls, the face transfers skip completely covered faces, as in
 `TreeStaggeredGeometricMultigridPreconditioner`, and the
 Jacobi smoother uses per-row weights (`_local_jacobi_relaxation!`).
+Every coarse operator carries the fine operator's cut-cell closure, and a
+cached hierarchy built for another closure is not reused.
 """
 
 mutable struct TreeVariableDiffusionPreconditioner{T, F, L, C} <:
@@ -116,7 +118,8 @@ function _tree_variable_diffusion_preconditioner(
     )
     # Geometry-dependent coarse operators are rebuilt on every construction.
     can_reuse = isnothing(geometry) && _tree_can_reuse(plan, reuse) &&
-        typeof(reuse.operators[1].boundary) === typeof(operator.boundary)
+        typeof(reuse.operators[1].boundary) === typeof(operator.boundary) &&
+        typeof(reuse.operators[1].closure) === typeof(operator.closure)
     fine_geometry = geometry
 
     operators = VariableStaggeredDiffusionOperator{T}[operator]
@@ -190,6 +193,7 @@ function _tree_variable_diffusion_preconditioner(
                 coarse_mesh; viscosity = coarse_viscosity,
                 boundary = operator.boundary, T, construction_cache,
                 averaging = operator.averaging, geometry = coarse_geometry,
+                closure = operator.closure,
             )
             if !isnothing(geometry)
                 _remove_covered_staggered_transfer!(
@@ -290,6 +294,8 @@ function _refresh_tree_variable_diffusion_preconditioner!(
         operator::VariableStaggeredDiffusionOperator{T}, matrix,
         inertia, dt,
     ) where {T}
+    typeof(preconditioner.operators[1].closure) === typeof(operator.closure) ||
+        throw(ArgumentError("refreshed diffusion operator changed its cut-cell closure"))
     preconditioner.operators[1] = operator
     fine_density = preconditioner.densities[1]
     for index in eachindex(fine_density)

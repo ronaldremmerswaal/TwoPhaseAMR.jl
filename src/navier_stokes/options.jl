@@ -39,7 +39,8 @@ end
                         pressure=LinearSolverOptions(),
                         diffusion=LinearSolverOptions(),
                         multigrid=MultigridOptions(),
-                        viscosity_averaging=HarmonicViscosityAveraging())
+                        viscosity_averaging=HarmonicViscosityAveraging(),
+                        embedded_viscous_closure=WallDistanceClosure())
 
 Numerical configuration for the incompressible Navier--Stokes equation
 system. Physics, velocity-model choices, runtime AMR fields, and evolving
@@ -53,20 +54,28 @@ normal-stress and wall rows) and at the shear-stress vertices: a
 operator: the two-velocity step diffuses the mass-weighted mixture velocity
 with it and gives both phases the common increment, so the rule applies to
 one- and two-velocity flows alike.
+
+`embedded_viscous_closure` selects the closure at a stationary embedded
+solid, for either velocity model. [`LSStagClosure`](@ref) uses open-face
+midpoints, Green normal stresses and coupled shear for two-phase viscosity.
+[`WallDistanceClosure`](@ref) selects the legacy wall-distance rows (default).
 """
 struct NavierStokesOptions{
         A <: AdvectionOptions,
         P <: LinearSolverOptions, D <: LinearSolverOptions,
         M <: MultigridOptions, V <: AbstractViscosityAveraging,
+        C <: AbstractEmbeddedViscousClosure,
     }
     advection::A
     pressure::P
     diffusion::D
     multigrid::M
     viscosity_averaging::V
+    embedded_viscous_closure::C
 
     function NavierStokesOptions(
             advection, pressure, diffusion, multigrid, viscosity_averaging,
+            embedded_viscous_closure,
         )
         advection isa AdvectionOptions || throw(
             ArgumentError("advection must be AdvectionOptions"),
@@ -85,10 +94,19 @@ struct NavierStokesOptions{
                 "viscosity_averaging must be HarmonicViscosityAveraging() or GeometricViscosityAveraging()",
             ),
         )
+        embedded_viscous_closure isa Union{WallDistanceClosure, LSStagClosure} || throw(
+            ArgumentError(
+                "embedded_viscous_closure must be WallDistanceClosure() or LSStagClosure()",
+            ),
+        )
         return new{
             typeof(advection), typeof(pressure), typeof(diffusion),
             typeof(multigrid), typeof(viscosity_averaging),
-        }(advection, pressure, diffusion, multigrid, viscosity_averaging)
+            typeof(embedded_viscous_closure),
+        }(
+            advection, pressure, diffusion, multigrid, viscosity_averaging,
+            embedded_viscous_closure,
+        )
     end
 end
 
@@ -98,8 +116,10 @@ function NavierStokesOptions(;
         diffusion = LinearSolverOptions(),
         multigrid = MultigridOptions(),
         viscosity_averaging = HarmonicViscosityAveraging(),
+        embedded_viscous_closure = WallDistanceClosure(),
     )
     return NavierStokesOptions(
         advection, pressure, diffusion, multigrid, viscosity_averaging,
+        embedded_viscous_closure,
     )
 end

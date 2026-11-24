@@ -252,6 +252,7 @@ function NavierStokesSystem(
                 mesh; viscosity = kinematic_viscosity, boundary, T,
             ) : StaggeredDiffusionOperator(
                 geometry; viscosity = kinematic_viscosity, boundary,
+                closure = options.embedded_viscous_closure,
             )
         kinematic_viscosity, operator
     else

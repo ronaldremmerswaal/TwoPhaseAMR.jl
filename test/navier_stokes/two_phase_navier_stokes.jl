@@ -1,8 +1,10 @@
 using Test, TwoPhaseAMR, Krylov
-using LinearAlgebra: Diagonal, mul!, norm
+using LinearAlgebra: Diagonal, dot, mul!, norm
 using Random: MersenneTwister, randn
 isdefined(@__MODULE__, :test_allocated_call) ||
     include(joinpath(@__DIR__, "..", "test_utils.jl"))
+isdefined(@__MODULE__, :_phase_storage_contract) ||
+    include(joinpath(@__DIR__, "..", "two_phase", "two_velocity", "helpers.jl"))
 @testset "One Navier-Stokes API, transported density jump" begin
     for kind in 1:3
         mesh = BlockTreeMesh(
@@ -626,4 +628,480 @@ end
     fixed_regrid = simulate!(fixed, 0.300001; dt = 0.0625, options...)
     @test automatic_regrid.mesh_updates == fixed_regrid.mesh_updates == 1
     _check_two_velocity_resume_fields(fixed, automatic)
+end
+
+# ---------------------------------------------------------------------------
+# Stationary embedded solids with an explicitly selected viscous closure.
+# The two-phase stress operator accepts the same `closure` as the single-phase
+# one. `WallDistanceClosure()` is the legacy/thesis assembly; `LSStagClosure()`
+# replaces the cut-cell rows. Every fixture below names its closure, because
+# the `NavierStokesOptions` default is deliberately not assumed.
+
+"""Two-phase fixture on (0,8)²: a stationary embedded `solid`, a flat phase
+interface above it, and a 100-fold dynamic-viscosity jump."""
+function _two_phase_embedded_fixture(
+        solid; viscosity = (1.0, 0.01), density = (2.0, 1.0)
+    )
+    mesh = BlockTreeMesh(
+        block_size = (8, 8), extent = (8.0, 8.0),
+        periodic = (false, false),
+    )
+    geometry = GeometryField(mesh, solid; lipschitz = 1.0)
+    interface = InterfaceField(
+        mesh, (x, y) -> y - 6.2; geometry, lipschitz = 1.0,
+    )
+    return (; mesh, geometry, interface, viscosity, density)
+end
+
+@testset "two-phase stress operator consumes the selected closure" begin
+    solid(x, y) = hypot(x - 4.0, y - 4.0) - 1.6
+    fixture = _two_phase_embedded_fixture(solid)
+    (; mesh, interface, viscosity) = fixture
+    wall = TwoPhaseAMR._staggered_diffusion_operator(
+        interface; viscosity, boundary = NoSlip(),
+        closure = WallDistanceClosure(),
+    )
+    lsstag = TwoPhaseAMR._staggered_diffusion_operator(
+        interface; viscosity, boundary = NoSlip(),
+        closure = LSStagClosure(),
+    )
+    public_operator = StaggeredDiffusionOperator(
+        interface; viscosity, boundary = NoSlip(),
+        closure = LSStagClosure(),
+    )
+    @test wall.closure isa WallDistanceClosure
+    @test lsstag.closure isa LSStagClosure
+    @test public_operator.closure isa LSStagClosure
+    @test public_operator.stiffness ≈ lsstag.stiffness rtol = 16eps()
+    mu = dynamic_viscosity(interface; viscosity)
+    from_cells = StaggeredDiffusionOperator(
+        fixture.geometry; viscosity = mu, closure = LSStagClosure(),
+    )
+    @test from_cells.strain == lsstag.strain
+    @test from_cells.stiffness == lsstag.stiffness
+    # The closure replaces cut-cell rows only: the unknown set and the mass
+    # (the dual volumes) are those of the legacy assembly.
+    @test lsstag.dirichlet_faces == wall.dirichlet_faces
+    @test lsstag.volumes == wall.volumes
+    @test any(>(0), lsstag.volumes)
+    covered = findall(iszero, fixture.geometry.face_dual_volumes)
+    @test !isempty(covered)
+    # A covered face carries no physical dual volume; its algebraic row must
+    # keep the stiffness column positive under either closure.
+    @test all(index -> lsstag.stiffness[index, index] > 0, covered)
+    @test all(index -> wall.stiffness[index, index] > 0, covered)
+    # A distinct closure must change the assembled values, not just the label.
+    @test Matrix(lsstag.stiffness) != Matrix(wall.stiffness)
+    @test lsstag.stiffness ≈ transpose(lsstag.stiffness) rtol = 1.0e-14
+    wall_stiffness = transpose(wall.stiffness)
+    @test wall.stiffness ≈ wall_stiffness rtol = 1.0e-14
+    # `E'WE` with nonnegative stress weights, so the quadratic form is the
+    # discrete dissipation. Both orders of evaluation agree to round-off.
+    rng = MersenneTwister(0x1e55)
+    velocity = randn(rng, length(mesh.faces))
+    velocity[lsstag.dirichlet_faces] .= 0.0
+    strain = lsstag.strain * velocity
+    quadratic = dot(velocity, lsstag.stiffness * velocity)
+    @test quadratic > 0
+    @test quadratic ≈ dot(strain, lsstag.stress_weights .* strain) rtol = 1.0e-12
+    # FreeSlip condenses the tangential wall trace in the cut-cell stress
+    # rows; NoSlip fixes it at zero. Releasing that constraint cannot add
+    # dissipation, and must change a motion with nonzero wall-tangential strain.
+    free = TwoPhaseAMR._staggered_diffusion_operator(
+        interface; viscosity, boundary = FreeSlip(),
+        closure = LSStagClosure(),
+    )
+    difference = lsstag.stiffness - free.stiffness
+    @test difference ≈ transpose(difference) atol = 1.0e-12
+    @test dot(velocity, difference * velocity) >= -1.0e-10 * max(quadratic, 1.0)
+    uniform = ones(length(mesh.faces))
+    uniform[lsstag.dirichlet_faces] .= 0.0
+    @test dot(uniform, difference * uniform) > 0
+    # LS-STAG replaces the values on and next to cut cells; rows far from the
+    # solid keep the legacy assembly.
+    far = [
+        index for (index, face) in pairs(mesh.faces)
+            if solid(face.center...) > 2.5
+    ]
+    @test !isempty(far)
+    @test lsstag.stiffness[far, :] ≈ wall.stiffness[far, :] atol = 1.0e-12
+end
+
+@testset "two-phase embedded wall rows drag the tangential velocity" begin
+    wall = 4.0
+    mesh = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (4, 4), extent = (8.0, 8.0),
+        periodic = (true, false), max_level = 1,
+    )
+    solid = InterfaceField(mesh; fraction_floor = 1.0e-14)
+    initialize!(solid, (0.0, 1.0), wall)
+    geometry = GeometryField(solid)
+    interface = InterfaceField(
+        mesh, (x, y) -> x - 3.5; geometry,
+        fraction_floor = 1.0e-14, lipschitz = 1.0,
+    )
+    viscosity = (1.0, 0.1)
+    tangent = 1
+    normal = 2
+    # The first open tangential face above the wall, at three streamwise
+    # positions, so one phase and then the other sees the wall.
+    faces = map((2.0, 4.0, 6.0)) do coordinate
+        candidates = [
+            index for (index, face) in pairs(mesh.faces)
+                if face.axis == tangent &&
+                abs(face.center[tangent] - coordinate) < 1.0e-12 &&
+                face.center[normal] > wall &&
+                geometry.face_dual_volumes[index] > 0
+        ]
+        @test !isempty(candidates)
+        sort!(candidates; by = index -> mesh.faces[index].center[normal])
+        return first(candidates)
+    end
+    velocity = FaceVelocity(
+        mesh, (x, y, time, axis) -> axis == tangent ? 1.0 : 0.0,
+    )
+    for index in eachindex(velocity.interior)
+        iszero(geometry.face_dual_volumes[index]) &&
+            (velocity.interior[index] = 0.0)
+    end
+    for closure in (WallDistanceClosure(), LSStagClosure())
+        no_slip = TwoPhaseAMR._staggered_diffusion_operator(
+            interface; viscosity, boundary = NoSlip(), closure,
+        )
+        free_slip = TwoPhaseAMR._staggered_diffusion_operator(
+            interface; viscosity, boundary = FreeSlip(), closure,
+        )
+        @test no_slip.closure isa typeof(closure)
+        @test free_slip.closure isa typeof(closure)
+        no_slip_rate, free_slip_rate = FaceVelocity(mesh), FaceVelocity(mesh)
+        diffusion!(no_slip_rate, velocity, no_slip)
+        diffusion!(free_slip_rate, velocity, free_slip)
+        for face in faces
+            # A uniform tangential field has no interior strain; the stationary
+            # wall can only slow it, and only NoSlip does.
+            @test no_slip_rate.interior[face] < 0
+            @test no_slip_rate.interior[face] <
+                free_slip_rate.interior[face]
+        end
+    end
+end
+
+@testset "two-phase closure is dissipative in an implicit midpoint step" begin
+    solid(x, y) = hypot(x - 4.0, y - 4.0) - 1.8
+    fixture = _two_phase_embedded_fixture(solid; viscosity = (0.2, 0.002))
+    (; mesh, interface, viscosity) = fixture
+    source = FaceVelocity(
+        mesh,
+        (x, y, time, axis) -> 0.1 * (
+            axis == 1 ? sinpi(x / 8) * cospi(y / 8) :
+                -cospi(x / 8) * sinpi(y / 8)
+        ),
+    )
+    density = mixture_density(interface, fixture.density)
+    for closure in (WallDistanceClosure(), LSStagClosure())
+        operator = TwoPhaseAMR._staggered_diffusion_operator(
+            interface; viscosity, boundary = NoSlip(), closure,
+        )
+        TwoPhaseAMR._update_dynamic_viscosity!(
+            operator, interface, viscosity,
+        )
+        @test operator.closure isa typeof(closure)
+        source.interior[operator.dirichlet_faces] .= 0.0
+        result = FaceVelocity(mesh)
+        implicit_midpoint_diffusion!(result, source, operator, 0.5; density)
+        inertia = density .* operator.volumes
+        before = sum(inertia .* source.interior .^ 2)
+        after = sum(inertia .* result.interior .^ 2)
+        @test before > 0
+        # The implicit midpoint step is contractive in this inertia; the
+        # inequality is strict because the source carries interior strain.
+        @test after < before
+        @test after >= 0
+        @test all(isfinite, result.interior)
+        @test all(iszero, result.interior[operator.dirichlet_faces])
+    end
+end
+
+@testset "two-phase cut-cell closure reaches the viscous multigrid levels" begin
+    for closure in (WallDistanceClosure(), LSStagClosure())
+        mesh = BlockTreeMesh(
+            base_mesh = (16, 16), block_size = (4, 4),
+            periodic = (false, false),
+        )
+        geometry = GeometryField(
+            mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.22;
+            lipschitz = 1.0,
+        )
+        interface = InterfaceField(
+            mesh, (x, y) -> x - 0.43; geometry, lipschitz = 1.0,
+        )
+        flow = FlowSimulation(
+            mesh,
+            TwoPhase(
+                interface; density = (4.0, 1.0),
+                dynamic_viscosity = (0.2, 0.002),
+            );
+            geometry,
+            numerics = NavierStokesOptions(
+                embedded_viscous_closure = closure,
+                multigrid = MultigridOptions(coarse_size = 8),
+            ),
+        )
+        operator = flow.workspace.two_phase.diffusion
+        @test operator.closure isa typeof(closure)
+        preconditioner =
+            flow.workspace.two_phase.diffusion_solver.preconditioner
+        @test preconditioner isa
+            TwoPhaseAMR.TreeVariableDiffusionPreconditioner
+        @test length(preconditioner.operators) > 1
+        @test preconditioner.operators[1] === operator
+        @test all(
+            level -> level.closure isa typeof(closure),
+            preconditioner.operators,
+        )
+    end
+end
+
+@testset "two-phase diffusion reuse is keyed to the closure" begin
+    solid(x, y) = hypot(x - 4.0, y - 4.0) - 1.6
+    fixture = _two_phase_embedded_fixture(solid)
+    physics = TwoPhase(
+        fixture.interface; density = fixture.density,
+        dynamic_viscosity = fixture.viscosity,
+    )
+    model = TwoPhaseAMR.TwoPhaseModel(physics)
+    legacy = TwoPhaseAMR.TwoPhaseFlowWorkspace(
+        model; boundary = NoSlip(), closure = WallDistanceClosure(),
+        diffusion_preconditioner = nothing,
+    )
+    @test legacy.diffusion.closure isa WallDistanceClosure
+    switched = TwoPhaseAMR.TwoPhaseFlowWorkspace(
+        model; boundary = NoSlip(), closure = LSStagClosure(),
+        diffusion_preconditioner = nothing,
+        reuse_diffusion = legacy.diffusion,
+    )
+    @test switched.diffusion.closure isa LSStagClosure
+    @test switched.diffusion !== legacy.diffusion
+    @test Matrix(switched.diffusion.stiffness) !=
+        Matrix(legacy.diffusion.stiffness)
+    repeated = TwoPhaseAMR.TwoPhaseFlowWorkspace(
+        model; boundary = NoSlip(), closure = LSStagClosure(),
+        diffusion_preconditioner = nothing,
+        reuse_diffusion = switched.diffusion,
+    )
+    @test repeated.diffusion.closure isa LSStagClosure
+    @test repeated.diffusion.stiffness_pointers ===
+        switched.diffusion.stiffness_pointers
+end
+
+@testset "two-phase stationary solid runs with the selected closure" begin
+    models = (
+        (:one, OneVelocityModel()),
+        (:cmdgfm, TwoVelocityModel(pressure_projection = CMDGFMProjection())),
+        (:mimetic, TwoVelocityModel(pressure_projection = MimeticProjection())),
+    )
+    for (name, model) in models, boundary in (NoSlip(), FreeSlip()),
+            closure in (WallDistanceClosure(), LSStagClosure())
+        mesh = BlockTreeMesh(
+            block_size = (6, 6), periodic = (false, false),
+        )
+        geometry = GeometryField(
+            mesh, (x, y) -> hypot(x - 0.5, y - 0.45) - 0.22;
+            lipschitz = 1.0,
+        )
+        interface = InterfaceField(
+            mesh, (x, y) -> y - 0.8; geometry,
+            embedded_contact_angle = pi / 3, lipschitz = 1.0,
+        )
+        physics = TwoPhase(
+            interface; density = (2.0, 1.0),
+            dynamic_viscosity = (0.2, 0.002),
+        )
+        shared = (x, y, time, axis) -> 0.05 * (
+            axis == 1 ? sinpi(x) * cospi(y) :
+                -cospi(x) * sinpi(y)
+        )
+        initial = model isa OneVelocityModel ? shared : (shared, shared)
+        flow = FlowSimulation(
+            mesh, physics; geometry, velocity_model = model,
+            velocity = initial, boundary,
+            numerics = NavierStokesOptions(
+                embedded_viscous_closure = closure,
+            ),
+        )
+        operator = flow.workspace.two_phase.diffusion
+        @test flow.diffusion_operator === operator
+        @test operator.closure isa typeof(closure)
+        @test flow.system.options.embedded_viscous_closure === closure
+        covered = findall(iszero, geometry.face_dual_volumes)
+        @test !isempty(covered)
+        @test all(index -> operator.stiffness[index, index] > 0, covered)
+        bound = stable_timestep(flow)
+        @test isfinite(bound) && bound > 0
+        volume = integrate(interface)
+        dt = 0.25bound
+        result = simulate!(
+            flow, 2dt; dt,
+            tolerance = 1.0e-9, max_cycles = 200,
+        )
+        @test result.steps == 2
+        @test flow.workspace.two_phase.diffusion_solver.stats.converged
+        for block in flow.pressure.blocks
+            @test all(isfinite, block)
+        end
+        for block in interface.fraction.blocks
+            @test all(isfinite, block)
+            @test all(value -> -1.0e-12 <= value <= 1 + 1.0e-12, block)
+        end
+        # The flux-form transport conserves the phase volume; the fraction
+        # floor of the PLIC cleanup may move a sliver per mixed cell.
+        @test integrate(interface) ≈ volume atol =
+            1.0e-8 * max(1, abs(volume))
+        if flow.velocity isa TwoPhaseVelocity
+            @test _phase_storage_contract(flow.velocity, interface)
+            for phase in 1:2
+                @test !isempty(_phase_interior_indices(interface, phase))
+            end
+        else
+            @test all(isfinite, flow.velocity.interior)
+        end
+    end
+end
+
+@testset "two-phase embedded wetting angle with LS-STAG" begin
+    contact_angle = pi / 3
+    for projection in (CMDGFMProjection(), MimeticProjection())
+        mesh = BlockTreeMesh(
+            block_size = (16, 16), periodic = (false, false),
+        )
+        geometry = GeometryField(
+            mesh, (x, y) -> y - 0.3; lipschitz = 1.0,
+        )
+        interface = InterfaceField(
+            mesh, (x, y) -> hypot(x - 0.5, y - 0.42) - 0.2;
+            geometry, embedded_contact_angle = contact_angle,
+            contact_angle = pi / 2, lipschitz = 1.0,
+            atol = 1.0e-8, maxdepth = 20,
+        )
+        @test interface.embedded_contact_angle == Float64(contact_angle)
+        physics = TwoPhase(
+            interface; density = (2.0, 1.0),
+            dynamic_viscosity = (0.2, 0.002),
+            surface_tension = 0.05, gravity = (0.0, -0.2),
+        )
+        flow = FlowSimulation(
+            mesh, physics; geometry, boundary = FreeSlip(),
+            velocity_model = TwoVelocityModel(
+                pressure_projection = projection,
+            ),
+            numerics = NavierStokesOptions(
+                embedded_viscous_closure = LSStagClosure(),
+            ),
+        )
+        @test flow.workspace.two_phase.diffusion.closure isa LSStagClosure
+        bound = stable_timestep(flow)
+        @test isfinite(bound) && bound > 0
+        volume = integrate(interface)
+        dt = 0.1bound
+        result = simulate!(
+            flow, 2dt; dt,
+            tolerance = 1.0e-9, max_cycles = 200,
+        )
+        @test result.steps == 2
+        @test flow.workspace.two_phase.diffusion_solver.stats.converged
+        @test _phase_storage_contract(flow.velocity, interface)
+        for phase in 1:2
+            @test !isempty(_phase_interior_indices(interface, phase))
+        end
+        for block in interface.fraction.blocks
+            @test all(value -> -1.0e-12 <= value <= 1 + 1.0e-12, block)
+        end
+        @test integrate(interface) ≈
+            volume atol = 1.0e-8 * max(1, abs(volume))
+    end
+end
+
+@testset "two-phase LS-STAG dynamic regrid keeps closure and constraints" begin
+    mesh = BlockTreeMesh(
+        block_size = (4, 4), max_level = 1, periodic = (false, false),
+    )
+    geometry = GeometryField(
+        mesh, (x, y) -> y - 0.25; lipschitz = 1.0,
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> x - 0.7; geometry, lipschitz = 1.0,
+    )
+    indicator = InterfaceRefinementIndicator(interface; level = 1)
+    physics = TwoPhase(
+        interface; density = (4.0, 1.0),
+        dynamic_viscosity = (0.02, 0.001),
+    )
+    flow = FlowSimulation(
+        mesh, physics; geometry, velocity = (0.0, 0.0),
+        adaptivity = Adaptivity(criteria = (indicator,)),
+        numerics = NavierStokesOptions(
+            embedded_viscous_closure = LSStagClosure(),
+        ),
+    )
+    before = flow.workspace.two_phase.diffusion
+    @test before.closure isa LSStagClosure
+    @test !isempty(before.dirichlet_faces)
+    covered = findall(iszero, geometry.face_dual_volumes)
+    @test !isempty(covered)
+    # A covered face carries no physical dual volume; its algebraic row must
+    # keep the stiffness column positive.
+    @test all(index -> before.stiffness[index, index] > 0, covered)
+    result = simulate!(
+        flow, 1.0e-4; dt = 1.0e-4,
+        tolerance = 1.0e-9, max_cycles = 200,
+    )
+    @test result.mesh_updates > 0
+    @test result.steps > 0
+    # Adaptation and rebuilding follow the first physical step. Exercise the
+    # rebuilt variable-stress operator in a second step before checking state.
+    after_regrid = simulate!(
+        flow, 2.0e-4; dt = 1.0e-4,
+        tolerance = 1.0e-9, max_cycles = 200,
+    )
+    @test after_regrid.steps == 1
+    @test flow.mesh_updates == result.mesh_updates + after_regrid.mesh_updates
+    @test nblocks(mesh) > 1
+    operator = flow.workspace.two_phase.diffusion
+    @test operator !== before
+    @test operator.closure isa LSStagClosure
+    @test flow.system.options.embedded_viscous_closure isa LSStagClosure
+    @test !isempty(operator.dirichlet_faces)
+    fresh = TwoPhaseAMR._staggered_diffusion_operator(
+        interface; viscosity = flow.system.two_phase.dynamic_viscosity,
+        boundary = flow.system.boundary, closure = LSStagClosure(),
+    )
+    @test operator.closure isa LSStagClosure
+    @test operator.dirichlet_faces == fresh.dirichlet_faces
+    @test operator.strain == fresh.strain
+    @test operator.volumes == fresh.volumes
+    # The face indices changed with the topology: recompute the covered set
+    # on the rebuilt mesh before checking its algebraic columns.
+    covered = findall(iszero, geometry.face_dual_volumes)
+    @test !isempty(covered)
+    @test all(index -> operator.stiffness[index, index] > 0, covered)
+    @test all(isfinite, flow.velocity.interior)
+    @test all(isfinite, flow.velocity.boundary)
+    for block in flow.pressure.blocks
+        @test all(isfinite, block)
+    end
+    for block in interface.fraction.blocks
+        @test all(isfinite, block)
+        @test all(value -> -1.0e-12 <= value <= 1 + 1.0e-12, block)
+    end
+    @test all(
+        index -> iszero(flow.velocity.interior[index]),
+        operator.dirichlet_faces,
+    )
+    println(
+        "two-phase LS-STAG regrid witness: mesh_updates=",
+        result.mesh_updates + after_regrid.mesh_updates,
+        " steps=", result.steps + after_regrid.steps,
+        " blocks=", nblocks(mesh), " covered_faces=", length(covered),
+        " constrained_faces=", length(operator.dirichlet_faces),
+    )
 end

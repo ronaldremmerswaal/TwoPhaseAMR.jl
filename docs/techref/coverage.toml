@@ -1154,6 +1154,35 @@ tests = [
 ]
 check = "moving_wall_check"
 [[claims]]
+label = "eq:viscosity:lsstag"
+sources = [
+  { file = "src/embedded/ls_stag.jl", symbol = "_ls_stag_closure" },
+  { file = "src/embedded/ls_stag.jl", symbol = "_ls_stag_open_part" },
+  { file = "src/embedded/ls_stag.jl", symbol = "_ls_stag_strip_edges" },
+  { file = "src/embedded/operators.jl", symbol = "_cut_cell_diffusion_component" },
+  { file = "src/operators/embedded_viscous_closure.jl", symbol = "LSStagClosure" }
+]
+tests = [
+  { file = "test/operators/embedded_ls_stag.jl", testset = "LS-STAG closure is second order at oblique walls (#110)" },
+  { file = "test/operators/embedded_ls_stag.jl", testset = "LS-STAG closure keeps the unknowns, the mass and an SPD stiffness (#110)" },
+  { file = "test/operators/embedded_ls_stag.jl", testset = "LS-STAG rows of an affine field that vanishes on the wall are exact (#110)" },
+  { file = "test/operators/embedded_ls_stag.jl", testset = "LS-STAG viscous multigrid versus wall distance (#110)" },
+  { file = "test/operators/embedded_wall_force.jl", testset = "cut-cell wall force balances viscous momentum loss for both closures (#110)" }
+]
+[[claims]]
+label = "eq:viscosity:lsstress"
+sources = [
+  { file = "src/two_phase/diffusion/variable_diffusion_ls_stag.jl", symbol = "_ls_stress_line" },
+  { file = "src/two_phase/diffusion/variable_diffusion_ls_stag.jl", symbol = "_ls_stress_cell!" },
+  { file = "src/two_phase/diffusion/variable_diffusion_ls_stag.jl", symbol = "_ls_stress_slip!" }
+]
+tests = [
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "LS-STAG two-phase stress rows are exact at a sloping solid" },
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "LS-STAG two-phase affine rows on a fixed composite mesh" },
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "LS-STAG tilted FreeSlip keeps a rigid tangent local null mode" },
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Uncondensed LS-STAG FreeSlip rows reproduce the PLIC tangent" }
+]
+[[claims]]
 label = "eq:viscosity:viscosity"
 sources = [
   { file = "src/two_phase/diffusion/variable_diffusion_geometry.jl", symbol = "dynamic_viscosity" },
@@ -1524,7 +1553,8 @@ sources = [
 tests = [
   { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: crossing-speed limiter" },
   { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: a translating drop stays at the one-donor level" },
-  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: the projection is idempotent" }
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl", testset = "Linear jump inference: the projection is idempotent" },
+  { file = "test/integration/two_velocity_instabilities.jl", testset = "Two-velocity Kelvin--Helmholtz roll-up stays free of grid-scale ripples" }
 ]
 [[claims]]
 label = "eq:projection:dominant-slope"
@@ -2525,6 +2555,7 @@ check = "solv_cmdgfm_cases"
 "src/operators/elliptic.jl" = { class = "equation", chapters = ["ch:discrete-setting", "ch:viscosity", "ch:projection", "ch:solvers"] }
 "src/operators/staggered_diffusion.jl" = { class = "equation", chapters = ["ch:viscosity", "ch:projection"] }
 "src/operators/viscosity_averaging.jl" = { class = "equation", chapters = ["ch:viscosity"] }
+"src/operators/embedded_viscous_closure.jl" = { class = "equation", chapters = ["ch:viscosity"] }
 "src/operators/advection/cell_advection.jl" = { class = "equation", chapters = ["ch:mesh-amr", "ch:discrete-setting", "ch:momentum-transport"] }
 "src/operators/advection/staggered_fluxes.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
 "src/operators/advection/staggered_schedules.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:momentum-transport"] }
@@ -2533,6 +2564,7 @@ check = "solv_cmdgfm_cases"
 "src/embedded/geometry.jl" = { class = "equation", chapters = ["ch:discrete-setting", "ch:interface", "ch:cutcells", "ch:amr-criteria-transfer"] }
 "src/embedded/geometry_utils.jl" = { class = "equation", chapters = ["ch:interface", "ch:cutcells"] }
 "src/embedded/operators.jl" = { class = "equation", chapters = ["ch:discrete-setting", "ch:momentum-transport", "ch:cutcells", "ch:forces", "ch:viscosity", "ch:projection"] }
+"src/embedded/ls_stag.jl" = { class = "equation", chapters = ["ch:viscosity"] }
 "src/interface/interface_field.jl" = { class = "equation", chapters = ["ch:interface", "ch:cutcells", "ch:amr-criteria-transfer"] }
 "src/interface/height_functions.jl" = { class = "equation", chapters = ["ch:interface", "ch:forces", "ch:amr-criteria-transfer"] }
 "src/interface/levelset_initialization.jl" = { class = "equation", chapters = ["ch:interface"] }
@@ -2554,6 +2586,7 @@ check = "solv_cmdgfm_cases"
 "src/two_phase/phase_face_transfer.jl" = { class = "equation", chapters = ["ch:amr-criteria-transfer"] }
 "src/two_phase/phase_face_transport.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
 "src/two_phase/diffusion/variable_diffusion_geometry.jl" = { class = "equation", chapters = ["ch:viscosity"] }
+"src/two_phase/diffusion/variable_diffusion_ls_stag.jl" = { class = "equation", chapters = ["ch:viscosity"] }
 "src/two_phase/diffusion/variable_diffusion_operator.jl" = { class = "equation", chapters = ["ch:viscosity"] }
 "src/two_phase/diffusion/variable_diffusion_preconditioner.jl" = { class = "algebraic", chapters = ["ch:solvers"] }
 "src/two_phase/diffusion/variable_diffusion_solver.jl" = { class = "equation", chapters = ["ch:viscosity", "ch:solvers"] }

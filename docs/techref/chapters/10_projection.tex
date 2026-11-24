@@ -636,7 +636,7 @@ $1000$), the row gives $0.010$ (thesis rows $0.142$).
   \slopeweight_f=1-s^2(3-2s),\qquad
   s=\min\curlypar{1,\max\curlypar{0,\frac{w_f/U_f-a}{b-a}}},\qquad
   w_f=\abs{\bar{\velo}_f\cdot\normalstag_f},\quad
-  (a,b)=\roundpar{\tfrac1{16},\tfrac3{16}},
+  (a,b)=\roundpar{\tfrac1{32},\tfrac3{32}},
 \end{equation}
 with the mixture velocity vector $\bar{\velo}_f$ of the face (its own
 mass-weighted mixture velocity along axis $k$, the mean of the mixture
@@ -693,18 +693,49 @@ step cannot provide that bound with a fixed constant: at the exit corner of
 the dual cell the fraction change vanishes with the Courant number, so the
 constant would have to grow like $\sqrt{n}$ under the capillary step
 restriction (measured). The crossing speed $w_f/U_f$ does not degenerate
-there, and $(a,b)$ is a modelling choice that separates interfaces that move
-through the faces ($w/U$ of order one at the front and rear of a translating
-drop and in a standing capillary wave) from quasi-static ones, whose normal
-speed comes only from slow growth (shear layers, Kelvin--Helmholtz), which
-keep the third-order inference. \emph{Sensitivity} (translating drop at
-$n=128$, \issue{171}): $(a,b)=(\frac14,\frac34)$, $(\frac18,\frac38)$,
-$(\frac1{16},\frac3{16})$ give $\max\abs{\velo-U}=0.98$, $0.30$, $0.29$;
-Rayleigh--Taylor at the density ratio $3$ ($n=32$) $0.0151$, $0.0103$,
-$0.0072$ (one-donor $0.0056$); viscous Kelvin--Helmholtz (density ratios $1$
-and $10$, thin layer, $\lambda/h=128$) is the same for $(0,\frac18)$ and
-$(\frac1{16},\frac3{16})$ (growth-rate errors $1.97/1.89\,\%$ and
-$7.64/7.56\,\%$; one-donor $45\,\%$ and $10.2\,\%$).
+there, and $(a,b)$ is a modelling choice that separates interfaces that sweep
+through the faces from quasi-static ones, whose normal speed comes only from
+slow growth, which keep the third-order inference. \emph{Populations.} The
+crossing ratios $w_f/U_f$ of the rows with second donors, over every
+projection of a run: quasi-static---the resolved shear over the tilted
+interfaces of the tests (slope $0.06$ and $\cos$ amplitude $0.01$,
+$n=32$--$128$) at most $0.028$; viscous Kelvin--Helmholtz ($\lambda/h=128$)
+and inviscid Kelvin--Helmholtz at the density ratio $1000$ in the linear
+regime about $97\,\%$ below $\frac1{128}$, and at the density ratio $1$
+($n=32$) $66\,\%$ below $\frac1{32}$ (median $0.026$); the Kelvin--Helmholtz
+wave of example~07 (inviscid, density ratio $1.2$, $\mathrm{We}=3$, level $5$,
+$h=1/256$) up to $t=0.5$ $89\,\%$ below $\frac1{32}$. Sweeping---the
+translating drop at the density ratio $1000$ (median $0.58$),
+Rayleigh--Taylor at the density ratio $3$ (median $0.37$), and the rolling-up
+wave of example~07 for $t>1.5$ (median $0.12$, $88\,\%$ above $\frac1{32}$,
+$62\,\%$ above $\frac3{32}$), whose inclined interface rotates and translates
+through the finest faces for many steps at $w/U=O(0.1)$, so that $k$ grows
+like $1/h$. $(a,b)=(\frac1{32},\frac3{32})$ puts $a$ above the quasi-static
+rows and $b$ below the median of the roll-up. With $(\frac1{16},\frac3{16})$
+(\issue{199}) $b$ lay above $80\,\%$ of these rows ($60\,\%$ in the run it
+produced), which kept part of the extrapolation, and the wake recursion
+roughened the interface: the RMS of the liquid column
+height minus its Gaussian-smoothed copy ($\sigma=3h$, on the columns at least
+$0.1$ from any column that crosses the interface more than once) was $0.135h$
+at $t=2.25$, with $15\,\%$ more steps, against $0.0044h$ now and $0.0048h$ for
+the one-donor rows. \emph{Sensitivity} ($(a,b)=(c,3c)$): the example~07
+roughness is $0.135h$, $0.0083h$, $0.0044h$, $0.0039h$, $0.0041h$, $0.0043h$
+for $c=\frac1{16},\frac1{24},\frac1{32},\frac1{48},\frac1{64},\frac1{128}$;
+the jump that the slope-$0.06$ shear creates at $n=128$ is $0.0076$ for
+$c\ge\frac1{32}$ and $0.017$, $0.053$, $0.149$ for
+$c=\frac1{48},\frac1{64},\frac1{128}$ (one-donor $0.155$: the third order is
+lost once $a$ falls below its largest crossing ratio). The translating drop
+($n=128$) gives $\max\abs{\velo-U}=0.98$, $0.30$, $0.30$, $0.28$, $0.29$,
+$0.29$ for $c=\frac14,\frac18,\frac1{16},\frac1{32},\frac1{64},\frac1{128}$
+(one-donor $0.34$; \issue{171} for the first two); Rayleigh--Taylor at the
+density ratio $3$ ($n=32$) $0.0072$, $0.0061$, $0.0059$, $0.0057$ for
+$c=\frac1{16},\dots,\frac1{128}$ (one-donor $0.0056$; $0.0151$ and $0.0103$
+for $c=\frac14,\frac18$); the vortex sheet at the density ratio $1000$
+($n=128$) $0.0101$, $0.0101$, $0.0106$, $0.0131$ (one-donor $0.142$); the
+viscous Kelvin--Helmholtz growth-rate errors at $\lambda/h=128$ (density
+ratios $1$ and $10$, thin and thick layers) are $1.89\,\%$, $0.040\,\%$ and
+$7.56\,\%$ for $c=\frac1{16},\frac1{32},\frac1{64}$ ($2.03\,\%$, $0.18\,\%$,
+$7.56\,\%$ for $c=\frac1{128}$; one-donor $45\,\%$, $11.1\,\%$, $10.2\,\%$).
 
 The audit of \issue{171} specifies rules (i)--(iii) on a uniform mesh without
 solid. Where the stencil of a row of the extension ($f$, its transverse and
@@ -867,6 +898,8 @@ and the ramp \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_CMDGFM_CROS
 (the ramp, rest and label symmetry),
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: the projection is idempotent},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: a translating drop stays at the one-donor level},
+\testsym{test/integration/two_velocity_instabilities.jl}{Two-velocity Kelvin--Helmholtz roll-up stays free of grid-scale ripples}
+(the rolled-up wave of example~07 at level $5$),
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{CMDGFM jump inference option}.
 \end{implnote}
 

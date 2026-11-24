@@ -9,11 +9,12 @@ algebraic constraint rows are zero. For retained velocities `u`, the integrated
 force on those faces is `-wall_reaction_strain' * (stress_weights .* (strain * u))`,
 using the current stress weights.
 """
-mutable struct VariableStaggeredDiffusionOperator{T, M, B}
+mutable struct VariableStaggeredDiffusionOperator{T, M, B, C <: AbstractEmbeddedViscousClosure}
     mesh::M
     stiffness::SparseMatrixCSC{T, Int}
     volumes::Vector{T}
     boundary::B
+    closure::C
     averaging::AbstractViscosityAveraging
     strain::SparseMatrixCSC{T, Int}
     strain_transpose::SparseMatrixCSC{T, Int}
@@ -102,6 +103,7 @@ mutable struct VariableDiffusionConstructionCache{T}
     interpolation_columns::Vector{Int}
     interpolation_values::Vector{T}
     shear_partitions::NTuple{2, ShearPartition{T}}
+    ls_stag::Union{Nothing, _LSStressCache{T}}
     cell_contact_offsets::Vector{Int}
     cell_contacts::Vector{Int}
     contact_marks::Vector{Int}
@@ -118,7 +120,7 @@ function VariableDiffusionConstructionCache(::Type{T}) where {T}
     return VariableDiffusionConstructionCache(
         CellRef[], Int[], Int[], T[], Int[], Int[], T[], Int[],
         Int[], Int[], T[],
-        (ShearPartition(T), ShearPartition(T)),
+        (ShearPartition(T), ShearPartition(T)), nothing,
         Int[], Int[], Int[], Int[], Int[], T[],
         Int[], Int[], Int[], Int[],
     )
