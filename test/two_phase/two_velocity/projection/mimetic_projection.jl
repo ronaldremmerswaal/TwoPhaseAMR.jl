@@ -389,15 +389,16 @@ function _mimetic_add_force!(velocity, case, rhs, dt)
     return velocity
 end
 
-@testset "Mimetic per-phase surface tension drives the liquid only" begin
+@testset "Mimetic per-phase surface tension drives the values on their booked carriers" begin
     # A wave whose trough cells are more than half liquid with a thin gas layer
     # on top (note mmd_small_apertures, fig. mech), with a curvature that varies
     # along the interface. The common jump σκ_f[H]_f|f| on both phases gives
     # the gas value of a face between two H = 1 cells the variation σΔκ of the
     # liquid's capillary pressure, ρ_l/ρ_g times the liquid's tangential
     # acceleration. Per phase, φ^g = σκH and φ^l = σκH - σκ: up to a common
-    # gradient the force is -σ c |f| Δκ on the liquid alone (c the booked
-    # carrier, the aperture on a face without a gas value).
+    # gradient the force is -σ b^π |f| Δκ on value π (b^π the booked carrier,
+    # the aperture on a face without a gas value), almost only on the heavy
+    # liquid at densities (1000, 1).
     TP = TwoPhaseAMR
     sigma, dt = 0.5, 1.0e-3
     kappa(x) = 4.0 + 2.0sinpi(2x)
@@ -419,22 +420,28 @@ end
         # Pure cells next to the interface carry a curvature (cell field).
         field = replace(work.cell_curvature, NaN => 0.0)
         Δκ(face) = field[topology.face_cells[2, face]] - field[topology.face_cells[1, face]]
-        # Up to the common gradient a^π J^g the liquid value gets the
-        # difference term -σ|f|Δκ on its carrier: the aperture where it is alone
-        # on its face, the booked carrier where the face has both values (at
-        # rest the upstream (minus) PLIC trace capped by the aperture).
-        carrier(dof) = (
-            face = assembly.dof_face[dof]; gas = assembly.gas_dof[face];
-            gas > 0 && assembly.dof_aperture[gas] > 0 ?
-                min(assembly.dof_aperture[dof], TP._face_aperture(interface, mesh.faces[face], mesh.faces[face].minus)) :
-                assembly.dof_aperture[dof]
-        )
-        liquid_only = _mimetic_zero_velocity(case)
+        # Up to the common gradient a^π J^g each value gets the difference
+        # term -σ|f|Δκ on its carrier: the liquid aperture where the liquid is
+        # alone on its face, none for a gas value alone. Where the face has both
+        # values, at rest the upstream (minus) PLIC trace t splits into the
+        # liquid of the liquid subface, min(a^l, t), and of the gas subface,
+        # max(t - a^l, 0); the liquid is heavy (or as heavy), so the gas value
+        # keeps λ = ρ_g/ρ_l of its share (the rest is not booked at rest).
+        ratio = density[2] / density[1]
+        function carrier(dof)
+            face = assembly.dof_face[dof]
+            liquid, gas = assembly.liquid_dof[face], assembly.gas_dof[face]
+            both = liquid > 0 && gas > 0 && assembly.dof_aperture[liquid] > 0 && assembly.dof_aperture[gas] > 0
+            assembly.dof_phase[dof] == 1 && !both && return assembly.dof_aperture[dof]
+            both || return 0.0
+            trace = TP._face_aperture(interface, mesh.faces[face], mesh.faces[face].minus)
+            assembly.dof_phase[dof] == 1 && return min(assembly.dof_aperture[liquid], trace)
+            return ratio * max(trace - assembly.dof_aperture[liquid], 0.0)
+        end
+        booked = _mimetic_zero_velocity(case)
         _mimetic_add_force!(
-            liquid_only, case, map(eachindex(assembly.dof_face)) do dof
-                face = assembly.dof_face[dof]
-                assembly.dof_phase[dof] == 1 ?
-                    -sigma * carrier(dof) * mesh.faces[face].area * Δκ(face) : 0.0
+            booked, case, map(eachindex(assembly.dof_face)) do dof
+                -sigma * carrier(dof) * mesh.faces[assembly.dof_face[dof]].area * Δκ(assembly.dof_face[dof])
             end, dt,
         )
         jumps = TP._surface_tension_jumps!(zeros(length(mesh.faces)), interface; sigma)
@@ -442,19 +449,19 @@ end
         _mimetic_add_force!(
             common, case, [assembly.dof_aperture[dof] * jumps[assembly.dof_face[dof]] for dof in eachindex(assembly.dof_face)], dt,
         )
-        for velocity in (per_phase, liquid_only, common)
+        for velocity in (per_phase, booked, common)
             stats = project!(
                 velocity, CellField(mesh), case.solver, dt, work; tolerance = 1.0e-12, max_iterations = 2000,
             )
             @test stats.converged
         end
         @test maximum(
-            maximum(abs, filter(isfinite, per_phase[phase].interior .- liquid_only[phase].interior))
+            maximum(abs, filter(isfinite, per_phase[phase].interior .- booked[phase].interior))
                 for phase in 1:2
         ) <= 1.0e-8 * _mimetic_maximum(per_phase)
         # Gas values on faces between two H = 1 cells, against the scale
         # σ max|Δκ| dt / (ρ_g h) of the misplaced force (measured: per phase
-        # 1e-3 to 4e-3 of it at 1000:1, the common jump 0.64 to 0.69).
+        # 8e-4 to 9e-4 of it at 1000:1, the common jump 0.40 to 0.47).
         gas_faces = filter(eachindex(mesh.faces)) do face
             gas = assembly.gas_dof[face]
             gas > 0 && assembly.dof_phase[gas] == 2 && assembly.dof_aperture[gas] > 0 &&
@@ -2210,17 +2217,18 @@ end
     @test_throws ErrorException TP._mimetic_pressure_cg!(work, _MimeticNaNPreconditioner(), 1.0e-8, 50)
 end
 
-@testset "Mimetic capillary force: booked carrier" begin
+@testset "Mimetic capillary force: booked carriers" begin
     # The difference term -σ|f|Δκ of a face with both values rides on the
-    # booked carrier c = (c^l u^l + c^g u^g)/u^l of the Δt → 0 VOF transport
-    # (c^π the overlap of the transport's subface of phase π with the PLIC
-    # trace of the upstream cell d(u^π) on the face). With equal phase values it
-    # is the upstream trace (the geometric flux of the common velocity), on split
+    # booked carriers b^π of the two values, which book the liquid volume of
+    # the Δt → 0 VOF transport (c^π the overlap of the transport's subface of
+    # phase π with the PLIC trace of the upstream cell d(u^π) on the face; the
+    # light value keeps ρ_L/ρ_H of its share of the heavy phase, the heavy value
+    # books the rest). With equal phase values b^l + b^g is the upstream trace
+    # (the geometric flux of the common velocity) at any densities, on split
     # sides the trace on the face's segment and at a solid its part on the
-    # open interval of the face. It is homogeneous of degree zero in the values
-    # (it depends on their ratio, the force on the common scale of the values
-    # not at all), and a constant curvature (no difference term) stays the
-    # balanced common jump.
+    # open interval of the face. The carriers are homogeneous of degree zero
+    # in the values (the force does not depend on their common scale), and a
+    # constant curvature (no difference term) stays the balanced common jump.
     TP = TwoPhaseAMR
     rng = Random.Xoshiro(29)
     h = 1 / 32
@@ -2250,15 +2258,20 @@ end
             common = _mimetic_velocity(case, (phase, face) -> sign)
             carriers = map(both) do face
                 liquid, gas = assembly.liquid_dof[face], assembly.gas_dof[face]
-                a, open = assembly.dof_aperture[liquid], assembly.dof_aperture[liquid] + assembly.dof_aperture[gas]
-                c = TP._mimetic_booked_carrier(interface, mesh.faces[face], common, face, a, assembly.dof_aperture[gas])
+                a, b = assembly.dof_aperture[liquid], assembly.dof_aperture[gas]
                 upstream = sign > 0 ? mesh.faces[face].minus : mesh.faces[face].plus
+                sums = map(((1000.0, 1.0), (1.0, 1.0), (1.0, 1000.0))) do density
+                    cl, cg = TP._mimetic_booked_carriers(interface, mesh.faces[face], common, face, a, b, density)
+                    @test 0 <= cl <= a + b && -a <= cg <= b
+                    cl + cg
+                end
+                c = first(sums)
+                @test all(s -> isapprox(s, c; atol = 1.0e-14), sums)
                 # The upstream trace on the open part of the face (both
                 # subfaces): the whole trace without a solid.
-                @test c ≈ TP._mimetic_carried_liquid(interface, mesh.faces[face], face, upstream, true, open) atol = 1.0e-14
+                @test c ≈ TP._mimetic_carried_liquid(interface, mesh.faces[face], face, upstream, true, a + b) atol = 1.0e-14
                 @test c <= trace(face, upstream) + 1.0e-14
                 isnothing(interface.geometry) && @test c ≈ trace(face, upstream) atol = 1.0e-14
-                @test 0 <= c <= open
                 c
             end
             # The traces differ from the mean aperture on most faces.
@@ -2393,10 +2406,12 @@ end
     # balanced with gravity's Gram moment ρ_π a|f| g⋅Δx* by one pressure per
     # cell: on a face with both values the hydrostatic part -|f|Δ(Δρ g⋅x*) of
     # the difference term keeps the liquid aperture, only the capillary part
-    # -|f|ΔΨ rides on the booked carrier (which depends on the phase values,
+    # -|f|ΔΨ rides on the booked carriers (which depend on the phase values,
     # here a moving state). Drop of radius 0.2, both labellings (liquid drop,
-    # liquid outside with the densities swapped). Measured 6e-12 – 7e-11 g dt;
-    # with the whole difference term on the booked carrier 0.066 – 61 g dt.
+    # liquid outside with the densities swapped). Measured 8e-12 – 1.1e-10
+    # g dt; with the whole difference term on the booked carriers 0.029 – 0.18
+    # g dt (0.066 – 61 with the former carrier, which booked it on the liquid
+    # whatever the densities).
     TP = TwoPhaseAMR
     gravity, dt = (0.0, -9.81), 1.0e-3
     circle = _mimetic_circle(32; radius = 0.2)
@@ -2419,7 +2434,7 @@ end
                 2.3 + contrast * (gravity[1] * assembly.pressure_x[cell] + gravity[2] * assembly.pressure_y[cell])
             end
             # Without gravity the right-hand side has no hydrostatic part:
-            # the whole difference term on the booked carrier.
+            # the whole difference term on the booked carriers.
             rhs, unresolved = TP._mimetic_capillary_rhs!(
                 work, case.solver, state, psi;
                 sigma = 1.0, formulation = CGFM(), curvature = nothing, gravity = split ? gravity : nothing,
@@ -2431,7 +2446,92 @@ end
             return _mimetic_maximum(velocity) / (9.81 * dt)
         end
         @test increment(true) <= 5.0e-10
-        @test increment(false) >= 0.03
+        @test increment(false) >= 0.02
+    end
+end
+
+function _mimetic_relabelled_flows(
+        n, levelset, density, viscosity; periodic, boundary, gravity = (0.0, 0.0), bottom = pi / 2,
+    )
+    return map((false, true)) do swapped
+        mesh = BlockTreeMesh(; block_size = (n, n), periodic)
+        angle = swapped ? pi - bottom : bottom
+        interface = InterfaceField(
+            mesh, swapped ? (x, y) -> -levelset(x, y) : levelset; lipschitz = 1.5,
+            contact_angle = (pi / 2, pi / 2, angle, pi / 2),
+        )
+        physics = TwoPhase(
+            interface; density = swapped ? reverse(density) : density,
+            dynamic_viscosity = swapped ? reverse(viscosity) : viscosity, gravity,
+            surface_tension = SurfaceTension(1.0; method = CGFM()),
+        )
+        FlowSimulation(
+            mesh, physics; boundary, velocity_model = TwoVelocityModel(pressure_projection = MimeticProjection()),
+        )
+    end
+end
+
+# Largest difference of the phase values of `normal` and the exchanged values
+# of `swapped` (`Inf` where only one of them is present), the largest value,
+# and the largest difference of the fractions `C` and `1 - C'`.
+function _mimetic_relabelling_defect(normal, swapped)
+    defect = scale = 0.0
+    for phase in 1:2, (a, b) in zip(normal.velocity[phase].interior, swapped.velocity[3 - phase].interior)
+        isnan(a) && isnan(b) && continue
+        defect = isnan(a) || isnan(b) ? Inf : max(defect, abs(a - b))
+        isfinite(a) && (scale = max(scale, abs(a)))
+    end
+    fraction = maximum(TwoPhaseAMR._cell_references(normal.interface.mesh)) do reference
+        abs(
+            TwoPhaseAMR._get(normal.interface.fraction, reference) +
+                TwoPhaseAMR._get(swapped.interface.fraction, reference) - 1,
+        )
+    end
+    return defect, scale, fraction
+end
+
+@testset "Mimetic projection: label symmetry" begin
+    # Exchanging the phase labels (the sign of the level set, the densities
+    # and viscosities, the contact angle θ → π - θ) exchanges the phase
+    # values: the phase roles follow the geometry and the densities, never
+    # the index (issue #200). Eight full steps from rest (transport, viscous
+    # step, per-phase capillary force with the booked carriers, gravity,
+    # projection) of a static drop, a sessile drop relaxing from 90° towards a
+    # 60° wall under gravity, and a capillary wave, at densities (1, 1) and
+    # (1000, 1). The drops are centred off the cell diagonals: on a diagonal
+    # the WY normal of the reconstruction chooses its axis by a round-off tie
+    # of C against 1 - C. Measured: phase values within 3e-14 – 2e-10 of
+    # their maximum, fractions within 3e-15; with the former carrier (the
+    # difference term booked on the liquid value whatever the densities)
+    # 2.5e-4 – 5.8 and up to 9e-3, and present values that differ.
+    cases = (
+        "static drop" => ratio -> _mimetic_relabelled_flows(
+            32, (x, y) -> hypot(x - 0.5 - 0.21 / 32, y - 0.5 - 0.37 / 32) - 0.2,
+            (1.0, 1 / ratio), (0.0129, 0.0129 / sqrt(ratio)); periodic = (false, false), boundary = FreeSlip(),
+        ),
+        "sessile drop" => ratio -> _mimetic_relabelled_flows(
+            24, (x, y) -> hypot(x - 0.5 - 0.21 / 24, y) - 0.2, (1.0, 1 / ratio), (0.0191, 0.0191 / sqrt(ratio));
+            periodic = (false, false), boundary = NoSlip(), gravity = (0.0, -30.0), bottom = pi / 3,
+        ),
+        "capillary wave" => ratio -> _mimetic_relabelled_flows(
+            32, (x, y) -> y - 0.5 - 0.02cos(2pi * x), (1.0, 1 / ratio), (0.0, 0.0);
+            periodic = (true, false), boundary = FreeSlip(),
+        ),
+    )
+    for (name, build) in cases, ratio in (1.0, 1000.0)
+        normal, swapped = build(ratio)
+        worst = scale = fraction = 0.0
+        for _ in 1:8
+            for flow in (normal, swapped)
+                stats = step!(flow, 5.0e-4; tolerance = 1.0e-12, max_cycles = 2000)
+                @test stats.converged
+            end
+            defect, largest, change = _mimetic_relabelling_defect(normal, swapped)
+            worst, scale, fraction = max(worst, defect), max(scale, largest), max(fraction, change)
+        end
+        @test scale > 0
+        @test worst <= 1.0e-8 * scale
+        @test fraction <= 1.0e-13
     end
 end
 
