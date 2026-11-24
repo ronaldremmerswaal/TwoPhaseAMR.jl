@@ -392,12 +392,28 @@ and \testsym{test/operators/staggered_diffusion.jl}{orphan transverse rows conve
 \end{implnote}
 
 \subsection{LS-STAG closure from PLIC data}\label{sec:viscosity:lsstag}
-With \code{closure=LSStagClosure()} of the operator, or
-\code{NavierStokesOptions(embedded_viscous_closure=LSStagClosure())} for a
-flow, the rows of the faces next to cut cells are replaced by the LS-STAG
+The LS-STAG closure is the default: with the keywords omitted,
+\code{StaggeredDiffusionOperator(...)}
+and \code{NavierStokesOptions()} select \code{closure=LSStagClosure()} and
+\code{embedded_viscous_closure=LSStagClosure()}. The rows of the faces next to
+cut cells are then replaced by the LS-STAG
 closure of Cheny and Botella~\cite{cheny2010} (\issue{110}, \issue{13}),
 assembled from the PLIC data of the \apitype{GeometryField}. The explicit
 \code{WallDistanceClosure()} selects the legacy closure described above.
+
+The default was switched to LS-STAG after measuring both closures, and the
+owner judged the regressions benign. Developed $\mathrm{Re}=100$ flow around a
+cylinder at 16 cells per diameter gives mean drag, pressure drag, maximum lift
+and Strouhal number $1.25876$, $0.92661$, $0.2154$, $0.1447$ with LS-STAG
+against $1.14227$, $0.83327$, $0.1534$, $0.1495$ with wall distance
+(reference $1.24$, $0.93$, $0.30$, $0.165$): pressure drag and lift move
+towards the reference, viscous drag and shedding frequency do not. A
+zero-gravity sessile cap on a $15^\circ$ slope at a quarter capillary time
+changes its open-volume-fraction shape error by $+6.70\,\%$ at $60^\circ$ with
+16 cells across the domain and $-13.73\,\%$ at 32 cells, and by $+0.21\,\%$
+and $+1.54\,\%$ at $90^\circ$, where the kinetic energy grows by $2.36\,\%$
+and $3.52\,\%$.
+
 For a single-phase component $k$ the \emph{replaced faces} are the faces of the cut cells (solid fraction
 strictly between zero and one), their neighbours on the same grid line (the
 line $x_k=\text{const}$ through the face) and, recursively, the fine faces

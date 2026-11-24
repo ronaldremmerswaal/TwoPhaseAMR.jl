@@ -101,9 +101,9 @@ end
             )
         end
     end
-    # (max, L2, L1) of components 1 and 2 at n = 64, as measured; the default
-    # closure gives 0.0435, 0.0644 (max) and 0.0023, 0.0029 (L2) on the
-    # uniform slope-0.1 mesh. Orders 16 -> 32 -> 64 are 1.98 to 2.07 in L2
+    # (max, L2, L1) of components 1 and 2 at n = 64, as measured; the
+    # wall-distance closure gives 0.0435, 0.0644 (max) and 0.0023, 0.0029 (L2)
+    # on the uniform slope-0.1 mesh. Orders 16 -> 32 -> 64 are 1.98 to 2.07 in L2
     # and L1 and 1.68 to 2.00 in the maximum norm, except for component 2 at
     # slope 0.5 (below).
     expected = (
@@ -139,15 +139,15 @@ end
         h = LS_STAG_EXTENT / n
         mesh = ls_stag_mesh(n, refined)
         geometry = GeometryField(mesh, case.levelset; lipschitz = case.lipschitz)
-        # This test compares the LS-STAG rows with the legacy closure; pin the
-        # reference explicitly so a future default change cannot alter it.
-        default = StaggeredDiffusionOperator(
+        # This test compares the LS-STAG rows with the legacy closure; name
+        # both explicitly so the reference does not depend on the default.
+        legacy = StaggeredDiffusionOperator(
             geometry; viscosity = 1.0, closure = WallDistanceClosure(),
         )
         lsstag = StaggeredDiffusionOperator(
             geometry; viscosity = 1.0, closure = LSStagClosure(),
         )
-        for (current, component) in ((default.x, lsstag.x), (default.y, lsstag.y))
+        for (current, component) in ((legacy.x, lsstag.x), (legacy.y, lsstag.y))
             stiffness = component.stiffness
             @test stiffness == transpose(stiffness)
             scale = Diagonal(1 ./ sqrt.(diag(stiffness)))
@@ -162,7 +162,7 @@ end
                     case.levelset(mesh.faces[global_index].center...) < 0,
                 component.local_to_global,
             )
-            # Rows away from the solid keep the default closure.
+            # Rows away from the solid agree with the legacy closure.
             far = [
                 local_index for (local_index, global_index) in pairs(component.local_to_global)
                     if abs(case.levelset(mesh.faces[global_index].center...)) > 4h

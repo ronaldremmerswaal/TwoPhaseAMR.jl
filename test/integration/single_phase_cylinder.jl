@@ -23,7 +23,9 @@ using Test, TwoPhaseAMR
     # resolution 8 from 1.05059 to 1.34872. That shift is an accuracy gain,
     # not a drift: total drag at 4/8/16 cells per diameter is
     # 0.94591 / 1.34872 / 1.38064 (#110), so the 8->16 change is 2.4 %,
-    # against 17 % for 0.89447 / 1.05059 / 1.244 before it.
+    # against 17 % for 0.89447 / 1.05059 / 1.244 before it. The references
+    # belong to the wall-distance closure, so it is selected explicitly; the
+    # LS-STAG default is measured by the example and validation studies.
     reference_drag = (0.94590674, 1.3487198)
     studies = map(resolutions) do resolution
         cylinder_flow(;
@@ -31,6 +33,7 @@ using Test, TwoPhaseAMR
             base_level = 0, max_level = 0, geometry_level = 0,
             final_time, transient_time = final_time,
             perturbation = 0.0, keyframe_count = 2, preview_dt = final_time + 1,
+            closure = WallDistanceClosure(),
         )
     end
     for (resolution, case, target) in zip(resolutions, studies, reference_drag)

@@ -2,7 +2,7 @@ function _staggered_diffusion_operator(
         mesh::BlockTreeMesh, viscosity::CellField, boundary, T;
         construction_cache = nothing, reuse = nothing,
         geometry = nothing,
-        closure = WallDistanceClosure(),
+        closure = LSStagClosure(),
         averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     )
     cache = isnothing(construction_cache) ?
@@ -17,7 +17,7 @@ function _variable_staggered_diffusion(
         mesh, viscosity::CellField, boundary, ::Type{T};
         cache = VariableDiffusionConstructionCache(T), reuse = nothing,
         geometry = nothing,
-        closure = WallDistanceClosure(),
+        closure = LSStagClosure(),
         averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     ) where {T}
     viscosity.mesh === mesh || throw(ArgumentError("viscosity field must share the operator mesh"))
@@ -360,7 +360,7 @@ end
 function _staggered_diffusion_operator(
         field::InterfaceField; viscosity::NTuple{2}, boundary = NoSlip(),
         construction_cache = nothing, reuse = nothing,
-        closure = WallDistanceClosure(),
+        closure = LSStagClosure(),
         averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     )
     mu = dynamic_viscosity(field; viscosity, averaging)
@@ -375,17 +375,18 @@ end
     StaggeredDiffusionOperator(field::InterfaceField;
                                viscosity, boundary=NoSlip(),
                                averaging=HarmonicViscosityAveraging(),
-                               closure=WallDistanceClosure())
+                               closure=LSStagClosure())
 
 Assemble the two-phase stress operator `div(2 mu D(u))` of an interface field.
 `viscosity` is the `(liquid, gas)` dynamic-viscosity tuple and `averaging` the
 phase-viscosity mixture rule, see [`HarmonicViscosityAveraging`](@ref).
-For a stationary embedded solid, `closure` selects the legacy wall rows or
-the coupled open-face Green and vertex rows of [`LSStagClosure`](@ref).
+For a stationary embedded solid, `closure` selects the coupled open-face Green
+and vertex rows of [`LSStagClosure`](@ref), the default, or the legacy wall
+rows of [`WallDistanceClosure`](@ref).
 """
 function StaggeredDiffusionOperator(
         field::InterfaceField; viscosity::NTuple{2}, boundary = NoSlip(),
-        closure = WallDistanceClosure(),
+        closure = LSStagClosure(),
         averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     )
     return _staggered_diffusion_operator(

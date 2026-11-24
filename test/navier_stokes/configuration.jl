@@ -145,12 +145,14 @@ end
 end
 
 @testset "embedded viscous closure option (#110)" begin
-    @test NavierStokesOptions().embedded_viscous_closure isa WallDistanceClosure
+    # LS-STAG is the default embedded viscous closure; the legacy
+    # wall-distance rows must be requested explicitly.
+    @test NavierStokesOptions().embedded_viscous_closure isa LSStagClosure
     @test_throws ArgumentError NavierStokesOptions(embedded_viscous_closure = :lsstag)
     mesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
     geometry = GeometryField(mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.23; lipschitz = 1)
     @test_throws ArgumentError StaggeredDiffusionOperator(geometry; closure = :lsstag)
-    @test StaggeredDiffusionOperator(geometry).closure isa WallDistanceClosure
+    @test StaggeredDiffusionOperator(geometry).closure isa LSStagClosure
     numerics = NavierStokesOptions(embedded_viscous_closure = LSStagClosure())
     physics = SinglePhase(density = 1.0, dynamic_viscosity = 0.1)
     flow = FlowSimulation(mesh, physics; geometry, numerics, dt = 1.0e-3)
@@ -169,7 +171,7 @@ end
     # The two-phase stress operator consumes the same selected closure; the
     # option is not a single-phase-only setting.
     interface = InterfaceField(mesh, (x, y) -> y - 0.8; geometry, lipschitz = 1)
-    @test StaggeredDiffusionOperator(interface; viscosity = (0.1, 0.01)).closure isa WallDistanceClosure
+    @test StaggeredDiffusionOperator(interface; viscosity = (0.1, 0.01)).closure isa LSStagClosure
     two_phase = TwoPhase(
         interface; density = (1.0, 0.1),
         dynamic_viscosity = (0.1, 0.01),
