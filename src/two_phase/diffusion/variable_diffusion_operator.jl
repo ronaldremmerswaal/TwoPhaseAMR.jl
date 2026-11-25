@@ -137,6 +137,7 @@ function _variable_staggered_diffusion(
             push!(vals, one(T))
         end
     end
+    box_traces = ls_solid && boundary isa FreeSlip ? _ls_box_traces!(cache, length(measures)) : nothing
     if !isempty(dirichlet_faces)
         # Separate the original prescribed columns before adding algebraic
         # rows. Keeping their stress-row indices makes the wall reaction
@@ -193,6 +194,10 @@ function _variable_staggered_diffusion(
         weights, measures, stress_work, cell_inverse_work,
         interpolation_transpose, cell_work, averaging,
     )
+    if !isnothing(box_traces)
+        _ls_box_slots!(box_traces, strain, strain_transpose, wall_reaction_strain, isempty(dirichlet_faces) ? dirichlet_faces : reaction_column)
+        _ls_update_box_strain!(box_traces, strain, strain_transpose, wall_reaction_strain, weights)
+    end
     stiffness_pointers = isnothing(reuse) ? Int[] : reuse.stiffness_pointers
     stiffness_stresses = isnothing(reuse) ? Int[] : reuse.stiffness_stresses
     stiffness_factors = isnothing(reuse) ? T[] : reuse.stiffness_factors
@@ -202,6 +207,7 @@ function _variable_staggered_diffusion(
         stiffness_pointers, stiffness_stresses, stiffness_factors,
         stiffness_refresh_offsets, cache, strain, strain_transpose, weights,
     )
+    isnothing(box_traces) || _ls_box_products!(box_traces, stiffness, stiffness_stresses, stiffness_refresh_offsets)
     volumes = isnothing(reuse) ? T[] : reuse.volumes
     resize!(volumes, length(mesh.faces))
     if isnothing(geometry)
@@ -216,7 +222,7 @@ function _variable_staggered_diffusion(
         wall_reaction_strain, dirichlet_faces, interpolation, interpolation_transpose,
         measures, weights, cell_work, cell_inverse_work, stress_work,
         stiffness_pointers, stiffness_stresses, stiffness_factors,
-        stiffness_refresh_offsets,
+        stiffness_refresh_offsets, box_traces,
     )
 end
 
@@ -274,8 +280,8 @@ function _fill_stress_weights!(
     return weights
 end
 
-"""Refresh the stress-location mixture viscosity without rebuilding geometric
-strain and interpolation stencils. This is used after every VOF update."""
+"""Refresh the stress viscosities after a VOF update. Geometry is fixed;
+on free-slip box patches the new weights also determine the trace minimizer."""
 function _update_log_dynamic_viscosity!(
         operator::VariableStaggeredDiffusionOperator{T},
         cell_log_viscosity::AbstractVector,
@@ -291,6 +297,17 @@ function _update_log_dynamic_viscosity!(
         operator.stress_interpolation_transpose, operator.cell_work,
         operator.averaging,
     )
+    box_traces = operator.box_traces
+    if !isnothing(box_traces)
+        _ls_update_box_strain!(
+            box_traces, operator.strain, operator.strain_transpose,
+            operator.wall_reaction_strain, operator.stress_weights,
+        )
+        coefficients = nonzeros(operator.strain)
+        for (p, i, j) in box_traces.products
+            @inbounds operator.stiffness_factors[p] = coefficients[i] * coefficients[j]
+        end
+    end
     isempty(operator.stiffness_pointers) && return operator
     stiffness_values = nonzeros(operator.stiffness)
     offsets = operator.stiffness_refresh_offsets

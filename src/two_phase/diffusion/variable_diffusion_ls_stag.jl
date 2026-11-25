@@ -33,12 +33,16 @@ mutable struct _LSStressCache{T}
     vertices::Vector{Int}               # one cell's distinct vertices
     lengths::Vector{NTuple{2, T}}        # incident open lengths by axis
     slip_columns::Dict{Int, Tuple{NTuple{3, Int}, NTuple{3, T}}}
+    box_rows::Vector{Int}
+    box_vertices::Vector{Int}
+    box_values::Vector{T}
 end
 
 _LSStressCache(T) = _LSStressCache(
     Dict{NTuple{2, Int}, Int}(), NTuple{2, Int}[], NTuple{4, Int}[],
     _LSStressFace{T}[], NTuple{2, _LSStressLine{T}}[], Int[], Int[], Int[],
     Int[], NTuple{2, T}[], Dict{Int, Tuple{NTuple{3, Int}, NTuple{3, T}}}(),
+    Int[], Int[], T[],
 )
 
 @inline _ls_stress_key(mesh, lattice, key) = ntuple(
@@ -88,30 +92,28 @@ end
     return _LSStressLine((0, 0, 0), z, z, zero(T), false, false)
 end
 
-# Extrapolate the fluid velocity to an endpoint from its two nearest open
-# midpoints. A terminating line with no second sample only supplies a
-# constant trace. On a box wall this is the interior Green reconstruction;
-# the actual wall shear is a separate vertex contribution.
-function _ls_stress_fluid_line(cache, face::_LSStressFace{T}, at_upper, box_derivative = zero(T)) where {T}
+# Extrapolate the fluid velocity at a line terminating on the embedded wall
+# from its two nearest open midpoints, or from the only available sample.
+# No shear rectangle crosses this endpoint.
+function _ls_stress_fluid_line(cache, face::_LSStressFace{T}, at_upper) where {T}
     axis = face.axis
     away = at_upper ? 1 : 2
-    on_box = !iszero(box_derivative)
     other = cache.incident[face.vertices[away]][2axis - 2 + away]
     if !iszero(other) && face.reaches[away]
         far = cache.faces[other]
         if far.reaches[3 - away]
             inverse_length = inv(face.length + far.length)
             q = face.length * inverse_length
-            inverse = (at_upper ? T(2) : -T(2)) * inverse_length
+            z = zero(T)
             return _LSStressLine(
-                (face.column, far.column, 0), (inverse, -inverse, zero(T)),
-                (one(T) + q, -q, zero(T)), box_derivative, on_box, on_box,
+                (face.column, far.column, 0), (z, z, z),
+                (one(T) + q, -q, z), z, false, false,
             )
         end
     end
     return _LSStressLine(
         (face.column, 0, 0), (zero(T), zero(T), zero(T)),
-        (one(T), zero(T), zero(T)), box_derivative, on_box, on_box,
+        (one(T), zero(T), zero(T)), zero(T), false, false,
     )
 end
 
@@ -142,7 +144,12 @@ function _ls_stress_line(cache::_LSStressCache{T}, mesh, lattice, vertex, axis) 
     direction = below ? one(T) : -one(T)
     distance = direction * anchor.length / 2
     if !mesh.periodic[tangent] && (key[tangent] == 0 || key[tangent] == lattice[tangent])
-        return _ls_stress_fluid_line(cache, anchor, below, -inv(distance))
+        # At a fixed box trace s=0 the Green endpoint value vanishes and
+        # the vertex quotient is d*(u_f-s); FreeSlip releases the same s
+        # in every adjacent Green and vertex row.
+        d = -inv(distance)
+        z = zero(T)
+        return _LSStressLine((anchor.column, 0, 0), (d, z, z), (z, z, z), d, true, true)
     end
     # Hanging vertex: use both coarse fluid samples when available. Never
     # replace a missing sample by a boundary-condition-dependent wall value.
@@ -218,8 +225,7 @@ end
 # the wrong traction. Give the PLIC segment a free scalar tangential trace
 # s (its normal velocity is zero). With the same cell viscosity on all three
 # rows the minimum of sum_i m_i (E_i u - b_i s)^2 is obtained by projecting
-# E orthogonally to b in the m metric. Box-wall shear is released separately
-# in its vertex row; it does not change the cell Green reconstruction.
+# both the face map and any shared box-trace columns orthogonally to b.
 function _ls_stress_slip!(cache, cell, wall_row, measures, b)
     rows = (2cell - 1, 2cell, wall_row)
     m = map(row -> measures[row], rows)
@@ -229,6 +235,16 @@ function _ls_stress_slip!(cache, cell, wall_row, measures, b)
     denom = sum(i -> m[i] * u[i]^2, 1:3)
     for j in 1:3
         cache.slip_columns[rows[j]] = (rows, ntuple(i -> u[i] * (m[j] * u[j] / denom), 3))
+    end
+    return nothing
+end
+
+@inline function _ls_box_entry!(cache, line, row, vertex, value, boundary)
+    # At a box corner both velocity components are normal to a box side.
+    if boundary isa FreeSlip && !iszero(line.box_derivative) && !iszero(line.columns[1]) && !iszero(value)
+        push!(cache.box_rows, row)
+        push!(cache.box_vertices, vertex)
+        push!(cache.box_values, value)
     end
     return nothing
 end
@@ -303,18 +319,19 @@ function _ls_stress_cell!(cache, geometry::GeometryField{T}, ref, cell, measures
             end
             for j in 1:2
                 face.reaches[j] || continue
-                line = cache.lines[face.vertices[j]][3 - face.axis]
+                vertex = face.vertices[j]
+                line = cache.lines[vertex][3 - face.axis]
                 if tilted_slip
-                    shear_flux += sign(oriented) * face.length * tangent[3 - face.axis] *
-                        sum(line.trace) / 2
+                    trace = iszero(line.box_derivative) ? sum(line.trace) : one(T)
+                    shear_flux += sign(oriented) * face.length * tangent[3 - face.axis] * trace / 2
                 end
                 _ls_stress_line_row!(rows, cols, vals, cell_row, line.columns, line.trace, coefficient)
+                _ls_box_entry!(cache, line, cell_row, vertex, coefficient, boundary)
             end
         end
         if tilted_slip
-            # The unit wall trace is precisely E applied to constant t: the
-            # shared vertex derivatives annihilate constants, and the cell
-            # shear retains the same endpoint traces as its Green integral.
+            # With the admissible box traces the unit wall column equals
+            # the Green map on constant t; shared derivatives vanish.
             slip = (
                 cell_row,
                 (
@@ -337,14 +354,8 @@ function _ls_stress_cell!(cache, geometry::GeometryField{T}, ref, cell, measures
             row = length(measures)
             cache.vertex_rows[v] = row
             for line in lines
-                if iszero(line.box_derivative)
-                    _ls_stress_line_row!(rows, cols, vals, row, line.columns, line.derivative, one(T))
-                elseif boundary isa NoSlip
-                    # The normal velocity is prescribed along a stationary box
-                    # wall. Only the wall-normal derivative of its tangential
-                    # velocity remains; freeing that trace releases this square.
-                    _ls_stress_line_row!(rows, cols, vals, row, (line.columns[1],), (line.box_derivative,), one(T))
-                end
+                _ls_stress_line_row!(rows, cols, vals, row, line.columns, line.derivative, one(T))
+                _ls_box_entry!(cache, line, row, v, -line.box_derivative, boundary)
             end
         end
         measures[row] += area
@@ -352,10 +363,30 @@ function _ls_stress_cell!(cache, geometry::GeometryField{T}, ref, cell, measures
         if complete
             for line in lines
                 _ls_stress_line_row!(rows, cols, vals, cell_row, line.columns, line.derivative, -area / remainder)
+                _ls_box_entry!(cache, line, cell_row, v, area * line.box_derivative / remainder, boundary)
             end
         end
     end
     return slip
+end
+
+function _ls_project_plic!(slip_columns, rows, cols, vals)
+    for p in eachindex(rows)
+        column = get(slip_columns, rows[p], nothing)
+        isnothing(column) && continue
+        targets, factors = column
+        value = vals[p]
+        for j in 1:3
+            if targets[j] == rows[p]
+                vals[p] = value * (1 - factors[j])
+            elseif !iszero(factors[j])
+                push!(rows, targets[j])
+                push!(cols, cols[p])
+                push!(vals, -value * factors[j])
+            end
+        end
+    end
+    return nothing
 end
 
 function _ls_stress_rows!(measures, construction, geometry::GeometryField{T}, boundary) where {T}
@@ -366,6 +397,9 @@ function _ls_stress_rows!(measures, construction, geometry::GeometryField{T}, bo
     end
     cache = _ls_stress_topology!(scratch, geometry)
     empty!(cache.slip_columns)
+    empty!(cache.box_rows)
+    empty!(cache.box_vertices)
+    empty!(cache.box_values)
     ir, iv = construction.interpolation_rows, construction.interpolation_values
     first_entry = length(iv) + 1
     for (cell, ref) in pairs(construction.cell_references)
@@ -376,22 +410,8 @@ function _ls_stress_rows!(measures, construction, geometry::GeometryField{T}, bo
         end
     end
     if !isempty(cache.slip_columns)
-        rows, cols, vals = construction.strain_rows, construction.strain_columns, construction.strain_values
-        for p in eachindex(rows)
-            column = get(cache.slip_columns, rows[p], nothing)
-            isnothing(column) && continue
-            targets, factors = column
-            value = vals[p]
-            for j in 1:3
-                if targets[j] == rows[p]
-                    vals[p] = value * (1 - factors[j])
-                elseif !iszero(factors[j])
-                    push!(rows, targets[j])
-                    push!(cols, cols[p])
-                    push!(vals, -value * factors[j])
-                end
-            end
-        end
+        _ls_project_plic!(cache.slip_columns, construction.strain_rows, construction.strain_columns, construction.strain_values)
+        _ls_project_plic!(cache.slip_columns, cache.box_rows, cache.box_vertices, cache.box_values)
     end
     for i in first_entry:length(iv)
         iv[i] /= measures[ir[i]]

@@ -2184,3 +2184,65 @@ end
         )
     end
 end
+
+@testset "LS-STAG NoSlip Helmholtz convergence at box-boundary T-junction" begin
+    # psi = [x(1-x)y(1-y)(y-c)]^2, u = (psi_y, -psi_x).
+    # Its gradient vanishes on the box and on the stationary solid y = c,
+    # and div(u) = 0. With constant viscosity, div(2D(u)) = Laplacian(u).
+    c = 0.25
+    levelset(x, y) = y - c
+    function manufactured(x, y, axis)
+        g, gx = x * (1 - x), 1 - 2x
+        p, px = g^2, 2g * gx
+        pxx, pxxx = 2(gx^2 - 2g), -12gx
+        h, hy = y * (1 - y), 1 - 2y
+        q = h * (y - c)
+        qy = hy * (y - c) + h
+        qyy = -2(y - c) + 2hy
+        qyyy = -6
+        Q, Qy = q^2, 2q * qy
+        Qyy = 2(qy^2 + q * qyy)
+        Qyyy = 2(3qy * qyy + q * qyyy)
+        return axis == 1 ? (p * Qy, pxx * Qy + p * Qyyy) :
+            (-px * Q, -pxxx * Q - px * Qyy)
+    end
+
+    errors = Float64[]
+    for n in (16, 32, 64)
+        mesh = BlockTreeMesh(;
+            base_mesh = (n, n), block_size = (4, 4), max_level = 1,
+            periodic = (false, false),
+            refine = (key, origin, _) -> key.level == 0 && origin[1] >= 0.5,
+        )
+        geometry = GeometryField(mesh, levelset; lipschitz = 1.0)
+        interface = InterfaceField(mesh, (x, y) -> y - 5; geometry, lipschitz = 1.0)
+        operator = StaggeredDiffusionOperator(
+            interface; viscosity = (1.0, 1.0), boundary = NoSlip(),
+            closure = LSStagClosure(),
+        )
+        exact = zeros(length(mesh.faces))
+        rhs = similar(exact)
+        fill!(rhs, 0)
+        active = falses(length(mesh.faces))
+        for (index, face) in pairs(mesh.faces)
+            open_length, midpoint = _ls2p_open_segment(face, levelset)
+            open_length > 64eps() * face.area || continue
+            geometry.face_dual_volumes[index] > 0 || continue
+            index in operator.dirichlet_faces && continue
+            active[index] = true
+            u, laplacian = manufactured(midpoint..., face.axis)
+            exact[index] = u
+            # The discrete mass is the operator's dual volume, including
+            # the algebraic treatment of covered and constrained faces.
+            rhs[index] = operator.volumes[index] * (u - laplacian)
+        end
+        @test any(active)
+        solution = (spdiagm(0 => operator.volumes) + operator.stiffness) \ rhs
+        push!(errors, maximum(abs, (solution - exact)[active]))
+    end
+    # The coarsest pair is slightly pre-asymptotic (reviewed EOC ~1.77);
+    # the two-level slope and final pair both exceed 1.8 for second order,
+    # while a first-order T-junction error fails either criterion.
+    @test log2(errors[1] / errors[3]) / 2 >= 1.8
+    @test log2(errors[2] / errors[3]) >= 1.8
+end

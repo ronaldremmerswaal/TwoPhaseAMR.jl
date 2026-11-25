@@ -31,6 +31,7 @@ mutable struct VariableStaggeredDiffusionOperator{T, M, B, C <: AbstractEmbedded
     stiffness_stresses::Vector{Int}
     stiffness_factors::Vector{T}
     stiffness_refresh_offsets::Vector{Int}
+    box_traces::Union{Nothing, _LSBoxTraces{T}}
 end
 
 """One sample of velocity component `k` in the shear partition: an owned face

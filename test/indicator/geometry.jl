@@ -1729,44 +1729,181 @@ end
     @test maximum(abs, velocity.interior) < 2.0e-12
 end
 
-# On this off-vertex oblique cut the box-wall squares and one local
-# tangential PLIC trace per cut cell account for the entire stiffness loss.
-function _check_ls_stag_free_trace_projection(mesh, geometry, no_slip, free_slip)
+# Reconstruct the uncondensed trace Jacobian from the open edge geometry.
+# Box traces are shared by every Green row meeting a vertex, not independent
+# vertex squares. PLIC traces and box traces must therefore be eliminated
+# together in the weighted strain metric.
+function _check_ls_stag_free_trace_projection(mesh, geometry, no_slip, free_slip; tilted)
     construction = TwoPhaseAMR.VariableDiffusionConstructionCache(Float64)
     refs = TwoPhaseAMR._cached_cell_references!(construction.cell_references, mesh)
-    measures = no_slip.stress_measures[1:(2 * length(refs))]
+    measures = copy(no_slip.stress_measures[1:(2 * length(refs))])
     cache = TwoPhaseAMR._ls_stress_topology!(TwoPhaseAMR._LSStressCache(Float64), geometry)
-    loss = zeros(size(no_slip.stiffness))
-    ncut = 0
+    free_construction = TwoPhaseAMR.VariableDiffusionConstructionCache(Float64)
+    free_measures = copy(free_slip.stress_measures[1:(2 * length(refs))])
+    free_cache = TwoPhaseAMR._ls_stress_topology!(TwoPhaseAMR._LSStressCache(Float64), geometry)
+    retained_rows = collect(1:(2 * length(refs)))
+    retained_free_rows = copy(retained_rows)
+    dropped_rows = Int[]
+    nrows = length(no_slip.stress_measures)
+    box = Dict{Int, Vector{Float64}}()
+    plic = Vector{Vector{Float64}}()
+    aligned_walls = 0
     for (c, ref) in pairs(refs)
-        slip = TwoPhaseAMR._ls_stress_cell!(cache, geometry, ref, c, measures, construction, FreeSlip())
-        isnothing(slip) && continue
-        ncut += 1
-        wall, column = slip
-        rows = [2c - 1, 2c, wall]
-        A = Matrix(no_slip.strain[rows, :])
-        E = Matrix(free_slip.strain[rows, :])
-        W = Diagonal(free_slip.stress_weights[rows])
-        b = collect(column)
-        g = A' * (W * b)
-        @test any(!iszero, g)
-        released = (g * g') / dot(b, W * b)
-        @test maximum(abs, A' * W * A - E' * W * E - released) <= 1024eps()
-        loss .+= released
+        open = TwoPhaseAMR._get(geometry.open_fraction, ref)
+        open > 0 || continue
+        entries = cache.offsets[c]:(cache.offsets[c + 1] - 1)
+        wall = !isone(open) || any(entries) do entry
+            iszero(cache.faces[abs(cache.cell_faces[entry])].length)
+        end
+        regular = isone(open) && length(entries) == 4
+        vertices = Int[]
+        lengths = NTuple{2, Float64}[]
+        for entry in entries
+            face = cache.faces[abs(cache.cell_faces[entry])]
+            for j in 1:2
+                v = face.vertices[j]
+                x, y = cache.lines[v]
+                regular &= face.reaches[j] && x.regular && y.regular
+                face.reaches[j] && x.active && y.active || continue
+                pos = findfirst(==(v), vertices)
+                if isnothing(pos)
+                    push!(vertices, v)
+                    push!(lengths, (0.0, 0.0))
+                    pos = length(vertices)
+                end
+                lengths[pos] = Base.setindex(lengths[pos], face.length, face.axis)
+            end
+        end
+        volume = open * mesh.blocks[ref.block].volume
+        rectangles = sum(a * b / 4 for (a, b) in lengths; init = 0.0)
+        scale = regular || iszero(rectangles) ? 1.0 : min(1.0, volume / (2rectangles))
+        remainder = regular ? 0.0 : volume - scale * rectangles
+        h = mesh.blocks[ref.block].spacing
+        n1 = TwoPhaseAMR._get(geometry.solid.normal_x, ref) / h[1]
+        n2 = TwoPhaseAMR._get(geometry.solid.normal_y, ref) / h[2]
+        norm_n = hypot(n1, n2)
+        sloped = !isone(open) && min(abs(n1), abs(n2)) > 64eps() * norm_n
+        no_complete = remainder > 0
+        free_complete = no_complete && (!wall || sloped)
+        wall && !sloped && no_complete && (aligned_walls += 1)
+        before = length(measures)
+        free_before = length(free_measures)
+        previous_vertices = count(!iszero, cache.vertex_rows)
+        free_previous_vertices = count(!iszero, free_cache.vertex_rows)
+        TwoPhaseAMR._ls_stress_cell!(cache, geometry, ref, c, measures, construction, NoSlip())
+        TwoPhaseAMR._ls_stress_cell!(free_cache, geometry, ref, c, free_measures, free_construction, FreeSlip())
+        new_vertices = count(!iszero, cache.vertex_rows) - previous_vertices
+        free_new_vertices = count(!iszero, free_cache.vertex_rows) - free_previous_vertices
+        @test new_vertices == free_new_vertices
+        # NoSlip retains the aligned-wall completion; FreeSlip drops it.
+        @test length(measures) - before == new_vertices + Int(no_complete)
+        @test length(free_measures) - free_before == free_new_vertices + Int(free_complete)
+        cell_row = no_complete ? before + 1 : 0
+        if no_complete
+            # The completion is inserted before any new vertex rows.
+            @test isapprox(measures[cell_row], remainder; rtol = 128eps(), atol = 128eps())
+            if free_complete
+                push!(retained_rows, cell_row)
+                push!(retained_free_rows, free_before + 1)
+            else
+                push!(dropped_rows, cell_row)
+            end
+        end
+        for (pos, v) in pairs(vertices)
+            area = scale * prod(lengths[pos]) / 4
+            area > 0 || continue
+            row = cache.vertex_rows[v]
+            for line in cache.lines[v]
+                (iszero(line.box_derivative) || iszero(line.columns[1])) && continue
+                column = get!(box, v) do
+                    zeros(nrows)
+                end
+                column[row] = -line.box_derivative
+                no_complete && (column[cell_row] += area * line.box_derivative / remainder)
+            end
+        end
+        if no_complete
+            normal_flux = zeros(2)
+            shear_flux = 0.0
+            tangent = sloped ? (-n2 / norm_n, n1 / norm_n) : (0.0, 0.0)
+            for entry in entries
+                oriented = cache.cell_faces[entry]
+                face = cache.faces[abs(oriented)]
+                normal_flux[face.axis] += sign(oriented) * face.length
+                for j in 1:2
+                    face.reaches[j] || continue
+                    v = face.vertices[j]
+                    line = cache.lines[v][3 - face.axis]
+                    if !iszero(line.box_derivative) && !iszero(line.columns[1])
+                        column = get!(box, v) do
+                            zeros(nrows)
+                        end
+                        column[cell_row] += sign(oriented) * face.length / (2remainder)
+                    end
+                    # The PLIC parameter has a unit endpoint trace even at
+                    # a box line, independently of the box trace parameter.
+                    endpoint = iszero(line.box_derivative) ? sum(line.trace) : 1.0
+                    shear_flux += sign(oriented) * face.length *
+                        tangent[3 - face.axis] * endpoint / 2
+                end
+            end
+            if sloped
+                column = zeros(nrows)
+                column[2c - 1] = tangent[1] * normal_flux[1] / volume
+                column[2c] = tangent[2] * normal_flux[2] / volume
+                column[cell_row] = shear_flux / remainder
+                push!(plic, column)
+            end
+        end
     end
-    @test ncut == count(ref -> 0 < TwoPhaseAMR._get(geometry.open_fraction, ref) < 1, refs)
-    @test ncut > 0
-    for (v, lines) in pairs(cache.lines)
-        r = cache.vertex_rows[v]
-        iszero(r) && continue
-        any(line -> !iszero(line.box_derivative), lines) || continue
-        # The normal velocity is prescribed along the wall. The only active
-        # contribution to this vertex is its tangential no-slip quotient.
-        @test all(iszero, free_slip.strain[r, :])
-        a = Array(no_slip.strain[r, :])
-        loss .+= no_slip.stress_weights[r] .* (a * a')
+    for v in eachindex(cache.vertex_rows)
+        row, free_row = cache.vertex_rows[v], free_cache.vertex_rows[v]
+        @test iszero(row) == iszero(free_row)
+        iszero(row) && continue
+        push!(retained_rows, row)
+        push!(retained_free_rows, free_row)
     end
-    @test maximum(abs, Matrix(no_slip.stiffness - free_slip.stiffness) - loss) <= 1024eps()
+    # Isolated closed-face and Dirichlet rows are appended after LS rows.
+    append!(retained_rows, (length(measures) + 1):nrows)
+    append!(retained_free_rows, (length(free_measures) + 1):length(free_slip.stress_measures))
+    @test length(retained_rows) == length(retained_free_rows)
+    @test sort([retained_rows; dropped_rows]) == collect(1:nrows)
+    @test sort(retained_free_rows) == collect(eachindex(free_slip.stress_measures))
+    @test no_slip.stress_weights[retained_rows] == free_slip.stress_weights[retained_free_rows]
+    surviving_E = Matrix(free_slip.strain[retained_free_rows, :])
+    surviving_W = no_slip.stress_weights[retained_rows]
+    @test maximum(
+        abs, Matrix(free_slip.stiffness) -
+            surviving_E' * (surviving_W .* surviving_E)
+    ) <= 1024eps()
+    @test length(dropped_rows) == aligned_walls
+    dropped = [Float64.(collect(1:nrows) .== row) for row in dropped_rows]
+    @test !isempty(box)
+    if tilted
+        ncut = count(ref -> 0 < TwoPhaseAMR._get(geometry.open_fraction, ref) < 1, refs)
+        @test ncut > 0
+        @test length(plic) == ncut
+    else
+        @test aligned_walls > 0
+        @test isempty(plic)
+    end
+    B = hcat(collect(values(box))..., plic..., dropped...)
+    A = Matrix(no_slip.strain)
+    for column in plic
+        # Every cut-cell trace must couple to at least one retained velocity.
+        @test any(!iszero, A' * (no_slip.stress_weights .* column))
+    end
+    Wsqrt = sqrt.(no_slip.stress_weights)
+    weighted_B = Wsqrt .* B
+    weighted_A = Wsqrt .* A
+    # SVD handles dependent trace columns without imposing an arbitrary gauge.
+    released = weighted_A' * weighted_B * pinv(weighted_B) * weighted_A
+    # Absolute 1024eps allows only accumulated Float64 round-off, not an
+    # O(1) error in a wall coefficient or the shared-trace cross terms.
+    @test maximum(abs, Matrix(no_slip.stiffness - free_slip.stiffness) - released) <= 1024eps()
+    if tilted
+        @test maximum(abs, hcat(collect(values(box))...)' * (no_slip.stress_weights .* hcat(plic...))) > 0
+    end
     return nothing
 end
 
@@ -1804,8 +1941,8 @@ end
     # Default LS-STAG closure. Both stiffnesses are individually PSD, and
     # releasing the wall tangential trace cannot add dissipation: the actual
     # K_NoSlip - K_FreeSlip is PSD on this nonperiodic tilted wall. The
-    # released trace is also checked cell by cell on the uncondensed
-    # FreeSlip reconstruction below. Do not loosen these bounds.
+    # released trace is checked against a joint weighted Schur elimination
+    # of the independent geometric trace columns below. Do not loosen these bounds.
     no_slip = StaggeredDiffusionOperator(
         interface; viscosity = (0.2, 0.03), boundary = NoSlip(),
     )
@@ -1822,7 +1959,51 @@ end
     wall_shear = no_slip.stiffness - free_slip.stiffness
     @test any(value -> !iszero(value), wall_shear)
     @test minimum(eigvals(Symmetric(Matrix(wall_shear)))) >= -1024eps()
-    _check_ls_stag_free_trace_projection(mesh, geometry, no_slip, free_slip)
+    _check_ls_stag_free_trace_projection(mesh, geometry, no_slip, free_slip; tilted = true)
+
+    # Changing the mixture next to the box/PLIC junction changes the weighted
+    # trace minimizer, not just the diagonal stress weights.
+    shifted_interface = InterfaceField(
+        mesh, (x, y) -> y - 0.24 - 0.4x;
+        geometry, lipschitz = hypot(1, 0.4),
+    )
+    refreshed_viscosity = (0.03, 0.2)
+    old_weights = copy(free_slip.stress_weights)
+    for operator in (no_slip, free_slip)
+        TwoPhaseAMR._update_dynamic_viscosity!(
+            operator, shifted_interface, refreshed_viscosity,
+        )
+    end
+    @test any(!iszero, free_slip.stress_weights - old_weights)
+    fresh_free_slip = StaggeredDiffusionOperator(
+        shifted_interface; viscosity = refreshed_viscosity, boundary = FreeSlip(),
+    )
+    # Both comparisons allow only round-off from assembly and dense products.
+    @test maximum(abs, Matrix(free_slip.stiffness - fresh_free_slip.stiffness)) <= 1024eps()
+    E = Matrix(free_slip.strain)
+    factorized = E' * (free_slip.stress_weights .* E)
+    @test maximum(abs, Matrix(free_slip.stiffness) - factorized) <= 1024eps()
+    @test minimum(eigvals(Symmetric(Matrix(no_slip.stiffness - free_slip.stiffness)))) >= -1024eps()
+    _check_ls_stag_free_trace_projection(mesh, geometry, no_slip, free_slip; tilted = true)
+
+    # A grid-aligned wall has closed faces but no PLIC completion. Check the
+    # released box traces separately, including their PSD stiffness difference.
+    aligned_geometry = GeometryField(mesh, (x, y) -> x - 0.5; lipschitz = 1)
+    aligned_interface = InterfaceField(
+        mesh, (x, y) -> y - 0.43; geometry = aligned_geometry, lipschitz = 1,
+    )
+    aligned_no_slip = StaggeredDiffusionOperator(
+        aligned_interface; viscosity = (0.2, 0.03), boundary = NoSlip(),
+    )
+    aligned_free_slip = StaggeredDiffusionOperator(
+        aligned_interface; viscosity = (0.2, 0.03), boundary = FreeSlip(),
+    )
+    aligned_loss = Matrix(aligned_no_slip.stiffness - aligned_free_slip.stiffness)
+    @test any(!iszero, aligned_loss)
+    @test minimum(eigvals(Symmetric(aligned_loss))) >= -1024eps()
+    _check_ls_stag_free_trace_projection(
+        mesh, aligned_geometry, aligned_no_slip, aligned_free_slip; tilted = false,
+    )
 
     for closure in (WallDistanceClosure(), LSStagClosure())
         constant_free_slip = StaggeredDiffusionOperator(

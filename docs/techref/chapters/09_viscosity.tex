@@ -689,11 +689,10 @@ and $R_c=V_c-\sum_v a_{cv}>0$, its additional shear row is
     \frac{Q_c(u)-\sum_v a_{cv}D_vu}{R_c}.
     \label{eq:viscosity:lsstress}
 \end{equation}
-Thus the area-weighted sum of the fluid-reconstructed strains equals the
-cell Green flux, and the stress work remains a sum of positive squares.
-The separate box-wall quadrature is described below. The $a_{cv}$ also give
-the viscosity interpolation weights of the shared vertex; the remaining
-row uses the cell viscosity. For an uncut uniform cell $R_c=0$ and the
+Thus the area-weighted strains sum to the cell Green flux for each choice
+of boundary trace. The $a_{cv}$ also give the viscosity interpolation weights
+of the shared vertex; the remaining row uses the cell viscosity.
+For an uncut uniform cell $R_c=0$ and the
 four vertex rows already give the Green flux. In the Cartesian free-slip
 limit there is no wall-shear row. If a slip wall ends at a grid vertex,
 an adjacent full cell uses the one-sided fluid trace extrapolated from open
@@ -710,25 +709,41 @@ a wall-distance penalty. The uncondensed identity is checked in every cut
 cell of uniform and composite periodic planar bands in
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{Uncondensed LS-STAG FreeSlip rows reproduce the PLIC tangent}.
 
-At a Cartesian box wall the cell Green completion uses the same fluid-side
-endpoint trace and derivative for both boundary conditions: extrapolate
-linearly through the nearest two open face midpoints, or extend the single
-available sample as a constant. The wall-touching vertex quarter, not the
-interior remainder, carries the boundary shear. If $u_f$ is the tangential
-sample a distance $d$ from the wall, its normal derivative there is
-$\pm u_f/d$ for stationary no slip and zero for free slip. Thus releasing
-the box trace removes a square rather than changing the strain of a
-neighbouring cell. Equivalently, the area-weighted sum of \emph{physical}
-strains differs from $Q_c$ only by the box boundary flux correction
-$\sum_{v\in\partial\domain}a_{cv}(D_v^{\mathrm{wall}}-D_v^{\mathrm{fluid}})u$.
-For the common cut-cell map $E_c$ and positive diagonal stress weights $W_c$,
-the loss of stiffness when the local trace is released is the positive
-rank-one term $(E_c^\top W_c b_c)(E_c^\top W_c b_c)^\top/(b_c^\top W_c b_c)$
-when $E_c^\top W_c b_c\ne0$. Consequently $K_{\mathrm{no\ slip}}-K_{\mathrm{free\ slip}}$
-is positive semidefinite. The rank-one identity is checked in
+At each Cartesian box-wall vertex $v$ use one tangential velocity $s_v$ in
+\emph{both} terms of \cref{eq:viscosity:lsstress}: the endpoint trace in
+$Q_c$ is $s_v$, and the wall derivative in $D_v$ is
+$\pm(u_f-s_v)/d$, where $u_f$ is the closest open midpoint at distance $d$.
+The normal component is prescribed; both components are prescribed at a box
+corner. Stationary no slip sets $s_v=0$, including in cells where a level
+transition meets the box. Free slip minimizes the weighted strain work over
+the $s_v$. A trace seen only by its vertex releases that square. If several
+traces enter one completion, their minimization is coupled; the cell and
+vertex viscosities need not agree, so the minimum is updated when they change.
+
+To see the stiffness ordering, write the complete no-slip energy as
+$\|W^{1/2}Eu\|_2^2$. Let $B$ contain the box and tilted PLIC trace
+columns. For each aligned embedded wall whose remaining shear row is
+omitted in free slip, also include the coordinate vector of that row:
+minimizing over its coefficient deletes exactly that square. If $P$ is the
+orthogonal projector onto the range of $W^{1/2}B$, the minimized energy is
+$\|(I-P)W^{1/2}Eu\|_2^2$. Hence the released energy is
+$\|PW^{1/2}Eu\|_2^2\ge0$ for every $u$, even when the trace columns are
+dependent. The implementation first eliminates the cell-local tilted
+PLIC trace from \emph{both} $E$ and the box columns, then the remaining
+shared box traces in their connected groups
+(\srcsym{src/two_phase/diffusion/variable_diffusion_box_traces.jl}{_ls_update_box_strain!}).
+A direct weighted projection,
+including the aligned-wall case and refreshed viscosities, is checked in
 \testsym{test/indicator/geometry.jl}{Embedded free slip omits only physical wall-shear stresses};
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{LS-STAG free-slip energy nests at terminating grid lines}
 checks the stiffness ordering on uniform and composite planar bands.
+On the right-half-refined Helmholtz fixture,
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{LS-STAG NoSlip Helmholtz convergence at box-boundary T-junction},
+the no-slip maximum error at $n=32,64,128$ is
+$9.76\times10^{-5},\,2.65\times10^{-5},\,6.99\times10^{-6}$
+(orders $1.88,1.93$). Using a wall midpoint quotient only at the vertex
+and a fluid extrapolation in the adjacent Green remainder instead gave
+$6.57\times10^{-5}$ at $n=128$ and order $1.03$.
 
 This PLIC extension to variable stress is implemented in
 \srcsym{src/two_phase/diffusion/variable_diffusion_ls_stag.jl}{_ls_stress_rows!}.
@@ -740,7 +755,7 @@ The two-layer manufactured channel of
 has an aligned no-slip wall and continuous tangential traction across its
 $2:1$ viscosity jump. From $n=16$ to $32$ to $64$, the volume-weighted
 $L^2$ orders for LS-STAG are $1.88,1.97$ and $1.97,2.00$ for the two
-components on the uniform mesh, and $1.96,2.00$ and $2.02,2.03$ with
+components on the uniform mesh, and $1.95,1.99$ and $2.03,2.03$ with
 the right half refined. This is not an order result for an oblique liquid
 contact line.
 
