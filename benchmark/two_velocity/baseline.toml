@@ -1,0 +1,1441 @@
+# Baseline of the two-velocity verification suite; re-record with
+# `run.jl --tier=... --record` only for an intentional change (see README).
+[meta]
+julia_version = "1.12.7"
+perturbed = false
+revision = "189ba44f"
+threads = 1
+
+[tier1]
+"T1/cos a=0.01 DR=1/n128/cmdgfm/max_change" = 0.007471546436233087
+"T1/cos a=0.01 DR=1/n128/cmdgfm/max_jump" = 0.00750404035648778
+"T1/cos a=0.01 DR=1/n128/cmdgfm/order(max_change)" = 2.685584496413875
+"T1/cos a=0.01 DR=1/n128/cmdgfm/order(max_jump)" = 2.7146920439321316
+"T1/cos a=0.01 DR=1/n128/cmdgfm_constant/max_change" = 0.1545357723066192
+"T1/cos a=0.01 DR=1/n128/cmdgfm_constant/max_jump" = 0.15841939803306004
+"T1/cos a=0.01 DR=1/n128/cmdgfm_constant/order(max_change)" = 0.9424014762548434
+"T1/cos a=0.01 DR=1/n128/cmdgfm_constant/order(max_jump)" = 0.9422693167125518
+"T1/cos a=0.01 DR=1/n128/mimetic/max_change" = 0.0
+"T1/cos a=0.01 DR=1/n128/mimetic/max_jump" = 0.0
+"T1/cos a=0.01 DR=1/n32/cmdgfm/max_change" = 0.21713287031036502
+"T1/cos a=0.01 DR=1/n32/cmdgfm/max_jump" = 0.2224298974093108
+"T1/cos a=0.01 DR=1/n32/cmdgfm_constant/max_change" = 0.5197953542556285
+"T1/cos a=0.01 DR=1/n32/cmdgfm_constant/max_jump" = 0.5325845381438218
+"T1/cos a=0.01 DR=1/n32/mimetic/max_change" = 0.0
+"T1/cos a=0.01 DR=1/n32/mimetic/max_jump" = 0.0
+"T1/cos a=0.01 DR=1/n64/cmdgfm/max_change" = 0.048067550282265344
+"T1/cos a=0.01 DR=1/n64/cmdgfm/max_jump" = 0.0492605090226586
+"T1/cos a=0.01 DR=1/n64/cmdgfm/order(max_change)" = 2.175442957695533
+"T1/cos a=0.01 DR=1/n64/cmdgfm/order(max_jump)" = 2.1748472768721006
+"T1/cos a=0.01 DR=1/n64/cmdgfm_constant/max_change" = 0.2969751697357028
+"T1/cos a=0.01 DR=1/n64/cmdgfm_constant/max_jump" = 0.30441054107729293
+"T1/cos a=0.01 DR=1/n64/cmdgfm_constant/order(max_change)" = 0.8076014280685512
+"T1/cos a=0.01 DR=1/n64/cmdgfm_constant/order(max_jump)" = 0.8069922280992827
+"T1/cos a=0.01 DR=1/n64/mimetic/max_change" = 0.0
+"T1/cos a=0.01 DR=1/n64/mimetic/max_jump" = 0.0
+"T1/cos a=0.01 DR=1000/n128/cmdgfm/max_change" = 0.013116507866543142
+"T1/cos a=0.01 DR=1000/n128/cmdgfm/max_jump" = 0.013173864753501546
+"T1/cos a=0.01 DR=1000/n128/cmdgfm/order(max_change)" = 2.4906628009420158
+"T1/cos a=0.01 DR=1000/n128/cmdgfm/order(max_jump)" = 2.493945245803755
+"T1/cos a=0.01 DR=1000/n128/cmdgfm_constant/max_change" = 0.2069361166734047
+"T1/cos a=0.01 DR=1000/n128/cmdgfm_constant/max_jump" = 0.20795466923399197
+"T1/cos a=0.01 DR=1000/n128/cmdgfm_constant/order(max_change)" = 0.9408278467720512
+"T1/cos a=0.01 DR=1000/n128/cmdgfm_constant/order(max_jump)" = 0.9408389418248931
+"T1/cos a=0.01 DR=1000/n128/mimetic/max_change" = 0.0
+"T1/cos a=0.01 DR=1000/n128/mimetic/max_jump" = 0.0
+"T1/cos a=0.01 DR=1000/n32/cmdgfm/max_change" = 0.33182249213566933
+"T1/cos a=0.01 DR=1000/n32/cmdgfm/max_jump" = 0.3340517841515316
+"T1/cos a=0.01 DR=1000/n32/cmdgfm_constant/max_change" = 0.6931121413874928
+"T1/cos a=0.01 DR=1000/n32/cmdgfm_constant/max_jump" = 0.6965701165868061
+"T1/cos a=0.01 DR=1000/n32/mimetic/max_change" = 0.0
+"T1/cos a=0.01 DR=1000/n32/mimetic/max_jump" = 0.0
+"T1/cos a=0.01 DR=1000/n64/cmdgfm/max_change" = 0.0737195093784482
+"T1/cos a=0.01 DR=1000/n64/cmdgfm/max_jump" = 0.07421052894222546
+"T1/cos a=0.01 DR=1000/n64/cmdgfm/order(max_change)" = 2.170293306105352
+"T1/cos a=0.01 DR=1000/n64/cmdgfm/order(max_jump)" = 2.1703759690921256
+"T1/cos a=0.01 DR=1000/n64/cmdgfm_constant/max_change" = 0.3972406625479231
+"T1/cos a=0.01 DR=1000/n64/cmdgfm_constant/max_jump" = 0.3991989760630197
+"T1/cos a=0.01 DR=1000/n64/cmdgfm_constant/order(max_change)" = 0.8030754823539633
+"T1/cos a=0.01 DR=1000/n64/cmdgfm_constant/order(max_jump)" = 0.8031605612876137
+"T1/cos a=0.01 DR=1000/n64/mimetic/max_change" = 0.0
+"T1/cos a=0.01 DR=1000/n64/mimetic/max_jump" = 0.0
+"T1/flat 0.37h DR=1/n128/cmdgfm/max_change" = 0.0
+"T1/flat 0.37h DR=1/n128/cmdgfm/max_jump" = 0.0
+"T1/flat 0.37h DR=1/n128/cmdgfm_constant/max_change" = 0.0
+"T1/flat 0.37h DR=1/n128/cmdgfm_constant/max_jump" = 0.0
+"T1/flat 0.37h DR=1/n128/mimetic/max_change" = 0.0
+"T1/flat 0.37h DR=1/n128/mimetic/max_jump" = 0.0
+"T1/flat 0.37h DR=1/n32/cmdgfm/max_change" = 0.0
+"T1/flat 0.37h DR=1/n32/cmdgfm/max_jump" = 0.0
+"T1/flat 0.37h DR=1/n32/cmdgfm_constant/max_change" = 0.0
+"T1/flat 0.37h DR=1/n32/cmdgfm_constant/max_jump" = 0.0
+"T1/flat 0.37h DR=1/n32/mimetic/max_change" = 0.0
+"T1/flat 0.37h DR=1/n32/mimetic/max_jump" = 0.0
+"T1/flat 0.37h DR=1/n64/cmdgfm/max_change" = 0.0
+"T1/flat 0.37h DR=1/n64/cmdgfm/max_jump" = 0.0
+"T1/flat 0.37h DR=1/n64/cmdgfm_constant/max_change" = 0.0
+"T1/flat 0.37h DR=1/n64/cmdgfm_constant/max_jump" = 0.0
+"T1/flat 0.37h DR=1/n64/mimetic/max_change" = 0.0
+"T1/flat 0.37h DR=1/n64/mimetic/max_jump" = 0.0
+"T1/flat 0.37h DR=1000/n128/cmdgfm/max_change" = 0.0
+"T1/flat 0.37h DR=1000/n128/cmdgfm/max_jump" = 0.0
+"T1/flat 0.37h DR=1000/n128/cmdgfm_constant/max_change" = 0.0
+"T1/flat 0.37h DR=1000/n128/cmdgfm_constant/max_jump" = 0.0
+"T1/flat 0.37h DR=1000/n128/mimetic/max_change" = 0.0
+"T1/flat 0.37h DR=1000/n128/mimetic/max_jump" = 0.0
+"T1/flat 0.37h DR=1000/n32/cmdgfm/max_change" = 0.0
+"T1/flat 0.37h DR=1000/n32/cmdgfm/max_jump" = 0.0
+"T1/flat 0.37h DR=1000/n32/cmdgfm_constant/max_change" = 0.0
+"T1/flat 0.37h DR=1000/n32/cmdgfm_constant/max_jump" = 0.0
+"T1/flat 0.37h DR=1000/n32/mimetic/max_change" = 0.0
+"T1/flat 0.37h DR=1000/n32/mimetic/max_jump" = 0.0
+"T1/flat 0.37h DR=1000/n64/cmdgfm/max_change" = 0.0
+"T1/flat 0.37h DR=1000/n64/cmdgfm/max_jump" = 0.0
+"T1/flat 0.37h DR=1000/n64/cmdgfm_constant/max_change" = 0.0
+"T1/flat 0.37h DR=1000/n64/cmdgfm_constant/max_jump" = 0.0
+"T1/flat 0.37h DR=1000/n64/mimetic/max_change" = 0.0
+"T1/flat 0.37h DR=1000/n64/mimetic/max_jump" = 0.0
+"T1/triangle s=0.06 DR=1/n128/cmdgfm/max_change" = 0.007451699974571881
+"T1/triangle s=0.06 DR=1/n128/cmdgfm/max_jump" = 0.0075501409736870445
+"T1/triangle s=0.06 DR=1/n128/cmdgfm/order(max_change)" = 2.6904014853701423
+"T1/triangle s=0.06 DR=1/n128/cmdgfm/order(max_jump)" = 2.7054496218812147
+"T1/triangle s=0.06 DR=1/n128/cmdgfm_constant/max_change" = 0.14746696550869245
+"T1/triangle s=0.06 DR=1/n128/cmdgfm_constant/max_jump" = 0.1549251981253183
+"T1/triangle s=0.06 DR=1/n128/cmdgfm_constant/order(max_change)" = 0.9034005426704942
+"T1/triangle s=0.06 DR=1/n128/cmdgfm_constant/order(max_jump)" = 0.9355949049181917
+"T1/triangle s=0.06 DR=1/n128/mimetic/max_change" = 0.0
+"T1/triangle s=0.06 DR=1/n128/mimetic/max_jump" = 0.0
+"T1/triangle s=0.06 DR=1/n32/cmdgfm/max_change" = 0.21737764224716785
+"T1/triangle s=0.06 DR=1/n32/cmdgfm/max_jump" = 0.222556430831886
+"T1/triangle s=0.06 DR=1/n32/cmdgfm_constant/max_change" = 0.48294114753679535
+"T1/triangle s=0.06 DR=1/n32/cmdgfm_constant/max_jump" = 0.5187687948401465
+"T1/triangle s=0.06 DR=1/n32/mimetic/max_change" = 0.0
+"T1/triangle s=0.06 DR=1/n32/mimetic/max_jump" = 0.0
+"T1/triangle s=0.06 DR=1/n64/cmdgfm/max_change" = 0.04810020288211645
+"T1/triangle s=0.06 DR=1/n64/cmdgfm/max_jump" = 0.049246633632978716
+"T1/triangle s=0.06 DR=1/n64/cmdgfm/order(max_change)" = 2.176088679469862
+"T1/triangle s=0.06 DR=1/n64/cmdgfm/order(max_jump)" = 2.176074174168215
+"T1/triangle s=0.06 DR=1/n64/cmdgfm_constant/max_change" = 0.275832480603854
+"T1/triangle s=0.06 DR=1/n64/cmdgfm_constant/max_jump" = 0.2963222006957656
+"T1/triangle s=0.06 DR=1/n64/cmdgfm_constant/order(max_change)" = 0.8080550380573147
+"T1/triangle s=0.06 DR=1/n64/cmdgfm_constant/order(max_jump)" = 0.8079249824965481
+"T1/triangle s=0.06 DR=1/n64/mimetic/max_change" = 0.0
+"T1/triangle s=0.06 DR=1/n64/mimetic/max_jump" = 0.0
+"T1/triangle s=0.06 DR=1000/n128/cmdgfm/max_change" = 0.011175999446841452
+"T1/triangle s=0.06 DR=1000/n128/cmdgfm/max_jump" = 0.011246654547422373
+"T1/triangle s=0.06 DR=1000/n128/cmdgfm/order(max_change)" = 2.7213418672647522
+"T1/triangle s=0.06 DR=1000/n128/cmdgfm/order(max_jump)" = 2.7213408002624964
+"T1/triangle s=0.06 DR=1000/n128/cmdgfm_constant/max_change" = 0.1833472079517582
+"T1/triangle s=0.06 DR=1000/n128/cmdgfm_constant/max_jump" = 0.18416013958274796
+"T1/triangle s=0.06 DR=1000/n128/cmdgfm_constant/order(max_change)" = 0.9411183057606726
+"T1/triangle s=0.06 DR=1000/n128/cmdgfm_constant/order(max_jump)" = 0.9411177536742459
+"T1/triangle s=0.06 DR=1000/n128/mimetic/max_change" = 0.0
+"T1/triangle s=0.06 DR=1000/n128/mimetic/max_jump" = 0.0
+"T1/triangle s=0.06 DR=1000/n32/cmdgfm/max_change" = 0.33209732221332
+"T1/triangle s=0.06 DR=1000/n32/cmdgfm/max_jump" = 0.3342357888237347
+"T1/triangle s=0.06 DR=1000/n32/cmdgfm_constant/max_change" = 0.6133248557203795
+"T1/triangle s=0.06 DR=1000/n32/cmdgfm_constant/max_jump" = 0.6161362707684805
+"T1/triangle s=0.06 DR=1000/n32/mimetic/max_change" = 0.0
+"T1/triangle s=0.06 DR=1000/n32/mimetic/max_jump" = 0.0
+"T1/triangle s=0.06 DR=1000/n64/cmdgfm/max_change" = 0.0737041432281724
+"T1/triangle s=0.06 DR=1000/n64/cmdgfm/max_jump" = 0.07417004881573702
+"T1/triangle s=0.06 DR=1000/n64/cmdgfm/order(max_change)" = 2.171788463233034
+"T1/triangle s=0.06 DR=1000/n64/cmdgfm/order(max_jump)" = 2.1719575968635008
+"T1/triangle s=0.06 DR=1000/n64/cmdgfm_constant/max_change" = 0.35202956608945496
+"T1/triangle s=0.06 DR=1000/n64/cmdgfm_constant/max_jump" = 0.3535902724870636
+"T1/triangle s=0.06 DR=1000/n64/cmdgfm_constant/order(max_change)" = 0.8009548167718207
+"T1/triangle s=0.06 DR=1000/n64/cmdgfm_constant/order(max_jump)" = 0.8011708811241708
+"T1/triangle s=0.06 DR=1000/n64/mimetic/max_change" = 0.0
+"T1/triangle s=0.06 DR=1000/n64/mimetic/max_jump" = 0.0
+"T1/triangle s=0.3 DR=1/n128/cmdgfm/max_change" = 0.16604340623456473
+"T1/triangle s=0.3 DR=1/n128/cmdgfm/max_jump" = 0.17109117414178662
+"T1/triangle s=0.3 DR=1/n128/cmdgfm/order(max_change)" = 0.7639796757889301
+"T1/triangle s=0.3 DR=1/n128/cmdgfm/order(max_jump)" = 0.7541860721924132
+"T1/triangle s=0.3 DR=1/n128/cmdgfm_constant/max_change" = 0.12785008045950388
+"T1/triangle s=0.3 DR=1/n128/cmdgfm_constant/max_jump" = 0.151814229496337
+"T1/triangle s=0.3 DR=1/n128/cmdgfm_constant/order(max_change)" = 0.9299842555481368
+"T1/triangle s=0.3 DR=1/n128/cmdgfm_constant/order(max_jump)" = 0.92943621645234
+"T1/triangle s=0.3 DR=1/n128/mimetic/max_change" = 0.0
+"T1/triangle s=0.3 DR=1/n128/mimetic/max_jump" = 0.0
+"T1/triangle s=0.3 DR=1/n32/cmdgfm/max_change" = 0.584941903442352
+"T1/triangle s=0.3 DR=1/n32/cmdgfm/max_jump" = 0.5970631024021951
+"T1/triangle s=0.3 DR=1/n32/cmdgfm_constant/max_change" = 0.41820471407773324
+"T1/triangle s=0.3 DR=1/n32/cmdgfm_constant/max_jump" = 0.5025191901902174
+"T1/triangle s=0.3 DR=1/n32/mimetic/max_change" = 0.0
+"T1/triangle s=0.3 DR=1/n32/mimetic/max_jump" = 0.0
+"T1/triangle s=0.3 DR=1/n64/cmdgfm/max_change" = 0.2819696936381718
+"T1/triangle s=0.3 DR=1/n64/cmdgfm/max_jump" = 0.28857601826294343
+"T1/triangle s=0.3 DR=1/n64/cmdgfm/order(max_change)" = 1.0527532342570252
+"T1/triangle s=0.3 DR=1/n64/cmdgfm/order(max_jump)" = 1.0489320035906489
+"T1/triangle s=0.3 DR=1/n64/cmdgfm_constant/max_change" = 0.24358703106344248
+"T1/triangle s=0.3 DR=1/n64/cmdgfm_constant/max_jump" = 0.28913499563127404
+"T1/triangle s=0.3 DR=1/n64/cmdgfm_constant/order(max_change)" = 0.7797720002787222
+"T1/triangle s=0.3 DR=1/n64/cmdgfm_constant/order(max_jump)" = 0.7974354540844271
+"T1/triangle s=0.3 DR=1/n64/mimetic/max_change" = 0.0
+"T1/triangle s=0.3 DR=1/n64/mimetic/max_jump" = 0.0
+"T1/triangle s=0.3 DR=1000/n128/cmdgfm/max_change" = 0.15639124772355267
+"T1/triangle s=0.3 DR=1000/n128/cmdgfm/max_jump" = 0.1644928680144037
+"T1/triangle s=0.3 DR=1000/n128/cmdgfm/order(max_change)" = 0.7685350303484912
+"T1/triangle s=0.3 DR=1000/n128/cmdgfm/order(max_jump)" = 0.7447581217428417
+"T1/triangle s=0.3 DR=1000/n128/cmdgfm_constant/max_change" = 0.15326126328146017
+"T1/triangle s=0.3 DR=1000/n128/cmdgfm_constant/max_jump" = 0.15880934228446086
+"T1/triangle s=0.3 DR=1000/n128/cmdgfm_constant/order(max_change)" = 0.933046670545749
+"T1/triangle s=0.3 DR=1000/n128/cmdgfm_constant/order(max_jump)" = 0.9332102201239032
+"T1/triangle s=0.3 DR=1000/n128/mimetic/max_change" = 0.0
+"T1/triangle s=0.3 DR=1000/n128/mimetic/max_jump" = 0.0
+"T1/triangle s=0.3 DR=1000/n32/cmdgfm/max_change" = 0.6123274540284713
+"T1/triangle s=0.3 DR=1000/n32/cmdgfm/max_jump" = 0.6317809838456204
+"T1/triangle s=0.3 DR=1000/n32/cmdgfm_constant/max_change" = 0.5094266290288476
+"T1/triangle s=0.3 DR=1000/n32/cmdgfm_constant/max_jump" = 0.5279592950017729
+"T1/triangle s=0.3 DR=1000/n32/mimetic/max_change" = 0.0
+"T1/triangle s=0.3 DR=1000/n32/mimetic/max_jump" = 0.0
+"T1/triangle s=0.3 DR=1000/n64/cmdgfm/max_change" = 0.2664185997595144
+"T1/triangle s=0.3 DR=1000/n64/cmdgfm/max_jump" = 0.2756395974352881
+"T1/triangle s=0.3 DR=1000/n64/cmdgfm/order(max_change)" = 1.2006085622462108
+"T1/triangle s=0.3 DR=1000/n64/cmdgfm/order(max_jump)" = 1.196641358121254
+"T1/triangle s=0.3 DR=1000/n64/cmdgfm_constant/max_change" = 0.29262231121324617
+"T1/triangle s=0.3 DR=1000/n64/cmdgfm_constant/max_jump" = 0.3032496551181315
+"T1/triangle s=0.3 DR=1000/n64/cmdgfm_constant/order(max_change)" = 0.7998346018681752
+"T1/triangle s=0.3 DR=1000/n64/cmdgfm_constant/order(max_jump)" = 0.7999206993080394
+"T1/triangle s=0.3 DR=1000/n64/mimetic/max_change" = 0.0
+"T1/triangle s=0.3 DR=1000/n64/mimetic/max_jump" = 0.0
+"T2/sheet wavy ε=0.005 DR=1/n128/cmdgfm/e2" = 0.00477739945995221
+"T2/sheet wavy ε=0.005 DR=1/n128/cmdgfm/e2_slaved" = 0.00046930558633345075
+"T2/sheet wavy ε=0.005 DR=1/n128/cmdgfm/e2_wetted" = 0.00844833908597376
+"T2/sheet wavy ε=0.005 DR=1/n128/cmdgfm/extension" = 0.01084221361934387
+"T2/sheet wavy ε=0.005 DR=1/n128/cmdgfm/order(e2)" = 0.8250208649827988
+"T2/sheet wavy ε=0.005 DR=1/n128/cmdgfm/order(e2_slaved)" = 1.4610836180746924
+"T2/sheet wavy ε=0.005 DR=1/n128/cmdgfm/order(e2_wetted)" = 0.7527641723953783
+"T2/sheet wavy ε=0.005 DR=1/n128/cmdgfm/order(extension)" = 0.31503873437804025
+"T2/sheet wavy ε=0.005 DR=1/n128/cmdgfm_constant/e2" = 0.009953471888003206
+"T2/sheet wavy ε=0.005 DR=1/n128/cmdgfm_constant/e2_slaved" = 0.010500567829848791
+"T2/sheet wavy ε=0.005 DR=1/n128/cmdgfm_constant/e2_wetted" = 0.008662290912326759
+"T2/sheet wavy ε=0.005 DR=1/n128/cmdgfm_constant/extension" = 0.011234868854816199
+"T2/sheet wavy ε=0.005 DR=1/n128/cmdgfm_constant/order(e2)" = -0.35722598419323076
+"T2/sheet wavy ε=0.005 DR=1/n128/cmdgfm_constant/order(e2_slaved)" = -3.0904613339003384
+"T2/sheet wavy ε=0.005 DR=1/n128/cmdgfm_constant/order(e2_wetted)" = 0.592519769230887
+"T2/sheet wavy ε=0.005 DR=1/n128/cmdgfm_constant/order(extension)" = 0.23114356823713259
+"T2/sheet wavy ε=0.005 DR=1/n128/mimetic/e2" = 0.014374284036841047
+"T2/sheet wavy ε=0.005 DR=1/n128/mimetic/e2_slaved" = 0.017294058993913234
+"T2/sheet wavy ε=0.005 DR=1/n128/mimetic/e2_wetted" = 0.002830284472946836
+"T2/sheet wavy ε=0.005 DR=1/n128/mimetic/extension" = 0.013548812887184652
+"T2/sheet wavy ε=0.005 DR=1/n128/mimetic/order(e2)" = 0.9174474043939651
+"T2/sheet wavy ε=0.005 DR=1/n128/mimetic/order(e2_slaved)" = 0.9557001950290414
+"T2/sheet wavy ε=0.005 DR=1/n128/mimetic/order(e2_wetted)" = 0.19621757414105392
+"T2/sheet wavy ε=0.005 DR=1/n128/mimetic/order(extension)" = 0.50801234372129
+"T2/sheet wavy ε=0.005 DR=1/n32/cmdgfm/e2" = 0.014086783101507875
+"T2/sheet wavy ε=0.005 DR=1/n32/cmdgfm/e2_slaved" = 0.005487496643840856
+"T2/sheet wavy ε=0.005 DR=1/n32/cmdgfm/e2_wetted" = 0.021758424509215155
+"T2/sheet wavy ε=0.005 DR=1/n32/cmdgfm/extension" = 0.020241659455824183
+"T2/sheet wavy ε=0.005 DR=1/n32/cmdgfm_constant/e2" = 0.01194453430410531
+"T2/sheet wavy ε=0.005 DR=1/n32/cmdgfm_constant/e2_slaved" = 0.0054099369333724815
+"T2/sheet wavy ε=0.005 DR=1/n32/cmdgfm_constant/e2_wetted" = 0.018109122667672155
+"T2/sheet wavy ε=0.005 DR=1/n32/cmdgfm_constant/extension" = 0.01999137166292951
+"T2/sheet wavy ε=0.005 DR=1/n32/mimetic/e2" = 0.050791083568318095
+"T2/sheet wavy ε=0.005 DR=1/n32/mimetic/e2_slaved" = 0.06438082646330139
+"T2/sheet wavy ε=0.005 DR=1/n32/mimetic/e2_wetted" = 0.0047691047231549965
+"T2/sheet wavy ε=0.005 DR=1/n32/mimetic/extension" = 0.032227761766760676
+"T2/sheet wavy ε=0.005 DR=1/n64/cmdgfm/e2" = 0.008463452936642477
+"T2/sheet wavy ε=0.005 DR=1/n64/cmdgfm/e2_slaved" = 0.00129206903645648
+"T2/sheet wavy ε=0.005 DR=1/n64/cmdgfm/e2_wetted" = 0.014235605102404392
+"T2/sheet wavy ε=0.005 DR=1/n64/cmdgfm/extension" = 0.013488202224836215
+"T2/sheet wavy ε=0.005 DR=1/n64/cmdgfm/order(e2)" = 0.7350239090533804
+"T2/sheet wavy ε=0.005 DR=1/n64/cmdgfm/order(e2_slaved)" = 2.0864649956583827
+"T2/sheet wavy ε=0.005 DR=1/n64/cmdgfm/order(e2_wetted)" = 0.6120702792963962
+"T2/sheet wavy ε=0.005 DR=1/n64/cmdgfm/order(extension)" = 0.585629498720445
+"T2/sheet wavy ε=0.005 DR=1/n64/cmdgfm_constant/e2" = 0.007770319164193696
+"T2/sheet wavy ε=0.005 DR=1/n64/cmdgfm_constant/e2_slaved" = 0.0012327960174314384
+"T2/sheet wavy ε=0.005 DR=1/n64/cmdgfm_constant/e2_wetted" = 0.01306167845810831
+"T2/sheet wavy ε=0.005 DR=1/n64/cmdgfm_constant/extension" = 0.01318709559895153
+"T2/sheet wavy ε=0.005 DR=1/n64/cmdgfm_constant/order(e2)" = 0.6203048434554905
+"T2/sheet wavy ε=0.005 DR=1/n64/cmdgfm_constant/order(e2_slaved)" = 2.1336776695340265
+"T2/sheet wavy ε=0.005 DR=1/n64/cmdgfm_constant/order(e2_wetted)" = 0.4713763550701614
+"T2/sheet wavy ε=0.005 DR=1/n64/cmdgfm_constant/order(extension)" = 0.600250610546512
+"T2/sheet wavy ε=0.005 DR=1/n64/mimetic/e2" = 0.02714972346774463
+"T2/sheet wavy ε=0.005 DR=1/n64/mimetic/e2_slaved" = 0.033542185907178654
+"T2/sheet wavy ε=0.005 DR=1/n64/mimetic/e2_wetted" = 0.0032426305072946458
+"T2/sheet wavy ε=0.005 DR=1/n64/mimetic/extension" = 0.019267625600539205
+"T2/sheet wavy ε=0.005 DR=1/n64/mimetic/order(e2)" = 0.9036377488923635
+"T2/sheet wavy ε=0.005 DR=1/n64/mimetic/order(e2_slaved)" = 0.9406543861522899
+"T2/sheet wavy ε=0.005 DR=1/n64/mimetic/order(e2_wetted)" = 0.556553822429712
+"T2/sheet wavy ε=0.005 DR=1/n64/mimetic/order(extension)" = 0.7421252004895483
+"T2/sheet wavy ε=0.005 DR=1000/n128/cmdgfm/e2" = 0.010099845110966624
+"T2/sheet wavy ε=0.005 DR=1000/n128/cmdgfm/e2_slaved" = 0.00419026171456795
+"T2/sheet wavy ε=0.005 DR=1000/n128/cmdgfm/e2_wetted" = 0.017079369726094695
+"T2/sheet wavy ε=0.005 DR=1000/n128/cmdgfm/extension" = 0.005044446994473316
+"T2/sheet wavy ε=0.005 DR=1000/n128/cmdgfm/order(e2)" = 0.619416862828831
+"T2/sheet wavy ε=0.005 DR=1000/n128/cmdgfm/order(e2_slaved)" = -1.7748162669332304
+"T2/sheet wavy ε=0.005 DR=1000/n128/cmdgfm/order(e2_wetted)" = 0.5987255315337071
+"T2/sheet wavy ε=0.005 DR=1000/n128/cmdgfm/order(extension)" = 1.505996525279731
+"T2/sheet wavy ε=0.005 DR=1000/n128/cmdgfm_constant/e2" = 0.14240848250862942
+"T2/sheet wavy ε=0.005 DR=1000/n128/cmdgfm_constant/e2_slaved" = 0.1347592946646818
+"T2/sheet wavy ε=0.005 DR=1000/n128/cmdgfm_constant/e2_wetted" = 0.15824855274788532
+"T2/sheet wavy ε=0.005 DR=1000/n128/cmdgfm_constant/extension" = 0.011780969117423917
+"T2/sheet wavy ε=0.005 DR=1000/n128/cmdgfm_constant/order(e2)" = -0.2947146242781193
+"T2/sheet wavy ε=0.005 DR=1000/n128/cmdgfm_constant/order(e2_slaved)" = -6.456898147212418
+"T2/sheet wavy ε=0.005 DR=1000/n128/cmdgfm_constant/order(e2_wetted)" = 0.2931658577056492
+"T2/sheet wavy ε=0.005 DR=1000/n128/cmdgfm_constant/order(extension)" = 1.0801522372517727
+"T2/sheet wavy ε=0.005 DR=1000/n128/mimetic/e2" = 0.02000618363394699
+"T2/sheet wavy ε=0.005 DR=1000/n128/mimetic/e2_slaved" = 0.022201633813334964
+"T2/sheet wavy ε=0.005 DR=1000/n128/mimetic/e2_wetted" = 0.01385973892202552
+"T2/sheet wavy ε=0.005 DR=1000/n128/mimetic/extension" = 0.0007930084996929311
+"T2/sheet wavy ε=0.005 DR=1000/n128/mimetic/order(e2)" = 0.9662517847497214
+"T2/sheet wavy ε=0.005 DR=1000/n128/mimetic/order(e2_slaved)" = 0.973328748211423
+"T2/sheet wavy ε=0.005 DR=1000/n128/mimetic/order(e2_wetted)" = 1.0825014844204346
+"T2/sheet wavy ε=0.005 DR=1000/n128/mimetic/order(extension)" = 0.8492031115324857
+"T2/sheet wavy ε=0.005 DR=1000/n32/cmdgfm/e2" = 0.024178901650398012
+"T2/sheet wavy ε=0.005 DR=1000/n32/cmdgfm/e2_slaved" = 0.00540911581766463
+"T2/sheet wavy ε=0.005 DR=1000/n32/cmdgfm/e2_wetted" = 0.03973777700117072
+"T2/sheet wavy ε=0.005 DR=1000/n32/cmdgfm/extension" = 0.027845083571091795
+"T2/sheet wavy ε=0.005 DR=1000/n32/cmdgfm_constant/e2" = 0.16760470513704726
+"T2/sheet wavy ε=0.005 DR=1000/n32/cmdgfm_constant/e2_slaved" = 0.005591318380921234
+"T2/sheet wavy ε=0.005 DR=1000/n32/cmdgfm_constant/e2_wetted" = 0.2798890181780705
+"T2/sheet wavy ε=0.005 DR=1000/n32/cmdgfm_constant/extension" = 0.04572496891248561
+"T2/sheet wavy ε=0.005 DR=1000/n32/mimetic/e2" = 0.07033843412238809
+"T2/sheet wavy ε=0.005 DR=1000/n32/mimetic/e2_slaved" = 0.08165588620708039
+"T2/sheet wavy ε=0.005 DR=1000/n32/mimetic/e2_wetted" = 0.04321103696742927
+"T2/sheet wavy ε=0.005 DR=1000/n32/mimetic/extension" = 0.0023405437568871984
+"T2/sheet wavy ε=0.005 DR=1000/n64/cmdgfm/e2" = 0.015515928481725044
+"T2/sheet wavy ε=0.005 DR=1000/n64/cmdgfm/e2_slaved" = 0.0012245265778740029
+"T2/sheet wavy ε=0.005 DR=1000/n64/cmdgfm/e2_wetted" = 0.025864624884006548
+"T2/sheet wavy ε=0.005 DR=1000/n64/cmdgfm/extension" = 0.014327278086083464
+"T2/sheet wavy ε=0.005 DR=1000/n64/cmdgfm/order(e2)" = 0.6399986791638382
+"T2/sheet wavy ε=0.005 DR=1000/n64/cmdgfm/order(e2_slaved)" = 2.143168700811174
+"T2/sheet wavy ε=0.005 DR=1000/n64/cmdgfm/order(e2_wetted)" = 0.6195308998181517
+"T2/sheet wavy ε=0.005 DR=1000/n64/cmdgfm/order(extension)" = 0.9586580719299665
+"T2/sheet wavy ε=0.005 DR=1000/n64/cmdgfm_constant/e2" = 0.11609617640122144
+"T2/sheet wavy ε=0.005 DR=1000/n64/cmdgfm_constant/e2_slaved" = 0.0015340471492356067
+"T2/sheet wavy ε=0.005 DR=1000/n64/cmdgfm_constant/e2_wetted" = 0.19390609652240662
+"T2/sheet wavy ε=0.005 DR=1000/n64/cmdgfm_constant/extension" = 0.024908022010924877
+"T2/sheet wavy ε=0.005 DR=1000/n64/cmdgfm_constant/order(e2)" = 0.5297421919442699
+"T2/sheet wavy ε=0.005 DR=1000/n64/cmdgfm_constant/order(e2_slaved)" = 1.8658456722320482
+"T2/sheet wavy ε=0.005 DR=1000/n64/cmdgfm_constant/order(e2_wetted)" = 0.5294967185982313
+"T2/sheet wavy ε=0.005 DR=1000/n64/cmdgfm_constant/order(extension)" = 0.876371729893155
+"T2/sheet wavy ε=0.005 DR=1000/n64/mimetic/e2" = 0.039087241436685204
+"T2/sheet wavy ε=0.005 DR=1000/n64/mimetic/e2_slaved" = 0.043589921219685315
+"T2/sheet wavy ε=0.005 DR=1000/n64/mimetic/e2_wetted" = 0.029350835383138294
+"T2/sheet wavy ε=0.005 DR=1000/n64/mimetic/extension" = 0.0014286092284146454
+"T2/sheet wavy ε=0.005 DR=1000/n64/mimetic/order(e2)" = 0.8476154472647262
+"T2/sheet wavy ε=0.005 DR=1000/n64/mimetic/order(e2_slaved)" = 0.9055622906555827
+"T2/sheet wavy ε=0.005 DR=1000/n64/mimetic/order(e2_wetted)" = 0.5579982868808934
+"T2/sheet wavy ε=0.005 DR=1000/n64/mimetic/order(extension)" = 0.7122323908685061
+"T3/gravity wavy ε=0.005 DR=1/n128/cmdgfm/e2" = 6.164067083549009e-14
+"T3/gravity wavy ε=0.005 DR=1/n128/cmdgfm/e2_slaved" = 1.6542463765368518e-15
+"T3/gravity wavy ε=0.005 DR=1/n128/cmdgfm/e2_wetted" = 1.0933896017441536e-13
+"T3/gravity wavy ε=0.005 DR=1/n128/cmdgfm/extension" = 2.2282109136445008e-11
+"T3/gravity wavy ε=0.005 DR=1/n128/cmdgfm/max_u" = 3.396394276933279e-12
+"T3/gravity wavy ε=0.005 DR=1/n128/cmdgfm_constant/e2" = 6.154022516675914e-14
+"T3/gravity wavy ε=0.005 DR=1/n128/cmdgfm_constant/e2_slaved" = 1.6133398824086228e-15
+"T3/gravity wavy ε=0.005 DR=1/n128/cmdgfm_constant/e2_wetted" = 1.0916201583114886e-13
+"T3/gravity wavy ε=0.005 DR=1/n128/cmdgfm_constant/extension" = 2.2276917095474747e-11
+"T3/gravity wavy ε=0.005 DR=1/n128/cmdgfm_constant/max_u" = 3.396394276933279e-12
+"T3/gravity wavy ε=0.005 DR=1/n128/mimetic/e2" = 8.57438610290735e-11
+"T3/gravity wavy ε=0.005 DR=1/n128/mimetic/e2_slaved" = 2.7804879888092502e-11
+"T3/gravity wavy ε=0.005 DR=1/n128/mimetic/e2_wetted" = 1.4657146193112589e-10
+"T3/gravity wavy ε=0.005 DR=1/n128/mimetic/extension" = 5.04588316065911e-10
+"T3/gravity wavy ε=0.005 DR=1/n128/mimetic/max_u" = 4.554578936222242e-11
+"T3/gravity wavy ε=0.005 DR=1/n32/cmdgfm/e2" = 2.979986072692032e-14
+"T3/gravity wavy ε=0.005 DR=1/n32/cmdgfm/e2_slaved" = 0.0
+"T3/gravity wavy ε=0.005 DR=1/n32/cmdgfm/e2_wetted" = 4.836119664026934e-14
+"T3/gravity wavy ε=0.005 DR=1/n32/cmdgfm/extension" = 2.0557287007963638e-10
+"T3/gravity wavy ε=0.005 DR=1/n32/cmdgfm/max_u" = 2.155431388928264e-11
+"T3/gravity wavy ε=0.005 DR=1/n32/cmdgfm_constant/e2" = 2.979932660138977e-14
+"T3/gravity wavy ε=0.005 DR=1/n32/cmdgfm_constant/e2_slaved" = 0.0
+"T3/gravity wavy ε=0.005 DR=1/n32/cmdgfm_constant/e2_wetted" = 4.8360329825821777e-14
+"T3/gravity wavy ε=0.005 DR=1/n32/cmdgfm_constant/extension" = 2.0558115734931071e-10
+"T3/gravity wavy ε=0.005 DR=1/n32/cmdgfm_constant/max_u" = 2.155431388928264e-11
+"T3/gravity wavy ε=0.005 DR=1/n32/mimetic/e2" = 4.900279828092388e-11
+"T3/gravity wavy ε=0.005 DR=1/n32/mimetic/e2_slaved" = 1.7054113234585243e-11
+"T3/gravity wavy ε=0.005 DR=1/n32/mimetic/e2_wetted" = 7.647926003016607e-11
+"T3/gravity wavy ε=0.005 DR=1/n32/mimetic/extension" = 2.5066580289324367e-10
+"T3/gravity wavy ε=0.005 DR=1/n32/mimetic/max_u" = 5.298872451930947e-11
+"T3/gravity wavy ε=0.005 DR=1/n64/cmdgfm/e2" = 4.598815616684145e-14
+"T3/gravity wavy ε=0.005 DR=1/n64/cmdgfm/e2_slaved" = 4.963323245173171e-16
+"T3/gravity wavy ε=0.005 DR=1/n64/cmdgfm/e2_wetted" = 7.794395512619901e-14
+"T3/gravity wavy ε=0.005 DR=1/n64/cmdgfm/extension" = 3.1266872189650735e-12
+"T3/gravity wavy ε=0.005 DR=1/n64/cmdgfm/max_u" = 2.5477397969098092e-12
+"T3/gravity wavy ε=0.005 DR=1/n64/cmdgfm_constant/e2" = 4.263117821336788e-14
+"T3/gravity wavy ε=0.005 DR=1/n64/cmdgfm_constant/e2_slaved" = 4.963323245173171e-16
+"T3/gravity wavy ε=0.005 DR=1/n64/cmdgfm_constant/e2_wetted" = 7.225386416742373e-14
+"T3/gravity wavy ε=0.005 DR=1/n64/cmdgfm_constant/extension" = 3.112245354541555e-12
+"T3/gravity wavy ε=0.005 DR=1/n64/cmdgfm_constant/max_u" = 2.546851618490109e-12
+"T3/gravity wavy ε=0.005 DR=1/n64/mimetic/e2" = 1.0876222126226073e-10
+"T3/gravity wavy ε=0.005 DR=1/n64/mimetic/e2_slaved" = 5.5657700975818023e-11
+"T3/gravity wavy ε=0.005 DR=1/n64/mimetic/e2_wetted" = 1.6787343706424768e-10
+"T3/gravity wavy ε=0.005 DR=1/n64/mimetic/extension" = 5.52012330004776e-10
+"T3/gravity wavy ε=0.005 DR=1/n64/mimetic/max_u" = 6.756550874342793e-11
+"T3/gravity wavy ε=0.005 DR=1000/n128/cmdgfm/e2" = 0.7665744733038349
+"T3/gravity wavy ε=0.005 DR=1000/n128/cmdgfm/e2_slaved" = 0.5247319424961333
+"T3/gravity wavy ε=0.005 DR=1000/n128/cmdgfm/e2_wetted" = 1.1354047951196986
+"T3/gravity wavy ε=0.005 DR=1000/n128/cmdgfm/extension" = 0.42089575343964886
+"T3/gravity wavy ε=0.005 DR=1000/n128/cmdgfm/order(e2)" = -2.7739199837432555
+"T3/gravity wavy ε=0.005 DR=1000/n128/cmdgfm/order(e2_slaved)" = -7.081038995799681
+"T3/gravity wavy ε=0.005 DR=1000/n128/cmdgfm/order(e2_wetted)" = -2.601063923794138
+"T3/gravity wavy ε=0.005 DR=1000/n128/cmdgfm/order(extension)" = -0.3695952453502131
+"T3/gravity wavy ε=0.005 DR=1000/n128/cmdgfm_constant/e2" = 0.6383115572606519
+"T3/gravity wavy ε=0.005 DR=1000/n128/cmdgfm_constant/e2_slaved" = 0.17957965642845
+"T3/gravity wavy ε=0.005 DR=1000/n128/cmdgfm_constant/e2_wetted" = 1.118142368544223
+"T3/gravity wavy ε=0.005 DR=1000/n128/cmdgfm_constant/extension" = 0.42023108552575844
+"T3/gravity wavy ε=0.005 DR=1000/n128/cmdgfm_constant/order(e2)" = -2.509754795546189
+"T3/gravity wavy ε=0.005 DR=1000/n128/cmdgfm_constant/order(e2_slaved)" = -5.534082305084882
+"T3/gravity wavy ε=0.005 DR=1000/n128/cmdgfm_constant/order(e2_wetted)" = -2.578961076555121
+"T3/gravity wavy ε=0.005 DR=1000/n128/cmdgfm_constant/order(extension)" = -0.367315177094147
+"T3/gravity wavy ε=0.005 DR=1000/n128/mimetic/e2" = 0.17181243674889324
+"T3/gravity wavy ε=0.005 DR=1000/n128/mimetic/e2_slaved" = 0.08054083652558354
+"T3/gravity wavy ε=0.005 DR=1000/n128/mimetic/e2_wetted" = 0.28505815945248103
+"T3/gravity wavy ε=0.005 DR=1000/n128/mimetic/extension" = 0.06006437952454403
+"T3/gravity wavy ε=0.005 DR=1000/n128/mimetic/order(e2)" = -1.824915832052548
+"T3/gravity wavy ε=0.005 DR=1000/n128/mimetic/order(e2_slaved)" = -0.8789480678445336
+"T3/gravity wavy ε=0.005 DR=1000/n128/mimetic/order(e2_wetted)" = -2.3495435493352255
+"T3/gravity wavy ε=0.005 DR=1000/n128/mimetic/order(extension)" = -0.5347049745769846
+"T3/gravity wavy ε=0.005 DR=1000/n32/cmdgfm/e2" = 0.11959367778594063
+"T3/gravity wavy ε=0.005 DR=1000/n32/cmdgfm/e2_slaved" = 0.005984487127601802
+"T3/gravity wavy ε=0.005 DR=1000/n32/cmdgfm/e2_wetted" = 0.199624488595975
+"T3/gravity wavy ε=0.005 DR=1000/n32/cmdgfm/extension" = 0.15727640459844772
+"T3/gravity wavy ε=0.005 DR=1000/n32/cmdgfm_constant/e2" = 0.11959367780054038
+"T3/gravity wavy ε=0.005 DR=1000/n32/cmdgfm_constant/e2_slaved" = 0.005984487128250201
+"T3/gravity wavy ε=0.005 DR=1000/n32/cmdgfm_constant/e2_wetted" = 0.19962448862034915
+"T3/gravity wavy ε=0.005 DR=1000/n32/cmdgfm_constant/extension" = 0.15727640459649678
+"T3/gravity wavy ε=0.005 DR=1000/n32/mimetic/e2" = 0.07459275707640707
+"T3/gravity wavy ε=0.005 DR=1000/n32/mimetic/e2_slaved" = 0.051622241905863904
+"T3/gravity wavy ε=0.005 DR=1000/n32/mimetic/e2_wetted" = 0.10370945895733041
+"T3/gravity wavy ε=0.005 DR=1000/n32/mimetic/extension" = 0.07262846846785388
+"T3/gravity wavy ε=0.005 DR=1000/n64/cmdgfm/e2" = 0.11207822197099686
+"T3/gravity wavy ε=0.005 DR=1000/n64/cmdgfm/e2_slaved" = 0.003875541252451043
+"T3/gravity wavy ε=0.005 DR=1000/n64/cmdgfm/e2_wetted" = 0.18713389726434215
+"T3/gravity wavy ε=0.005 DR=1000/n64/cmdgfm/extension" = 0.32577315129519524
+"T3/gravity wavy ε=0.005 DR=1000/n64/cmdgfm/order(e2)" = 0.09363515086361167
+"T3/gravity wavy ε=0.005 DR=1000/n64/cmdgfm/order(e2_slaved)" = 0.6268298039076289
+"T3/gravity wavy ε=0.005 DR=1000/n64/cmdgfm/order(e2_wetted)" = 0.09321780098111238
+"T3/gravity wavy ε=0.005 DR=1000/n64/cmdgfm/order(extension)" = -1.0505654619793456
+"T3/gravity wavy ε=0.005 DR=1000/n64/cmdgfm_constant/e2" = 0.11207822197186883
+"T3/gravity wavy ε=0.005 DR=1000/n64/cmdgfm_constant/e2_slaved" = 0.0038755412525924493
+"T3/gravity wavy ε=0.005 DR=1000/n64/cmdgfm_constant/e2_wetted" = 0.18713389726579388
+"T3/gravity wavy ε=0.005 DR=1000/n64/cmdgfm_constant/extension" = 0.32577315129499373
+"T3/gravity wavy ε=0.005 DR=1000/n64/cmdgfm_constant/order(e2)" = 0.09363515102850871
+"T3/gravity wavy ε=0.005 DR=1000/n64/cmdgfm_constant/order(e2_slaved)" = 0.6268298040113007
+"T3/gravity wavy ε=0.005 DR=1000/n64/cmdgfm_constant/order(e2_wetted)" = 0.09321780114607364
+"T3/gravity wavy ε=0.005 DR=1000/n64/cmdgfm_constant/order(extension)" = -1.0505654619963494
+"T3/gravity wavy ε=0.005 DR=1000/n64/mimetic/e2" = 0.048495360522536994
+"T3/gravity wavy ε=0.005 DR=1000/n64/mimetic/e2_slaved" = 0.04379518880636496
+"T3/gravity wavy ε=0.005 DR=1000/n64/mimetic/e2_wetted" = 0.05593071770092979
+"T3/gravity wavy ε=0.005 DR=1000/n64/mimetic/extension" = 0.04146243072537131
+"T3/gravity wavy ε=0.005 DR=1000/n64/mimetic/order(e2)" = 0.6211888187745095
+"T3/gravity wavy ε=0.005 DR=1000/n64/mimetic/order(e2_slaved)" = 0.23722040883639917
+"T3/gravity wavy ε=0.005 DR=1000/n64/mimetic/order(e2_wetted)" = 0.8908347348818855
+"T3/gravity wavy ε=0.005 DR=1000/n64/mimetic/order(extension)" = 0.8087304613696377
+"T4/circle R=0.25 DR=1/n128/cmdgfm/e2" = 0.04086329300206508
+"T4/circle R=0.25 DR=1/n128/cmdgfm/order(e2)" = 0.37001414530117244
+"T4/circle R=0.25 DR=1/n128/cmdgfm_constant/e2" = 0.18583474412196704
+"T4/circle R=0.25 DR=1/n128/cmdgfm_constant/order(e2)" = 0.04340894625485168
+"T4/circle R=0.25 DR=1/n128/mimetic/e2" = 0.011532458026044176
+"T4/circle R=0.25 DR=1/n128/mimetic/order(e2)" = 0.9618266674680173
+"T4/circle R=0.25 DR=1/n32/cmdgfm/e2" = 0.07438455965506945
+"T4/circle R=0.25 DR=1/n32/cmdgfm_constant/e2" = 0.19693425140037524
+"T4/circle R=0.25 DR=1/n32/mimetic/e2" = 0.042425625497167996
+"T4/circle R=0.25 DR=1/n64/cmdgfm/e2" = 0.05281031017109158
+"T4/circle R=0.25 DR=1/n64/cmdgfm/order(e2)" = 0.4941835707462453
+"T4/circle R=0.25 DR=1/n64/cmdgfm_constant/e2" = 0.19151125792879956
+"T4/circle R=0.25 DR=1/n64/cmdgfm_constant/order(e2)" = 0.04028484792998015
+"T4/circle R=0.25 DR=1/n64/mimetic/e2" = 0.022462627754777476
+"T4/circle R=0.25 DR=1/n64/mimetic/order(e2)" = 0.9174092211321042
+"T4/triangle s=0.3 DR=1/n128/cmdgfm/e2" = 0.0060945102060411625
+"T4/triangle s=0.3 DR=1/n128/cmdgfm/order(e2)" = 0.4319298722804977
+"T4/triangle s=0.3 DR=1/n128/cmdgfm_constant/e2" = 0.04843717924951718
+"T4/triangle s=0.3 DR=1/n128/cmdgfm_constant/order(e2)" = -0.013965081982528483
+"T4/triangle s=0.3 DR=1/n128/mimetic/e2" = 0.003925361987448532
+"T4/triangle s=0.3 DR=1/n128/mimetic/order(e2)" = 1.0616771470993076
+"T4/triangle s=0.3 DR=1/n32/cmdgfm/e2" = 0.011890113675548717
+"T4/triangle s=0.3 DR=1/n32/cmdgfm_constant/e2" = 0.04843449971636821
+"T4/triangle s=0.3 DR=1/n32/mimetic/e2" = 0.015637805445133005
+"T4/triangle s=0.3 DR=1/n64/cmdgfm/e2" = 0.008221719506641464
+"T4/triangle s=0.3 DR=1/n64/cmdgfm/order(e2)" = 0.5322504493859197
+"T4/triangle s=0.3 DR=1/n64/cmdgfm_constant/e2" = 0.047970576239715554
+"T4/triangle s=0.3 DR=1/n64/cmdgfm_constant/order(e2)" = 0.013885270230978956
+"T4/triangle s=0.3 DR=1/n64/mimetic/e2" = 0.008193630582947706
+"T4/triangle s=0.3 DR=1/n64/mimetic/order(e2)" = 0.9324633098589612
+"T4/triangle s=1 DR=1/n128/cmdgfm/e2" = 0.14260541344639832
+"T4/triangle s=1 DR=1/n128/cmdgfm/order(e2)" = -0.2585866544113555
+"T4/triangle s=1 DR=1/n128/cmdgfm_constant/e2" = 0.2918462856431999
+"T4/triangle s=1 DR=1/n128/cmdgfm_constant/order(e2)" = 1.5182572265327615e-6
+"T4/triangle s=1 DR=1/n128/mimetic/e2" = 0.004151653755552522
+"T4/triangle s=1 DR=1/n128/mimetic/order(e2)" = 1.0649570483402586
+"T4/triangle s=1 DR=1/n32/cmdgfm/e2" = 0.19775677006490697
+"T4/triangle s=1 DR=1/n32/cmdgfm_constant/e2" = 0.29189293690103313
+"T4/triangle s=1 DR=1/n32/mimetic/e2" = 0.01802013336454334
+"T4/triangle s=1 DR=1/n64/cmdgfm/e2" = 0.11920478057013394
+"T4/triangle s=1 DR=1/n64/cmdgfm/order(e2)" = 0.7302849906209605
+"T4/triangle s=1 DR=1/n64/cmdgfm_constant/e2" = 0.29184659277530534
+"T4/triangle s=1 DR=1/n64/cmdgfm_constant/order(e2)" = 0.0002290762818113605
+"T4/triangle s=1 DR=1/n64/mimetic/e2" = 0.008685706344681864
+"T4/triangle s=1 DR=1/n64/mimetic/order(e2)" = 1.0528946057726256
+"T5/circle R=0.25 DR=1/n128/cmdgfm/max_jump" = 6.5036099444910774e-15
+"T5/circle R=0.25 DR=1/n128/cmdgfm/max_u" = 7.531286352839328e-14
+"T5/circle R=0.25 DR=1/n128/cmdgfm_constant/max_jump" = 4.971724561037014e-15
+"T5/circle R=0.25 DR=1/n128/cmdgfm_constant/max_u" = 1.6509095732734618e-13
+"T5/circle R=0.25 DR=1/n128/mimetic/max_jump" = 0.06639366767810259
+"T5/circle R=0.25 DR=1/n128/mimetic/max_u" = 0.042679011108517725
+"T5/circle R=0.25 DR=1/n128/mimetic/order(max_jump)" = 0.6385915371105666
+"T5/circle R=0.25 DR=1/n128/mimetic/order(max_u)" = 0.8760468707143507
+"T5/circle R=0.25 DR=1/n32/cmdgfm/max_jump" = 2.5108632071936157e-12
+"T5/circle R=0.25 DR=1/n32/cmdgfm/max_u" = 4.485161978996884e-12
+"T5/circle R=0.25 DR=1/n32/cmdgfm_constant/max_jump" = 1.5744137648460459e-12
+"T5/circle R=0.25 DR=1/n32/cmdgfm_constant/max_u" = 5.224561627620391e-12
+"T5/circle R=0.25 DR=1/n32/mimetic/max_jump" = 0.20090668009353768
+"T5/circle R=0.25 DR=1/n32/mimetic/max_u" = 0.14828396045962416
+"T5/circle R=0.25 DR=1/n64/cmdgfm/max_jump" = 2.899876183709218e-15
+"T5/circle R=0.25 DR=1/n64/cmdgfm/max_u" = 5.092465493343017e-15
+"T5/circle R=0.25 DR=1/n64/cmdgfm_constant/max_jump" = 2.2014303955597417e-15
+"T5/circle R=0.25 DR=1/n64/cmdgfm_constant/max_u" = 2.618729651264239e-14
+"T5/circle R=0.25 DR=1/n64/mimetic/max_jump" = 0.1033622294046105
+"T5/circle R=0.25 DR=1/n64/mimetic/max_u" = 0.07833047024432407
+"T5/circle R=0.25 DR=1/n64/mimetic/order(max_jump)" = 0.958816441338463
+"T5/circle R=0.25 DR=1/n64/mimetic/order(max_u)" = 0.9207170286775608
+"T5/triangle s=0.3 DR=1/n128/cmdgfm/max_jump" = 2.8983479100449365e-15
+"T5/triangle s=0.3 DR=1/n128/cmdgfm/max_u" = 7.845642227533988e-14
+"T5/triangle s=0.3 DR=1/n128/cmdgfm_constant/max_jump" = 3.287150678465599e-15
+"T5/triangle s=0.3 DR=1/n128/cmdgfm_constant/max_u" = 1.9379608899131257e-13
+"T5/triangle s=0.3 DR=1/n128/mimetic/max_jump" = 0.027177795932196398
+"T5/triangle s=0.3 DR=1/n128/mimetic/max_u" = 0.028717783936790624
+"T5/triangle s=0.3 DR=1/n128/mimetic/order(max_jump)" = 0.981454223528273
+"T5/triangle s=0.3 DR=1/n128/mimetic/order(max_u)" = 0.9804979388967121
+"T5/triangle s=0.3 DR=1/n32/cmdgfm/max_jump" = 3.922921975861726e-13
+"T5/triangle s=0.3 DR=1/n32/cmdgfm/max_u" = 6.393482161084623e-12
+"T5/triangle s=0.3 DR=1/n32/cmdgfm_constant/max_jump" = 2.138319401775553e-12
+"T5/triangle s=0.3 DR=1/n32/cmdgfm_constant/max_u" = 6.270154382268969e-12
+"T5/triangle s=0.3 DR=1/n32/mimetic/max_jump" = 0.10187900433308837
+"T5/triangle s=0.3 DR=1/n32/mimetic/max_u" = 0.107253540229265
+"T5/triangle s=0.3 DR=1/n64/cmdgfm/max_jump" = 3.120903331857787e-15
+"T5/triangle s=0.3 DR=1/n64/cmdgfm/max_u" = 9.835708092611297e-15
+"T5/triangle s=0.3 DR=1/n64/cmdgfm_constant/max_jump" = 1.5383489511140365e-15
+"T5/triangle s=0.3 DR=1/n64/cmdgfm_constant/max_u" = 3.040449449931708e-14
+"T5/triangle s=0.3 DR=1/n64/mimetic/max_jump" = 0.053661325246332076
+"T5/triangle s=0.3 DR=1/n64/mimetic/max_u" = 0.05666438949083256
+"T5/triangle s=0.3 DR=1/n64/mimetic/order(max_jump)" = 0.9249021756334885
+"T5/triangle s=0.3 DR=1/n64/mimetic/order(max_u)" = 0.9205109999290169
+"T5/wavy ε=0.02 DR=1/n128/cmdgfm/max_jump" = 5.475580079080626e-13
+"T5/wavy ε=0.02 DR=1/n128/cmdgfm/max_u" = 8.959712378310621e-12
+"T5/wavy ε=0.02 DR=1/n128/cmdgfm_constant/max_jump" = 6.267235534144425e-15
+"T5/wavy ε=0.02 DR=1/n128/cmdgfm_constant/max_u" = 1.532943278764011e-13
+"T5/wavy ε=0.02 DR=1/n128/mimetic/max_jump" = 0.024821820037527604
+"T5/wavy ε=0.02 DR=1/n128/mimetic/max_u" = 0.0260510373968169
+"T5/wavy ε=0.02 DR=1/n128/mimetic/order(max_jump)" = 0.959949038987068
+"T5/wavy ε=0.02 DR=1/n128/mimetic/order(max_u)" = 0.9676167182611205
+"T5/wavy ε=0.02 DR=1/n32/cmdgfm/max_jump" = 1.0343763057993959e-15
+"T5/wavy ε=0.02 DR=1/n32/cmdgfm/max_u" = 2.268097081667198e-15
+"T5/wavy ε=0.02 DR=1/n32/cmdgfm_constant/max_jump" = 1.1008244624888646e-15
+"T5/wavy ε=0.02 DR=1/n32/cmdgfm_constant/max_u" = 1.984584946458798e-15
+"T5/wavy ε=0.02 DR=1/n32/mimetic/max_jump" = 0.08381357483763816
+"T5/wavy ε=0.02 DR=1/n32/mimetic/max_u" = 0.08261499767479247
+"T5/wavy ε=0.02 DR=1/n64/cmdgfm/max_jump" = 1.5169670610860792e-12
+"T5/wavy ε=0.02 DR=1/n64/cmdgfm/max_u" = 1.297786539503505e-11
+"T5/wavy ε=0.02 DR=1/n64/cmdgfm_constant/max_jump" = 1.193988654298567e-12
+"T5/wavy ε=0.02 DR=1/n64/cmdgfm_constant/max_u" = 5.0370142024155045e-12
+"T5/wavy ε=0.02 DR=1/n64/mimetic/max_jump" = 0.048284426522341474
+"T5/wavy ε=0.02 DR=1/n64/mimetic/max_u" = 0.05094559969749644
+"T5/wavy ε=0.02 DR=1/n64/mimetic/order(max_jump)" = 0.7956259858254204
+"T5/wavy ε=0.02 DR=1/n64/mimetic/order(max_u)" = 0.6974461653889926
+"T6/flat 0.37h DR=1/n128/cmdgfm/jump_ratio" = 0.00015456898795336452
+"T6/flat 0.37h DR=1/n128/cmdgfm/mean_ratio" = 0.022376509140116255
+"T6/flat 0.37h DR=1/n128/cmdgfm/order(jump_ratio)" = 2.0005944326484673
+"T6/flat 0.37h DR=1/n128/cmdgfm/order(mean_ratio)" = 0.9729261993242195
+"T6/flat 0.37h DR=1/n128/cmdgfm_constant/jump_ratio" = 0.005087302009163223
+"T6/flat 0.37h DR=1/n128/cmdgfm_constant/mean_ratio" = 0.022376509138951773
+"T6/flat 0.37h DR=1/n128/cmdgfm_constant/order(jump_ratio)" = 0.998702257473718
+"T6/flat 0.37h DR=1/n128/cmdgfm_constant/order(mean_ratio)" = 0.9729261993901106
+"T6/flat 0.37h DR=1/n128/mimetic/jump_ratio" = 0.025285497122239382
+"T6/flat 0.37h DR=1/n128/mimetic/mean_ratio" = 0.015630083296742512
+"T6/flat 0.37h DR=1/n128/mimetic/order(jump_ratio)" = 0.9770251266526279
+"T6/flat 0.37h DR=1/n128/mimetic/order(mean_ratio)" = 1.0131676468740338
+"T6/flat 0.37h DR=1/n32/cmdgfm/jump_ratio" = 0.0023364298399343626
+"T6/flat 0.37h DR=1/n32/cmdgfm/mean_ratio" = 0.08460071595807124
+"T6/flat 0.37h DR=1/n32/cmdgfm_constant/jump_ratio" = 0.020257964968635887
+"T6/flat 0.37h DR=1/n32/cmdgfm_constant/mean_ratio" = 0.08460071595585665
+"T6/flat 0.37h DR=1/n32/mimetic/jump_ratio" = 0.09658993859869186
+"T6/flat 0.37h DR=1/n32/mimetic/mean_ratio" = 0.06396351311653989
+"T6/flat 0.37h DR=1/n64/cmdgfm/jump_ratio" = 0.0006185307521189359
+"T6/flat 0.37h DR=1/n64/cmdgfm/mean_ratio" = 0.043921008601115995
+"T6/flat 0.37h DR=1/n64/cmdgfm/order(jump_ratio)" = 1.9173884854998313
+"T6/flat 0.37h DR=1/n64/cmdgfm/order(mean_ratio)" = 0.9457586878796475
+"T6/flat 0.37h DR=1/n64/cmdgfm_constant/jump_ratio" = 0.010165455806786869
+"T6/flat 0.37h DR=1/n64/cmdgfm_constant/mean_ratio" = 0.0439210086008363
+"T6/flat 0.37h DR=1/n64/cmdgfm_constant/order(jump_ratio)" = 0.9948143489019715
+"T6/flat 0.37h DR=1/n64/cmdgfm_constant/order(mean_ratio)" = 0.9457586878510694
+"T6/flat 0.37h DR=1/n64/mimetic/jump_ratio" = 0.04977203135924321
+"T6/flat 0.37h DR=1/n64/mimetic/mean_ratio" = 0.03154678782403685
+"T6/flat 0.37h DR=1/n64/mimetic/order(jump_ratio)" = 0.9565376475947932
+"T6/flat 0.37h DR=1/n64/mimetic/order(mean_ratio)" = 1.0197560655023818
+"T6/flat 0.37h DR=1000/n128/cmdgfm/jump_ratio" = 0.0013995196609334181
+"T6/flat 0.37h DR=1000/n128/cmdgfm/mean_ratio" = 7.959256660887784e-5
+"T6/flat 0.37h DR=1000/n128/cmdgfm/order(jump_ratio)" = 1.8997486391719995
+"T6/flat 0.37h DR=1000/n128/cmdgfm/order(mean_ratio)" = 2.8737932823250008
+"T6/flat 0.37h DR=1000/n128/cmdgfm_constant/jump_ratio" = 0.6033008191671403
+"T6/flat 0.37h DR=1000/n128/cmdgfm_constant/mean_ratio" = 0.03198257969418505
+"T6/flat 0.37h DR=1000/n128/cmdgfm_constant/order(jump_ratio)" = 0.00869639168543228
+"T6/flat 0.37h DR=1000/n128/cmdgfm_constant/order(mean_ratio)" = 1.051087008745349
+"T6/flat 0.37h DR=1000/n128/mimetic/jump_ratio" = 0.021492842262234038
+"T6/flat 0.37h DR=1000/n128/mimetic/mean_ratio" = 0.0002695865119848422
+"T6/flat 0.37h DR=1000/n128/mimetic/order(jump_ratio)" = 0.9983450142267236
+"T6/flat 0.37h DR=1000/n128/mimetic/order(mean_ratio)" = 1.9467457485810389
+"T6/flat 0.37h DR=1000/n32/cmdgfm/jump_ratio" = 0.018232803949078592
+"T6/flat 0.37h DR=1000/n32/cmdgfm/mean_ratio" = 0.004252657560732319
+"T6/flat 0.37h DR=1000/n32/cmdgfm_constant/jump_ratio" = 0.6130267306178073
+"T6/flat 0.37h DR=1000/n32/cmdgfm_constant/mean_ratio" = 0.14108300297380166
+"T6/flat 0.37h DR=1000/n32/mimetic/jump_ratio" = 0.08574276677489183
+"T6/flat 0.37h DR=1000/n32/mimetic/mean_ratio" = 0.003863290216509175
+"T6/flat 0.37h DR=1000/n64/cmdgfm/jump_ratio" = 0.005222282106084009
+"T6/flat 0.37h DR=1000/n64/cmdgfm/mean_ratio" = 0.000583405459425125
+"T6/flat 0.37h DR=1000/n64/cmdgfm/order(jump_ratio)" = 1.8037841458525117
+"T6/flat 0.37h DR=1000/n64/cmdgfm/order(mean_ratio)" = 2.8657938967055787
+"T6/flat 0.37h DR=1000/n64/cmdgfm_constant/jump_ratio" = 0.6069484263569438
+"T6/flat 0.37h DR=1000/n64/cmdgfm_constant/mean_ratio" = 0.06627079925725797
+"T6/flat 0.37h DR=1000/n64/cmdgfm_constant/order(jump_ratio)" = 0.014376050078286653
+"T6/flat 0.37h DR=1000/n64/cmdgfm_constant/order(mean_ratio)" = 1.0900989649753063
+"T6/flat 0.37h DR=1000/n64/mimetic/jump_ratio" = 0.04293640182407304
+"T6/flat 0.37h DR=1000/n64/mimetic/mean_ratio" = 0.0010392667287548972
+"T6/flat 0.37h DR=1000/n64/mimetic/order(jump_ratio)" = 0.9978136763742603
+"T6/flat 0.37h DR=1000/n64/mimetic/order(mean_ratio)" = 1.8942640884234234
+"T7/circle R=0.3 walls DR=1/n128/cmdgfm/jump_ratio" = 0.05657250024702268
+"T7/circle R=0.3 walls DR=1/n128/cmdgfm/mean_ratio" = 0.028519579071125664
+"T7/circle R=0.3 walls DR=1/n128/cmdgfm/order(jump_ratio)" = -0.8571681962053427
+"T7/circle R=0.3 walls DR=1/n128/cmdgfm/order(mean_ratio)" = -0.12874642963566876
+"T7/circle R=0.3 walls DR=1/n128/cmdgfm/order(p_rms_centre)" = 1.4457308693814597
+"T7/circle R=0.3 walls DR=1/n128/cmdgfm/order(p_rms_point)" = 1.4457308693814597
+"T7/circle R=0.3 walls DR=1/n128/cmdgfm/p_rms_centre" = 0.0008512800475811154
+"T7/circle R=0.3 walls DR=1/n128/cmdgfm/p_rms_point" = 0.0008512800475811154
+"T7/circle R=0.3 walls DR=1/n128/cmdgfm_constant/jump_ratio" = 0.34457299102390926
+"T7/circle R=0.3 walls DR=1/n128/cmdgfm_constant/mean_ratio" = 0.0752440895520818
+"T7/circle R=0.3 walls DR=1/n128/cmdgfm_constant/order(jump_ratio)" = 0.14286297806237716
+"T7/circle R=0.3 walls DR=1/n128/cmdgfm_constant/order(mean_ratio)" = 0.22669996445181392
+"T7/circle R=0.3 walls DR=1/n128/cmdgfm_constant/order(p_rms_centre)" = 1.2504888556699876
+"T7/circle R=0.3 walls DR=1/n128/cmdgfm_constant/order(p_rms_point)" = 1.2504888556699876
+"T7/circle R=0.3 walls DR=1/n128/cmdgfm_constant/p_rms_centre" = 0.0007826598722135178
+"T7/circle R=0.3 walls DR=1/n128/cmdgfm_constant/p_rms_point" = 0.0007826598722135178
+"T7/circle R=0.3 walls DR=1/n128/mimetic/jump_ratio" = 0.09014583775061673
+"T7/circle R=0.3 walls DR=1/n128/mimetic/mean_ratio" = 0.02343536980323563
+"T7/circle R=0.3 walls DR=1/n128/mimetic/order(jump_ratio)" = 0.9444997994752119
+"T7/circle R=0.3 walls DR=1/n128/mimetic/order(mean_ratio)" = 1.0731590482664042
+"T7/circle R=0.3 walls DR=1/n128/mimetic/order(p_rms_centre)" = 1.573246041108664
+"T7/circle R=0.3 walls DR=1/n128/mimetic/order(p_rms_point)" = 2.6249698999858517
+"T7/circle R=0.3 walls DR=1/n128/mimetic/p_rms_centre" = 0.0024712409510102245
+"T7/circle R=0.3 walls DR=1/n128/mimetic/p_rms_point" = 0.0005419880700732017
+"T7/circle R=0.3 walls DR=1/n32/cmdgfm/jump_ratio" = 0.06728896507886925
+"T7/circle R=0.3 walls DR=1/n32/cmdgfm/mean_ratio" = 0.034094574371512025
+"T7/circle R=0.3 walls DR=1/n32/cmdgfm/p_rms_centre" = 0.009192953876693898
+"T7/circle R=0.3 walls DR=1/n32/cmdgfm/p_rms_point" = 0.009192953876693898
+"T7/circle R=0.3 walls DR=1/n32/cmdgfm_constant/jump_ratio" = 0.31770799621074347
+"T7/circle R=0.3 walls DR=1/n32/cmdgfm_constant/mean_ratio" = 0.046888548490966575
+"T7/circle R=0.3 walls DR=1/n32/cmdgfm_constant/p_rms_centre" = 0.008719080041878708
+"T7/circle R=0.3 walls DR=1/n32/cmdgfm_constant/p_rms_point" = 0.008719080041878708
+"T7/circle R=0.3 walls DR=1/n32/mimetic/jump_ratio" = 0.3560124374055896
+"T7/circle R=0.3 walls DR=1/n32/mimetic/mean_ratio" = 0.07604981426679931
+"T7/circle R=0.3 walls DR=1/n32/mimetic/p_rms_centre" = 0.015105266039772549
+"T7/circle R=0.3 walls DR=1/n32/mimetic/p_rms_point" = 0.006377596070327888
+"T7/circle R=0.3 walls DR=1/n64/cmdgfm/jump_ratio" = 0.031230003623300556
+"T7/circle R=0.3 walls DR=1/n64/cmdgfm/mean_ratio" = 0.02608474372074472
+"T7/circle R=0.3 walls DR=1/n64/cmdgfm/order(jump_ratio)" = 1.1074371955652562
+"T7/circle R=0.3 walls DR=1/n64/cmdgfm/order(mean_ratio)" = 0.386335915588622
+"T7/circle R=0.3 walls DR=1/n64/cmdgfm/order(p_rms_centre)" = 1.987091911029477
+"T7/circle R=0.3 walls DR=1/n64/cmdgfm/order(p_rms_point)" = 1.987091911029477
+"T7/circle R=0.3 walls DR=1/n64/cmdgfm/p_rms_centre" = 0.002318893545807506
+"T7/circle R=0.3 walls DR=1/n64/cmdgfm/p_rms_point" = 0.002318893545807506
+"T7/circle R=0.3 walls DR=1/n64/cmdgfm_constant/jump_ratio" = 0.38044096483445944
+"T7/circle R=0.3 walls DR=1/n64/cmdgfm_constant/mean_ratio" = 0.08804726720254899
+"T7/circle R=0.3 walls DR=1/n64/cmdgfm_constant/order(jump_ratio)" = -0.2599711991138391
+"T7/circle R=0.3 walls DR=1/n64/cmdgfm_constant/order(mean_ratio)" = -0.9090426077583385
+"T7/circle R=0.3 walls DR=1/n64/cmdgfm_constant/order(p_rms_centre)" = 2.22722968387835
+"T7/circle R=0.3 walls DR=1/n64/cmdgfm_constant/order(p_rms_point)" = 2.22722968387835
+"T7/circle R=0.3 walls DR=1/n64/cmdgfm_constant/p_rms_centre" = 0.001862120247888251
+"T7/circle R=0.3 walls DR=1/n64/cmdgfm_constant/p_rms_point" = 0.001862120247888251
+"T7/circle R=0.3 walls DR=1/n64/mimetic/jump_ratio" = 0.17348760421089093
+"T7/circle R=0.3 walls DR=1/n64/mimetic/mean_ratio" = 0.04930885008285547
+"T7/circle R=0.3 walls DR=1/n64/mimetic/order(jump_ratio)" = 1.0370950579780287
+"T7/circle R=0.3 walls DR=1/n64/mimetic/order(mean_ratio)" = 0.6250981159558893
+"T7/circle R=0.3 walls DR=1/n64/mimetic/order(p_rms_centre)" = 1.0384979641495018
+"T7/circle R=0.3 walls DR=1/n64/mimetic/order(p_rms_point)" = 0.9317098250857193
+"T7/circle R=0.3 walls DR=1/n64/mimetic/p_rms_centre" = 0.0073537581208645885
+"T7/circle R=0.3 walls DR=1/n64/mimetic/p_rms_point" = 0.003343369719711354
+"T7/circle R=0.3 walls DR=1000/n128/cmdgfm/jump_ratio" = 0.3946813790631169
+"T7/circle R=0.3 walls DR=1000/n128/cmdgfm/mean_ratio" = 0.8504746201829616
+"T7/circle R=0.3 walls DR=1000/n128/cmdgfm/order(jump_ratio)" = -0.5043514876056917
+"T7/circle R=0.3 walls DR=1000/n128/cmdgfm/order(mean_ratio)" = -1.3063669975088188
+"T7/circle R=0.3 walls DR=1000/n128/cmdgfm/order(p_rms_centre)" = 1.482796880538657
+"T7/circle R=0.3 walls DR=1000/n128/cmdgfm/order(p_rms_point)" = 1.482796880538657
+"T7/circle R=0.3 walls DR=1000/n128/cmdgfm/p_rms_centre" = 0.11385688622588451
+"T7/circle R=0.3 walls DR=1000/n128/cmdgfm/p_rms_point" = 0.11385688622588451
+"T7/circle R=0.3 walls DR=1000/n128/cmdgfm_constant/jump_ratio" = 0.7165657153007845
+"T7/circle R=0.3 walls DR=1000/n128/cmdgfm_constant/mean_ratio" = 0.8322205841442565
+"T7/circle R=0.3 walls DR=1000/n128/cmdgfm_constant/order(jump_ratio)" = 0.008565050104713997
+"T7/circle R=0.3 walls DR=1000/n128/cmdgfm_constant/order(mean_ratio)" = -0.01716059540352137
+"T7/circle R=0.3 walls DR=1000/n128/cmdgfm_constant/order(p_rms_centre)" = 1.4883593774674326
+"T7/circle R=0.3 walls DR=1000/n128/cmdgfm_constant/order(p_rms_point)" = 1.4883593774674326
+"T7/circle R=0.3 walls DR=1000/n128/cmdgfm_constant/p_rms_centre" = 0.25913757324057024
+"T7/circle R=0.3 walls DR=1000/n128/cmdgfm_constant/p_rms_point" = 0.25913757324057024
+"T7/circle R=0.3 walls DR=1000/n128/mimetic/jump_ratio" = 0.01571466727053456
+"T7/circle R=0.3 walls DR=1000/n128/mimetic/mean_ratio" = 0.004203460837429804
+"T7/circle R=0.3 walls DR=1000/n128/mimetic/order(jump_ratio)" = 1.0258607363317132
+"T7/circle R=0.3 walls DR=1000/n128/mimetic/order(mean_ratio)" = 1.0301939445725552
+"T7/circle R=0.3 walls DR=1000/n128/mimetic/order(p_rms_centre)" = 1.8195213741961902
+"T7/circle R=0.3 walls DR=1000/n128/mimetic/order(p_rms_point)" = 2.6670781674283135
+"T7/circle R=0.3 walls DR=1000/n128/mimetic/p_rms_centre" = 0.0027582731873885846
+"T7/circle R=0.3 walls DR=1000/n128/mimetic/p_rms_point" = 0.0005426861727315974
+"T7/circle R=0.3 walls DR=1000/n32/cmdgfm/jump_ratio" = 0.3694389040663975
+"T7/circle R=0.3 walls DR=1000/n32/cmdgfm/mean_ratio" = 0.5254776704850151
+"T7/circle R=0.3 walls DR=1000/n32/cmdgfm/p_rms_centre" = 1.006537280660987
+"T7/circle R=0.3 walls DR=1000/n32/cmdgfm/p_rms_point" = 1.006537280660987
+"T7/circle R=0.3 walls DR=1000/n32/cmdgfm_constant/jump_ratio" = 0.7102607727178564
+"T7/circle R=0.3 walls DR=1000/n32/cmdgfm_constant/mean_ratio" = 0.7636717022628189
+"T7/circle R=0.3 walls DR=1000/n32/cmdgfm_constant/p_rms_centre" = 1.0437148788827064
+"T7/circle R=0.3 walls DR=1000/n32/cmdgfm_constant/p_rms_point" = 1.0437148788827064
+"T7/circle R=0.3 walls DR=1000/n32/mimetic/jump_ratio" = 0.059680840233115706
+"T7/circle R=0.3 walls DR=1000/n32/mimetic/mean_ratio" = 0.010840579069858875
+"T7/circle R=0.3 walls DR=1000/n32/mimetic/p_rms_centre" = 0.01710818631996999
+"T7/circle R=0.3 walls DR=1000/n32/mimetic/p_rms_point" = 0.005388484573056615
+"T7/circle R=0.3 walls DR=1000/n64/cmdgfm/jump_ratio" = 0.2782413750269432
+"T7/circle R=0.3 walls DR=1000/n64/cmdgfm/mean_ratio" = 0.3438790405520333
+"T7/circle R=0.3 walls DR=1000/n64/cmdgfm/order(jump_ratio)" = 0.408998831146919
+"T7/circle R=0.3 walls DR=1000/n64/cmdgfm/order(mean_ratio)" = 0.6117282737766283
+"T7/circle R=0.3 walls DR=1000/n64/cmdgfm/order(p_rms_centre)" = 1.661310272546122
+"T7/circle R=0.3 walls DR=1000/n64/cmdgfm/order(p_rms_point)" = 1.661310272546122
+"T7/circle R=0.3 walls DR=1000/n64/cmdgfm/p_rms_centre" = 0.31821865882173483
+"T7/circle R=0.3 walls DR=1000/n64/cmdgfm/p_rms_point" = 0.31821865882173483
+"T7/circle R=0.3 walls DR=1000/n64/cmdgfm_constant/jump_ratio" = 0.7208325046307071
+"T7/circle R=0.3 walls DR=1000/n64/cmdgfm_constant/mean_ratio" = 0.8223801128267653
+"T7/circle R=0.3 walls DR=1000/n64/cmdgfm_constant/order(jump_ratio)" = -0.02131525999920109
+"T7/circle R=0.3 walls DR=1000/n64/cmdgfm_constant/order(mean_ratio)" = -0.1068528111729122
+"T7/circle R=0.3 walls DR=1000/n64/cmdgfm_constant/order(p_rms_centre)" = 0.5215781570220659
+"T7/circle R=0.3 walls DR=1000/n64/cmdgfm_constant/order(p_rms_point)" = 0.5215781570220659
+"T7/circle R=0.3 walls DR=1000/n64/cmdgfm_constant/p_rms_centre" = 0.7270615941285232
+"T7/circle R=0.3 walls DR=1000/n64/cmdgfm_constant/p_rms_point" = 0.7270615941285232
+"T7/circle R=0.3 walls DR=1000/n64/mimetic/jump_ratio" = 0.03199779436498526
+"T7/circle R=0.3 walls DR=1000/n64/mimetic/mean_ratio" = 0.008584722954957855
+"T7/circle R=0.3 walls DR=1000/n64/mimetic/order(jump_ratio)" = 0.8992953847636749
+"T7/circle R=0.3 walls DR=1000/n64/mimetic/order(mean_ratio)" = 0.3365983413829995
+"T7/circle R=0.3 walls DR=1000/n64/mimetic/order(p_rms_centre)" = 0.8133281924135035
+"T7/circle R=0.3 walls DR=1000/n64/mimetic/order(p_rms_point)" = 0.6446113718043004
+"T7/circle R=0.3 walls DR=1000/n64/mimetic/p_rms_centre" = 0.009735713590451466
+"T7/circle R=0.3 walls DR=1000/n64/mimetic/p_rms_point" = 0.0034468254057869966
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm/grad_l2" = 25.156856860636097
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm/grad_linf" = 5547.086704197124
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm/order(grad_l2)" = 0.3156713552187853
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm/order(grad_linf)" = -1.059490550365953
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm/order(p_l2)" = 1.4828391172512665
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm/order(p_linf)" = 1.2389648736578855
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm/order(xi_l2)" = -0.14570566864313778
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm/order(xi_linf)" = 0.01433488924603959
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm/p_l2" = 0.11386652546535758
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm/p_linf" = 1.8770887203197497
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm/xi_l2" = 2.387942197734168
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm/xi_linf" = 6.096002388685945
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm_constant/grad_l2" = 50.07940921141029
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm_constant/grad_linf" = 5903.888115496933
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm_constant/order(grad_l2)" = 0.8007056699689769
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm_constant/order(grad_linf)" = -0.15120813735185598
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm_constant/order(p_l2)" = 1.488360077289927
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm_constant/order(p_linf)" = 0.9748896124089822
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm_constant/order(xi_l2)" = 0.004408802993030706
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm_constant/order(xi_linf)" = 3.067966089741093e-5
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm_constant/p_l2" = 0.25913834046255474
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm_constant/p_linf" = 4.96451759956477
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm_constant/xi_l2" = 3.3197876660698293
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/cmdgfm_constant/xi_linf" = 6.285553708786469
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/mimetic/grad_l2" = 0.05301377922162201
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/mimetic/grad_linf" = 3.149547055259948
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/mimetic/order(grad_l2)" = 1.7273108285499732
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/mimetic/order(grad_linf)" = 0.9684264946948865
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/mimetic/order(p_l2)" = 1.8220954457398955
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/mimetic/order(p_linf)" = 0.9910808669216734
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/mimetic/order(xi_l2)" = 1.1089262546896799
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/mimetic/order(xi_linf)" = 1.2092141331595525
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/mimetic/p_l2" = 0.002758525381875008
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/mimetic/p_linf" = 0.09378521083657132
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/mimetic/xi_l2" = 0.11801931232228308
+"T7/ex12 periodic circle R=0.3 DR=1000/n128/mimetic/xi_linf" = 0.5309647782542625
+"T7/ex12 periodic circle R=0.3 DR=1000/n32/cmdgfm/grad_l2" = 70.22231687791529
+"T7/ex12 periodic circle R=0.3 DR=1000/n32/cmdgfm/grad_linf" = 3378.1845692078773
+"T7/ex12 periodic circle R=0.3 DR=1000/n32/cmdgfm/p_l2" = 1.006673695732266
+"T7/ex12 periodic circle R=0.3 DR=1000/n32/cmdgfm/p_linf" = 10.780959599864591
+"T7/ex12 periodic circle R=0.3 DR=1000/n32/cmdgfm/xi_l2" = 2.148194191582601
+"T7/ex12 periodic circle R=0.3 DR=1000/n32/cmdgfm/xi_linf" = 5.805433038599583
+"T7/ex12 periodic circle R=0.3 DR=1000/n32/cmdgfm_constant/grad_l2" = 90.54919689118731
+"T7/ex12 periodic circle R=0.3 DR=1000/n32/cmdgfm_constant/grad_linf" = 5304.829851505341
+"T7/ex12 periodic circle R=0.3 DR=1000/n32/cmdgfm_constant/p_l2" = 1.043776923122939
+"T7/ex12 periodic circle R=0.3 DR=1000/n32/cmdgfm_constant/p_linf" = 8.987827792629668
+"T7/ex12 periodic circle R=0.3 DR=1000/n32/cmdgfm_constant/xi_l2" = 3.2305534040746844
+"T7/ex12 periodic circle R=0.3 DR=1000/n32/cmdgfm_constant/xi_linf" = 6.286515012497406
+"T7/ex12 periodic circle R=0.3 DR=1000/n32/mimetic/grad_l2" = 0.29703687881296925
+"T7/ex12 periodic circle R=0.3 DR=1000/n32/mimetic/grad_linf" = 7.830588784706692
+"T7/ex12 periodic circle R=0.3 DR=1000/n32/mimetic/p_l2" = 0.017109325977079065
+"T7/ex12 periodic circle R=0.3 DR=1000/n32/mimetic/p_linf" = 0.16275757460264972
+"T7/ex12 periodic circle R=0.3 DR=1000/n32/mimetic/xi_l2" = 0.41617330855381673
+"T7/ex12 periodic circle R=0.3 DR=1000/n32/mimetic/xi_linf" = 1.345457390450929
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm/grad_l2" = 31.30998974583907
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm/grad_linf" = 2661.50029364638
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm/order(grad_l2)" = 1.1653065605320627
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm/order(grad_linf)" = 0.34400842739283094
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm/order(p_l2)" = 1.6613414148604757
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm/order(p_linf)" = 1.2829519769870705
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm/order(xi_l2)" = -0.006937831288587426
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm/order(xi_linf)" = -0.08479467284166198
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm/p_l2" = 0.31825491671290823
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm/p_linf" = 4.430476022449261
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm/xi_l2" = 2.158549603997482
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm/xi_linf" = 6.1568753365705104
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm_constant/grad_l2" = 87.23597537047851
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm_constant/grad_linf" = 5316.427963503888
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm_constant/order(grad_l2)" = 0.05377863270931814
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm_constant/order(grad_linf)" = -0.0031507653059650678
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm_constant/order(p_l2)" = 0.5216589451554734
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm_constant/order(p_linf)" = -0.11857066815064127
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm_constant/order(xi_l2)" = -0.04371844826687381
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm_constant/order(xi_linf)" = 0.00018994721125960412
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm_constant/p_l2" = 0.7270640994053468
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm_constant/p_linf" = 9.75771367884734
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm_constant/xi_l2" = 3.329948286340619
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/cmdgfm_constant/xi_linf" = 6.285687375778656
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/mimetic/grad_l2" = 0.1755339542733115
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/mimetic/grad_linf" = 6.162735446051725
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/mimetic/order(grad_l2)" = 0.7588919368049833
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/mimetic/order(grad_linf)" = 0.3455499279254484
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/mimetic/order(p_l2)" = 0.8107183199104472
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/mimetic/order(p_linf)" = -0.1957885246751837
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/mimetic/order(xi_l2)" = 0.7092352283660454
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/mimetic/order(xi_linf)" = 0.13219450195043742
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/mimetic/p_l2" = 0.009753991403395185
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/mimetic/p_linf" = 0.18641438745824201
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/mimetic/xi_l2" = 0.2545500258014649
+"T7/ex12 periodic circle R=0.3 DR=1000/n64/mimetic/xi_linf" = 1.2276524594370488
+
+[tier2]
+"Kelvin-Helmholtz/DR=1000 We=0.5 amplitude 0.04/n32/cmdgfm/error" = 0.8483035067617801
+"Kelvin-Helmholtz/DR=1000 We=0.5 amplitude 0.04/n32/cmdgfm/steps" = 5277.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 amplitude 0.04/n32/cmdgfm_constant/error" = 0.2921919365175838
+"Kelvin-Helmholtz/DR=1000 We=0.5 amplitude 0.04/n32/cmdgfm_constant/steps" = 3314.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 amplitude 0.04/n32/mimetic/error" = 0.26211320534762206
+"Kelvin-Helmholtz/DR=1000 We=0.5 amplitude 0.04/n32/mimetic/steps" = 3263.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ensemble/n32/cmdgfm/grid_mean" = 0.32311857865625787
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ensemble/n32/cmdgfm/grid_spread" = 8.760411741626228e-5
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ensemble/n32/cmdgfm_constant/grid_mean" = 0.33954266961181057
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ensemble/n32/cmdgfm_constant/grid_spread" = 0.0002023971268740321
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ensemble/n32/mimetic/grid_mean" = 0.35116659774883696
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ensemble/n32/mimetic/grid_spread" = 0.11193579511909063
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×0.995/n32/cmdgfm/error" = 0.32308213916216694
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×0.995/n32/cmdgfm/steps" = 3010.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×0.995/n32/cmdgfm_constant/error" = 0.3396577944911958
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×0.995/n32/cmdgfm_constant/steps" = 3013.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×0.995/n32/mimetic/error" = 0.4208674346734247
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×0.995/n32/mimetic/steps" = 3036.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×0.9975/n32/cmdgfm/error" = 0.3230994562200727
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×0.9975/n32/cmdgfm/steps" = 3011.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×0.9975/n32/cmdgfm_constant/error" = 0.3396305177285185
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×0.9975/n32/cmdgfm_constant/steps" = 3013.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×0.9975/n32/mimetic/error" = 0.387822830655647
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×0.9975/n32/mimetic/steps" = 3040.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×1.0025/n32/cmdgfm/error" = 0.32312967398003206
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×1.0025/n32/cmdgfm/steps" = 3011.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×1.0025/n32/cmdgfm_constant/error" = 0.3395115170096046
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×1.0025/n32/cmdgfm_constant/steps" = 3013.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×1.0025/n32/mimetic/error" = 0.32137482462499606
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×1.0025/n32/mimetic/steps" = 3043.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×1.005/n32/cmdgfm/error" = 0.3231697432795832
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×1.005/n32/cmdgfm/steps" = 3011.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×1.005/n32/cmdgfm_constant/error" = 0.3394553973643218
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×1.005/n32/cmdgfm_constant/steps" = 3014.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×1.005/n32/mimetic/error" = 0.316836259235783
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×1.005/n32/mimetic/steps" = 3043.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×1/n32/cmdgfm/error" = 0.3231118806394343
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×1/n32/cmdgfm/steps" = 3011.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×1/n32/cmdgfm_constant/error" = 0.33945812146541215
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×1/n32/cmdgfm_constant/steps" = 3013.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×1/n32/mimetic/error" = 0.30893163955433406
+"Kelvin-Helmholtz/DR=1000 We=0.5 grid ×1/n32/mimetic/steps" = 3043.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 moving U=2/n32/cmdgfm/error" = 0.4751787800384902
+"Kelvin-Helmholtz/DR=1000 We=0.5 moving U=2/n32/cmdgfm/steps" = 4627.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 moving U=2/n32/cmdgfm_constant/error" = 0.46488041066069635
+"Kelvin-Helmholtz/DR=1000 We=0.5 moving U=2/n32/cmdgfm_constant/steps" = 4626.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 moving U=2/n32/mimetic/error" = 0.6491089182887746
+"Kelvin-Helmholtz/DR=1000 We=0.5 moving U=2/n32/mimetic/steps" = 4592.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 shift 0.333h/n32/cmdgfm/error" = 0.5619128937020895
+"Kelvin-Helmholtz/DR=1000 We=0.5 shift 0.333h/n32/cmdgfm/steps" = 2989.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 shift 0.333h/n32/cmdgfm_constant/error" = 0.5576665868646606
+"Kelvin-Helmholtz/DR=1000 We=0.5 shift 0.333h/n32/cmdgfm_constant/steps" = 2985.0
+"Kelvin-Helmholtz/DR=1000 We=0.5 shift 0.333h/n32/mimetic/error" = 0.5538380144726142
+"Kelvin-Helmholtz/DR=1000 We=0.5 shift 0.333h/n32/mimetic/steps" = 3045.0
+"capillary wave/La=3000 DR=1/n16/cmdgfm/error" = 0.005625454283116871
+"capillary wave/La=3000 DR=1/n16/cmdgfm/steps" = 29.0
+"capillary wave/La=3000 DR=1/n16/cmdgfm_constant/error" = 0.005590380907022715
+"capillary wave/La=3000 DR=1/n16/cmdgfm_constant/steps" = 29.0
+"capillary wave/La=3000 DR=1/n16/mimetic/error" = 0.0227810921818369
+"capillary wave/La=3000 DR=1/n16/mimetic/steps" = 29.0
+"capillary wave/La=3000 DR=1/n16/one_velocity/error" = 0.009207045689358515
+"capillary wave/La=3000 DR=1/n16/one_velocity/steps" = 29.0
+"capillary wave/La=3000 DR=1/n32/cmdgfm/error" = 0.004681338329957794
+"capillary wave/La=3000 DR=1/n32/cmdgfm/order(error)" = 0.26504857040004626
+"capillary wave/La=3000 DR=1/n32/cmdgfm/steps" = 80.0
+"capillary wave/La=3000 DR=1/n32/cmdgfm_constant/error" = 0.004702854924449582
+"capillary wave/La=3000 DR=1/n32/cmdgfm_constant/order(error)" = 0.24940975805234392
+"capillary wave/La=3000 DR=1/n32/cmdgfm_constant/steps" = 80.0
+"capillary wave/La=3000 DR=1/n32/mimetic/error" = 0.011673932974026274
+"capillary wave/La=3000 DR=1/n32/mimetic/order(error)" = 0.964546224956159
+"capillary wave/La=3000 DR=1/n32/mimetic/steps" = 80.0
+"capillary wave/La=3000 DR=1/n32/one_velocity/error" = 0.0031233424906325817
+"capillary wave/La=3000 DR=1/n32/one_velocity/order(error)" = 1.5596475288286586
+"capillary wave/La=3000 DR=1/n32/one_velocity/steps" = 80.0
+"capillary wave/La=3000 DR=1/n64/cmdgfm/error" = 0.0015449112314915453
+"capillary wave/La=3000 DR=1/n64/cmdgfm/order(error)" = 1.5993970901516663
+"capillary wave/La=3000 DR=1/n64/cmdgfm/steps" = 227.0
+"capillary wave/La=3000 DR=1/n64/cmdgfm_constant/error" = 0.0015559297345184892
+"capillary wave/La=3000 DR=1/n64/cmdgfm_constant/order(error)" = 1.5957599180782416
+"capillary wave/La=3000 DR=1/n64/cmdgfm_constant/steps" = 227.0
+"capillary wave/La=3000 DR=1/n64/mimetic/error" = 0.003993145493857707
+"capillary wave/La=3000 DR=1/n64/mimetic/order(error)" = 1.5476931461758452
+"capillary wave/La=3000 DR=1/n64/mimetic/steps" = 227.0
+"capillary wave/La=3000 DR=1/n64/one_velocity/error" = 0.0023419525616050984
+"capillary wave/La=3000 DR=1/n64/one_velocity/order(error)" = 0.4153789239686853
+"capillary wave/La=3000 DR=1/n64/one_velocity/steps" = 227.0
+"capillary wave/La=3000 DR=1000/n16/cmdgfm/error" = 0.021727156612054172
+"capillary wave/La=3000 DR=1000/n16/cmdgfm/steps" = 29.0
+"capillary wave/La=3000 DR=1000/n16/cmdgfm_constant/error" = 0.021783304294171735
+"capillary wave/La=3000 DR=1000/n16/cmdgfm_constant/steps" = 29.0
+"capillary wave/La=3000 DR=1000/n16/mimetic/error" = 0.018733724242610876
+"capillary wave/La=3000 DR=1000/n16/mimetic/steps" = 29.0
+"capillary wave/La=3000 DR=1000/n16/one_velocity/error" = 0.024646696478120452
+"capillary wave/La=3000 DR=1000/n16/one_velocity/steps" = 29.0
+"capillary wave/La=3000 DR=1000/n32/cmdgfm/error" = 0.005592657252031302
+"capillary wave/La=3000 DR=1000/n32/cmdgfm/order(error)" = 1.9578935622910782
+"capillary wave/La=3000 DR=1000/n32/cmdgfm/steps" = 80.0
+"capillary wave/La=3000 DR=1000/n32/cmdgfm_constant/error" = 0.005615342504274264
+"capillary wave/La=3000 DR=1000/n32/cmdgfm_constant/order(error)" = 1.955776885358437
+"capillary wave/La=3000 DR=1000/n32/cmdgfm_constant/steps" = 80.0
+"capillary wave/La=3000 DR=1000/n32/mimetic/error" = 0.004795668577933019
+"capillary wave/La=3000 DR=1000/n32/mimetic/order(error)" = 1.9658338695532995
+"capillary wave/La=3000 DR=1000/n32/mimetic/steps" = 80.0
+"capillary wave/La=3000 DR=1000/n32/one_velocity/error" = 0.006829659608976619
+"capillary wave/La=3000 DR=1000/n32/one_velocity/order(error)" = 1.8515087064869
+"capillary wave/La=3000 DR=1000/n32/one_velocity/steps" = 80.0
+"capillary wave/La=3000 DR=1000/n64/cmdgfm/error" = 0.002406227430339544
+"capillary wave/La=3000 DR=1000/n64/cmdgfm/order(error)" = 1.2167609082289186
+"capillary wave/La=3000 DR=1000/n64/cmdgfm/steps" = 227.0
+"capillary wave/La=3000 DR=1000/n64/cmdgfm_constant/error" = 0.0024045182011685155
+"capillary wave/La=3000 DR=1000/n64/cmdgfm_constant/order(error)" = 1.2236261747478316
+"capillary wave/La=3000 DR=1000/n64/cmdgfm_constant/steps" = 227.0
+"capillary wave/La=3000 DR=1000/n64/mimetic/error" = 0.0014893444884063439
+"capillary wave/La=3000 DR=1000/n64/mimetic/order(error)" = 1.6870544687120206
+"capillary wave/La=3000 DR=1000/n64/mimetic/steps" = 227.0
+"capillary wave/La=3000 DR=1000/n64/one_velocity/error" = 0.002735099440142188
+"capillary wave/La=3000 DR=1000/n64/one_velocity/order(error)" = 1.3202203901152638
+"capillary wave/La=3000 DR=1000/n64/one_velocity/steps" = 227.0
+"hydrostatic/pool DR=1000 normal/n32/cmdgfm/max_u" = 5.642816942874607e-12
+"hydrostatic/pool DR=1000 normal/n32/cmdgfm_constant/max_u" = 5.638306661837067e-12
+"hydrostatic/pool DR=1000 normal/n32/mimetic/max_u" = 8.198953668769882e-12
+"hydrostatic/pool DR=1000 normal/n32/one_velocity/max_u" = 3.8838758294537645e-10
+"hydrostatic/pool DR=1000 swapped/n32/cmdgfm/max_u" = 2.612970603776965e-12
+"hydrostatic/pool DR=1000 swapped/n32/cmdgfm_constant/max_u" = 2.76407586055627e-12
+"hydrostatic/pool DR=1000 swapped/n32/mimetic/max_u" = 7.843682300889832e-12
+"hydrostatic/pool DR=1000 swapped/n32/one_velocity/max_u" = 3.883730524678608e-10
+"label symmetry/capillary wave DR=1/n32/cmdgfm/fraction" = 4.440892098500626e-16
+"label symmetry/capillary wave DR=1/n32/cmdgfm/velocity" = 4.531201247074094e-13
+"label symmetry/capillary wave DR=1/n32/cmdgfm_constant/fraction" = 4.440892098500626e-16
+"label symmetry/capillary wave DR=1/n32/cmdgfm_constant/velocity" = 3.1734867848880736e-10
+"label symmetry/capillary wave DR=1/n32/mimetic/fraction" = 4.440892098500626e-16
+"label symmetry/capillary wave DR=1/n32/mimetic/velocity" = 3.266430923208212e-10
+"label symmetry/capillary wave DR=1/n32/one_velocity/fraction" = 4.440892098500626e-16
+"label symmetry/capillary wave DR=1/n32/one_velocity/velocity" = 2.9783099713311193e-13
+"label symmetry/capillary wave DR=1000/n32/cmdgfm/fraction" = 4.440892098500626e-16
+"label symmetry/capillary wave DR=1000/n32/cmdgfm/velocity" = 2.9965887627603824e-13
+"label symmetry/capillary wave DR=1000/n32/cmdgfm_constant/fraction" = 4.440892098500626e-16
+"label symmetry/capillary wave DR=1000/n32/cmdgfm_constant/velocity" = 2.6190800343879196e-13
+"label symmetry/capillary wave DR=1000/n32/mimetic/fraction" = 4.440892098500626e-16
+"label symmetry/capillary wave DR=1000/n32/mimetic/velocity" = 3.1243904472249243e-10
+"label symmetry/capillary wave DR=1000/n32/one_velocity/fraction" = 4.440892098500626e-16
+"label symmetry/capillary wave DR=1000/n32/one_velocity/velocity" = 2.916004005250415e-13
+"label symmetry/static drop DR=1/n32/cmdgfm/fraction" = 4.440892098500626e-16
+"label symmetry/static drop DR=1/n32/cmdgfm/velocity" = 4.090118818504775e-12
+"label symmetry/static drop DR=1/n32/cmdgfm_constant/fraction" = 4.440892098500626e-16
+"label symmetry/static drop DR=1/n32/cmdgfm_constant/velocity" = 2.1220706961403907e-12
+"label symmetry/static drop DR=1/n32/mimetic/fraction" = 4.440892098500626e-16
+"label symmetry/static drop DR=1/n32/mimetic/velocity" = 7.319348810517354e-14
+"label symmetry/static drop DR=1/n32/one_velocity/fraction" = 4.440892098500626e-16
+"label symmetry/static drop DR=1/n32/one_velocity/velocity" = 2.3124612548823297e-12
+"label symmetry/static drop DR=1000/n32/cmdgfm/fraction" = 4.440892098500626e-16
+"label symmetry/static drop DR=1000/n32/cmdgfm/velocity" = 1.3094860440736538e-12
+"label symmetry/static drop DR=1000/n32/cmdgfm_constant/fraction" = 4.440892098500626e-16
+"label symmetry/static drop DR=1000/n32/cmdgfm_constant/velocity" = 1.6080586527962707e-12
+"label symmetry/static drop DR=1000/n32/mimetic/fraction" = 2.220446049250313e-15
+"label symmetry/static drop DR=1000/n32/mimetic/velocity" = 8.50405502075601e-12
+"label symmetry/static drop DR=1000/n32/one_velocity/fraction" = 4.440892098500626e-16
+"label symmetry/static drop DR=1000/n32/one_velocity/velocity" = 1.688090958004747e-11
+"static drop/R=0.2 DR=1 normal/n32/cmdgfm/K_growth" = 1.016371391598549
+"static drop/R=0.2 DR=1 normal/n32/cmdgfm/K_max" = 7.354717704501727e-7
+"static drop/R=0.2 DR=1 normal/n32/cmdgfm/late_u" = 0.005842451557758417
+"static drop/R=0.2 DR=1 normal/n32/cmdgfm/late_u_resolved" = 0.005842451557758417
+"static drop/R=0.2 DR=1 normal/n32/cmdgfm/steps" = 227.0
+"static drop/R=0.2 DR=1 normal/n32/cmdgfm_constant/K_growth" = 1.0243592332819516
+"static drop/R=0.2 DR=1 normal/n32/cmdgfm_constant/K_max" = 7.387491408951672e-7
+"static drop/R=0.2 DR=1 normal/n32/cmdgfm_constant/late_u" = 0.005803360798780983
+"static drop/R=0.2 DR=1 normal/n32/cmdgfm_constant/late_u_resolved" = 0.005803360798780983
+"static drop/R=0.2 DR=1 normal/n32/cmdgfm_constant/steps" = 227.0
+"static drop/R=0.2 DR=1 normal/n32/mimetic/K_growth" = 0.7152259181776273
+"static drop/R=0.2 DR=1 normal/n32/mimetic/K_max" = 6.479581136212734e-7
+"static drop/R=0.2 DR=1 normal/n32/mimetic/late_u" = 0.016217907455060167
+"static drop/R=0.2 DR=1 normal/n32/mimetic/late_u_resolved" = 0.004549701243602489
+"static drop/R=0.2 DR=1 normal/n32/mimetic/steps" = 227.0
+"static drop/R=0.2 DR=1 normal/n32/one_velocity/K_growth" = 1.0576539480092173
+"static drop/R=0.2 DR=1 normal/n32/one_velocity/K_max" = 7.91972675962977e-7
+"static drop/R=0.2 DR=1 normal/n32/one_velocity/late_u" = 0.006850925412238386
+"static drop/R=0.2 DR=1 normal/n32/one_velocity/late_u_resolved" = 0.006850925412238386
+"static drop/R=0.2 DR=1 normal/n32/one_velocity/steps" = 227.0
+"static drop/R=0.2 DR=1 swapped/n32/cmdgfm/K_growth" = 1.016371391598858
+"static drop/R=0.2 DR=1 swapped/n32/cmdgfm/K_max" = 7.354717704502933e-7
+"static drop/R=0.2 DR=1 swapped/n32/cmdgfm/late_u" = 0.005842451557753289
+"static drop/R=0.2 DR=1 swapped/n32/cmdgfm/late_u_resolved" = 0.005842451557753289
+"static drop/R=0.2 DR=1 swapped/n32/cmdgfm/steps" = 227.0
+"static drop/R=0.2 DR=1 swapped/n32/cmdgfm_constant/K_growth" = 1.0243592332812796
+"static drop/R=0.2 DR=1 swapped/n32/cmdgfm_constant/K_max" = 7.387491408950229e-7
+"static drop/R=0.2 DR=1 swapped/n32/cmdgfm_constant/late_u" = 0.005803360798781498
+"static drop/R=0.2 DR=1 swapped/n32/cmdgfm_constant/late_u_resolved" = 0.005803360798781498
+"static drop/R=0.2 DR=1 swapped/n32/cmdgfm_constant/steps" = 227.0
+"static drop/R=0.2 DR=1 swapped/n32/mimetic/K_growth" = 0.7152259181785208
+"static drop/R=0.2 DR=1 swapped/n32/mimetic/K_max" = 6.479581136216481e-7
+"static drop/R=0.2 DR=1 swapped/n32/mimetic/late_u" = 0.01621790745506107
+"static drop/R=0.2 DR=1 swapped/n32/mimetic/late_u_resolved" = 0.004549701243603099
+"static drop/R=0.2 DR=1 swapped/n32/mimetic/steps" = 227.0
+"static drop/R=0.2 DR=1 swapped/n32/one_velocity/K_growth" = 1.0576539480093519
+"static drop/R=0.2 DR=1 swapped/n32/one_velocity/K_max" = 7.91972675963099e-7
+"static drop/R=0.2 DR=1 swapped/n32/one_velocity/late_u" = 0.006850925412241188
+"static drop/R=0.2 DR=1 swapped/n32/one_velocity/late_u_resolved" = 0.006850925412241188
+"static drop/R=0.2 DR=1 swapped/n32/one_velocity/steps" = 227.0
+"static drop/R=0.2 DR=1000 normal/n32/cmdgfm/K_growth" = 1.0272596571523274
+"static drop/R=0.2 DR=1000 normal/n32/cmdgfm/K_max" = 7.709291162926704e-7
+"static drop/R=0.2 DR=1000 normal/n32/cmdgfm/late_u" = 0.009606506473858115
+"static drop/R=0.2 DR=1000 normal/n32/cmdgfm/late_u_resolved" = 0.009606506473858115
+"static drop/R=0.2 DR=1000 normal/n32/cmdgfm/steps" = 321.0
+"static drop/R=0.2 DR=1000 normal/n32/cmdgfm_constant/K_growth" = 1.0336558296621936
+"static drop/R=0.2 DR=1000 normal/n32/cmdgfm_constant/K_max" = 7.743611218245749e-7
+"static drop/R=0.2 DR=1000 normal/n32/cmdgfm_constant/late_u" = 0.00934821015503386
+"static drop/R=0.2 DR=1000 normal/n32/cmdgfm_constant/late_u_resolved" = 0.00934821015503386
+"static drop/R=0.2 DR=1000 normal/n32/cmdgfm_constant/steps" = 321.0
+"static drop/R=0.2 DR=1000 normal/n32/mimetic/K_growth" = 1.0055646557303273
+"static drop/R=0.2 DR=1000 normal/n32/mimetic/K_max" = 7.052825613191455e-7
+"static drop/R=0.2 DR=1000 normal/n32/mimetic/late_u" = 0.027397273014755797
+"static drop/R=0.2 DR=1000 normal/n32/mimetic/late_u_resolved" = 0.008459624717010379
+"static drop/R=0.2 DR=1000 normal/n32/mimetic/steps" = 321.0
+"static drop/R=0.2 DR=1000 normal/n32/one_velocity/K_growth" = 0.9763611591333077
+"static drop/R=0.2 DR=1000 normal/n32/one_velocity/K_max" = 7.636525313355289e-7
+"static drop/R=0.2 DR=1000 normal/n32/one_velocity/late_u" = 0.009009648505429558
+"static drop/R=0.2 DR=1000 normal/n32/one_velocity/late_u_resolved" = 0.009009648505429558
+"static drop/R=0.2 DR=1000 normal/n32/one_velocity/steps" = 321.0
+"static drop/R=0.2 DR=1000 swapped/n32/cmdgfm/K_growth" = 1.0272596571523496
+"static drop/R=0.2 DR=1000 swapped/n32/cmdgfm/K_max" = 7.70929116292835e-7
+"static drop/R=0.2 DR=1000 swapped/n32/cmdgfm/late_u" = 0.009606506473857905
+"static drop/R=0.2 DR=1000 swapped/n32/cmdgfm/late_u_resolved" = 0.009606506473857905
+"static drop/R=0.2 DR=1000 swapped/n32/cmdgfm/steps" = 321.0
+"static drop/R=0.2 DR=1000 swapped/n32/cmdgfm_constant/K_growth" = 1.0336558296622316
+"static drop/R=0.2 DR=1000 swapped/n32/cmdgfm_constant/K_max" = 7.74361121824475e-7
+"static drop/R=0.2 DR=1000 swapped/n32/cmdgfm_constant/late_u" = 0.009348210155036512
+"static drop/R=0.2 DR=1000 swapped/n32/cmdgfm_constant/late_u_resolved" = 0.009348210155036512
+"static drop/R=0.2 DR=1000 swapped/n32/cmdgfm_constant/steps" = 321.0
+"static drop/R=0.2 DR=1000 swapped/n32/mimetic/K_growth" = 1.0055612810353267
+"static drop/R=0.2 DR=1000 swapped/n32/mimetic/K_max" = 7.052825324163103e-7
+"static drop/R=0.2 DR=1000 swapped/n32/mimetic/late_u" = 0.027397340131452525
+"static drop/R=0.2 DR=1000 swapped/n32/mimetic/late_u_resolved" = 0.008459688332998164
+"static drop/R=0.2 DR=1000 swapped/n32/mimetic/steps" = 321.0
+"static drop/R=0.2 DR=1000 swapped/n32/one_velocity/K_growth" = 0.9763611591333606
+"static drop/R=0.2 DR=1000 swapped/n32/one_velocity/K_max" = 7.63652531335661e-7
+"static drop/R=0.2 DR=1000 swapped/n32/one_velocity/late_u" = 0.009009648505428198
+"static drop/R=0.2 DR=1000 swapped/n32/one_velocity/late_u_resolved" = 0.009009648505428198
+"static drop/R=0.2 DR=1000 swapped/n32/one_velocity/steps" = 321.0
+"translation/sheet DR=1000 film 1.5h/n32/cmdgfm/fraction" = 1.2212453270876722e-14
+"translation/sheet DR=1000 film 1.5h/n32/cmdgfm/normal" = 0.0
+"translation/sheet DR=1000 film 1.5h/n32/cmdgfm/tangential" = 0.0
+"translation/sheet DR=1000 film 1.5h/n32/cmdgfm_constant/fraction" = 1.2212453270876722e-14
+"translation/sheet DR=1000 film 1.5h/n32/cmdgfm_constant/normal" = 0.0
+"translation/sheet DR=1000 film 1.5h/n32/cmdgfm_constant/tangential" = 0.0
+"translation/sheet DR=1000 film 1.5h/n32/mimetic/fraction" = 1.2212453270876722e-14
+"translation/sheet DR=1000 film 1.5h/n32/mimetic/normal" = 0.0
+"translation/sheet DR=1000 film 1.5h/n32/mimetic/tangential" = 0.0
+"translation/sheet DR=1000 film 1.5h/n32/one_velocity/fraction" = 1.2323475573339238e-14
+"translation/sheet DR=1000 film 1.5h/n32/one_velocity/normal" = 0.0
+"translation/sheet DR=1000 film 1.5h/n32/one_velocity/tangential" = 0.9995368923383403
+"translation/sheet DR=1000 resolved/n32/cmdgfm/fraction" = 1.2323475573339238e-14
+"translation/sheet DR=1000 resolved/n32/cmdgfm/normal" = 0.0
+"translation/sheet DR=1000 resolved/n32/cmdgfm/tangential" = 0.0
+"translation/sheet DR=1000 resolved/n32/cmdgfm_constant/fraction" = 1.2323475573339238e-14
+"translation/sheet DR=1000 resolved/n32/cmdgfm_constant/normal" = 0.0
+"translation/sheet DR=1000 resolved/n32/cmdgfm_constant/tangential" = 0.0
+"translation/sheet DR=1000 resolved/n32/mimetic/fraction" = 1.2323475573339238e-14
+"translation/sheet DR=1000 resolved/n32/mimetic/normal" = 0.0
+"translation/sheet DR=1000 resolved/n32/mimetic/tangential" = 0.0
+"translation/sheet DR=1000 resolved/n32/one_velocity/fraction" = 1.2101430968414206e-14
+"translation/sheet DR=1000 resolved/n32/one_velocity/normal" = 0.0
+"translation/sheet DR=1000 resolved/n32/one_velocity/tangential" = 0.9202963222035077
+
+[tier3]
+"impact/V=2 member 1/n32/cmdgfm/fast_small_steps" = 0.0
+"impact/V=2 member 1/n32/cmdgfm/gas_raw" = 2.9677191964811014
+"impact/V=2 member 1/n32/cmdgfm/gas_regular" = 2.9677191964811014
+"impact/V=2 member 1/n32/cmdgfm/gas_resolved" = 2.918413974508319
+"impact/V=2 member 1/n32/cmdgfm/gas_slaved" = 2.5891001582302513
+"impact/V=2 member 1/n32/cmdgfm/gas_small" = 2.267708042009254
+"impact/V=2 member 1/n32/cmdgfm/liquid_raw" = 3.4633295975646745
+"impact/V=2 member 1/n32/cmdgfm/liquid_resolved" = 2.3930311744625445
+"impact/V=2 member 1/n32/cmdgfm/min_dt" = 0.00041793134878706506
+"impact/V=2 member 1/n32/cmdgfm/peak_aperture" = 0.49710080398308865
+"impact/V=2 member 1/n32/cmdgfm/peak_fraction" = 0.478336261068413
+"impact/V=2 member 1/n32/cmdgfm/peak_time" = 0.04337173474396323
+"impact/V=2 member 1/n32/cmdgfm/slaved_per_step" = 48.3421052631579
+"impact/V=2 member 1/n32/cmdgfm/small_per_step" = 5.2894736842105265
+"impact/V=2 member 1/n32/cmdgfm/steps" = 38.0
+"impact/V=2 member 1/n32/cmdgfm_constant/fast_small_steps" = 0.0
+"impact/V=2 member 1/n32/cmdgfm_constant/gas_raw" = 3.386932286945391
+"impact/V=2 member 1/n32/cmdgfm_constant/gas_regular" = 3.386932286945391
+"impact/V=2 member 1/n32/cmdgfm_constant/gas_resolved" = 3.386932286945391
+"impact/V=2 member 1/n32/cmdgfm_constant/gas_slaved" = 2.4648061220745046
+"impact/V=2 member 1/n32/cmdgfm_constant/gas_small" = 2.400000115825766
+"impact/V=2 member 1/n32/cmdgfm_constant/liquid_raw" = 2.8881304166022654
+"impact/V=2 member 1/n32/cmdgfm_constant/liquid_resolved" = 2.4621063476377825
+"impact/V=2 member 1/n32/cmdgfm_constant/min_dt" = 0.0033806391906049255
+"impact/V=2 member 1/n32/cmdgfm_constant/peak_aperture" = 0.9241374697563302
+"impact/V=2 member 1/n32/cmdgfm_constant/peak_fraction" = 0.7625695820470331
+"impact/V=2 member 1/n32/cmdgfm_constant/peak_time" = 0.012552616165841154
+"impact/V=2 member 1/n32/cmdgfm_constant/slaved_per_step" = 48.14705882352941
+"impact/V=2 member 1/n32/cmdgfm_constant/small_per_step" = 4.676470588235294
+"impact/V=2 member 1/n32/cmdgfm_constant/steps" = 34.0
+"impact/V=2 member 1/n32/mimetic/fast_small_steps" = 68.0
+"impact/V=2 member 1/n32/mimetic/gas_raw" = 66.44041712840176
+"impact/V=2 member 1/n32/mimetic/gas_regular" = 34.07056487024785
+"impact/V=2 member 1/n32/mimetic/gas_resolved" = 17.153783879945898
+"impact/V=2 member 1/n32/mimetic/gas_slaved" = 51.84274635761704
+"impact/V=2 member 1/n32/mimetic/gas_small" = 66.44041712840176
+"impact/V=2 member 1/n32/mimetic/liquid_raw" = 2.5091971166522664
+"impact/V=2 member 1/n32/mimetic/liquid_resolved" = 2.5091971166522664
+"impact/V=2 member 1/n32/mimetic/min_dt" = 0.00020648272201475389
+"impact/V=2 member 1/n32/mimetic/peak_aperture" = 0.011883276845602198
+"impact/V=2 member 1/n32/mimetic/peak_fraction" = 0.11514346910950202
+"impact/V=2 member 1/n32/mimetic/peak_time" = 0.02617686576369534
+"impact/V=2 member 1/n32/mimetic/slaved_per_step" = 39.66981132075472
+"impact/V=2 member 1/n32/mimetic/small_per_step" = 4.30188679245283
+"impact/V=2 member 1/n32/mimetic/steps" = 106.0
+"impact/V=2 member 1/n32/one_velocity/fast_small_steps" = 0.0
+"impact/V=2 member 1/n32/one_velocity/gas_raw" = 5.335290524715386
+"impact/V=2 member 1/n32/one_velocity/gas_regular" = 5.335290524715386
+"impact/V=2 member 1/n32/one_velocity/gas_resolved" = 5.335290524715386
+"impact/V=2 member 1/n32/one_velocity/gas_slaved" = 2.0908994691609957
+"impact/V=2 member 1/n32/one_velocity/gas_small" = 2.0817335288314074
+"impact/V=2 member 1/n32/one_velocity/liquid_raw" = 4.923121259910689
+"impact/V=2 member 1/n32/one_velocity/liquid_resolved" = 2.5415777279469087
+"impact/V=2 member 1/n32/one_velocity/min_dt" = 0.0025719205026761734
+"impact/V=2 member 1/n32/one_velocity/peak_aperture" = 1.0
+"impact/V=2 member 1/n32/one_velocity/peak_fraction" = 1.0
+"impact/V=2 member 1/n32/one_velocity/peak_time" = 0.0025719205026761734
+"impact/V=2 member 1/n32/one_velocity/slaved_per_step" = 51.93023255813954
+"impact/V=2 member 1/n32/one_velocity/small_per_step" = 5.27906976744186
+"impact/V=2 member 1/n32/one_velocity/steps" = 43.0
+"impact/V=2 member 1/n64/cmdgfm/fast_small_steps" = 0.0
+"impact/V=2 member 1/n64/cmdgfm/gas_raw" = 5.437307955490217
+"impact/V=2 member 1/n64/cmdgfm/gas_regular" = 5.437307955490217
+"impact/V=2 member 1/n64/cmdgfm/gas_resolved" = 5.437307955490217
+"impact/V=2 member 1/n64/cmdgfm/gas_slaved" = 3.512073287822471
+"impact/V=2 member 1/n64/cmdgfm/gas_small" = 3.2667851089407267
+"impact/V=2 member 1/n64/cmdgfm/liquid_raw" = 4.8901658992021915
+"impact/V=2 member 1/n64/cmdgfm/liquid_resolved" = 3.408922933875093
+"impact/V=2 member 1/n64/cmdgfm/min_dt" = 0.0009667688948139519
+"impact/V=2 member 1/n64/cmdgfm/peak_aperture" = 0.5872674947017332
+"impact/V=2 member 1/n64/cmdgfm/peak_fraction" = 0.6313496267039114
+"impact/V=2 member 1/n64/cmdgfm/peak_time" = 0.023692356249090652
+"impact/V=2 member 1/n64/cmdgfm/slaved_per_step" = 99.47311827956989
+"impact/V=2 member 1/n64/cmdgfm/small_per_step" = 17.440860215053764
+"impact/V=2 member 1/n64/cmdgfm/steps" = 93.0
+"impact/V=2 member 1/n64/cmdgfm_constant/fast_small_steps" = 0.0
+"impact/V=2 member 1/n64/cmdgfm_constant/gas_raw" = 5.394321306089234
+"impact/V=2 member 1/n64/cmdgfm_constant/gas_regular" = 5.394321306089234
+"impact/V=2 member 1/n64/cmdgfm_constant/gas_resolved" = 5.394321306089234
+"impact/V=2 member 1/n64/cmdgfm_constant/gas_slaved" = 3.8664224876374447
+"impact/V=2 member 1/n64/cmdgfm_constant/gas_small" = 3.655834904442103
+"impact/V=2 member 1/n64/cmdgfm_constant/liquid_raw" = 3.6050626474528147
+"impact/V=2 member 1/n64/cmdgfm_constant/liquid_resolved" = 3.17769501492601
+"impact/V=2 member 1/n64/cmdgfm_constant/min_dt" = 0.000532022093032769
+"impact/V=2 member 1/n64/cmdgfm_constant/peak_aperture" = 0.48480965887954897
+"impact/V=2 member 1/n64/cmdgfm_constant/peak_fraction" = 0.6468254215454574
+"impact/V=2 member 1/n64/cmdgfm_constant/peak_time" = 0.02030502697884079
+"impact/V=2 member 1/n64/cmdgfm_constant/slaved_per_step" = 96.27956989247312
+"impact/V=2 member 1/n64/cmdgfm_constant/small_per_step" = 9.56989247311828
+"impact/V=2 member 1/n64/cmdgfm_constant/steps" = 93.0
+"impact/V=2 member 1/n64/mimetic/fast_small_steps" = 138.0
+"impact/V=2 member 1/n64/mimetic/gas_raw" = 90.35265687644288
+"impact/V=2 member 1/n64/mimetic/gas_regular" = 70.08273317205281
+"impact/V=2 member 1/n64/mimetic/gas_resolved" = 28.13393181229818
+"impact/V=2 member 1/n64/mimetic/gas_slaved" = 74.38486792654011
+"impact/V=2 member 1/n64/mimetic/gas_small" = 90.35265687644288
+"impact/V=2 member 1/n64/mimetic/liquid_raw" = 2.905162571484214
+"impact/V=2 member 1/n64/mimetic/liquid_resolved" = 2.905162571484214
+"impact/V=2 member 1/n64/mimetic/min_dt" = 6.781871522301432e-5
+"impact/V=2 member 1/n64/mimetic/peak_aperture" = 0.0038890417804589017
+"impact/V=2 member 1/n64/mimetic/peak_fraction" = 0.0004307792986026904
+"impact/V=2 member 1/n64/mimetic/peak_time" = 0.023619476779229383
+"impact/V=2 member 1/n64/mimetic/slaved_per_step" = 83.52244897959184
+"impact/V=2 member 1/n64/mimetic/small_per_step" = 9.583673469387755
+"impact/V=2 member 1/n64/mimetic/steps" = 245.0
+"impact/V=2 member 1/n64/one_velocity/fast_small_steps" = 0.0
+"impact/V=2 member 1/n64/one_velocity/gas_raw" = 8.163609854408778
+"impact/V=2 member 1/n64/one_velocity/gas_regular" = 8.163609854408778
+"impact/V=2 member 1/n64/one_velocity/gas_resolved" = 8.163609854408778
+"impact/V=2 member 1/n64/one_velocity/gas_slaved" = 3.0553562729016344
+"impact/V=2 member 1/n64/one_velocity/gas_small" = 3.20422585324799
+"impact/V=2 member 1/n64/one_velocity/liquid_raw" = 7.450962893171657
+"impact/V=2 member 1/n64/one_velocity/liquid_resolved" = 3.804575037095275
+"impact/V=2 member 1/n64/one_velocity/min_dt" = 0.0006751903175002405
+"impact/V=2 member 1/n64/one_velocity/peak_aperture" = 1.0
+"impact/V=2 member 1/n64/one_velocity/peak_fraction" = 1.0
+"impact/V=2 member 1/n64/one_velocity/peak_time" = 0.01364176819619431
+"impact/V=2 member 1/n64/one_velocity/slaved_per_step" = 104.87096774193549
+"impact/V=2 member 1/n64/one_velocity/small_per_step" = 11.233870967741936
+"impact/V=2 member 1/n64/one_velocity/steps" = 124.0
+"impact/V=2 member 2/n32/cmdgfm/fast_small_steps" = 0.0
+"impact/V=2 member 2/n32/cmdgfm/gas_raw" = 3.9032065998332834
+"impact/V=2 member 2/n32/cmdgfm/gas_regular" = 3.9032065998332834
+"impact/V=2 member 2/n32/cmdgfm/gas_resolved" = 3.9032065998332834
+"impact/V=2 member 2/n32/cmdgfm/gas_slaved" = 2.459332349004598
+"impact/V=2 member 2/n32/cmdgfm/gas_small" = 2.8181590448254603
+"impact/V=2 member 2/n32/cmdgfm/liquid_raw" = 3.438419458540946
+"impact/V=2 member 2/n32/cmdgfm/liquid_resolved" = 2.6431675093783116
+"impact/V=2 member 2/n32/cmdgfm/min_dt" = 0.0026131254565097705
+"impact/V=2 member 2/n32/cmdgfm/peak_aperture" = 1.0
+"impact/V=2 member 2/n32/cmdgfm/peak_fraction" = 0.8971192245688431
+"impact/V=2 member 2/n32/cmdgfm/peak_time" = 0.01806167198111955
+"impact/V=2 member 2/n32/cmdgfm/slaved_per_step" = 50.6578947368421
+"impact/V=2 member 2/n32/cmdgfm/small_per_step" = 7.921052631578948
+"impact/V=2 member 2/n32/cmdgfm/steps" = 38.0
+"impact/V=2 member 2/n32/cmdgfm_constant/fast_small_steps" = 0.0
+"impact/V=2 member 2/n32/cmdgfm_constant/gas_raw" = 4.841214007801141
+"impact/V=2 member 2/n32/cmdgfm_constant/gas_regular" = 4.841214007801141
+"impact/V=2 member 2/n32/cmdgfm_constant/gas_resolved" = 4.841214007801141
+"impact/V=2 member 2/n32/cmdgfm_constant/gas_slaved" = 3.0217133781715697
+"impact/V=2 member 2/n32/cmdgfm_constant/gas_small" = 2.6083858628538468
+"impact/V=2 member 2/n32/cmdgfm_constant/liquid_raw" = 3.686253638466125
+"impact/V=2 member 2/n32/cmdgfm_constant/liquid_resolved" = 2.565883058939797
+"impact/V=2 member 2/n32/cmdgfm_constant/min_dt" = 0.001964381643971086
+"impact/V=2 member 2/n32/cmdgfm_constant/peak_aperture" = 0.8233344441033738
+"impact/V=2 member 2/n32/cmdgfm_constant/peak_fraction" = 0.7568165495246204
+"impact/V=2 member 2/n32/cmdgfm_constant/peak_time" = 0.03144027032308504
+"impact/V=2 member 2/n32/cmdgfm_constant/slaved_per_step" = 47.36842105263158
+"impact/V=2 member 2/n32/cmdgfm_constant/small_per_step" = 7.631578947368421
+"impact/V=2 member 2/n32/cmdgfm_constant/steps" = 38.0
+"impact/V=2 member 2/n32/mimetic/fast_small_steps" = 127.0
+"impact/V=2 member 2/n32/mimetic/gas_raw" = 47.12547437434924
+"impact/V=2 member 2/n32/mimetic/gas_regular" = 30.12464999088314
+"impact/V=2 member 2/n32/mimetic/gas_resolved" = 16.112348995317962
+"impact/V=2 member 2/n32/mimetic/gas_slaved" = 47.12547437434924
+"impact/V=2 member 2/n32/mimetic/gas_small" = 46.420466999850966
+"impact/V=2 member 2/n32/mimetic/liquid_raw" = 2.5054709465718474
+"impact/V=2 member 2/n32/mimetic/liquid_resolved" = 2.5054709465718474
+"impact/V=2 member 2/n32/mimetic/min_dt" = 0.00027680783376402804
+"impact/V=2 member 2/n32/mimetic/peak_aperture" = 0.0
+"impact/V=2 member 2/n32/mimetic/peak_fraction" = 5.071873202244781e-5
+"impact/V=2 member 2/n32/mimetic/peak_time" = 0.028538444075055003
+"impact/V=2 member 2/n32/mimetic/slaved_per_step" = 39.91025641025641
+"impact/V=2 member 2/n32/mimetic/small_per_step" = 4.788461538461538
+"impact/V=2 member 2/n32/mimetic/steps" = 156.0
+"impact/V=2 member 2/n32/one_velocity/fast_small_steps" = 0.0
+"impact/V=2 member 2/n32/one_velocity/gas_raw" = 5.752812217712153
+"impact/V=2 member 2/n32/one_velocity/gas_regular" = 5.752812217712153
+"impact/V=2 member 2/n32/one_velocity/gas_resolved" = 5.752812217712153
+"impact/V=2 member 2/n32/one_velocity/gas_slaved" = 2.1396852016516617
+"impact/V=2 member 2/n32/one_velocity/gas_small" = 2.222150475695829
+"impact/V=2 member 2/n32/one_velocity/liquid_raw" = 5.740668693644233
+"impact/V=2 member 2/n32/one_velocity/liquid_resolved" = 2.6728119334646028
+"impact/V=2 member 2/n32/one_velocity/min_dt" = 0.002081012099035485
+"impact/V=2 member 2/n32/one_velocity/peak_aperture" = 1.0
+"impact/V=2 member 2/n32/one_velocity/peak_fraction" = 1.0
+"impact/V=2 member 2/n32/one_velocity/peak_time" = 0.0177325799927903
+"impact/V=2 member 2/n32/one_velocity/slaved_per_step" = 49.955555555555556
+"impact/V=2 member 2/n32/one_velocity/small_per_step" = 6.977777777777778
+"impact/V=2 member 2/n32/one_velocity/steps" = 45.0
+"impact/V=2 member 3/n32/cmdgfm/fast_small_steps" = 0.0
+"impact/V=2 member 3/n32/cmdgfm/gas_raw" = 4.167011624031447
+"impact/V=2 member 3/n32/cmdgfm/gas_regular" = 4.140047691967544
+"impact/V=2 member 3/n32/cmdgfm/gas_resolved" = 3.895294246391467
+"impact/V=2 member 3/n32/cmdgfm/gas_slaved" = 4.167011624031447
+"impact/V=2 member 3/n32/cmdgfm/gas_small" = 2.5620825389382924
+"impact/V=2 member 3/n32/cmdgfm/liquid_raw" = 2.746048537621122
+"impact/V=2 member 3/n32/cmdgfm/liquid_resolved" = 2.488751370747547
+"impact/V=2 member 3/n32/cmdgfm/min_dt" = 0.00018733231655329585
+"impact/V=2 member 3/n32/cmdgfm/peak_aperture" = 0.0
+"impact/V=2 member 3/n32/cmdgfm/peak_fraction" = 0.0903008152362933
+"impact/V=2 member 3/n32/cmdgfm/peak_time" = 0.05569684376812529
+"impact/V=2 member 3/n32/cmdgfm/slaved_per_step" = 49.2
+"impact/V=2 member 3/n32/cmdgfm/small_per_step" = 9.675
+"impact/V=2 member 3/n32/cmdgfm/steps" = 40.0
+"impact/V=2 member 3/n32/cmdgfm_constant/fast_small_steps" = 0.0
+"impact/V=2 member 3/n32/cmdgfm_constant/gas_raw" = 4.24604854589416
+"impact/V=2 member 3/n32/cmdgfm_constant/gas_regular" = 4.24604854589416
+"impact/V=2 member 3/n32/cmdgfm_constant/gas_resolved" = 4.24604854589416
+"impact/V=2 member 3/n32/cmdgfm_constant/gas_slaved" = 3.771965579089436
+"impact/V=2 member 3/n32/cmdgfm_constant/gas_small" = 3.79344394155781
+"impact/V=2 member 3/n32/cmdgfm_constant/liquid_raw" = 3.287926464300231
+"impact/V=2 member 3/n32/cmdgfm_constant/liquid_resolved" = 2.44084140108698
+"impact/V=2 member 3/n32/cmdgfm_constant/min_dt" = 0.0014128343251852693
+"impact/V=2 member 3/n32/cmdgfm_constant/peak_aperture" = 0.5915300066479543
+"impact/V=2 member 3/n32/cmdgfm_constant/peak_fraction" = 0.6656296265426076
+"impact/V=2 member 3/n32/cmdgfm_constant/peak_time" = 0.030093123287253644
+"impact/V=2 member 3/n32/cmdgfm_constant/slaved_per_step" = 50.25
+"impact/V=2 member 3/n32/cmdgfm_constant/small_per_step" = 12.15
+"impact/V=2 member 3/n32/cmdgfm_constant/steps" = 40.0
+"impact/V=2 member 3/n32/mimetic/fast_small_steps" = 141.0
+"impact/V=2 member 3/n32/mimetic/gas_raw" = 58.09442238539192
+"impact/V=2 member 3/n32/mimetic/gas_regular" = 38.096966061514216
+"impact/V=2 member 3/n32/mimetic/gas_resolved" = 18.01300051929234
+"impact/V=2 member 3/n32/mimetic/gas_slaved" = 58.09442238539192
+"impact/V=2 member 3/n32/mimetic/gas_small" = 56.0878785995747
+"impact/V=2 member 3/n32/mimetic/liquid_raw" = 2.518841422507849
+"impact/V=2 member 3/n32/mimetic/liquid_resolved" = 2.518841422507849
+"impact/V=2 member 3/n32/mimetic/min_dt" = 1.5034612233857936e-5
+"impact/V=2 member 3/n32/mimetic/peak_aperture" = 0.0
+"impact/V=2 member 3/n32/mimetic/peak_fraction" = 2.584585848675047e-7
+"impact/V=2 member 3/n32/mimetic/peak_time" = 0.02765162614723037
+"impact/V=2 member 3/n32/mimetic/slaved_per_step" = 38.83040935672515
+"impact/V=2 member 3/n32/mimetic/small_per_step" = 3.391812865497076
+"impact/V=2 member 3/n32/mimetic/steps" = 171.0
+"impact/V=2 member 3/n32/one_velocity/fast_small_steps" = 0.0
+"impact/V=2 member 3/n32/one_velocity/gas_raw" = 5.118632789884601
+"impact/V=2 member 3/n32/one_velocity/gas_regular" = 5.118632789884601
+"impact/V=2 member 3/n32/one_velocity/gas_resolved" = 5.118632789884601
+"impact/V=2 member 3/n32/one_velocity/gas_slaved" = 2.1221627923256623
+"impact/V=2 member 3/n32/one_velocity/gas_small" = 2.0859819341243795
+"impact/V=2 member 3/n32/one_velocity/liquid_raw" = 5.118632789884601
+"impact/V=2 member 3/n32/one_velocity/liquid_resolved" = 2.266888714469094
+"impact/V=2 member 3/n32/one_velocity/min_dt" = 0.002157393969970847
+"impact/V=2 member 3/n32/one_velocity/peak_aperture" = 1.0
+"impact/V=2 member 3/n32/one_velocity/peak_fraction" = 0.9994269194958987
+"impact/V=2 member 3/n32/one_velocity/peak_time" = 0.004525445700077923
+"impact/V=2 member 3/n32/one_velocity/slaved_per_step" = 48.702127659574465
+"impact/V=2 member 3/n32/one_velocity/small_per_step" = 8.425531914893616
+"impact/V=2 member 3/n32/one_velocity/steps" = 47.0
+"impact/V=2 member 4/n32/cmdgfm/fast_small_steps" = 0.0
+"impact/V=2 member 4/n32/cmdgfm/gas_raw" = 3.5525886437922076
+"impact/V=2 member 4/n32/cmdgfm/gas_regular" = 3.5525886437922076
+"impact/V=2 member 4/n32/cmdgfm/gas_resolved" = 3.5525886437922076
+"impact/V=2 member 4/n32/cmdgfm/gas_slaved" = 2.501190802836748
+"impact/V=2 member 4/n32/cmdgfm/gas_small" = 2.2219499864860652
+"impact/V=2 member 4/n32/cmdgfm/liquid_raw" = 3.5210117891613146
+"impact/V=2 member 4/n32/cmdgfm/liquid_resolved" = 2.2076641674777155
+"impact/V=2 member 4/n32/cmdgfm/min_dt" = 0.0011453193875080453
+"impact/V=2 member 4/n32/cmdgfm/peak_aperture" = 0.6211722623897808
+"impact/V=2 member 4/n32/cmdgfm/peak_fraction" = 0.7572536405391436
+"impact/V=2 member 4/n32/cmdgfm/peak_time" = 0.0069914518007348206
+"impact/V=2 member 4/n32/cmdgfm/slaved_per_step" = 52.457142857142856
+"impact/V=2 member 4/n32/cmdgfm/small_per_step" = 6.457142857142857
+"impact/V=2 member 4/n32/cmdgfm/steps" = 35.0
+"impact/V=2 member 4/n32/cmdgfm_constant/fast_small_steps" = 0.0
+"impact/V=2 member 4/n32/cmdgfm_constant/gas_raw" = 3.540355383071319
+"impact/V=2 member 4/n32/cmdgfm_constant/gas_regular" = 3.540355383071319
+"impact/V=2 member 4/n32/cmdgfm_constant/gas_resolved" = 3.540355383071319
+"impact/V=2 member 4/n32/cmdgfm_constant/gas_slaved" = 2.969374268490468
+"impact/V=2 member 4/n32/cmdgfm_constant/gas_small" = 2.575530075259358
+"impact/V=2 member 4/n32/cmdgfm_constant/liquid_raw" = 3.300597614285799
+"impact/V=2 member 4/n32/cmdgfm_constant/liquid_resolved" = 2.328336448879136
+"impact/V=2 member 4/n32/cmdgfm_constant/min_dt" = 7.899273539460627e-5
+"impact/V=2 member 4/n32/cmdgfm_constant/peak_aperture" = 0.8925134308514977
+"impact/V=2 member 4/n32/cmdgfm_constant/peak_fraction" = 0.8594715557166226
+"impact/V=2 member 4/n32/cmdgfm_constant/peak_time" = 0.0070541768979179706
+"impact/V=2 member 4/n32/cmdgfm_constant/slaved_per_step" = 52.42857142857143
+"impact/V=2 member 4/n32/cmdgfm_constant/small_per_step" = 7.371428571428571
+"impact/V=2 member 4/n32/cmdgfm_constant/steps" = 35.0
+"impact/V=2 member 4/n32/mimetic/fast_small_steps" = 124.0
+"impact/V=2 member 4/n32/mimetic/gas_raw" = 75.19593877903152
+"impact/V=2 member 4/n32/mimetic/gas_regular" = 39.949815773640026
+"impact/V=2 member 4/n32/mimetic/gas_resolved" = 14.993819460640971
+"impact/V=2 member 4/n32/mimetic/gas_slaved" = 75.19593877903152
+"impact/V=2 member 4/n32/mimetic/gas_small" = 62.653503599947136
+"impact/V=2 member 4/n32/mimetic/liquid_raw" = 2.3704387479232247
+"impact/V=2 member 4/n32/mimetic/liquid_resolved" = 2.3704387479232247
+"impact/V=2 member 4/n32/mimetic/min_dt" = 0.0001820791796988408
+"impact/V=2 member 4/n32/mimetic/peak_aperture" = 0.0
+"impact/V=2 member 4/n32/mimetic/peak_fraction" = 3.6920860171929526e-5
+"impact/V=2 member 4/n32/mimetic/peak_time" = 0.027963455766022268
+"impact/V=2 member 4/n32/mimetic/slaved_per_step" = 39.142857142857146
+"impact/V=2 member 4/n32/mimetic/small_per_step" = 4.254658385093168
+"impact/V=2 member 4/n32/mimetic/steps" = 161.0
+"impact/V=2 member 4/n32/one_velocity/fast_small_steps" = 0.0
+"impact/V=2 member 4/n32/one_velocity/gas_raw" = 5.287306524137786
+"impact/V=2 member 4/n32/one_velocity/gas_regular" = 5.287306524137786
+"impact/V=2 member 4/n32/one_velocity/gas_resolved" = 5.287306524137786
+"impact/V=2 member 4/n32/one_velocity/gas_slaved" = 2.0913302770420152
+"impact/V=2 member 4/n32/one_velocity/gas_small" = 2.0684046745725837
+"impact/V=2 member 4/n32/one_velocity/liquid_raw" = 5.283020291552006
+"impact/V=2 member 4/n32/one_velocity/liquid_resolved" = 2.3020992189753513
+"impact/V=2 member 4/n32/one_velocity/min_dt" = 0.0024243274727412693
+"impact/V=2 member 4/n32/one_velocity/peak_aperture" = 1.0
+"impact/V=2 member 4/n32/one_velocity/peak_fraction" = 1.0
+"impact/V=2 member 4/n32/one_velocity/peak_time" = 0.0024243274727412693
+"impact/V=2 member 4/n32/one_velocity/slaved_per_step" = 48.955555555555556
+"impact/V=2 member 4/n32/one_velocity/small_per_step" = 5.644444444444445
+"impact/V=2 member 4/n32/one_velocity/steps" = 45.0
+"impact/V=2 member 5/n32/cmdgfm/fast_small_steps" = 0.0
+"impact/V=2 member 5/n32/cmdgfm/gas_raw" = 3.542899214505205
+"impact/V=2 member 5/n32/cmdgfm/gas_regular" = 3.542899214505205
+"impact/V=2 member 5/n32/cmdgfm/gas_resolved" = 3.542899214505205
+"impact/V=2 member 5/n32/cmdgfm/gas_slaved" = 2.510346191718498
+"impact/V=2 member 5/n32/cmdgfm/gas_small" = 2.525602787208767
+"impact/V=2 member 5/n32/cmdgfm/liquid_raw" = 3.3676731921993044
+"impact/V=2 member 5/n32/cmdgfm/liquid_resolved" = 2.603470137082961
+"impact/V=2 member 5/n32/cmdgfm/min_dt" = 0.0007193141480593968
+"impact/V=2 member 5/n32/cmdgfm/peak_aperture" = 1.0
+"impact/V=2 member 5/n32/cmdgfm/peak_fraction" = 0.9345033700039995
+"impact/V=2 member 5/n32/cmdgfm/peak_time" = 0.01930107346794855
+"impact/V=2 member 5/n32/cmdgfm/slaved_per_step" = 51.61538461538461
+"impact/V=2 member 5/n32/cmdgfm/small_per_step" = 8.384615384615385
+"impact/V=2 member 5/n32/cmdgfm/steps" = 39.0
+"impact/V=2 member 5/n32/cmdgfm_constant/fast_small_steps" = 0.0
+"impact/V=2 member 5/n32/cmdgfm_constant/gas_raw" = 3.5368096015073958
+"impact/V=2 member 5/n32/cmdgfm_constant/gas_regular" = 3.5368096015073958
+"impact/V=2 member 5/n32/cmdgfm_constant/gas_resolved" = 3.5368096015073958
+"impact/V=2 member 5/n32/cmdgfm_constant/gas_slaved" = 2.8398842600182514
+"impact/V=2 member 5/n32/cmdgfm_constant/gas_small" = 2.750239536827945
+"impact/V=2 member 5/n32/cmdgfm_constant/liquid_raw" = 3.107804291639333
+"impact/V=2 member 5/n32/cmdgfm_constant/liquid_resolved" = 2.838608674052464
+"impact/V=2 member 5/n32/cmdgfm_constant/min_dt" = 0.0011304661598867116
+"impact/V=2 member 5/n32/cmdgfm_constant/peak_aperture" = 0.8466452771998316
+"impact/V=2 member 5/n32/cmdgfm_constant/peak_fraction" = 0.7556921540890602
+"impact/V=2 member 5/n32/cmdgfm_constant/peak_time" = 0.03496162760003329
+"impact/V=2 member 5/n32/cmdgfm_constant/slaved_per_step" = 50.0
+"impact/V=2 member 5/n32/cmdgfm_constant/small_per_step" = 7.542857142857143
+"impact/V=2 member 5/n32/cmdgfm_constant/steps" = 35.0
+"impact/V=2 member 5/n32/mimetic/fast_small_steps" = 123.0
+"impact/V=2 member 5/n32/mimetic/gas_raw" = 83.75330989877222
+"impact/V=2 member 5/n32/mimetic/gas_regular" = 30.379855466919327
+"impact/V=2 member 5/n32/mimetic/gas_resolved" = 20.174663406694805
+"impact/V=2 member 5/n32/mimetic/gas_slaved" = 83.75330989877222
+"impact/V=2 member 5/n32/mimetic/gas_small" = 77.83355324688623
+"impact/V=2 member 5/n32/mimetic/liquid_raw" = 2.4827102218524066
+"impact/V=2 member 5/n32/mimetic/liquid_resolved" = 2.4827102218524066
+"impact/V=2 member 5/n32/mimetic/min_dt" = 0.000144539206173914
+"impact/V=2 member 5/n32/mimetic/peak_aperture" = 0.0
+"impact/V=2 member 5/n32/mimetic/peak_fraction" = 2.524973782724871e-6
+"impact/V=2 member 5/n32/mimetic/peak_time" = 0.027110993537876237
+"impact/V=2 member 5/n32/mimetic/slaved_per_step" = 39.85625
+"impact/V=2 member 5/n32/mimetic/small_per_step" = 4.8
+"impact/V=2 member 5/n32/mimetic/steps" = 160.0
+"impact/V=2 member 5/n32/one_velocity/fast_small_steps" = 0.0
+"impact/V=2 member 5/n32/one_velocity/gas_raw" = 5.764115167854059
+"impact/V=2 member 5/n32/one_velocity/gas_regular" = 5.764115167854059
+"impact/V=2 member 5/n32/one_velocity/gas_resolved" = 5.764115167854059
+"impact/V=2 member 5/n32/one_velocity/gas_slaved" = 2.1091526839576114
+"impact/V=2 member 5/n32/one_velocity/gas_small" = 2.133992125225074
+"impact/V=2 member 5/n32/one_velocity/liquid_raw" = 5.545298707671089
+"impact/V=2 member 5/n32/one_velocity/liquid_resolved" = 2.7641749003399334
+"impact/V=2 member 5/n32/one_velocity/min_dt" = 3.272670823735446e-5
+"impact/V=2 member 5/n32/one_velocity/peak_aperture" = 1.0
+"impact/V=2 member 5/n32/one_velocity/peak_fraction" = 1.0
+"impact/V=2 member 5/n32/one_velocity/peak_time" = 0.019084221988059924
+"impact/V=2 member 5/n32/one_velocity/slaved_per_step" = 51.38297872340426
+"impact/V=2 member 5/n32/one_velocity/small_per_step" = 6.8936170212765955
+"impact/V=2 member 5/n32/one_velocity/steps" = 47.0
+"impact/V=2 members 1-5/n32/cmdgfm/ensemble_gas_raw_median" = 3.5525886437922076
+"impact/V=2 members 1-5/n32/cmdgfm/ensemble_gas_resolved_median" = 3.5525886437922076
+"impact/V=2 members 1-5/n32/cmdgfm_constant/ensemble_gas_raw_median" = 3.540355383071319
+"impact/V=2 members 1-5/n32/cmdgfm_constant/ensemble_gas_resolved_median" = 3.540355383071319
+"impact/V=2 members 1-5/n32/mimetic/ensemble_gas_raw_median" = 66.44041712840176
+"impact/V=2 members 1-5/n32/mimetic/ensemble_gas_resolved_median" = 17.153783879945898
+"impact/V=2 members 1-5/n32/one_velocity/ensemble_gas_raw_median" = 5.335290524715386
+"impact/V=2 members 1-5/n32/one_velocity/ensemble_gas_resolved_median" = 5.335290524715386

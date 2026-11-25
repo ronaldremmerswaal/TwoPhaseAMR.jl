@@ -17,6 +17,8 @@
 # Local performance-research output; keep outside the package checkout.
 /benchmark/scaling/
 /research/
+# Results of benchmark/two_velocity/run.jl (the baseline is committed).
+/benchmark/two_velocity/output/
 
 # Generated technical reference and its local Documenter copy.
 /docs/techref/*.aux

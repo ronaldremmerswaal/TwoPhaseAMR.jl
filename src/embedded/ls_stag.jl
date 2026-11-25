@@ -43,6 +43,11 @@ end
 @inline _ls_stag_sides(face::InteriorFace) = ((face.minus, 1), (face.plus, -1))
 @inline _ls_stag_sides(face::BoundaryFace) = ((face.cell, face.side),)
 
+# A face carries an LS-STAG fluid value when its open aperture exceeds this
+# floor and its open staggered volume is positive; other faces have no open part.
+@inline _ls_stag_active(aperture::T, open_volume::T) where {T} =
+    aperture > T(1.0e-10) && open_volume > zero(T)
+
 # The open part of a partially open face lies at the end that the solid planes
 # of its cut cells leave open: the first cut cell whose own trace of the face is
 # partial decides, otherwise any cut cell with a tangential normal component,
@@ -216,7 +221,7 @@ function _ls_stag_closure(
         _, minus_scale = _cell_lattice_bounds(mesh, mesh.blocks, face.minus, lattice)
         _, plus_scale = _cell_lattice_bounds(mesh, mesh.blocks, face.plus, lattice)
         aperture = geometry.aperture[global_index]
-        active = aperture > T(1.0e-10) && open_volumes[local_index] > zero(T)
+        active = _ls_stag_active(aperture, open_volumes[local_index])
         lower, upper, open_lower, open_upper, at_lo, at_hi = active ?
             _ls_stag_open_part(geometry, face, aperture) :
             (

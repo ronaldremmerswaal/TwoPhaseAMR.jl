@@ -99,6 +99,45 @@ non-periodic boundary-convection allocation separately from the periodic case.
 The Taylor–Green measurement precedes Stokes in the same fresh process, so
 Stokes can reuse compilation performed by the Taylor–Green measurement.
 
+## Two-velocity verification suite
+
+`two_velocity/` compares the two-velocity projections (CMDGFM with linear
+and with constant jump inference, MimeticProjection) on problems with exact
+or reference answers, with the one-velocity model as the reference in the
+time-dependent tiers. It measures and reports; contracts stay in `test/`.
+The problems, metrics and current tables are on the documentation page
+"Two-velocity verification" (`docs/src/two-velocity-verification.md`).
+
+```sh
+julia --project=benchmark -t 1 benchmark/two_velocity/run.jl --tier=1 --compare
+julia --project=benchmark -t 1 benchmark/two_velocity/run.jl --tier=2 --methods=mimetic,cmdgfm
+julia --project=benchmark -t 1 benchmark/two_velocity/run.jl --tier=3 --impact=32:1 --compare
+```
+
+- Tier 1: single projections (the mimetic-projection audit's laboratory
+  T1–T7, including the manufactured Poisson problem of the former gallery
+  example 12) at n = 32, 64, 128; 45 s for all methods plus compilation.
+  CI runs it with `--compare` (job `two-velocity-verification`, required by
+  `ci-ok`).
+- Tier 2: hydrostatic rest, static drop, capillary wave, Kelvin–Helmholtz
+  ensemble, translation and label exchange; 20 minutes for all methods,
+  local.
+- Tier 3: drop impact, n = 32 members 1–5 and n = 64; 2 minutes for all
+  methods, local.
+
+Each run writes `two_velocity/output/results.toml` and `results.md`.
+`--compare` reports every metric as better, same or worse than
+`two_velocity/baseline.toml` and exits with status 1 when a metric is worse
+by more than `max(rtol |baseline|, atol)` (rtol `1e-3`, `2e-2`, `0.25` in tiers
+1, 2, 3; `atol` per metric at the solver level of exact cases), when a
+measured metric of a case that ran is missing, or when a case failed (an
+exception or an unconverged projection). Observed orders, counts and step
+numbers are reported only. `--record` replaces the run's tiers and methods
+in the baseline; re-record only for an intentional change, in the pull
+request that makes it. `--update-docs` rewrites the generated tables of the
+documentation page. `TWO_VELOCITY_PERTURB=1` loosens the projection
+tolerance from `1e-8` to `1e-3` to exercise the failure path.
+
 ## Latency breakdown
 
 Fresh-process probe of where the first run of an example spends its time:
