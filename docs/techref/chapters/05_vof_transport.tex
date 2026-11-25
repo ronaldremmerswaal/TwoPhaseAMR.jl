@@ -444,10 +444,13 @@ $h=\min_{c,k}\cellwidth{c}{k}$ (\cref{ch:stability-accuracy}),
 ($\abs{\gravacc}>0$, $\dens^{\liq}\neq\dens^{\gas}$),
 and $\infty$ otherwise. Without a prescribed step, \apifun{simulate!}
 evaluates these bounds with $\wycflval=0.45$ (keyword \code{cfl}) for the
-boundary-enforced velocity at the start of every step and takes
-$\dt^{\timelevel{n}}=\min\curlypar{\dt^{\timelevel{n-1}},\dtwy,\dtcap,\dtgrav}$: the step
-never grows; an infinite first bound gives a step of $1/128$ of the requested
-interval, and the last step is shortened to end at the final time.
+boundary-enforced velocity at the start of every step and feeds them to the
+controller of~\cref{eq:stab:selection}: the step is kept inside the band of the
+bound,
+lowered to $0.8$ times the bound when the bound drops below it, and raised by
+at most $1.2$ per step otherwise. An infinite first bound gives a first step
+of $1/128$ of the requested interval, and the last step is shortened to end
+at the final time.
 
 \begin{sloppypar}
 \emph{Checks} (\code{cfl_check}). An independent evaluation

@@ -420,11 +420,16 @@ function _flow_amr_workspace!(flow::FlowSimulation)
     return cache.workspace
 end
 
-function _same_simulation_step(flow::FlowSimulation)
+function _same_simulation_proposal(flow::FlowSimulation)
     selection = flow.workspace.simulation_step
     return selection.velocity === flow.velocity &&
         selection.pressure === flow.pressure && selection.solver === flow.system &&
-        selection.time == flow.time &&
+        selection.time == flow.time
+end
+
+function _same_simulation_step(flow::FlowSimulation)
+    selection = flow.workspace.simulation_step
+    return _same_simulation_proposal(flow) &&
         selection.topology_generation == flow.system.mesh.topology_cache.generation
 end
 
@@ -552,11 +557,13 @@ workspace. The low-level simulation result is returned with `total_steps`,
 `total_mesh_updates`, and `total_unresolved_curvature_faces` added; the last is
 the cumulative number of unresolved surface-tension faces over all calls.
 Calling this method again continues the same run. For automatic stepping, the
-unmodified step proposal is retained across consecutive calls. To avoid a
-tiny final step, a proposal leaving less than `1e-6` of itself is stretched
-to the target. A target between physical steps can change the
-trajectory. If automatic step selection initially has an infinite
-stability bound, the step is capped at one 128th of the requested interval.
+step proposal is retained across consecutive calls, so the hysteresis
+controller continues from the step it had selected. To avoid a tiny final
+step, a proposal leaving less than `1e-6` of itself is stretched to the
+target. A target between physical steps can change the trajectory. If
+automatic step selection initially has an infinite stability bound, the first
+step is capped at one 128th of the requested interval; while the bound stays
+infinite the step then grows by `gamma` per step.
 The initial time is owned by `flow` and therefore cannot be passed as a
 keyword.
 """

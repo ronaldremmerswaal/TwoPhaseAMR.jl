@@ -11,8 +11,8 @@ A tangential velocity jump and gravity perturb a heavy-over-light interface, com
 | **Physics** | Inviscid two-phase Kelvin–Helmholtz/Rayleigh–Taylor case; `ρ_l/ρ_g=3`, `We=0.5`, `Bo=0.75`, wavelength `1`, initial amplitude `0.01`. The denser liquid starts above the gas; gravity points downward and surface tension is derived from the density and wavelength. The domain is `[0,1] × [-1.5,1.5]`, periodic in `x` and free-slip at the `y` walls. |
 | **Algorithms** | The default `TwoVelocityModel()` uses separate phase velocities, frozen-interface WY transport, and `CMDGFMProjection()` (BiCGSTAB with the default pressure-GMG/jump-ILU block preconditioner). Surface tension uses CGFM; PLIC normals use LHF with WY fallback, momentum uses Lax–Wendroff, and interface AMR refines to `max_level`, checking every 5 steps with coarsening delay 2: square cells on every level, `dx = dy = 1/8` on level 0 and `1/128` at the default level 4 around the interface (128 cells per wavelength, 1.3 cells across the initial amplitude), level 1 (`1/16`) in the far field. The example sets both dynamic viscosities to zero, so no viscous solve is needed. |
 | **Worth varying** | `density_ratio=3.0`, `weber=0.5` and `bond=0.75` change the derived physical parameters; `max_level=4` sets the AMR ceiling; `final_time=nothing` selects the linear doubling time in the unstable case; the default `velocity_model=TwoVelocityModel(...)` resolves the velocity jump, while `OneVelocityModel()` replaces it by its density-weighted mean. |
-| **Validated against** | The `:amplitude` history is compared with `:analytical_amplitude` from small-amplitude linear theory. At `t=2 acosh(2)≈2.634`, the two-velocity amplitude is `0.0195018` versus `0.02`, a maximum sampled absolute error of `4.98195e-4`; the one-velocity closure ends at `0.00260283`. |
-| **Cost** | Default and `:docs`: level 4, `T≈2.634`, 859 steps and 6144 final cells for two velocities. On one thread, setup and simulation took 68.42 s for two velocities and 20.04 s for one; the level-5 README animation run took 418.5 s, and the whole figure script 751.8 s, including 89.9 s of package precompilation and rendering. |
+| **Validated against** | The `:amplitude` history is compared with `:analytical_amplitude` from small-amplitude linear theory. At `t=2 acosh(2)≈2.634`, the two-velocity amplitude is `0.0195150` versus `0.02`, a maximum sampled absolute error of `4.84994e-4`; the one-velocity closure ends at `0.00260146`. |
+| **Cost** | Default and `:docs`: level 4, `T≈2.634`, 1074 steps and 6144 final cells for two velocities. On one thread, setup and simulation took 70.39 s for two velocities and 25.18 s for one; the level-5 README animation run took 365.4 s, and the whole figure script 536.2 s, including compilation of the example's own code and rendering (the package was already precompiled). |
 
 Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded.
 
@@ -53,7 +53,7 @@ press Ctrl+C to close Studio after the run.
 
 ## Results
 
-The two-velocity amplitude reaches `0.0195018` against the linear reference `0.02`, with maximum sampled absolute difference `4.98195e-4`. The one-velocity result reaches `0.00260283`; its difference from the same reference reflects a different closure, not just discretization error.
+The two-velocity amplitude reaches `0.0195150` against the linear reference `0.02`, with maximum sampled absolute difference `4.84994e-4`. The one-velocity result reaches `0.00260146`; its difference from the same reference reflects a different closure, not just discretization error.
 
 ![Initial interface and final interfaces for the two velocity models](assets/interfaces.png)
 

@@ -327,7 +327,15 @@ end
                 "endpoint_rate=$endpoint_rate",
             )
             @test all(diff(two_velocity_errors) .< 0)
-            @test endpoint_rate >= minimum_rate
+            # DR 1 is gated at 1.6, owner-approved. The hysteresis controller
+            # gives 1.66 here (errors 0.0468/0.00563/0.00468 at n = 8/16/32),
+            # where the old 1.98 relied on time and space error cancelling at
+            # the old (smaller) step sizes. With a fixed small step there is no
+            # spatial asymptote on these grids: theory errors
+            # 0.00699/0.0140/0.00761/0.00171 at n = 8/16/32/64 and
+            # dt = 5.51e-4 (0.00620/0.0148/0.00830/0.00238 at dt/2), and the
+            # time-L^2 differences to n = 64 give rates -0.53 and 1.06.
+            @test endpoint_rate >= (density_ratio == 1.0 ? 1.6 : minimum_rate)
             two_velocity_series = [
                 timestep_factor == 1 ? two_velocity_results[2] : wave_case(
                         :uniform, 16, density_ratio, mode;

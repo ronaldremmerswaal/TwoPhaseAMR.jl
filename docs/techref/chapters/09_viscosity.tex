@@ -991,7 +991,10 @@ taken at the midpoint. The system is multiplied by $\dualvolmat$ and solved
 by CG if $\dualvolmat\lapstag{k}$ is symmetric for every shift, including the
 embedded conservative operator, otherwise by BiCGSTAB, both
 preconditioned by default with the rediscretised tree multigrid of
-\cref{ch:solvers}; a different step size only refreshes the shift.
+\cref{ch:solvers}. The shift $\half\dt\visc/\dens$ of the system matrix, of every
+multigrid level and of the bottom factorization is the current one: every
+change of the step refreshes them
+(\cref{sec:viscosity:refresh}).
 
 \emph{Two phases, one velocity.} With the mass matrix
 $\massmat=\diag{\stagdens_f\stagvol{f}}$ of the transported fractions
@@ -1009,6 +1012,17 @@ and the rediscretised multigrid of \cref{ch:solvers}. If both viscosities
 are zero no operator is built and $\velo^{\stage{2}}=\velo^{\stage{1}}$;
 one zero viscosity is rejected, as is a non-positive single-phase
 viscosity.
+
+\paragraph{Refresh on a step change.}\label{sec:viscosity:refresh}
+The single-phase system of~\cref{eq:viscosity:single-midpoint} depends
+on the step through the shift $\half\dt\visc/\dens$. A changed shift
+refreshes the system and multigrid matrices and refactorises the bottom
+system. The two-phase system of~\cref{eq:viscosity:phase-midpoint} also
+depends on the evolving density and viscosity: its numerical hierarchy and
+bottom factorization are refreshed every step even when $\dt$ is unchanged.
+For the mimetic viscous solve, the band factor additionally depends on the
+current metric, drag and step. Topology changes can also require rebuilding
+these structures.
 
 \emph{Stopping criterion.} With $\resvec$ the residual and $\rhsvec$ the
 right-hand side of the integrated system and $\mathsf{m}_f$ the diagonal of

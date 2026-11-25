@@ -575,7 +575,7 @@ instability studies refine the step with the mesh through the bounds of
   \quad DR $1000$ & as above & as above & end $1.63$ & end $\ge1.5$\\
   \quad gravity wave, DR $1000$ & as above & as above & end $0.66$ & end $\ge0.4$\\
   \quad capillary--gravity, DR $1000$, uniform, composite, adaptive & as above & as above & end $1.63$ & end $\ge1.5$\\
-  \quad two velocities & as above & as above & DR $1$: end $1.98$; DR $1000$: $1.67$ & as one velocity\\
+  \quad two velocities & as above & as above & DR $1$: end $1.66$; DR $1000$: $1.67$ & DR $1$: end $\ge1.6$; DR $1000$: as one velocity\\
   \quad flat interface at rest & amplitude and speed & rest & $1.1\times10^{-14}$ & $\le10^{-9}$\\
   Floating droplet, mode 4, DR $1000$ (16, 32) & mean period of the kinetic energy over eight periods (interpolated peaks); largest kinetic energy & Lamb period & relative error $1.0\times10^{-3}$, $4.7\times10^{-2}$ (La $\infty$), $2.0\times10^{-3}$, $5.4\times10^{-2}$ (La $1000$); $n=64$, $128$: $3.3\times10^{-3}$, $6.6\times10^{-3}$ and $7.1\times10^{-3}$, $2.1\times10^{-2}$ & period error falls by more than $4$ (recorded as broken: the $n=32$ drop oscillates regularly in mode 4 but $5\,\%$ slow, as on main before the LHF-first curvature); $\le1.5$ times the measured errors; energy falls by more than $4$; viscous peaks decay\\
   Static droplet, La $1200$ and $\infty$, DR $1$, $3$, $1000$ (16, 32) & largest phase speed on mixed faces (aperture floor $0.05$); kinetic-energy envelope; rest with prescribed $\kappa$ & rest; thesis floating droplet & prescribed $\le1.5\times10^{-11}$; mimetic DR $1000$, $n=32$ late $2.9\times10^{-2}$ (gas; liquid $1.8\times10^{-3}$), Ca $\le1.1\times10^{-3}$ & prescribed $\le10^{-9}\sigma/\mu$; finite La: each phase's second half $\le$ first half and peaks decay; La $\infty$: last-third peaks $\le1.25$ first third; $n=32\le n=16$; Ca $=\max|u|\mu_l/\sigma\le5\times10^{-3}$ (mimetic $n=32$: the inviscid envelope, $1.68$--$2.19$, and the growth of the second-half gas current, and at DR $1$ the liquid current, are recorded as broken)\\
@@ -594,7 +594,12 @@ $\dt\propto\minwidth^{1/2}$, so that the first-order splitting limits the
 order to $\half$ until the advective bound is active,
 \cref{sec:stab:accuracy}), the
 Rayleigh--Taylor wave at Bond number $2$ ($1.3$) and the combined wave
-($0.79$). The
+($0.79$). The two-velocity capillary wave at density ratio one is gated at
+$1.6$: with a fixed small step there is no spatial asymptote on these grids
+($0.00699/0.0140/0.00761/0.00171$ at $n=8/16/32/64$ and
+$\dt=5.51\cdot10^{-4}$, the time-$L^2$ self-differences to $n=64$ giving rates
+$-0.53$ and $1.06$), and the former $1.98$ of the coarse automatic steps relied
+on time and space error cancelling. The
 sessile droplet converges faster than the order of about $1.5$ that the
 thesis observes for the symmetric difference of its sessile
 droplets~\thesis{\S4.8.3}.

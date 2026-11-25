@@ -1,3 +1,21 @@
+# The automatic step is a hysteresis controller on the stability bound. The
+# step is kept while `sigma_low * bound <= dt <= bound`; above the bound it is
+# set to `sigma * bound` (a margin, so the next step does not sit on the
+# bound); below `sigma_low * bound` it grows by at most `gamma` per step, up to
+# `sigma * bound`. Shrinking to the margin is what makes the band a hysteresis:
+# the step lands at `sigma * bound > sigma_low * bound`, so the same bound
+# never both lowers and raises the step. A temporary spike can therefore be
+# followed by gradual recovery.
+#
+# The single-phase viscous hierarchy is refreshed when its shift changes.
+# Two-phase variable-viscosity hierarchies are refreshed every step because
+# their density and viscosity fields also change.
+function _next_step_proposal(proposal::T, bound::T) where {T}
+    bound < proposal && return (T(4) / T(5)) * bound
+    proposal < (T(1) / T(2)) * bound || return proposal
+    return min((T(6) / T(5)) * proposal, (T(4) / T(5)) * bound)
+end
+
 """
     simulate!(velocity, pressure, solver, final_time, workspace;
               time=0, dt=nothing, cfl=0.45, force=nothing,
@@ -5,16 +23,23 @@
               observer=NoObserver(),
               tolerance=sqrt(eps(T)), max_cycles=nothing)
 
-Advance to `final_time`. If `dt` is omitted, a stable step is
-chosen initially and retained while it remains below the current bound, which
-also reuses the shifted viscous hierarchy and bottom factorization. The `cfl`
-keyword must lie in `(0, 1]` for one phase and `(0, 1/2]` for two phases; each
-step is checked against the same bound at the top of that range, so every step
-the bound returns is accepted. Consecutive
-automatic calls using the same fields, solver, workspace and topology retain
-the unmodified proposal, not the last step adjusted to `final_time`. If the
-next step would leave less than `1e-6` of the proposal, it is stretched to
-reach the target instead of leaving a tiny final step. Formulations that retain
+Advance to `final_time`. If `dt` is omitted, the step is a hysteresis
+controller on the current bound: it is kept while
+`sigma_low * bound <= dt <= bound`, set to `sigma * bound` when the bound
+drops below it, and grown by at most `gamma` per step, up to `sigma * bound`,
+when it falls below `sigma_low * bound` (`_next_step_proposal`, with
+`sigma = 0.8`, `sigma_low = 0.5`, `gamma = 1.2`). Shrinking to the margin
+makes the band the hysteresis: the step never lands at the lower edge of the
+band, so the same bound never both lowers and raises it. A transient spike
+can be followed by gradual recovery. The `cfl` keyword must lie
+in `(0, 1]` for one phase and `(0, 1/2]` for two phases; each step is checked
+against the same bound at the top of that range, so every step the bound
+returns is accepted. Consecutive automatic calls using the same fields,
+solver, workspace and time retain the proposal, including across a regrid,
+not the last step adjusted to `final_time`. If the next step
+would leave less than `1e-6` of the proposal, it is stretched to
+reach the target instead of leaving a tiny final step; an already aligned
+proposal is used unchanged. Formulations that retain
 inherited divergence use the largest of the proposal, the previous actual step,
 and the current step as the reference; the first step uses its proposal. The
 previous step is retained across fixed and automatic calls when the field and
@@ -25,9 +50,10 @@ proposal. After a regrid, the transfer may create a new defect. Its reference
 is the current unshortened proposal, also used for the two-velocity regrid
 projection, until the next physical step establishes a new actual step.
 A chunk boundary between physical steps nevertheless introduces a shortened
-step and can change the trajectory. If the initial bound is infinite, the step
-is capped at one 128th of the requested simulation interval, ensuring at least
-128 steps before the target time. Returns the final time, number of steps,
+step and can change the trajectory. If the initial bound is infinite, the
+first step is capped at one 128th of the requested simulation interval; while
+the bound stays infinite the step grows by `gamma` per step towards the
+target. Returns the final time, number of steps,
 latest physical-step projection statistics, the accumulated projection
 statistics of this call (`projection`; see [`ProjectionRunStats`](@ref)), the
 number of topology changes,
@@ -109,7 +135,7 @@ function _simulate!(
     defect_step = previous_matches ? selection.defect_dt : zero(T)
     last_step = previous_matches ? selection.last_dt : zero(T)
     selected_step = if isnothing(dt)
-        same_run ? selection.step : T(Inf)
+        _same_simulation_proposal(flow) ? selection.step : T(Inf)
     else
         _positive_finite_step(T, dt)
     end
@@ -154,8 +180,10 @@ function _simulate!(
                         workspace.two_phase.inactive_failures,
                     )
                 end
-                bound = stable_timestep(velocity, solver, workspace; cfl)
-                selected_step = min(selected_step, bound)
+                raw_bound = stable_timestep(velocity, solver, workspace; cfl)
+                bound = T(raw_bound)
+                bound > raw_bound && (bound = prevfloat(bound))
+                selected_step = _next_step_proposal(selected_step, bound)
                 if step_count == 0 && !isfinite(bound) && !isfinite(selected_step)
                     selected_step = (target_time - current_time) / T(128)
                 end
@@ -166,12 +194,15 @@ function _simulate!(
             end
             remaining = target_time - current_time
             proposed = isfinite(selected_step) ? selected_step : remaining
-            step_size = remaining - proposed < T(1.0e-6) * proposed ?
-                remaining : proposed
+            # Preserve an already aligned proposal: subtracting the times may
+            # round to a different step even though their sum hits the target.
+            aligned = current_time + proposed == target_time
+            step_size = aligned ? proposed :
+                remaining - proposed < T(1.0e-6) * proposed ? remaining : proposed
             reference_step = max(proposed, defect_step, step_size)
             step_size > zero(T) ||
                 throw(ArgumentError("time-step selection produced a non-positive step"))
-            next_time = step_size == remaining ? target_time :
+            next_time = aligned || step_size == remaining ? target_time :
                 min(target_time, current_time + step_size)
             stats = step!(
                 flow, step_size; force, observer, options...,

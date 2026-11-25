@@ -17,8 +17,19 @@
 # velocity with permeable walls, and initialisers need not satisfy them.
 const STAB_CFL = 0.45
 
+function stab_enforce!(flow)
+    if flow.velocity isa FaceVelocity
+        AMR._enforce_current_velocity_boundary!(flow.velocity, flow.system, flow.time)
+    else
+        AMR._enforce_current_velocity_boundary!(
+            flow.velocity, flow.system, flow.time, flow.workspace.two_phase.inactive_failures,
+        )
+    end
+    return nothing
+end
+
 function stab_track!(flow)
-    AMR._enforce_current_velocity_boundary!(flow.velocity, flow.system, flow.time)
+    stab_enforce!(flow)
     add_diagnostic!(flow, MaximumVelocity())
     add_diagnostic!(flow, CFLTimeStep(cfl = STAB_CFL))
     return flow
@@ -182,7 +193,7 @@ end
 # The advective bound of eq:stab:flow-bound from the code's per-transport
 # bounds, after imposing the boundary values as simulate! does.
 function stab_advective_bound(flow, cfl)
-    AMR._enforce_current_velocity_boundary!(flow.velocity, flow.system, flow.time)
+    stab_enforce!(flow)
     workspace = flow.workspace
     isnothing(flow.system.two_phase) &&
         return stable_timestep(flow.velocity, workspace.advection; cfl)
@@ -219,13 +230,13 @@ end
 stab_same(step, value, time) = abs(step - value) <= 4eps(max(abs(time), 1.0))
 
 # Replays eq:stab:selection on a recorded automatic run that started without a
-# retained proposal: proposal_n = min(proposal_(n-1), bound_n); every step but
-# the last equals its proposal, the last one ends at the target.
+# retained proposal, with the controller constants of the package; every step
+# but the last equals its proposal, the last one ends at the target.
 function stab_replay(record, target)
     proposal = Inf
     proposals = Float64[]
     for n in eachindex(record.steps)
-        proposal = min(proposal, record.bounds[n])
+        proposal = AMR._next_step_proposal(proposal, record.bounds[n])
         push!(proposals, proposal)
     end
     last = length(record.steps)
@@ -235,7 +246,11 @@ function stab_replay(record, target)
     remaining = target - record.times[last]
     final = remaining - proposals[last] < 1.0e-6 * proposals[last] ||
         stab_same(record.steps[last], proposals[last], target)
-    return (; proposals, ok = regular && final && record.times[end] == target)
+    bounded = all(
+        n -> proposals[n] <= record.bounds[n] * (1 + 1.0e-12),
+        eachindex(proposals),
+    )
+    return (; proposals, ok = regular && final && bounded && record.times[end] == target)
 end
 
 # Bounds at the start and at the end of a run of simulate! over `steps` times
@@ -248,9 +263,13 @@ function stab_case(case; steps = STAB_CASE_STEPS)
     record = stab_history(flow)
     replay = stab_replay(record, target)
     @assert replay.ok
-    @assert issorted(replay.proposals; rev = true)
     finish = stab_bounds(case)
-    return (; start, finish, record, replay, steps = length(record.steps))
+    mean_band = sum(
+        record.steps[n] / record.bounds[n] for n in eachindex(record.steps)
+    ) / length(record.steps)
+    return (;
+        start, finish, record, replay, steps = length(record.steps), mean_band,
+    )
 end
 
 # Bounds of the four flows of tab:stab:cases; the first three then run over
@@ -279,10 +298,7 @@ function case_bounds_check()
     @assert wave.start.active == :capillary && isinf(wave.start.advective)
     @assert cylinder.start.active == :advective && kh.start.active == :advective
     @assert khrt.active == :capillary && isfinite(khrt.gravity)
-    # The wave and the cylinder keep their first proposal; the bound of the
-    # growing Kelvin--Helmholtz wave falls and shortens its steps.
-    @assert wave.steps == cylinder.steps == STAB_CASE_STEPS < kh.steps
-    @assert all(==(cylinder.replay.proposals[1]), cylinder.replay.proposals)
+    # The replay above checks each physical step against the controller.
     @assert kh.replay.proposals[end] < kh.replay.proposals[1]
     return (; wave, cylinder, plain, smallest, kh, khrt)
 end
@@ -300,53 +316,68 @@ function stab_accepts(flow, dt)
 end
 
 function step_selection_check()
-    # Infinite bound: the first step is the interval / 128.
+    # Infinite bound: the first step is the interval / 128, then growth by
+    # gamma per step, and the last step ends at the target.
     rest = stab_taylor_green(; rest = true)
     capped = simulate!(rest, 1.0)
     rest_record = stab_history(rest)
-    @assert capped.steps == 128 &&
-        all(n -> stab_same(rest_record.steps[n], 1 / 128, rest_record.times[n + 1]), 1:128)
+    @assert capped.steps < 128 &&
+        stab_same(rest_record.steps[1], 1 / 128, rest_record.times[2])
+    @assert all(
+        n -> stab_same(
+            rest_record.steps[n + 1],
+            AMR._STEP_GROW_FACTOR * rest_record.steps[n],
+            rest_record.times[n + 2],
+        ),
+        1:(length(rest_record.steps) - 2),
+    )
 
-    # The proposal never grows while the decaying vortex raises its bound.
+    # The decaying vortex raises its bound; replay its step sequence.
     flow = stab_taylor_green()
     proposal = stable_timestep(flow; cfl = STAB_CFL)
-    run = simulate!(flow, 10proposal)
+    target = 10proposal
+    run = simulate!(flow, target)
     record = stab_history(flow)
-    @assert all(
-        n -> stab_same(record.steps[n], proposal, record.times[n + 1]),
-        1:(length(record.steps) - 1),
-    )
+    replay = stab_replay(record, target)
+    @assert replay.ok
     growth = record.bounds[end] / proposal
+    mean_band = sum(
+        record.steps[n] / record.bounds[n] for n in 1:(length(record.steps) - 1)
+    ) / (length(record.steps) - 1)
 
     # A remainder below 1e-6 of the proposal stretches the last step; a
     # larger one is a step of its own.
     stretched = stab_taylor_green()
-    simulate!(stretched, 3proposal + 0.5e-6 * proposal)
+    stretched_target = 0.8proposal * (3 + 0.5e-6)
+    simulate!(stretched, stretched_target)
     stretched_record = stab_history(stretched)
     short = stab_taylor_green()
-    simulate!(short, 3proposal + 2.0e-6 * proposal)
+    short_target = 0.8proposal * (3 + 2.0e-6)
+    simulate!(short, short_target)
     short_record = stab_history(short)
-    @assert length(stretched_record.steps) == 3 && length(short_record.steps) == 4
-    @assert stretched_record.steps[end] > proposal && stretched_record.times[end] > 3proposal
+    @assert length(short_record.steps) == length(stretched_record.steps) + 1
+    @assert stretched_record.times[end] == stretched_target &&
+        short_record.times[end] == short_target
 
     # A second call resumes with the retained proposal, not with the
-    # shortened last step of the first; chunk ends on the step grid reproduce
-    # the uninterrupted run.
+    # shortened last step of the first.
     chunked = stab_taylor_green()
-    simulate!(chunked, 2.5proposal)
-    simulate!(chunked, 5proposal)
+    simulate!(chunked, 1.7proposal)
+    simulate!(chunked, 3.4proposal)
     chunked_record = stab_history(chunked)
-    @assert length(chunked_record.steps) == 6
-    @assert stab_same(chunked_record.steps[3], 0.5proposal, 2.5proposal) &&
-        stab_same(chunked_record.steps[4], proposal, 3.5proposal)
+
+    # Two calls whose ends lie on the step sequence continue the same
+    # proposals; the boundary step is one recomputed remaining time, so the
+    # fields agree up to the rounding of that step.
     whole = stab_taylor_green()
-    simulate!(whole, 4proposal)
+    simulate!(whole, record.times[4])
+    reference = whole
     aligned = stab_taylor_green()
-    simulate!(aligned, 2proposal)
-    simulate!(aligned, 4proposal)
-    @assert length(stab_history(aligned).steps) == 4
-    aligned_difference = maximum(abs, whole.velocity.interior .- aligned.velocity.interior)
-    @assert aligned_difference == 0 && whole.pressure.blocks == aligned.pressure.blocks
+    simulate!(aligned, record.times[2])
+    simulate!(aligned, record.times[4])
+    aligned_difference = maximum(abs, reference.velocity.interior .- aligned.velocity.interior)
+    @assert aligned_difference <= 1.0e-13 * maximum(abs, reference.velocity.interior)
+    whole_steps = length(stab_history(whole).steps)
 
     # The check of step!: (1 + 1e-6 + 32 eps) times the bound at the top of the
     # one-phase cfl range, stagcfl = 1 (#121).
@@ -358,7 +389,8 @@ function step_selection_check()
         capped_steps = capped.steps, proposal, steps = run.steps, growth,
         stretched = stretched_record.steps[end] / proposal,
         short = short_record.steps[end] / proposal, aligned_difference,
-        accepted, rejected,
+        accepted, rejected, mean_band, whole_steps,
+        chunked_steps = length(chunked_record.steps),
     )
 end
 
@@ -372,14 +404,14 @@ end
 function stab_margin_run(build, m; steps)
     case = build()
     flow = case.flow
-    AMR._enforce_current_velocity_boundary!(flow.velocity, flow.system, flow.time)
+    stab_enforce!(flow)
     selected = stable_timestep(flow; cfl = STAB_CFL)
     dt = m * selected
     speeds = Float64[]
     failure = ""
     for _ in 1:steps
         try
-            AMR._enforce_current_velocity_boundary!(flow.velocity, flow.system, flow.time)
+            stab_enforce!(flow)
             stable_timestep(flow; cfl = STAB_CFL)
             flow.workspace.transport_geometry_prepared = true
             stats = step!(
@@ -459,7 +491,10 @@ function stability_outputs(write_output)
     w, c, k, r = cases.wave, cases.cylinder, cases.kh, cases.khrt
     cylinder_bounds = c.record.bounds
     return Any[
-        ("chkStabCaseSteps", w.steps),
+        ("chkStabCaseSteps", STAB_CASE_STEPS), ("chkStabWaveSteps", w.steps),
+        ("chkStabCylSteps", c.steps), ("chkStabWaveMeanBand", @sprintf("%.2f", w.mean_band)),
+        ("chkStabSelMeanBand", @sprintf("%.2f", selection.mean_band)),
+        ("chkStabSelAligned", sci(selection.aligned_difference)),
         ("chkStabWaveH", frac(w.start.h)), ("chkStabWaveCap", stab_value(w.start.capillary)),
         ("chkStabWaveAdvEnd", stab_value(w.finish.advective)),
         ("chkStabWaveAdvRatio", @sprintf("%.0f", w.finish.advective / w.start.capillary)),

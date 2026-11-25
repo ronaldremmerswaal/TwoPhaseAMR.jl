@@ -11,9 +11,11 @@ using Test, TwoPhaseAMR
         @test isopen(run.app)
         close(run.app)
         @test run.result.time == 1.0e-6
-        # A cavity at rest has an infinite stability bound, so simulate! caps
-        # its first step at 1/128 of the interval; the others take one step.
-        @test run.result.steps == (name == :lid_driven_cavity ? 128 : 1)
+        # A cavity at rest starts at interval/128, then its infinite bound
+        # permits growth by 1.2 each step. The geometric sum reaches the
+        # interval in ceil(log(1 + 128 * 0.2) / log(1.2)) = 18 steps.
+        cavity_steps = ceil(Int, log(1 + 128 * (1.2 - 1)) / log(1.2))
+        @test run.result.steps == (name == :lid_driven_cavity ? cavity_steps : 1)
         @test run.result.pressure.converged
         if name == :lid_driven_cavity
             @test length(keyframes(snapshot_store(run.recorder))) >= 2

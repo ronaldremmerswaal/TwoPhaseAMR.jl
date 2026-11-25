@@ -772,7 +772,10 @@ end
         velocity, pressure, solver, 0.2, workspace;
         tolerance = 1.0e-10, max_cycles = 20
     )
-    @test result.steps == 128
+    # Infinite bound: the initial interval/128 proposal grows geometrically.
+    # Sum (0.2/128) * (1.2^n - 1) / (1.2 - 1) >= 0.2 gives n = 18.
+    expected_steps = ceil(Int, log(1 + 128 * (1.2 - 1)) / log(1.2))
+    @test result.steps == expected_steps
     @test result.time == 0.2
     @test result.pressure.converged
 end

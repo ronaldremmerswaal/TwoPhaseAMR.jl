@@ -11,8 +11,8 @@ A seeded periodic velocity field decays while pressure-driven adaptation changes
 | **Physics** | Single phase on the periodic square `[0, 2π]²`, density 1, `reynolds=400` and dynamic viscosity 0.0025; initially random, band-limited solenoidal modes. The Reynolds parameter sets viscosity and is not a measured turbulent Reynolds number. |
 | **Algorithms** | Initial velocity projection, Lax–Wendroff staggered advection, implicit-midpoint diffusion and pressure projection. Pressure uses CG/tree multigrid; diffusion uses tree multigrid and selects CG or BiCGSTAB by matrix symmetry. Pressure interpolation-error AMR uses refine/coarsen thresholds 0.6/0.2, update interval 5, coarsen delay 25 and minimum level `min(2, max_level)`. Automatic stepping uses CFL 0.45. |
 | **Worth varying** | `reynolds=400` changes viscosity; `max_level=4` changes the finest possible level; `final_time=10` sets the duration; `dt=nothing` selects automatic steps. At `max_level=2` the protected minimum equals the maximum, so no coarsening below level 2 is possible. |
-| **Validated against** | Incompressibility has exact reference zero: the final volume-weighted `:divergence_norm` is `1.08446e-6` at docs size. `:projected_kinetic_energy` decreases from `715.044` to `341.261`; no exact turbulent-flow trajectory is claimed. |
-| **Cost** | Default: level 4, `T=10`, initially 16384 and finally 1024 cells, 18213 steps and 393 mesh updates; setup and simulation took 106.4 s on one thread. Docs: level 3, `T=2`, initially 4096 and finally 2176 cells, 1744 steps and 54 mesh updates; setup and simulation took 29.50 s and the whole figure script, with its 81-frame GIF, 63.25 s, including first-use compilation and rendering, measured while other jobs shared the machine. |
+| **Validated against** | Incompressibility has exact reference zero: the final volume-weighted `:divergence_norm` is `3.72333e-6` at docs size. `:projected_kinetic_energy` decreases from `715.044` to `355.295`; no exact turbulent-flow trajectory is claimed. |
+| **Cost** | Default: level 4, `T=10`, initially 16384 and finally 1024 cells, 7690 steps and 438 mesh updates; setup and simulation took 95.04 s on one thread. Docs: level 3, `T=2`, initially 4096 and finally 1984 cells, 2069 steps and 58 mesh updates; setup and simulation took 27.57 s and the whole figure script, with its 81-frame GIF, 57.91 s, including first-use compilation and rendering, measured while other jobs shared the machine. |
 
 The gallery measurement used Julia 1.12.7, one Julia thread and one BLAS thread; compilation depends on earlier examples and package loading is excluded.
 
@@ -56,7 +56,7 @@ The hero compares the initial and final retained vorticity states, with leaf-blo
 
 ![Kinetic energy and active cell count over time](assets/energy_cells.png)
 
-The projected energy falls from `715.044` to `341.261`, while active cells fall from 4096 to 2176. The figure registers `:projected_kinetic_energy` after the initial projection.
+The projected energy falls from `715.044` to `355.295`, while active cells fall from 4096 to 1984. The figure registers `:projected_kinetic_energy` after the initial projection.
 
 ![Animation of adaptive vorticity](assets/vorticity.gif)
 
