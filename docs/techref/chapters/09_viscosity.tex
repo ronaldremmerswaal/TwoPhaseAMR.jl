@@ -284,8 +284,10 @@ retained velocities, is stored separately from wall connections and included
 when reporting embedded viscous forces; it is not added to diffusion twice.
 
 Every embedded wall value is zero, also for a moving \code{NoSlip(u)}
-(since \issue{75}); with \apitype{VelocityBoundaryConditions} the cut kind is
-kept whatever the sides choose, so the embedded walls are no-slip. Away from
+(since \issue{75}). With \apitype{VelocityBoundaryConditions} the embedded
+walls take its separate \code{embedded} condition, whatever the sides choose:
+\apitype{NoSlip}\code{()} by default, or \apitype{FreeSlip}\code{()}, which
+omits their tangential connections as uniform free slip does. Away from
 eliminated wall-normal faces, a completely covered background face retains the
 unit-volume algebraic penalty $\wallcond{w}=1$ for both wall types. With
 $\velo^{\timelevel{n}}_f=0$, the midpoint step
@@ -602,7 +604,9 @@ below are exact. The tangential derivative of a contact is
       & \text{anchored at }a,
   \end{cases}
 \end{equation}
-where wall samples enter with the value zero. Two samples are paired if
+where wall samples enter with the value zero and a wall contact takes the
+condition of the side it meets (each side its own with
+\apitype{VelocityBoundaryConditions}). Two samples are paired if
 their volumes have equal widths along $k$ (a wall sample counted with its
 mirror image) or if the narrower one has no other contact on that side; the
 code requires paired samples to be collinear. Otherwise, at a level
@@ -745,6 +749,99 @@ $9.76\times10^{-5},\,2.65\times10^{-5},\,6.99\times10^{-6}$
 and a fluid extrapolation in the adjacent Green remainder instead gave
 $6.57\times10^{-5}$ at $n=128$ and order $1.03$.
 
+\paragraph{Per-side walls and corners.}\label{sec:viscosity:per-side}
+With \apitype{VelocityBoundaryConditions} each box side is a stationary
+\apitype{NoSlip}\code{()} or \apitype{FreeSlip}\code{()}, and the solid has
+its own \code{embedded} condition, a stationary no-slip wall by default, as in
+the single-phase operator. A no-slip solid keeps the rows of uniform no slip;
+a free-slip solid releases its tilted trace and omits its aligned-wall rows
+as uniform free slip does.
+The trace $s_v$ of a box vertex $v$ that is not a corner is the velocity
+component tangential to the one side that contains $v$, and that side alone
+fixes $s_v=0$ or releases it
+(\srcsym{src/two_phase/diffusion/variable_diffusion_ls_stag.jl}{_ls_box_entry!});
+the legacy rows apply the same rule to the wall contacts
+of~\cref{eq:viscosity:shear}.
+
+\emph{Corner rule.} A box corner lies on two sides, and each velocity
+component there is the normal velocity of one of them: $\velo_1$ of the side
+normal to $\unitvec{1}$, $\velo_2$ of the other. No-slip and free-slip sides
+both prescribe their normal velocity, zero, so the tangential trace of one
+side at a corner is the prescribed normal velocity of the other, and the
+corner velocity vanishes for every combination of the two. The corner line
+takes its endpoint from the boundary face, whose column is not an unknown,
+so no trace column exists there. Releasing a corner trace with its
+free-slip side would let that side move fluid through the other side.
+
+\emph{Nesting.} For LS-STAG the rows, their measures and their viscosities
+do not depend on the side conditions; only the admissible traces do. Let
+$\mathcal S_{\mathrm N}=\{0\}$, $\mathcal S$ and $\mathcal S_{\mathrm F}$ be
+the box-trace spaces of all no-slip sides, of a mixed configuration and of
+all free-slip sides, each with the corners fixed, so
+$\mathcal S_{\mathrm N}\subseteq\mathcal S\subseteq\mathcal S_{\mathrm F}$,
+and let $\mathcal P$ be the solid's parameters: $\{0\}$ for a no-slip solid,
+the tilted traces and aligned-row coefficients of the projection argument
+above, unconstrained, for a free-slip one, with columns $C$. With $E$, $W$
+and the box columns $B$ of the previous paragraphs, every configuration is
+the minimum over its spaces, and a minimum over larger sets is smaller:
+\begin{equation}\label{eq:viscosity:per-side-nesting}
+  \begin{gathered}
+  \velo^{\transpose}K_{\mathcal S,\mathcal P}\velo
+  =\min_{s\in\mathcal S,\,p\in\mathcal P}\|W^{1/2}(E\velo-Bs-Cp)\|_2^2,\\
+  \mathcal S\subseteq\mathcal S',\ \mathcal P\subseteq\mathcal P'
+  \ \Longrightarrow\ K_{\mathcal S,\mathcal P}\succeq K_{\mathcal S',\mathcal P'}.
+  \end{gathered}
+\end{equation}
+All no-slip walls are $(\mathcal S_{\mathrm N},\{0\})$ and uniform
+\apitype{FreeSlip}\code{()} is $(\mathcal S_{\mathrm F},\mathcal P)$, so every
+per-side configuration, with either solid, lies between them, and releasing
+the solid at fixed sides only removes dissipation. The shear rows
+of~\cref{eq:viscosity:shear} (legacy closure, or no solid) drop the one-sided
+difference of a free-slip wall contact instead and nest in the same
+measurements. Over all sixteen side combinations, each with a no-slip and
+with a free-slip solid, on fixtures without a solid, with the sloping, an
+aligned and a disk solid, a $1.5h$ gap and a disk that cuts a corner cell, on
+uniform and right- or top-refined meshes, with both closures and viscosity
+ratios up to $1000$, the smallest eigenvalue of every difference along these
+chains, and of every stiffness, relative to the largest entry of the
+all-no-slip stiffness is $-3.8\times10^{-16}$
+(\testsym{test/two_phase/variable_staggered_diffusion.jl}{Mixed per-side walls nest between no-slip and free-slip walls},
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{Per-side walls with a free-slip solid nest and keep its rigid tangent}).
+Equal sides and solid reproduce the uniform operators bitwise. The released
+stiffness is the joint weighted elimination of the free sides' traces and,
+for a free-slip solid, of its parameters
+(\testsym{test/indicator/geometry.jl}{Per-side free slip releases only the traces of its own sides}),
+no corner trace is ever released
+(\testsym{test/two_phase/variable_staggered_diffusion.jl}{LS-STAG per-side box traces follow their side and never a corner}),
+a constant tangential velocity along a free-slip floor between hanging
+vertices and viscosity jumps has no strain there
+(\testsym{test/two_phase/variable_staggered_diffusion.jl}{Mixed per-side walls keep the rigid tangent of a free-slip side}),
+and one along the sloping free-slip solid has none away from the box,
+whatever the sides.
+
+The manufactured streamfunctions vanish with their normal derivative on the
+no-slip walls and with their second normal derivative on the free-slip
+sides, whose tangential velocity is not zero. Between $n=64$ and $128$, the
+orders of the shifted Helmholtz solve on uniform and right- or top-refined
+meshes (LS-STAG) are
+\begin{center}
+\begin{tabular}{llcc}
+\toprule
+Sides & Solid & $L^2$ & Maximum \\
+\midrule
+free sides, no-slip floor, lid & none & $1.99$--$2.01$ & $1.94$--$1.98$ \\
+free sides, no-slip lid & $y=c+sx$ meets free sides & $1.99$--$2.03$ & $1.74$--$1.96$ \\
+free sides, no-slip lid & $y=sx$ through $(0,0)$ & $2.00$ & $1.96$--$1.97$ \\
+no-slip sides, free lid & $y=c+sx$ & $2.00$--$2.06$ & $1.92$--$1.98$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+The $1.74$ is a maximum in the interior, on the top-refined mesh where the
+transition crosses the solid; it is $1.84$ between $n=128$ and $256$, while
+the maximum within five cells of the box converges at $1.99$. Four of these
+configurations, the corner one included, are pinned in
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{Mixed per-side walls keep second-order manufactured solutions}.
+
 \paragraph{Cost of a thin Cartesian free-slip gap.}
 If a wall runs parallel, or nearly parallel, to a box side only one to
 two cells away, successive Green remainders may share traces along the
@@ -874,9 +971,10 @@ along free-slip walls; a no-slip wall or a solid makes it definite. The
 walls are part of the rows: no-slip
 domain walls through the one-sided shear differences, free slip through the
 vanishing ones, the embedded solid through the wall rows (no-slip only).
-Only the stationary \apitype{NoSlip}\code{()} and \apitype{FreeSlip}\code{()}
-are accepted; moving walls and \apitype{VelocityBoundaryConditions} are
-rejected. When the interface moves only $\stressw$ changes: the code
+Only stationary walls are accepted, \apitype{NoSlip}\code{()} and
+\apitype{FreeSlip}\code{()}, uniform or per side with
+\apitype{VelocityBoundaryConditions} (\cref{sec:viscosity:per-side}); moving
+walls and open sides are rejected. When the interface moves only $\stressw$ changes: the code
 refreshes $\visc_c$ from the transported fractions before every viscous step
 and keeps $\strainmat$ until the next regrid, which rebuilds the contacts and
 rows from the lattice topology.

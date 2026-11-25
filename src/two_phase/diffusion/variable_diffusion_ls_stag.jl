@@ -145,8 +145,8 @@ function _ls_stress_line(cache::_LSStressCache{T}, mesh, lattice, vertex, axis) 
     distance = direction * anchor.length / 2
     if !mesh.periodic[tangent] && (key[tangent] == 0 || key[tangent] == lattice[tangent])
         # At a fixed box trace s=0 the Green endpoint value vanishes and
-        # the vertex quotient is d*(u_f-s); FreeSlip releases the same s
-        # in every adjacent Green and vertex row.
+        # the vertex quotient is d*(u_f-s); a FreeSlip side releases the
+        # same s in every adjacent Green and vertex row.
         d = -inv(distance)
         z = zero(T)
         return _LSStressLine((anchor.column, 0, 0), (d, z, z), (z, z, z), d, true, true)
@@ -239,9 +239,20 @@ function _ls_stress_slip!(cache, cell, wall_row, measures, b)
     return nothing
 end
 
-@inline function _ls_box_entry!(cache, line, row, vertex, value, boundary)
-    # At a box corner both velocity components are normal to a box side.
-    if boundary isa FreeSlip && !iszero(line.box_derivative) && !iszero(line.columns[1]) && !iszero(value)
+# The trace of line `axis` at a box vertex is velocity component `axis` on
+# the side normal to the other axis; only a FreeSlip side releases it.
+@inline function _ls_free_box_trace(boundary, key, axis)
+    tangent = 3 - axis
+    side = iszero(key[tangent]) ? -1 : 1
+    return _variable_side_wall(boundary, tangent, side) isa FreeSlip
+end
+
+@inline function _ls_box_entry!(cache, line, row, vertex, axis, value, boundary)
+    # At a box corner both velocity components are normal to a box side:
+    # the anchor is a boundary face and the corner trace stays zero for
+    # every combination of side conditions.
+    if !iszero(line.box_derivative) && !iszero(line.columns[1]) && !iszero(value) &&
+            _ls_free_box_trace(boundary, cache.keys[vertex], axis)
         push!(cache.box_rows, row)
         push!(cache.box_vertices, vertex)
         push!(cache.box_values, value)
@@ -287,7 +298,8 @@ function _ls_stress_cell!(cache, geometry::GeometryField{T}, ref, cell, measures
     remainder = regular ? zero(T) : volume - scale * sum_rectangles
     tilted_slip = false
     tangent = (zero(T), zero(T))
-    if boundary isa FreeSlip && !isone(open)
+    embedded = _variable_embedded_wall(boundary)
+    if embedded isa FreeSlip && !isone(open)
         h = mesh.blocks[ref.block].spacing
         n1 = _get(geometry.solid.normal_x, ref) / h[1]
         n2 = _get(geometry.solid.normal_y, ref) / h[2]
@@ -295,7 +307,7 @@ function _ls_stress_cell!(cache, geometry::GeometryField{T}, ref, cell, measures
         tilted_slip = min(abs(n1), abs(n2)) > 64eps(T) * norm_n
         tilted_slip && (tangent = (-n2 / norm_n, n1 / norm_n))
     end
-    complete = remainder > zero(T) && (!(wall && boundary isa FreeSlip) || tilted_slip)
+    complete = remainder > zero(T) && (!(wall && embedded isa FreeSlip) || tilted_slip)
     rows, cols, vals = construction.strain_rows, construction.strain_columns, construction.strain_values
     ir, ic, iv = construction.interpolation_rows, construction.interpolation_columns, construction.interpolation_values
     cell_row = 0
@@ -326,7 +338,7 @@ function _ls_stress_cell!(cache, geometry::GeometryField{T}, ref, cell, measures
                     shear_flux += sign(oriented) * face.length * tangent[3 - face.axis] * trace / 2
                 end
                 _ls_stress_line_row!(rows, cols, vals, cell_row, line.columns, line.trace, coefficient)
-                _ls_box_entry!(cache, line, cell_row, vertex, coefficient, boundary)
+                _ls_box_entry!(cache, line, cell_row, vertex, 3 - face.axis, coefficient, boundary)
             end
         end
         if tilted_slip
@@ -353,17 +365,17 @@ function _ls_stress_cell!(cache, geometry::GeometryField{T}, ref, cell, measures
             push!(measures, zero(T))
             row = length(measures)
             cache.vertex_rows[v] = row
-            for line in lines
+            for (axis, line) in pairs(lines)
                 _ls_stress_line_row!(rows, cols, vals, row, line.columns, line.derivative, one(T))
-                _ls_box_entry!(cache, line, row, v, -line.box_derivative, boundary)
+                _ls_box_entry!(cache, line, row, v, axis, -line.box_derivative, boundary)
             end
         end
         measures[row] += area
         push!(ir, row); push!(ic, cell); push!(iv, area)
         if complete
-            for line in lines
+            for (axis, line) in pairs(lines)
                 _ls_stress_line_row!(rows, cols, vals, cell_row, line.columns, line.derivative, -area / remainder)
-                _ls_box_entry!(cache, line, cell_row, v, area * line.box_derivative / remainder, boundary)
+                _ls_box_entry!(cache, line, cell_row, v, axis, area * line.box_derivative / remainder, boundary)
             end
         end
     end

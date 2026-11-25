@@ -1684,6 +1684,9 @@ end
 A cell field of dynamic viscosity selects the coupled stress operator.
 The conservative cut-cell stiffness is symmetric positive semidefinite.
 Embedded walls include surfaces aligned with cell faces as well as PLIC cuts.
+They are no-slip for `NoSlip()` and free-slip for `FreeSlip()`, which omits
+their tangential wall connections; with [`VelocityBoundaryConditions`](@ref)
+the solid takes its `embedded` condition, `NoSlip()` by default.
 For Cartesian wall segments the tangential closure uses the wall-normal distance
 and the portion of the segment owned by the dual face. A wall-aligned normal
 velocity is prescribed zero and removed from the diffusion unknowns.

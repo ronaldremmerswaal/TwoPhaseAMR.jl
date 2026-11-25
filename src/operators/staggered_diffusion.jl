@@ -55,30 +55,33 @@ struct BoundaryExtrapolationSchedule
 end
 
 """
-    VelocityBoundaryConditions(; left, right, bottom, top)
+    VelocityBoundaryConditions(; left, right, bottom, top, embedded=NoSlip())
 
 Side-specific velocity conditions. Each side accepts `NoSlip()`, `FreeSlip()`,
-`Inflow(f)`, `Outflow()`, or `ZeroGradientVelocity()`. This object can be
-passed through the existing `boundary` keyword. The default remains four
-stationary no-slip walls.
+`Inflow(f)`, `Outflow()`, or `ZeroGradientVelocity()`. `embedded` is the
+viscous condition of a stationary embedded solid ([`GeometryField`](@ref)):
+`NoSlip()`, the default, or `FreeSlip()`; its normal velocity is zero either
+way. This object can be passed through the existing `boundary` keyword. The
+default remains four stationary no-slip walls and a no-slip solid.
 """
-struct VelocityBoundaryConditions{L, R, B, U} <: AbstractWallBoundaryCondition
+struct VelocityBoundaryConditions{L, R, B, U, E} <: AbstractWallBoundaryCondition
     left::L
     right::R
     bottom::B
     top::U
+    embedded::E
     cache::Base.RefValue{Union{Nothing, BoundaryExtrapolationSchedule}}
 end
 
-VelocityBoundaryConditions(left, right, bottom, top) =
+VelocityBoundaryConditions(left, right, bottom, top, embedded = NoSlip()) =
     VelocityBoundaryConditions(
-    left, right, bottom, top,
+    left, right, bottom, top, embedded,
     Ref{Union{Nothing, BoundaryExtrapolationSchedule}}(nothing)
 )
 
 function VelocityBoundaryConditions(;
         left = NoSlip(), right = NoSlip(),
-        bottom = NoSlip(), top = NoSlip(),
+        bottom = NoSlip(), top = NoSlip(), embedded = NoSlip(),
     )
     conditions = (left, right, bottom, top)
     all(
@@ -92,7 +95,10 @@ function VelocityBoundaryConditions(;
                 "Outflow(), or ZeroGradientVelocity()",
         )
     )
-    return VelocityBoundaryConditions(left, right, bottom, top)
+    embedded isa Union{FreeSlip, NoSlip{StationaryWall}} || throw(
+        ArgumentError("an embedded solid is stationary: embedded must be NoSlip() or FreeSlip()"),
+    )
+    return VelocityBoundaryConditions(left, right, bottom, top, embedded)
 end
 
 @inline function _side_boundary(boundary::VelocityBoundaryConditions, axis, side)
@@ -477,7 +483,9 @@ end
         boundary::VelocityBoundaryConditions,
         connection::WallDiffusionConnection,
     )
-    iszero(connection.boundary_axis) && return true # embedded stationary wall
+    # An embedded stationary wall has its own condition.
+    iszero(connection.boundary_axis) &&
+        return _include_wall_connection(boundary.embedded, connection)
     side = _side_boundary(
         boundary, connection.boundary_axis, connection.boundary_side,
     )
