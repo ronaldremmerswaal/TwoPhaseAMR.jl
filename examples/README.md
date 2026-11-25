@@ -2,9 +2,10 @@
 
 These standalone examples each define `run_example` and run headlessly by
 default. The tables on each page describe physical parameters, algorithms,
-validation and cost. The manufactured Poisson case is a static projection
-rather than a time-dependent flow, and the disc wave integrates the linear
-wave equation with the cut-cell viscous operator as its Laplacian.
+validation and cost. The disc wave integrates the linear wave equation
+with the cut-cell viscous operator as its Laplacian. The manufactured
+Poisson projection that used to be example 12 is now case T7 of the
+two-velocity verification suite (`benchmark/two_velocity`).
 
 | # | Example | Physics | Default model | Default cost |
 | --- | --- | --- | --- | --- |
@@ -19,7 +20,6 @@ wave equation with the cut-cell viscous operator as its Laplacian.
 | 09 | [Sloped sessile droplet](09_sloped_sessile_droplet/) | Embedded inclined wall | One velocity | Level 2, four capillary times; unmeasured at this size (level-3 gallery run 93.79 s) |
 | 10 | [Stokes wave](10_stokes3_wave/) | Nonlinear free-surface wave | One velocity | Level 5, one period; unmeasured |
 | 11 | [Large gas-pocket impact](11_lgpi/) | Gravity wave over bathymetry | Two velocity | Level 4, 1.2 gravity periods; unmeasured (gallery level-3 run 1872 s) |
-| 12 | [Manufactured Poisson](12_manufactured_poisson/) | Pressure projection with density jump | Two velocity | 32×32; 11.86 s setup and solve |
 | 13 | [Disc wave](13_disc_wave/) | Staggered wave equation on a cut-cell disc | Implicit midpoint, LS-STAG | 128×128, one period in 128 steps; 0.48 s setup, 1.26 s stepping |
 
 Warm timings are second calls in one process; first-call compilation is
@@ -48,8 +48,7 @@ To run an example directly, for example,
 Most flow examples return `(; flow, result, recorder, app)`; keyframes are
 available via `snapshot_store(run.recorder)`. Vortex reversal returns its
 interface, prescribed velocity, result, recorder and app. LGPI returns its
-flow, result and recorder, while manufactured Poisson returns its projection
-fields, errors and a `registry`. The disc wave returns its geometry, operator,
+flow, result and recorder. The disc wave returns its geometry, operator,
 fields, energy history, recorder and app; its `disc_wave_analysis.jl` measures
 them against the exact solution. For most cases, a low `max_level` and short
 `final_time` make a quick initial run.
