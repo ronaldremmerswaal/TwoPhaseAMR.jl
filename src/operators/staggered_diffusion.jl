@@ -71,13 +71,20 @@ struct VelocityBoundaryConditions{L, R, B, U, E} <: AbstractWallBoundaryConditio
     top::U
     embedded::E
     cache::Base.RefValue{Union{Nothing, BoundaryExtrapolationSchedule}}
+
+    function VelocityBoundaryConditions(left::L, right::R, bottom::B, top::U, embedded::E) where {L, R, B, U, E}
+        embedded isa Union{FreeSlip, NoSlip{StationaryWall}} || throw(
+            ArgumentError("an embedded solid is stationary: embedded must be NoSlip() or FreeSlip()"),
+        )
+        return new{L, R, B, U, E}(
+            left, right, bottom, top, embedded,
+            Ref{Union{Nothing, BoundaryExtrapolationSchedule}}(nothing),
+        )
+    end
 end
 
-VelocityBoundaryConditions(left, right, bottom, top, embedded = NoSlip()) =
-    VelocityBoundaryConditions(
-    left, right, bottom, top, embedded,
-    Ref{Union{Nothing, BoundaryExtrapolationSchedule}}(nothing)
-)
+VelocityBoundaryConditions(left, right, bottom, top) =
+    VelocityBoundaryConditions(left, right, bottom, top, NoSlip())
 
 function VelocityBoundaryConditions(;
         left = NoSlip(), right = NoSlip(),
@@ -94,9 +101,6 @@ function VelocityBoundaryConditions(;
             "velocity sides must be NoSlip(), FreeSlip(), Inflow(f), " *
                 "Outflow(), or ZeroGradientVelocity()",
         )
-    )
-    embedded isa Union{FreeSlip, NoSlip{StationaryWall}} || throw(
-        ArgumentError("an embedded solid is stationary: embedded must be NoSlip() or FreeSlip()"),
     )
     return VelocityBoundaryConditions(left, right, bottom, top, embedded)
 end

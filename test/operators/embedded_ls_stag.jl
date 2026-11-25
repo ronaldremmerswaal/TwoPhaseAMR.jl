@@ -428,6 +428,7 @@ end
     @test VelocityBoundaryConditions().embedded isa NoSlip
     for embedded in (NoSlip((x, y, time, axis) -> 1.0), Outflow())
         @test_throws ArgumentError VelocityBoundaryConditions(; embedded)
+        @test_throws ArgumentError VelocityBoundaryConditions(NoSlip(), NoSlip(), NoSlip(), NoSlip(), embedded)
     end
     sides = (left = FreeSlip(), right = NoSlip(), bottom = NoSlip(), top = FreeSlip())
     free = (left = FreeSlip(), right = FreeSlip(), bottom = FreeSlip(), top = FreeSlip())
@@ -440,11 +441,13 @@ end
         # and sides that all match a uniform condition reproduce it bitwise.
         no_slip_solid = stiffness(VelocityBoundaryConditions(; sides...))
         @test no_slip_solid == stiffness(VelocityBoundaryConditions(; sides..., embedded = NoSlip()))
+        @test no_slip_solid == stiffness(VelocityBoundaryConditions(values(sides)...))
         @test stiffness(VelocityBoundaryConditions()) == stiffness(NoSlip())
         @test stiffness(VelocityBoundaryConditions(; free..., embedded = FreeSlip())) ==
             stiffness(FreeSlip())
         # Releasing the solid at fixed sides removes dissipation only.
         free_solid = stiffness(VelocityBoundaryConditions(; sides..., embedded = FreeSlip()))
+        @test free_solid == stiffness(VelocityBoundaryConditions(values(sides)..., FreeSlip()))
         for (no, released) in zip(no_slip_solid, free_solid)
             loss = no - released
             @test any(!iszero, loss)
