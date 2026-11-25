@@ -130,6 +130,30 @@ function energy_study(; resolution = 128, periods = 4, tolerances = (1.0e-6, 1.0
     end
 end
 
+# The trajectory of test/examples/disc_wave_example.jl, t = 1/4 in 20 steps
+# per 32 cells, refined in space and time together (Δt ∝ h). The test bounds
+# each relative error e(n) of LS-STAG by C (32/n)², C the largest
+# e(n) (n/32)² printed here, and checks the orders against these.
+function regression_study(; resolutions = STUDY_RESOLUTIONS)
+    for closure in (LSStagClosure(), WallDistanceClosure()), resolution in resolutions
+        run = run_example(;
+            resolution, closure, final_time = 0.25, steps = 20 * resolution ÷ 32,
+            tolerance = 1.0e-12, keyframes = nothing,
+        )
+        relative = relative_error.(Ref(run.errors), ERROR_NAMES)
+        println(
+            @sprintf("%-20s n=%3d relative u L2/max ", typeof(closure), resolution),
+            join((@sprintf("%.4e", value) for value in relative[1:2]), "/"),
+            "  ∂u/∂t L2/max ", join((@sprintf("%.4e", value) for value in relative[3:4]), "/"),
+            "  times (n/32)² ", join((@sprintf("%.4e", value * (resolution / 32)^2) for value in relative), "/"),
+            "  frequency errors ", join(
+                (@sprintf("%.3e", entry.spatial / entry.exact - 1) for entry in run.frequencies), ", ",
+            ),
+        )
+    end
+    return nothing
+end
+
 # Both displacement components over one period of the (0,1) mode, one output
 # frame per keyframe; 31 colour levels keep the GIF small.
 function wave_animation(path, run; size)
@@ -288,6 +312,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     spatial = spatial_study()
     temporal = temporal_study()
     energy = energy_study()
+    regression_study()
     convergence_figure(joinpath(outdir, "convergence.png"), spatial; size = docs ? (1020, 470) : (1360, 620))
     time_figure(joinpath(outdir, "time.png"), temporal, energy; size = docs ? (860, 430) : (1150, 570))
     println("figure script: ", time() - started, " s")
