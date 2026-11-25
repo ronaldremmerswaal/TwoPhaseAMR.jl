@@ -7,7 +7,7 @@ default) and [`ConstantJumpInference`](@ref) (the published rows)."""
 abstract type AbstractJumpInference end
 
 """
-    LinearJumpInference()
+    LinearJumpInference(; limiter = :normal)
 
 The CMDGFM jump inference (the default, issue #171). Compared with the
 published rows ([`ConstantJumpInference`](@ref)):
@@ -17,14 +17,12 @@ published rows ([`ConstantJumpInference`](@ref)):
   jump and pressure-gradient columns; for a smooth single-valued field and
   `θ = 1` the inferred jump is `O(h³)` instead of `O(h)`;
 - the slope weight `θ ∈ [0, 1]` of a row is one minus a smoothstep of the
-  crossing speed `w/U` over the ramp `[1/32, 3/32]`, with `w` the larger of
-  the normal component of the mixture velocity at the face and the sliding
-  speed `|u_g,a - u_l,a| |n_a|` of the phases along the face's axis `a`, and
-  `U` the local mixture speed: an interface that moves through the face (a
-  translating drop, a rolling-up shear layer), or along which the phases
-  slide past each other (a vortex sheet over a growing wave), gets the
-  one-donor rule; a quasi-static one with a continuous velocity (a resolved
-  shear layer in its linear regime) keeps the linear extrapolation;
+  crossing speed `w/U` over the ramp `[1/32, 3/32]`. `U` is the local mixture
+  speed. With `limiter = :normal` (the default), `w = |ū · n|` measures how
+  fast the interface crosses the face. With `limiter = :sliding`, `w` also
+  includes `|u_g,a - u_l,a| |n_a|`, taking the larger of the two speeds along
+  the face's axis `a`. This limits extrapolation when the phases slide past
+  each other along an inclined interface, even if the interface barely moves.
 - a mixed face without a regular row gets a row that makes the interpolated
   normal jump of the projected state vanish where `|n_t| ≤ |n_a|`, and the
   tangential row below where `|n_t| > |n_a|`, instead of keeping its jump;
@@ -38,7 +36,13 @@ phase or is itself a mixed face, that face falls back to the rule of
 [`ConstantJumpInference`](@ref); the counts are reported in
 `CMDGFMProjectionStats.jump_inference`.
 """
-struct LinearJumpInference <: AbstractJumpInference end
+struct LinearJumpInference{Limiter} <: AbstractJumpInference
+    function LinearJumpInference(; limiter = :normal)
+        limiter === :normal && return new{:normal}()
+        limiter === :sliding && return new{:sliding}()
+        throw(ArgumentError("linear CMDGFM limiter must be :normal or :sliding"))
+    end
+end
 
 """
     ConstantJumpInference()

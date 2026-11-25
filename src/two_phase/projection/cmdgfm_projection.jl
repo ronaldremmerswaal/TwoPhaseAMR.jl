@@ -1085,8 +1085,8 @@ noise grows like `k^{3/2}`; any `θ ≤ θ* < 1` at the last write turns it into
 a bounded slope with a random walk of the value, like the one-donor rule.
 The same recursion runs without any interface motion where the phases slide
 past each other along an inclined interface, one write per step of the
-interface staircase passed ([`_cmdgfm_sliding_speed`](@ref)), so the crossing
-speed `w` is the larger of the interface normal speed and the sliding speed.
+interface staircase passed ([`_cmdgfm_sliding_speed`](@ref)). The optional
+`:sliding` limiter takes the larger of the interface normal and sliding speeds.
 Example 07 run to twice its default time (density ratio 3, We 0.5, Bo 0.75,
 level 4) shows the sliding case: with the normal speed alone 97 % of its rows
 stay below 1/32 until `t = 1.5`, keep `θ = 1`, and a band of grid-scale
@@ -1192,27 +1192,28 @@ inference."""
 end
 
 """Extrapolation slope weight `θ` of a row with second donors from the state
-`liquid`, `gas` before the projection. The crossing speed `w` is the larger of
-the interface normal speed, the normal component `|u_mix,f · n_f|` of the
-mixture velocity with the staggered PLIC normal
-([`_cmdgfm_face_normal`](@ref)) (the speed at which a kinematic interface
-crosses the face), and the sliding speed `|u_g,a - u_l,a| |n_a|`
-([`_cmdgfm_sliding_speed`](@ref)). `U` is the largest mixture speed over the
-face and its four donors (at least `floatmin`), and `θ` follows the ramp
-[`_CMDGFM_CROSSING_RAMP`](@ref) in `w/U`. Mixture velocities, the phase
-difference and `|·|` make `θ` label symmetric; it uses the current state
-only. Without a normal or a mixture velocity the row keeps `θ = 1`."""
+`liquid`, `gas` before the projection. The default crossing speed `w` is the
+normal component `|u_mix,f · n_f|` of the mixture velocity with the staggered
+PLIC normal ([`_cmdgfm_face_normal`](@ref)). With `:sliding`, `w` is the larger
+of that speed and [`_cmdgfm_sliding_speed`](@ref). `U` is the largest mixture
+speed over the face and its four donors (at least `floatmin`), and `θ` follows
+the ramp [`_CMDGFM_CROSSING_RAMP`](@ref) in `w/U`. The mixture velocity and
+the magnitude of the phase difference make `θ` label symmetric. Without a
+normal or a mixture velocity the row keeps `θ = 1`."""
 function _cmdgfm_crossing_slope(
         stencil::CMDGFMJumpStencil{T}, data, liquid, gas, mesh, incidence, interface,
-    ) where {T}
+        ::LinearJumpInference{Limiter},
+    ) where {T, Limiter}
     face = mesh.faces[stencil.face]
     normal = _cmdgfm_face_normal(interface, face)
     velocity = _cmdgfm_mixture_vector(stencil.face, data, liquid, gas, mesh, incidence)
     (isnothing(normal) || isnothing(velocity)) && return one(T)
-    crossing_speed = max(
-        abs(velocity[1] * normal[1] + velocity[2] * normal[2]),
-        _cmdgfm_sliding_speed(liquid, gas, stencil.face, normal[face.axis]),
-    )
+    crossing_speed = abs(velocity[1] * normal[1] + velocity[2] * normal[2])
+    if Limiter === :sliding
+        crossing_speed = max(
+            crossing_speed, _cmdgfm_sliding_speed(liquid, gas, stencil.face, normal[face.axis]),
+        )
+    end
     scale = hypot(velocity...)
     for donor in (
             stencil.gas_inference_face, stencil.gas_extrapolation_face,
@@ -1267,21 +1268,24 @@ With the pressure `cache` of a workspace, `θ` is also frozen with the rows of
 the reconstructed interface: the first projection after the interface has
 been reconstructed (or after [`_cmdgfm_release_crossing!`](@ref)) evaluates it
 from the state it projects, and every further projection with the same
-interface reuses it, so that projecting a projected state again changes
-nothing. Without `cache`, `θ` is evaluated from `velocity`."""
+interface and limiter reuses it, so projecting a projected state again
+changes nothing. Without `cache`, `θ` is evaluated from `velocity`."""
 function _cmdgfm_limit_extrapolation!(
         stencils::AbstractVector{CMDGFMJumpStencil{T}}, data,
-        velocity::TwoPhaseVelocity, interface;
+        velocity::TwoPhaseVelocity, interface, inference::LinearJumpInference{Limiter};
         incidence = _cmdgfm_incident_faces(interface.mesh), cache = nothing,
-    ) where {T}
+    ) where {T, Limiter}
     liquid, gas = velocity[1].interior, velocity[2].interior
     mesh = interface.mesh
+    sliding = Limiter === :sliding
     frozen = !isnothing(cache) && cache.crossing_frozen &&
-        cache.crossing_reconstructions == interface.reconstructions[]
+        cache.crossing_reconstructions == interface.reconstructions[] &&
+        cache.crossing_sliding == sliding
     if !isnothing(cache) && !frozen
         resize!(cache.crossing_slope, length(mesh.faces))
         fill!(cache.crossing_slope, T(NaN))
         cache.crossing_reconstructions = interface.reconstructions[]
+        cache.crossing_sliding = sliding
         cache.crossing_frozen = true
     end
     for row in eachindex(stencils)
@@ -1289,7 +1293,7 @@ function _cmdgfm_limit_extrapolation!(
         stencil.gas_extrapolation_face > 0 || continue
         slope = isnothing(cache) ? T(NaN) : cache.crossing_slope[stencil.face]
         if isnan(slope)
-            slope = _cmdgfm_crossing_slope(stencil, data, liquid, gas, mesh, incidence, interface)
+            slope = _cmdgfm_crossing_slope(stencil, data, liquid, gas, mesh, incidence, interface, inference)
             isnothing(cache) || (cache.crossing_slope[stencil.face] = slope)
         end
         stencils[row] = _cmdgfm_dominant_row(stencil, data, slope)
@@ -1545,7 +1549,7 @@ function _assemble_cmdgfm_cached!(
         push!(mixed_faces, stencil.face)
     end
     _linear_jump_inference(solver) && _cmdgfm_limit_extrapolation!(
-        stencils, data, velocity, interface; incidence = cache.incidence, cache,
+        stencils, data, velocity, interface, solver.jump_inference; incidence = cache.incidence, cache,
     )
     pressure_positive = cache.reduced_pressure
     pressure_jump = _cmdgfm_pressure_jump(cache, data, mixed_faces, mesh)

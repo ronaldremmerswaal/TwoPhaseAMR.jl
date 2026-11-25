@@ -636,9 +636,7 @@ $1000$), the row gives $0.010$ (thesis rows $0.142$).
   \begin{gathered}
   \slopeweight_f=1-s^2(3-2s),\qquad
   s=\min\curlypar{1,\max\curlypar{0,\frac{w_f/U_f-a}{b-a}}},\qquad
-  (a,b)=\roundpar{\tfrac1{32},\tfrac3{32}},\\
-  w_f=\max\curlypar{\abs{\bar{\velo}_f\cdot\normalstag_f},\;
-    \abs{\velo^{\gas}_f-\velo^{\liq}_f}\,\abs{\normalstag_{f,k}}},
+  (a,b)=\roundpar{\tfrac1{32},\tfrac3{32}}.
   \end{gathered}
 \end{equation}
 with the mixture velocity vector $\bar{\velo}_f$ of the face (its own
@@ -648,12 +646,17 @@ velocities $\velo^{\phase}_f$ of $f$ along axis $k$, and $U_f$ the
 largest $\abs{\bar{\velo}}$ over $f$ and its four donors (at least the
 smallest normal floating-point number); the row takes the smaller of this
 weight and the diagonal-dominance bound~\cref{eq:projection:dominant-slope}
-below. For a kinematic interface the first term of $w_f$ is the speed at
-which it crosses $f$; the second, the sliding speed, is the speed at which
-phases with different tangential velocities slide past the staircase in
-which an inclined interface crosses the rows of axis-$k$ faces (one step
-every $h\abs{\normalstag_{f,t}/\normalstag_{f,k}}$ along $k$; \emph{Why the
-limiter} below). $\slopeweight_f$ is evaluated from the
+below. The default \code{limiter=:normal} uses
+$w_f=\abs{\bar{\velo}_f\cdot\normalstag_f}$, the speed at which a kinematic
+interface crosses $f$. The optional \code{limiter=:sliding} instead uses
+\[
+  w_f=\max\curlypar{\abs{\bar{\velo}_f\cdot\normalstag_f},\;
+    \abs{\velo^{\gas}_f-\velo^{\liq}_f}\,\abs{\normalstag_{f,k}}}.
+\]
+The second term measures phases sliding past the staircase in which an
+inclined interface crosses the rows of axis-$k$ faces (one step every
+$h\abs{\normalstag_{f,t}/\normalstag_{f,k}}$ along $k$; \emph{Why the limiter}
+below). $\slopeweight_f$ is evaluated from the
 state that the projection receives (in a step the predictor
 $\velo^{\stage{3}}$, after a regrid the transferred state; no history), is
 the same for both phases (label symmetric) and is frozen in the row:
@@ -661,11 +664,11 @@ velocity, jump and pressure-gradient columns all use it, so a single-valued
 gradient is removed exactly for any $\slopeweight_f$; without a staggered
 normal or a mixture velocity, $\slopeweight_f=1$. The workspace keeps
 $\slopeweight_f$ with the rows of the reconstructed interface: a further
-projection with the same interface reuses it, so the projection stays
-idempotent (a projected state is projected onto itself to round-off;
-evaluated again from the projected state, $\slopeweight_f$ changed it by
-$0.26$, $0.11$, $0.21$ of the velocity scale over three repetitions on a
-tilted interface). A flow releases the frozen weights before each of its
+projection with the same interface and limiter reuses it, so the projection
+stays idempotent. In the tilted-interface sliding-limiter fixture,
+reevaluating the weights from the projected state instead would change it by
+$0.26$, $0.11$, $0.21$ of the velocity scale over three repetitions.
+A flow releases the frozen weights before each of its
 projections, so each step evaluates them from its own predictor. The
 smoothstep makes $\slopeweight_f$ a continuous function of that state, so the
 rows do not switch in time.
@@ -716,10 +719,10 @@ carries over the crest and the trough. The band depends neither on the time
 step nor on regrids, needs no interface motion (a wave held at constant
 amplitude by $\mathrm{We}+\mathrm{Bo}=1$ grows the same band) and grows under
 refinement ($0.088$, $0.198$, $1.04$ in the liquid at $t=T$ on levels $3$,
-$4$, $5$). The sliding speed in $w_f$ gives these rows the one-donor rule:
-$0.12$ and $0.20$ at $2T$ (level $5$: $0.23$ and $0.34$, against $6.2$ and
-$8.4$). It vanishes for a continuous velocity, so resolved shear layers keep
-the third-order inference. Stability requires only
+$4$, $5$). With \code{limiter=:sliding} the extra speed in $w_f$ gives these
+rows the one-donor rule: $0.12$ and $0.20$ at $2T$ (level $5$: $0.23$ and
+$0.34$, against $6.2$ and $8.4$). It vanishes for a continuous velocity.
+The normal-speed-only limiter stays the default. Stability requires only
 $\sup\slopeweight_k<1$ at the last write of every swept face, uniformly in
 $n$; it fixes no threshold. A law in the change of the staggered fraction per
 step cannot provide that bound with a fixed constant: at the exit corner of
@@ -865,10 +868,10 @@ tangential jump $\pm2hU'$ in a resolved shear layer. The default
 \apitype{LinearJumpInference} extrapolates linearly from two donors
 (\cref{eq:projection:cmdgfm-row-linear}), blended back to one donor by the
 crossing-speed limiter~\cref{eq:projection:crossing-limiter} where the
-interface moves through the face or the phases slide past each other along
-it, and adds the tangential and normal
+interface moves through the face, and adds the tangential and normal
 rows~\cref{eq:projection:tangential-row,eq:projection:normal-row} for faces
-the thesis leaves without a condition. \apitype{ConstantJumpInference}
+the thesis leaves without a condition. \code{LinearJumpInference(limiter=:sliding)}
+extends the limiter to relative phase motion. \apitype{ConstantJumpInference}
 keeps the thesis' rule.
 \end{deviation}
 

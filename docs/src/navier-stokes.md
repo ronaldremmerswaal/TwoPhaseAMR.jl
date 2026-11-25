@@ -268,19 +268,20 @@ each phase linearly from two donors, so a resolved shear layer keeps its
 velocity continuous across the interface (the published one-donor rule,
 `CMDGFMProjection(jump_inference=ConstantJumpInference())`, creates a
 tangential phase-velocity jump of order `2U'h` there, issue #171). Where the
-interface moves through a face, or where the phases slide past each other
-along an inclined interface, a ramp in the crossing speed `w/U` blends the
-extrapolation back to one donor (`w` is the larger of the normal mixture speed
-and the sliding speed `|u_g,a - u_l,a| |n_a|` along the face's axis `a`, `U`
-the local mixture speed, ramp `[1/32, 3/32]`): the values that a sweeping
-interface leaves behind, or that a sliding phase carries from step to step of
-the interface staircase, would otherwise accumulate the extrapolation slope.
-The weight is
-evaluated once from the state the projection receives (a step's predictor)
-and kept with the rows of that interface, so projecting a projected state
-again changes nothing; it is also capped, with the interpolation weight `β` of
-the row lowered accordingly, so that the jump block stays weakly diagonally
-dominant. Mixed faces without
+interface moves through a face, a ramp in the crossing speed `w/U` blends the
+extrapolation back to one donor (`w = |ū · n|`, `U` the local mixture speed,
+ramp `[1/32, 3/32]`). The optional sliding limiter sets `w` to the larger of
+the normal mixture speed and `|u_g,a - u_l,a| |n_a|` along the face's axis `a`.
+This also limits extrapolation where phases slide past an inclined interface
+that barely moves. To opt in, pass
+`CMDGFMProjection(jump_inference=LinearJumpInference(limiter=:sliding))` as the
+`pressure_projection` of `TwoVelocityModel`. `limiter=:normal` is the default.
+The sliding option reduces late-time grid-scale vorticity in the interfacial
+instability example but can increase jump errors against exact solutions.
+Both limiters evaluate the weight from the predictor and freeze it for
+repeated projections on the same interface with the same limiter. Each flow
+step evaluates it again. The weight is also capped, and the interpolation
+weight `β` lowered, to keep the jump block weakly diagonally dominant. Mixed faces without
 a regular row get a row that removes the interpolated normal jump (or, for a
 normal closer to the transverse axis, a `β = 0` row), and faces with an exactly
 tangential normal get a `β = 0` row imposed as an increment of their own jump.

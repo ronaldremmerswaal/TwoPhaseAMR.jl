@@ -449,7 +449,7 @@ end
     dt, tolerance, budget = 0.01, 1.0e-10, 20_000
     # The published rows (#126) and the default linear inference, whose normal
     # and tangential rows give the faces without a published row an unknown.
-    sizes = Dict(ConstantJumpInference() => (7933, 382, 17:19), LinearJumpInference() => (8151, 600, 19:21))
+    sizes = Dict(ConstantJumpInference() => (7933, 382, 17:19), LinearJumpInference() => (8151, 600, 10:12))
     for preconditioner in (:block, :ilu), jump_inference in (ConstantJumpInference(), LinearJumpInference())
         solver = CMDGFMProjectionSolver(
             interface; density = (1000.0, 1.0), preconditioner, jump_inference,
@@ -473,10 +473,7 @@ end
             # the jump factor was the ILU of J; with the ILU of the local
             # Schur complement J - C D⁻¹ B it takes 18 and 19 (#171), 18
             # and 11 with the crossing ramp (1/32, 3/32) (fewer extrapolated
-            # rows on this fixture), and 18 and 20 with the sliding speed in
-            # the crossing speed: the predictor's phase jump (0.37 along x,
-            # -0.21 along y) slides along the drop, and the sliding speed
-            # lowers the slope weights of its rows.
+            # rows on this fixture).
             println("cmdgfm_126_block_iterations ", jump_inference, " ", stats.iterations)
             @test stats.iterations in block_iterations
         end

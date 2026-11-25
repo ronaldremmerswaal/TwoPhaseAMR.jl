@@ -225,6 +225,9 @@ end
     n = 32
     mesh = BlockTreeMesh(; base_mesh = (n, n), block_size = (8, 8), periodic = (true, true))
     lower, upper = CJI._CMDGFM_CROSSING_RAMP
+    normal_inference = LinearJumpInference()
+    sliding_inference = LinearJumpInference(; limiter = :sliding)
+    @test_throws ArgumentError LinearJumpInference(; limiter = :unknown)
     @test (lower, upper) == (1 / 32, 3 / 32)
     ramp(r) = (s = clamp((r - lower) / (upper - lower), 0.0, 1.0); 1 - s^2 * (3 - 2s))
     weights = map((1, -1)) do label
@@ -249,10 +252,10 @@ end
         @test all(
             stencil -> stencil.gas_extrapolation_face == 0 ? stencil.slope == 1 :
                 stencil.slope == min(1.0, cap(stencil)),
-            CJI._cmdgfm_limit_extrapolation!(copy(stencils), data, rest, interface),
+            CJI._cmdgfm_limit_extrapolation!(copy(stencils), data, rest, interface, normal_inference),
         )
         translation = ntuple(_ -> FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ? 1.0 : 0.0), 2)
-        limited = CJI._cmdgfm_limit_extrapolation!(stencils, data, translation, interface)
+        limited = CJI._cmdgfm_limit_extrapolation!(copy(stencils), data, translation, interface, normal_inference)
         slopes = Dict{Int, Float64}()
         for stencil in limited
             stencil.gas_extrapolation_face > 0 || continue
@@ -275,8 +278,10 @@ end
             ), 2,
         )
         incidence = CJI._cmdgfm_incident_faces(mesh)
+        normal_rows = CJI._cmdgfm_limit_extrapolation!(copy(stencils), data, sliding, interface, normal_inference)
+        normal_slopes = Dict(stencil.face => stencil.slope for stencil in normal_rows)
         x_rows = larger_alone = 0
-        for stencil in CJI._cmdgfm_limit_extrapolation!(copy(stencils), data, sliding, interface)
+        for stencil in CJI._cmdgfm_limit_extrapolation!(copy(stencils), data, sliding, interface, sliding_inference)
             stencil.gas_extrapolation_face > 0 && mesh.faces[stencil.face].axis == 1 || continue
             @test stencil.slope ≈ slopes[stencil.face] atol = 1.0e-12
             x_rows += 1
@@ -285,6 +290,7 @@ end
                 stencil.face, data, sliding[1].interior, sliding[2].interior, mesh, incidence,
             )
             alone = min(ramp(abs(mixture[1] * normal[1] + mixture[2] * normal[2])), cap(stencil))
+            @test normal_slopes[stencil.face] ≈ alone atol = 1.0e-12
             alone > stencil.slope + 0.1 && (larger_alone += 1)
         end
         @test x_rows > 4
@@ -555,18 +561,22 @@ end
     graph = _triangle(0.5 + 0.37 / n, 0.3)
     mesh = BlockTreeMesh(; base_mesh = (n, n), block_size = (8, 8), periodic = (true, false))
     interface = InterfaceField(mesh, (x, y) -> y - graph[1](x); lipschitz = 1)
-    solver = CMDGFMProjectionSolver(
-        interface; density = (10.0, 1.0), jump_inference = LinearJumpInference(),
-    )
+    inference = LinearJumpInference(; limiter = :sliding)
+    density = (10.0, 1.0)
+    solver = CMDGFMProjectionSolver(interface; density, jump_inference = inference)
     workspace = CMDGFMProjectionWorkspace(solver)
-    velocity = (
-        FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ? sinpi(2y) : 0.3cospi(2x)),
-        FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ? 0.1 + sinpi(2y) : 0.0),
-    )
-    foreach(phase -> fill!(velocity[phase].boundary, 0.0), 1:2)
+    function initial_velocity()
+        fields = (
+            FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ? sinpi(2y) : 0.3cospi(2x)),
+            FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ? 0.1 + sinpi(2y) : 0.0),
+        )
+        foreach(phase -> fill!(fields[phase].boundary, 0.0), 1:2)
+        return fields
+    end
+    velocity = initial_velocity()
     data = CJI._projection_face_data(solver, workspace)
     stencils = filter(stencil -> stencil.resolved, CJI._cmdgfm_jump_stencils(solver, data))
-    predictor = CJI._cmdgfm_limit_extrapolation!(copy(stencils), data, velocity, interface)
+    predictor = CJI._cmdgfm_limit_extrapolation!(copy(stencils), data, velocity, interface, inference)
     @test any(stencil -> 0 < stencil.slope < 1, predictor)
     weights(rows) = Dict(
         stencil.face => stencil.slope for stencil in rows if stencil.gas_extrapolation_face > 0
@@ -596,7 +606,7 @@ end
     end
     # Released (as a flow does before each projection), the weights are
     # evaluated again, from the projected state.
-    projected = CJI._cmdgfm_limit_extrapolation!(copy(stencils), data, velocity, interface)
+    projected = CJI._cmdgfm_limit_extrapolation!(copy(stencils), data, velocity, interface, inference)
     CJI._cmdgfm_release_crossing!(workspace)
     @test project!(
         velocity, CellField(mesh), solver, 1.0, workspace;
@@ -604,6 +614,21 @@ end
     ).converged
     @test slopes(workspace) == weights(projected)
     @test slopes(workspace) != weights(predictor)
+
+    # Reusing the same workspace and reconstruction with another limiter
+    # must not inherit the previous limiter's frozen coefficients.
+    normal = CMDGFMProjectionSolver(interface; density)
+    normal_rows = CJI._cmdgfm_limit_extrapolation!(
+        copy(stencils), data, initial_velocity(), interface, normal.jump_inference,
+    )
+    @test weights(normal_rows) != weights(predictor)
+    for (policy, rows) in ((normal, normal_rows), (solver, predictor))
+        @test project!(
+            initial_velocity(), CellField(mesh), policy, 1.0, workspace;
+            tolerance, max_iterations = 4000, warm_start = false,
+        ).converged
+        @test slopes(workspace) == weights(rows)
+    end
 end
 
 @testset "Linear jump inference: a resolved shear layer stays continuous in a flow" begin
