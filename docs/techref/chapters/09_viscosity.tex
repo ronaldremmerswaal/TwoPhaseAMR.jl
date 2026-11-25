@@ -745,6 +745,48 @@ $9.76\times10^{-5},\,2.65\times10^{-5},\,6.99\times10^{-6}$
 and a fluid extrapolation in the adjacent Green remainder instead gave
 $6.57\times10^{-5}$ at $n=128$ and order $1.03$.
 
+\paragraph{Cost of a thin Cartesian free-slip gap.}
+If a wall runs parallel, or nearly parallel, to a box side only one to
+two cells away, successive Green remainders may share traces along the
+entire side. Eliminating them jointly is then nonlocal: on a patch with
+$r$ stress rows and $f$ faces the stiffness contains a dense $f\times f$
+block. This is a consequence of the exact minimum, not a cutoff in the
+closure. With $S=W^{1/2}E_{\mathrm{patch}}$ after projection,
+\srcsym{src/two_phase/diffusion/variable_diffusion_box_traces.jl}{_ls_add_box_stiffness!}
+forms $S^\top S$ in a preallocated block and adds one triangle to both
+orientations of the sparse stiffness. Ordinary stress rows retain their
+separate sparse refresh map. For a strip with $r,f$ and trace rank all
+proportional to the side length in cells, the stored patch data now grow
+quadratically, not cubically. Dense arithmetic still costs cubic work
+per refresh. The strip regression checks storage, nesting, and agreement
+with fresh assembly after changing the viscosity:
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{LS-STAG thin-gap FreeSlip box traces are compact and refresh exactly}.
+
+For a straight $1.5h$ fluid strip on a uniform $n\times n$ mesh (blocks of
+$4\times4$, viscosity pair $2.5,0.4$), the table gives the complete retained
+patch storage, warm construction time and cumulative construction allocation,
+median of five viscosity refreshes, and stored stiffness entries. Julia
+1.12.7, \texttt{Float64}, and one Julia and BLAS thread were used.
+\begin{center}
+\begin{tabular}{rlrrrrr}
+\toprule
+$n$ & Wall & Patch (MiB) & Build (ms) & Build (MiB) & Refresh (ms) & $\mathrm{nnz}(K)$ \\
+\midrule
+64  & No slip   & 0     & 4.04   & 9.97   & 0.081 & 9\,936 \\
+64  & Free slip & 1.44  & 6.83   & 15.74  & 0.914 & 43\,974 \\
+128 & No slip   & 0     & 15.48  & 40.29  & 0.315 & 36\,304 \\
+128 & Free slip & 5.75  & 29.11  & 62.58  & 5.645 & 178\,054 \\
+256 & No slip   & 0     & 107.06 & 154.33 & 1.317 & 138\,192 \\
+256 & Free slip & 23.00 & 203.97 & 236.72 & 41.726 & 716\,550 \\
+\bottomrule
+\end{tabular}
+\end{center}
+The measured refresh allocated zero bytes in each configuration. At $n=256$ the
+free-slip patch has 513 stress rows, 766 faces and trace rank 257;
+enumerating the row/face/face products previously cost over 6\,GiB for
+the tuples alone. The dense block is substantially cheaper, but it still
+costs more to store and refresh than the no-slip stencil.
+
 This PLIC extension to variable stress is implemented in
 \srcsym{src/two_phase/diffusion/variable_diffusion_ls_stag.jl}{_ls_stress_rows!}.
 One-velocity flow and both two-velocity projections support it with either

@@ -9,14 +9,11 @@ struct _LSBoxPatch{T}
     raw::Matrix{T}                     # strains after the cell-local PLIC elimination
     weighted_basis::Matrix{T}
     sqrt_weights::Vector{T}
-    work::Vector{T}
     slots::Matrix{Int}                 # negative slots refer to the reaction matrix
     transpose_slots::Matrix{Int}
-end
-
-struct _LSBoxTraces{T}
-    patches::Vector{_LSBoxPatch{T}}
-    products::Vector{NTuple{3, Int}}   # stiffness factor slot, its two strain slots
+    weighted_strain::Matrix{T}         # sqrt(W) times the projected strain
+    gram::Matrix{T}                    # dense face-pair block
+    stiffness_slots::Matrix{Int}       # zero when either face is prescribed
 end
 
 function _ls_trace_basis!(B::Matrix{T}) where {T}
@@ -99,7 +96,8 @@ function _ls_box_traces!(construction, nrows)
         push!(
             patches, _LSBoxPatch(
                 stress, faces, basis, raw, similar(basis), Vector{T}(undef, length(stress)),
-                Vector{T}(undef, length(stress)), similar(raw, Int), similar(raw, Int),
+                similar(raw, Int), similar(raw, Int), similar(raw),
+                similar(raw, length(faces), length(faces)), Matrix{Int}(undef, length(faces), length(faces)),
             ),
         )
     end
@@ -115,11 +113,11 @@ function _ls_box_traces!(construction, nrows)
     for patch in patches, col in patch.faces, row in patch.rows
         push!(rows, row); push!(cols, col); push!(vals, zero(T))
     end
-    return isempty(patches) ? nothing : _LSBoxTraces(patches, NTuple{3, Int}[])
+    return isempty(patches) ? nothing : patches
 end
 
 function _ls_box_slots!(traces, strain, strain_transpose, reaction, prescribed)
-    for patch in traces.patches, (j, f) in pairs(patch.faces)
+    for patch in traces, (j, f) in pairs(patch.faces)
         wall = isempty(prescribed) ? 0 : prescribed[f]
         for (i, r) in pairs(patch.rows)
             if iszero(wall)
@@ -134,14 +132,45 @@ function _ls_box_slots!(traces, strain, strain_transpose, reaction, prescribed)
     return nothing
 end
 
-function _ls_box_products!(traces, stiffness, stresses, offsets)
-    for patch in traces.patches, (j, f) in pairs(patch.faces), (k, g) in pairs(patch.faces)
-        (patch.slots[1, j] < 0 || patch.slots[1, k] < 0) && continue
-        entry = _csc_stored_pointer(stiffness, f, g)
-        for (i, r) in pairs(patch.rows)
-            product = _csc_stored_pointer_or_zero(stresses, offsets, r, entry)
-            @assert !iszero(product)
-            push!(traces.products, (product, patch.slots[i, j], patch.slots[i, k]))
+# For the stiffness pattern one representative strain row per patch already
+# contains all its active face pairs. Reserve its shape, but do not accumulate
+# any of its rows into the scalar stiffness-factor map.
+function _ls_box_stiffness_rows(traces, nrows)
+    isnothing(traces) && return nothing
+    kind = zeros(Int8, nrows)
+    for patch in traces
+        for r in patch.rows
+            kind[r] = -1
+        end
+        kind[first(patch.rows)] = 1
+    end
+    return kind
+end
+
+function _ls_box_stiffness_slots!(traces, stiffness)
+    for patch in traces, (j, g) in pairs(patch.faces), (i, f) in pairs(patch.faces)
+        patch.stiffness_slots[i, j] = if patch.slots[1, i] > 0 && patch.slots[1, j] > 0
+            _csc_stored_pointer(stiffness, f, g)
+        else
+            0
+        end
+    end
+    return nothing
+end
+
+function _ls_add_box_stiffness!(traces, stiffness)
+    values = nonzeros(stiffness)
+    for patch in traces
+        S = patch.weighted_strain
+        mul!(patch.gram, transpose(S), S)
+        # Scatter one triangle to both orientations for exact symmetry.
+        # Different patches and ordinary stresses may share a CSC slot.
+        @inbounds for j in axes(S, 2), i in 1:j
+            p = patch.stiffness_slots[i, j]
+            iszero(p) && continue
+            value = patch.gram[i, j]
+            values[p] += value
+            i == j || (values[patch.stiffness_slots[j, i]] += value)
         end
     end
     return nothing
@@ -152,8 +181,8 @@ end
 # the condition number. All work arrays and CSC slots survive VOF updates.
 function _ls_update_box_strain!(traces, strain, strain_transpose, reaction, weights)
     values, tvalues, rvalues = nonzeros(strain), nonzeros(strain_transpose), nonzeros(reaction)
-    for patch in traces.patches
-        Q, w, work = patch.weighted_basis, patch.sqrt_weights, patch.work
+    for patch in traces
+        Q, w = patch.weighted_basis, patch.sqrt_weights
         @inbounds for (i, r) in pairs(patch.rows)
             w[i] = sqrt(weights[r])
         end
@@ -170,6 +199,7 @@ function _ls_update_box_strain!(traces, strain, strain_transpose, reaction, weig
             q ./= norm(q)
         end
         for j in axes(patch.raw, 2)
+            work = view(patch.weighted_strain, :, j)
             @inbounds for i in eachindex(w)
                 work[i] = w[i] * patch.raw[i, j]
             end

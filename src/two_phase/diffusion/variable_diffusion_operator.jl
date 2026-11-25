@@ -206,8 +206,12 @@ function _variable_staggered_diffusion(
     stiffness = _symmetric_stiffness!(
         stiffness_pointers, stiffness_stresses, stiffness_factors,
         stiffness_refresh_offsets, cache, strain, strain_transpose, weights,
+        _ls_box_stiffness_rows(box_traces, length(weights)),
     )
-    isnothing(box_traces) || _ls_box_products!(box_traces, stiffness, stiffness_stresses, stiffness_refresh_offsets)
+    if !isnothing(box_traces)
+        _ls_box_stiffness_slots!(box_traces, stiffness)
+        _ls_add_box_stiffness!(box_traces, stiffness)
+    end
     volumes = isnothing(reuse) ? T[] : reuse.volumes
     resize!(volumes, length(mesh.faces))
     if isnothing(geometry)
@@ -303,12 +307,8 @@ function _update_log_dynamic_viscosity!(
             box_traces, operator.strain, operator.strain_transpose,
             operator.wall_reaction_strain, operator.stress_weights,
         )
-        coefficients = nonzeros(operator.strain)
-        for (p, i, j) in box_traces.products
-            @inbounds operator.stiffness_factors[p] = coefficients[i] * coefficients[j]
-        end
     end
-    isempty(operator.stiffness_pointers) && return operator
+    isempty(operator.stiffness_pointers) && isnothing(box_traces) && return operator
     stiffness_values = nonzeros(operator.stiffness)
     offsets = operator.stiffness_refresh_offsets
     @_parallel for pointer in 1:length(stiffness_values)
@@ -320,6 +320,7 @@ function _update_log_dynamic_viscosity!(
         end
         @inbounds stiffness_values[pointer] = value
     end
+    isnothing(box_traces) || _ls_add_box_stiffness!(box_traces, operator.stiffness)
     return operator
 end
 

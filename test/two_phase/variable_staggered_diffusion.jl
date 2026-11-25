@@ -2246,3 +2246,81 @@ end
     @test log2(errors[1] / errors[3]) / 2 >= 1.8
     @test log2(errors[2] / errors[3]) >= 1.8
 end
+
+@testset "LS-STAG thin-gap FreeSlip box traces are compact and refresh exactly" begin
+    n = 64
+    mesh = BlockTreeMesh(;
+        base_mesh = (n, n), block_size = (4, 4), periodic = (false, false),
+    )
+    # A 1.5-cell fluid gap separates x=0 from the parallel embedded solid.
+    geometry = GeometryField(mesh, (x, y) -> 1.5 / n - x; lipschitz = 1.0)
+    lower = InterfaceField(mesh, (x, y) -> y - 0.5; geometry, lipschitz = 1.0)
+    crossing = InterfaceField(
+        mesh, (x, y) -> y - 0.25 + 0.05x; geometry, lipschitz = hypot(1.0, 0.05),
+    )
+    initial = (lower, (2.5, 0.4))
+    states = ((crossing, (0.35, 1.9)), initial)
+    construct(field, viscosity, boundary) =
+        StaggeredDiffusionOperator(field; viscosity, boundary, closure = LSStagClosure())
+    free = construct(initial..., FreeSlip())
+    patches = free.box_traces
+    @test patches isa Vector
+    @test any(p -> min(length(p.rows), length(p.faces)) >= n ÷ 2, patches)
+    patch_rows = falses(length(free.stress_weights))
+    for patch in patches
+        @test size(patch.basis, 1) == length(patch.rows)
+        @test 0 < size(patch.basis, 2) <= length(patch.rows)
+        patch_rows[patch.rows] .= true
+    end
+    # Count all retained arrays, including coefficient/CSC-slot matrices and
+    # both trace bases. The old 24-byte tuples per (row,face,face) exceed
+    # this quadratic envelope by more than an order of magnitude at n=64.
+    entries = sum(p -> length(p.rows) * length(p.faces) + length(p.faces)^2, patches)
+    @test Base.summarysize(patches) <= 16 * sizeof(Int) * entries + 4096 * (1 + length(patches))
+    @test !any(row -> patch_rows[row], free.stiffness_stresses)
+
+    peak(A) = maximum(abs, nonzeros(A); init = 0.0)
+    for (field, viscosity) in states
+        old_weights = free.stress_weights[patch_rows]
+        old_strain, old_stiffness = copy(free.strain), copy(free.stiffness)
+        TwoPhaseAMR._update_dynamic_viscosity!(free, field, viscosity)
+        fresh = construct(field, viscosity, FreeSlip())
+        @test free.stress_weights[patch_rows] != old_weights
+        @test peak(free.strain - old_strain) > 0
+        @test peak(free.stiffness - old_stiffness) > 1.0e-6 * peak(fresh.stiffness)
+        for name in (:strain, :stiffness, :wall_reaction_strain)
+            actual, expected = getproperty(free, name), getproperty(fresh, name)
+            @test actual.colptr == expected.colptr
+            @test rowvals(actual) == rowvals(expected)
+            @test peak(actual - expected) <= 512eps() * max(1.0, peak(expected))
+        end
+        @test free.dirichlet_faces == fresh.dirichlet_faces
+        @test free.stress_weights ≈ fresh.stress_weights rtol = 64eps()
+        @test free.stiffness_factors == fresh.stiffness_factors
+        @test free.stiffness_stresses == fresh.stiffness_stresses
+        @test free.stiffness_pointers == fresh.stiffness_pointers
+        @test free.stiffness_refresh_offsets == fresh.stiffness_refresh_offsets
+        for op in (free, fresh)
+            E, K = op.strain, op.stiffness
+            @test op.strain_transpose == transpose(E)
+            @test issymmetric(K)
+            @test peak(K - transpose(E) * (Diagonal(op.stress_weights) * E)) <=
+                1024eps() * peak(K)
+        end
+
+        no_slip = construct(field, viscosity, NoSlip())
+        @test isnothing(no_slip.box_traces)
+        loss = dropzeros!(no_slip.stiffness - free.stiffness)
+        @test issymmetric(loss)
+        @test peak(loss) > 1.0e-6 * peak(no_slip.stiffness)
+        # All other columns (and by symmetry rows) vanish exactly. This
+        # principal block has the full nonzero spectrum; no mode is sampled
+        # or discarded by a numerical support threshold.
+        support = findall(c -> !isempty(nzrange(loss, c)), axes(loss, 2))
+        @test 0 < length(support) <= 16n
+        if 0 < length(support) <= 16n
+            @test eigmin(Symmetric(Matrix(loss[support, support]))) >=
+                -1024eps() * peak(no_slip.stiffness)
+        end
+    end
+end

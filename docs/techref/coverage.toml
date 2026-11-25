@@ -1175,7 +1175,8 @@ sources = [
   { file = "src/two_phase/diffusion/variable_diffusion_ls_stag.jl", symbol = "_ls_stress_line" },
   { file = "src/two_phase/diffusion/variable_diffusion_ls_stag.jl", symbol = "_ls_stress_cell!" },
   { file = "src/two_phase/diffusion/variable_diffusion_ls_stag.jl", symbol = "_ls_stress_slip!" },
-  { file = "src/two_phase/diffusion/variable_diffusion_box_traces.jl", symbol = "_ls_update_box_strain!" }
+  { file = "src/two_phase/diffusion/variable_diffusion_box_traces.jl", symbol = "_ls_update_box_strain!" },
+  { file = "src/two_phase/diffusion/variable_diffusion_box_traces.jl", symbol = "_ls_add_box_stiffness!" }
 ]
 tests = [
   { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "LS-STAG two-phase stress rows are exact at a sloping solid" },
@@ -1183,6 +1184,7 @@ tests = [
   { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "LS-STAG tilted FreeSlip keeps a rigid tangent local null mode" },
   { file = "test/indicator/geometry.jl", testset = "Embedded free slip omits only physical wall-shear stresses" },
   { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "LS-STAG NoSlip Helmholtz convergence at box-boundary T-junction" },
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "LS-STAG thin-gap FreeSlip box traces are compact and refresh exactly" },
   { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "LS-STAG free-slip energy nests at terminating grid lines" },
   { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Uncondensed LS-STAG FreeSlip rows reproduce the PLIC tangent" }
 ]
