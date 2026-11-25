@@ -19,6 +19,7 @@ rather than a time-dependent flow.
 | 10 | [Stokes wave](10_stokes3_wave/) | Nonlinear free-surface wave | One velocity | Level 5, one period; unmeasured |
 | 11 | [Large gas-pocket impact](11_lgpi/) | Gravity wave over bathymetry | Two velocity | Level 4, 1.2 gravity periods; unmeasured (gallery level-3 run 1872 s) |
 | 12 | [Manufactured Poisson](12_manufactured_poisson/) | Pressure projection with density jump | Two velocity | 32×32; 11.86 s setup and solve |
+| 15 | [Forced sloshing](15_sloshing/) | Shaken tank, baffle as an exact polygon | One velocity | Level 2, T=10; 975 steps, 49.8 s |
 
 Warm timings are second calls in one process; first-call compilation is
 additional. See each page for docs-size runs and validation details.
