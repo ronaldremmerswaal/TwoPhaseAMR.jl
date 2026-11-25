@@ -2692,7 +2692,21 @@ end
     @test _pw_eigmin(Float64.(mixed.stiffness - build(FreeSlip()).stiffness)) >= -4096eps(T) * scale
 end
 
-@testset "LS-STAG per-side thin-gap traces refresh exactly without allocating" begin
+# Keep the allocation check in compiled code and exclude threaded launcher metadata.
+function _pw_thin_gap_refresh_allocations(operator, lower, crossing)
+    grain = TwoPhaseAMR._PARALLEL_GRAIN
+    previous = grain[]
+    try
+        grain[] = typemax(Int)
+        TwoPhaseAMR._update_dynamic_viscosity!(operator, lower, (2.5, 0.4))
+        TwoPhaseAMR._update_dynamic_viscosity!(operator, crossing, (0.35, 1.9))
+        return @allocated TwoPhaseAMR._update_dynamic_viscosity!(operator, lower, (2.5, 0.4))
+    finally
+        grain[] = previous
+    end
+end
+
+@testset "LS-STAG per-side thin-gap traces refresh exactly with no serial allocations" begin
     n = 32
     mesh = BlockTreeMesh(; base_mesh = (n, n), block_size = (4, 4), periodic = (false, false))
     # A 1.5-cell fluid gap runs along the left side.
@@ -2728,8 +2742,7 @@ end
         @test 0 < length(support) <= 16n
         @test _pw_eigmin(loss[support, support]) >= -1024eps() * peak(no_slip.stiffness)
     end
-    TwoPhaseAMR._update_dynamic_viscosity!(operator, crossing, (0.35, 1.9))
-    @test @allocated(TwoPhaseAMR._update_dynamic_viscosity!(operator, lower, (2.5, 0.4))) == 0
+    @test _pw_thin_gap_refresh_allocations(operator, lower, crossing) == 0
 end
 
 @testset "Per-side walls key the variable diffusion hierarchy" begin
