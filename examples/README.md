@@ -2,8 +2,9 @@
 
 These standalone examples each define `run_example` and run headlessly by
 default. The tables on each page describe physical parameters, algorithms,
-validation and cost. The manufactured Poisson case is a static projection
-rather than a time-dependent flow.
+validation and cost. The manufactured Poisson projection that used to be
+example 12 is now case T7 of the two-velocity verification suite
+(`benchmark/two_velocity`).
 
 | # | Example | Physics | Default model | Default cost |
 | --- | --- | --- | --- | --- |
@@ -18,7 +19,6 @@ rather than a time-dependent flow.
 | 09 | [Sloped sessile droplet](09_sloped_sessile_droplet/) | Embedded inclined wall | One velocity | Level 2, four capillary times; unmeasured at this size (level-3 gallery run 93.79 s) |
 | 10 | [Stokes wave](10_stokes3_wave/) | Nonlinear free-surface wave | One velocity | Level 5, one period; unmeasured |
 | 11 | [Large gas-pocket impact](11_lgpi/) | Gravity wave over bathymetry | Two velocity | Level 4, 1.2 gravity periods; unmeasured (gallery level-3 run 1872 s) |
-| 12 | [Manufactured Poisson](12_manufactured_poisson/) | Pressure projection with density jump | Two velocity | 32×32; 11.86 s setup and solve |
 
 Warm timings are second calls in one process; first-call compilation is
 additional. See each page for docs-size runs and validation details.
@@ -46,8 +46,7 @@ To run an example directly, for example,
 Most flow examples return `(; flow, result, recorder, app)`; keyframes are
 available via `snapshot_store(run.recorder)`. Vortex reversal returns its
 interface, prescribed velocity, result, recorder and app. LGPI returns its
-flow, result and recorder, while manufactured Poisson returns its projection
-fields, errors and a `registry`. For most cases, a low `max_level` and short
+flow, result and recorder. For most cases, a low `max_level` and short
 `final_time` make a quick initial run.
 
 ## Studio

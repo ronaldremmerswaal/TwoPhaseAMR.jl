@@ -11,6 +11,7 @@ remain outside the test tree.
 | performance contracts | `test/performance` | allocation and hot-kernel regression checks |
 | thread equivalence | `test/threading_equivalence.jl` | bitwise 1/2/4-thread comparison of complete flows and their warm-step allocations |
 | benchmarks | `benchmark` | machine-local timing and allocation measurements |
+| two-velocity verification | `benchmark/two_velocity` | the two-velocity projections against exact answers and a recorded baseline; see [Two-velocity verification](two-velocity-verification.md) |
 
 Run the standard suite with:
 
