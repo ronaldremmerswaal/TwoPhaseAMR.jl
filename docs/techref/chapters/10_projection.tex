@@ -633,19 +633,27 @@ the sheet strength there (relative error $0.085$ at the density ratio
 $1000$), the row gives $0.010$ (thesis rows $0.142$).
 (iv)~Crossing-speed limiter: the slope weight of a row with second donors is
 \begin{equation}\label{eq:projection:crossing-limiter}
+  \begin{gathered}
   \slopeweight_f=1-s^2(3-2s),\qquad
   s=\min\curlypar{1,\max\curlypar{0,\frac{w_f/U_f-a}{b-a}}},\qquad
-  w_f=\abs{\bar{\velo}_f\cdot\normalstag_f},\quad
-  (a,b)=\roundpar{\tfrac1{32},\tfrac3{32}},
+  (a,b)=\roundpar{\tfrac1{32},\tfrac3{32}},\\
+  w_f=\max\curlypar{\abs{\bar{\velo}_f\cdot\normalstag_f},\;
+    \abs{\velo^{\gas}_f-\velo^{\liq}_f}\,\abs{\normalstag_{f,k}}},
+  \end{gathered}
 \end{equation}
 with the mixture velocity vector $\bar{\velo}_f$ of the face (its own
 mass-weighted mixture velocity along axis $k$, the mean of the mixture
-velocities of the axis-$t$ faces of its two cells along $t$), and $U_f$ the
+velocities of the axis-$t$ faces of its two cells along $t$), the phase
+velocities $\velo^{\phase}_f$ of $f$ along axis $k$, and $U_f$ the
 largest $\abs{\bar{\velo}}$ over $f$ and its four donors (at least the
 smallest normal floating-point number); the row takes the smaller of this
 weight and the diagonal-dominance bound~\cref{eq:projection:dominant-slope}
-below. For a kinematic interface $w_f$ is
-the speed at which it crosses $f$. $\slopeweight_f$ is evaluated from the
+below. For a kinematic interface the first term of $w_f$ is the speed at
+which it crosses $f$; the second, the sliding speed, is the speed at which
+phases with different tangential velocities slide past the staircase in
+which an inclined interface crosses the rows of axis-$k$ faces (one step
+every $h\abs{\normalstag_{f,t}/\normalstag_{f,k}}$ along $k$; \emph{Why the
+limiter} below). $\slopeweight_f$ is evaluated from the
 state that the projection receives (in a step the predictor
 $\velo^{\stage{3}}$, after a regrid the transferred state; no history), is
 the same for both phases (label symmetric) and is frozen in the row:
@@ -656,7 +664,7 @@ $\slopeweight_f$ with the rows of the reconstructed interface: a further
 projection with the same interface reuses it, so the projection stays
 idempotent (a projected state is projected onto itself to round-off;
 evaluated again from the projected state, $\slopeweight_f$ changed it by
-$0.36$, $0.12$, $0.024$ of the velocity scale over three repetitions on a
+$0.26$, $0.11$, $0.21$ of the velocity scale over three repetitions on a
 tilted interface). A flow releases the frozen weights before each of its
 projections, so each step evaluates them from its own predictor. The
 smoothstep makes $\slopeweight_f$ a continuous function of that state, so the
@@ -686,7 +694,32 @@ stable uniformly in $n$: a drop of radius $0.2$ translated at $U=1$ through
 a periodic channel (density ratio $1000$, $\sigma=0.2$, inviscid, $t=1$)
 reaches $\max\abs{\velo-U}=1.09$, $3.85$, $4.14$ at $n=32,64,128$, against
 $0.180$, $0.205$, $0.343$ for the one-donor rule; the error first grows on
-rows with second donors in the wake of the drop. Stability requires only
+rows with second donors in the wake of the drop. The same recursion runs
+without any motion of the interface. Phases with different tangential
+velocities cannot both move with an inclined interface that stays in place:
+one of them slides past the staircase in which the interface crosses the rows
+of axis-$k$ faces, and where it flows out of the staircase into its row it
+advects the value that a row writes at a step into the first donor of the
+next step's row, one write per step passed. Example~07 shows it (density
+ratio $3$, $\mathrm{We}=0.5$, $\mathrm{Bo}=0.75$, inviscid, level $4$, run to
+twice its default time, $2T=5.27$). The wave grows slowly, so with the first
+term of $w_f$ alone $97\,\%$ of its rows stay below $\frac1{32}$ until $t=1.5$
+and keep $\slopeweight_f=1$, while the gas ($+0.195$) and the liquid
+($-0.065$) slide along the interface. On the trough-to-crest flank, where both
+flow out of the staircase, a band of grid-scale vorticity builds up in the
+resolved phase velocities, visible as streaks in both components: the RMS of
+the phase vorticity over the vertices whose four faces carry resolved values
+of the phase is $1.44$ in the liquid and $2.74$ in the gas at $2T$, against
+$0.13$ and $0.22$ for the one-donor rows and $0.063$ and $0.17$ with
+\apitype{MimeticProjection}. The other flank only receives what the flow
+carries over the crest and the trough. The band depends neither on the time
+step nor on regrids, needs no interface motion (a wave held at constant
+amplitude by $\mathrm{We}+\mathrm{Bo}=1$ grows the same band) and grows under
+refinement ($0.088$, $0.198$, $1.04$ in the liquid at $t=T$ on levels $3$,
+$4$, $5$). The sliding speed in $w_f$ gives these rows the one-donor rule:
+$0.12$ and $0.20$ at $2T$ (level $5$: $0.23$ and $0.34$, against $6.2$ and
+$8.4$). It vanishes for a continuous velocity, so resolved shear layers keep
+the third-order inference. Stability requires only
 $\sup\slopeweight_k<1$ at the last write of every swept face, uniformly in
 $n$; it fixes no threshold. A law in the change of the staggered fraction per
 step cannot provide that bound with a fixed constant: at the exit corner of
@@ -694,9 +727,11 @@ the dual cell the fraction change vanishes with the Courant number, so the
 constant would have to grow like $\sqrt{n}$ under the capillary step
 restriction (measured). The crossing speed $w_f/U_f$ does not degenerate
 there, and $(a,b)$ is a modelling choice that separates interfaces that sweep
-through the faces from quasi-static ones, whose normal speed comes only from
-slow growth, which keep the third-order inference. \emph{Populations.} The
-crossing ratios $w_f/U_f$ of the rows with second donors, over every
+through the faces, or along which the phases slide, from quasi-static ones
+with a continuous velocity, whose normal speed comes only from slow growth
+and which keep the third-order inference. \emph{Populations.} The ratios
+$\abs{\bar{\velo}_f\cdot\normalstag_f}/U_f$ of the first term (measured before
+the sliding speed was added) of the rows with second donors, over every
 projection of a run: quasi-static---the resolved shear over the tilted
 interfaces of the tests (slope $0.06$ and $\cos$ amplitude $0.01$,
 $n=32$--$128$) at most $0.028$; viscous Kelvin--Helmholtz ($\lambda/h=128$)
@@ -717,8 +752,8 @@ produced), which kept part of the extrapolation, and the wake recursion
 roughened the interface: the RMS of the liquid column
 height minus its Gaussian-smoothed copy ($\sigma=3h$, on the columns at least
 $0.1$ from any column that crosses the interface more than once) was $0.135h$
-at $t=2.25$, with $15\,\%$ more steps, against $0.0044h$ now and $0.0048h$ for
-the one-donor rows. \emph{Sensitivity} ($(a,b)=(c,3c)$): the example~07
+at $t=2.25$, with $15\,\%$ more steps, against $0.0044h$ with $(\frac1{32},\frac3{32})$ and $0.0048h$ for
+the one-donor rows. \emph{Sensitivity} ($(a,b)=(c,3c)$, first term of $w_f$ alone): the example~07
 roughness is $0.135h$, $0.0083h$, $0.0044h$, $0.0039h$, $0.0041h$, $0.0043h$
 for $c=\frac1{16},\frac1{24},\frac1{32},\frac1{48},\frac1{64},\frac1{128}$;
 the jump that the slope-$0.06$ shear creates at $n=128$ is $0.0076$ for
@@ -830,7 +865,8 @@ tangential jump $\pm2hU'$ in a resolved shear layer. The default
 \apitype{LinearJumpInference} extrapolates linearly from two donors
 (\cref{eq:projection:cmdgfm-row-linear}), blended back to one donor by the
 crossing-speed limiter~\cref{eq:projection:crossing-limiter} where the
-interface moves through the face, and adds the tangential and normal
+interface moves through the face or the phases slide past each other along
+it, and adds the tangential and normal
 rows~\cref{eq:projection:tangential-row,eq:projection:normal-row} for faces
 the thesis leaves without a condition. \apitype{ConstantJumpInference}
 keeps the thesis' rule.
@@ -883,7 +919,8 @@ with the dominance cap and $\jumpbeta_f$ \srcsym{src/two_phase/projection/cmdgfm
 and \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_inferred_jump},
 limiter \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_limit_extrapolation!}
 (frozen weights released by \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_release_crossing!})
-with \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_crossing_slope}
+with \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_crossing_slope},
+the sliding speed \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_sliding_speed}
 and the ramp \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_CMDGFM_CROSSING_RAMP}, counts
 \srcsym{src/two_phase/projection/cmdgfm_cache.jl}{CMDGFMInferenceCounts}. Tests:
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: smooth shear across tilted and curved interfaces}
@@ -895,7 +932,8 @@ and the ramp \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_CMDGFM_CROS
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: near-tangential faces without a regular row},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: flat interface and single-valued gradients are exact},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: crossing-speed limiter}
-(the ramp, rest and label symmetry),
+(the ramp, rest, the sliding speed of a light phase moving over a heavy one
+at rest, and label symmetry),
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: the projection is idempotent},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_jump_inference.jl}{Linear jump inference: a translating drop stays at the one-donor level},
 \testsym{test/integration/two_velocity_instabilities.jl}{Two-velocity Kelvin--Helmholtz roll-up stays free of grid-scale ripples}

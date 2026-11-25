@@ -17,11 +17,14 @@ published rows ([`ConstantJumpInference`](@ref)):
   jump and pressure-gradient columns; for a smooth single-valued field and
   `θ = 1` the inferred jump is `O(h³)` instead of `O(h)`;
 - the slope weight `θ ∈ [0, 1]` of a row is one minus a smoothstep of the
-  interface crossing speed `w/U` over the ramp `[1/32, 3/32]`, with `w` the
-  normal component of the mixture velocity at the face and `U` the local
-  mixture speed: an interface that moves through the face (a translating
-  drop, a rolling-up shear layer) gets the one-donor rule, a quasi-static one
-  (a shear layer in its linear regime) the linear extrapolation;
+  crossing speed `w/U` over the ramp `[1/32, 3/32]`, with `w` the larger of
+  the normal component of the mixture velocity at the face and the sliding
+  speed `|u_g,a - u_l,a| |n_a|` of the phases along the face's axis `a`, and
+  `U` the local mixture speed: an interface that moves through the face (a
+  translating drop, a rolling-up shear layer), or along which the phases
+  slide past each other (a vortex sheet over a growing wave), gets the
+  one-donor rule; a quasi-static one with a continuous velocity (a resolved
+  shear layer in its linear regime) keeps the linear extrapolation;
 - a mixed face without a regular row gets a row that makes the interpolated
   normal jump of the projected state vanish where `|n_t| ≤ |n_a|`, and the
   tangential row below where `|n_t| > |n_a|`, instead of keeping its jump;

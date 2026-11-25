@@ -1552,6 +1552,7 @@ tests = [
 label = "eq:projection:crossing-limiter"
 sources = [
   { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_crossing_slope" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_sliding_speed" },
   { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_limit_extrapolation!" },
   { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_CMDGFM_CROSSING_RAMP" },
   { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_release_crossing!" }

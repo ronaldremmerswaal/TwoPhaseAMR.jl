@@ -261,10 +261,14 @@ each phase linearly from two donors, so a resolved shear layer keeps its
 velocity continuous across the interface (the published one-donor rule,
 `CMDGFMProjection(jump_inference=ConstantJumpInference())`, creates a
 tangential phase-velocity jump of order `2U'h` there, issue #171). Where the
-interface moves through a face, a ramp in the crossing speed `w/U` (the normal
-mixture speed over the local mixture speed, `[1/32, 3/32]`) blends the
-extrapolation back to one donor: the values that a sweeping interface leaves
-behind would otherwise accumulate the extrapolation slope. The weight is
+interface moves through a face, or where the phases slide past each other
+along an inclined interface, a ramp in the crossing speed `w/U` blends the
+extrapolation back to one donor (`w` is the larger of the normal mixture speed
+and the sliding speed `|u_g,a - u_l,a| |n_a|` along the face's axis `a`, `U`
+the local mixture speed, ramp `[1/32, 3/32]`): the values that a sweeping
+interface leaves behind, or that a sliding phase carries from step to step of
+the interface staircase, would otherwise accumulate the extrapolation slope.
+The weight is
 evaluated once from the state the projection receives (a step's predictor)
 and kept with the rows of that interface, so projecting a projected state
 again changes nothing; it is also capped, with the interpolation weight `β` of

@@ -1083,31 +1083,45 @@ linear extrapolation the values left behind obey the double-integrator
 recursion `u_{k+1} = 2u_k - u_{k-1} + e_k` (`k` the cells crossed), whose
 noise grows like `k^{3/2}`; any `θ ≤ θ* < 1` at the last write turns it into
 a bounded slope with a random walk of the value, like the one-donor rule.
+The same recursion runs without any interface motion where the phases slide
+past each other along an inclined interface, one write per step of the
+interface staircase passed ([`_cmdgfm_sliding_speed`](@ref)), so the crossing
+speed `w` is the larger of the interface normal speed and the sliding speed.
+Example 07 run to twice its default time (density ratio 3, We 0.5, Bo 0.75,
+level 4) shows the sliding case: with the normal speed alone 97 % of its rows
+stay below 1/32 until `t = 1.5`, keep `θ = 1`, and a band of grid-scale
+vorticity builds up in the resolved phase velocities on the flank where both
+phases flow out of the staircase (RMS 1.44 / 2.74 in the liquid / gas at
+`t = 5.27`; one-donor rows 0.13 / 0.22, with the sliding speed 0.12 / 0.20;
+level 5: 6.2 / 8.4 against 0.23 / 0.34).
 Stability therefore fixes no threshold: the ramp is a modelling choice that
-separates interfaces that sweep through the faces from quasi-static ones whose
-normal speed comes only from slow growth, which keep the third-order
-inference. Measured populations of `w/U` (rows with second donors, every
-projection): quasi-static — a resolved shear over the tilted interfaces of the
-jump-inference tests (slope 0.06, `cos` amplitude 0.01) at most 0.028,
-viscous and density-ratio-1000 Kelvin–Helmholtz in the linear regime about 97 %
-below 1/128, inviscid Kelvin–Helmholtz at density ratio 1 (`n = 32`) 66 %
+separates interfaces that sweep through the faces, or along which the phases
+slide, from quasi-static ones with a continuous velocity, whose normal speed
+comes only from slow growth and which keep the third-order inference.
+Measured populations of the normal part `|ū·n|/U` (rows with second donors,
+every projection, before the sliding speed was added): quasi-static — a
+resolved shear over the tilted interfaces of the jump-inference tests (slope
+0.06, `cos` amplitude 0.01) at most 0.028 (a continuous velocity, no sliding),
+viscous and density-ratio-1000 Kelvin–Helmholtz in the linear regime about
+97 % below 1/128, inviscid Kelvin–Helmholtz at density ratio 1 (`n = 32`) 66 %
 below 1/32, example 07 before roll-up (`t ≤ 0.5`) 89 % below 1/32; sweeping —
 the translating drop and Rayleigh–Taylor at density ratio 3 (medians 0.58 and
 0.37) and example 07 rolling up (inviscid, density ratio 1.2, We 3, level 5,
 `t > 1.5`: median 0.12, 88 % above 1/32). `[1/32, 3/32]` puts `a` above the
-quasi-static rows and `b` below the median of the roll-up. Sensitivity: at
-`a = 1/48` the slope-0.06 shear test loses its third-order jump at `n = 128`
-(0.017 against 0.0076); at `[1/24, 3/24]` the straight part of the rolled-up
-example 07 interface is rough by 0.0083 h RMS at `t = 2.25` and at
-`[1/16, 3/16]` (#199) by 0.135 h with 15 % more steps (one-donor rule 0.0048 h,
-`[1/32, 3/32]` 0.0044 h): there most roll-up rows kept part of the
-extrapolation. The translating drop (density ratio 1000, `n = 128`) gives
-max|u - U| 0.30, 0.28, 0.29, 0.29 for `a = 1/16, 1/32, 1/64, 1/128` (one-donor
-0.34); the viscous Kelvin–Helmholtz growth-rate errors (`λ/h = 128`: 1.89 %,
-0.040 %, 7.56 %) are the same for `a = 1/16` to `1/64`; Rayleigh–Taylor at
-density ratio 3 moves towards the one-donor value (0.0072, 0.0061, 0.0059,
-0.0057; one-donor 0.0056). The smoothstep keeps `θ` a
-continuous function of the velocity, so the rows do not switch in time.
+quasi-static rows and `b` below the median of the roll-up. Sensitivity
+(normal part alone): at `a = 1/48` the slope-0.06 shear test loses its
+third-order jump at `n = 128` (0.017 against 0.0076); at `[1/24, 3/24]` the
+straight part of the rolled-up example 07 interface is rough by 0.0083 h RMS
+at `t = 2.25` and at `[1/16, 3/16]` (#199) by 0.135 h with 15 % more steps
+(one-donor rule 0.0048 h, `[1/32, 3/32]` 0.0044 h): there most roll-up rows
+kept part of the extrapolation. The translating drop (density ratio 1000,
+`n = 128`) gives max|u - U| 0.30, 0.28, 0.29, 0.29 for
+`a = 1/16, 1/32, 1/64, 1/128` (one-donor 0.34); the viscous Kelvin–Helmholtz
+growth-rate errors (`λ/h = 128`: 1.89 %, 0.040 %, 7.56 %) are the same for
+`a = 1/16` to `1/64`; Rayleigh–Taylor at density ratio 3 moves towards the
+one-donor value (0.0072, 0.0061, 0.0059, 0.0057; one-donor 0.0056). The
+smoothstep keeps `θ` a continuous function of the velocity, so the rows do
+not switch in time.
 """
 const _CMDGFM_CROSSING_RAMP = (1 / 32, 3 / 32)
 
@@ -1157,22 +1171,48 @@ function _cmdgfm_mixture_vector(index, data, liquid, gas, mesh, incidence)
     return face.axis == 1 ? (along, across) : (across, along)
 end
 
+"""Sliding speed `|u_g,a - u_l,a| |n_a|` of a row at its face `index` with
+axis `a`, from the phase velocities `liquid`, `gas` before the projection and
+the component `normal_axis = n_a` of the staggered PLIC normal; zero if not
+finite. An inclined interface crosses the rows of `a`-faces in a staircase
+with a step every `h|n_t/n_a|` along `a`. Two phases with different
+velocities along `a` cannot both move with an interface that stays in place:
+one of them slides past the staircase, and where it flows out of the
+staircase into its row it advects the value that a row writes at a step into
+the first donor of the next step's row. That is the wake recursion of a
+sweeping interface (techref `eq:projection:wake-recursion`), one write per
+step passed, without any motion of the interface. The relative velocity at
+the face measures this sliding of a velocity jump. It vanishes for a
+continuous velocity, so a resolved shear layer keeps the third-order
+inference."""
+@inline function _cmdgfm_sliding_speed(liquid, gas, index, normal_axis)
+    T = eltype(liquid)
+    speed = abs((gas[index] - liquid[index]) * T(normal_axis))
+    return isfinite(speed) ? speed : zero(T)
+end
+
 """Extrapolation slope weight `θ` of a row with second donors from the state
-`liquid`, `gas` before the projection. The interface normal speed at the face
-is the normal component of the mixture velocity, `w = |u_mix,f · n_f|` with
-the staggered PLIC normal ([`_cmdgfm_face_normal`](@ref)): the speed at which
-the interface crosses the face for a kinematic interface. `U` is the largest
-mixture speed over the face and its four donors (at least `floatmin`), and `θ`
-follows the ramp [`_CMDGFM_CROSSING_RAMP`](@ref) in `w/U`. Mixture velocities
-and `|·|` make `θ` label symmetric; it uses the current state only. Without a
-normal or a mixture velocity the row keeps `θ = 1`."""
+`liquid`, `gas` before the projection. The crossing speed `w` is the larger of
+the interface normal speed, the normal component `|u_mix,f · n_f|` of the
+mixture velocity with the staggered PLIC normal
+([`_cmdgfm_face_normal`](@ref)) (the speed at which a kinematic interface
+crosses the face), and the sliding speed `|u_g,a - u_l,a| |n_a|`
+([`_cmdgfm_sliding_speed`](@ref)). `U` is the largest mixture speed over the
+face and its four donors (at least `floatmin`), and `θ` follows the ramp
+[`_CMDGFM_CROSSING_RAMP`](@ref) in `w/U`. Mixture velocities, the phase
+difference and `|·|` make `θ` label symmetric; it uses the current state
+only. Without a normal or a mixture velocity the row keeps `θ = 1`."""
 function _cmdgfm_crossing_slope(
         stencil::CMDGFMJumpStencil{T}, data, liquid, gas, mesh, incidence, interface,
     ) where {T}
-    normal = _cmdgfm_face_normal(interface, mesh.faces[stencil.face])
+    face = mesh.faces[stencil.face]
+    normal = _cmdgfm_face_normal(interface, face)
     velocity = _cmdgfm_mixture_vector(stencil.face, data, liquid, gas, mesh, incidence)
     (isnothing(normal) || isnothing(velocity)) && return one(T)
-    normal_speed = abs(velocity[1] * normal[1] + velocity[2] * normal[2])
+    crossing_speed = max(
+        abs(velocity[1] * normal[1] + velocity[2] * normal[2]),
+        _cmdgfm_sliding_speed(liquid, gas, stencil.face, normal[face.axis]),
+    )
     scale = hypot(velocity...)
     for donor in (
             stencil.gas_inference_face, stencil.gas_extrapolation_face,
@@ -1182,7 +1222,7 @@ function _cmdgfm_crossing_slope(
         isnothing(donor_velocity) || (scale = max(scale, hypot(donor_velocity...)))
     end
     lower, upper = T.(_CMDGFM_CROSSING_RAMP)
-    s = clamp((normal_speed / max(scale, floatmin(T)) - lower) / (upper - lower), zero(T), one(T))
+    s = clamp((crossing_speed / max(scale, floatmin(T)) - lower) / (upper - lower), zero(T), one(T))
     return one(T) - s * s * (3 - 2s)
 end
 

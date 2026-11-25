@@ -261,6 +261,34 @@ end
             slopes[stencil.face] = stencil.slope
         end
         @test any(<(1), values(slopes)) && any(==(1), values(slopes))
+        # The phases sliding past each other: the heavy phase at rest, the
+        # light one moving with u = (1, 0). The mixture of a face with heavy
+        # mass hardly moves, so the interface normal speed |ū_x n_x| of an
+        # x-face row stays below |n_x|, but the sliding speed
+        # |u_g,x - u_l,x| |n_x| = |n_x| and U = 1 (the pure light second donor)
+        # give the x-face rows the weights of the translation. On some of them
+        # the normal speed alone would leave a larger weight.
+        light = label == 1 ? 2 : 1
+        sliding = ntuple(
+            phase -> FaceVelocity(
+                mesh, (x, y, time, axis) -> phase == light && axis == 1 ? 1.0 : 0.0,
+            ), 2,
+        )
+        incidence = CJI._cmdgfm_incident_faces(mesh)
+        x_rows = larger_alone = 0
+        for stencil in CJI._cmdgfm_limit_extrapolation!(copy(stencils), data, sliding, interface)
+            stencil.gas_extrapolation_face > 0 && mesh.faces[stencil.face].axis == 1 || continue
+            @test stencil.slope ≈ slopes[stencil.face] atol = 1.0e-12
+            x_rows += 1
+            normal = CJI._cmdgfm_face_normal(interface, mesh.faces[stencil.face])
+            mixture = CJI._cmdgfm_mixture_vector(
+                stencil.face, data, sliding[1].interior, sliding[2].interior, mesh, incidence,
+            )
+            alone = min(ramp(abs(mixture[1] * normal[1] + mixture[2] * normal[2])), cap(stencil))
+            alone > stencil.slope + 0.1 && (larger_alone += 1)
+        end
+        @test x_rows > 4
+        @test larger_alone > 0
         slopes
     end
     @test keys(weights[1]) == keys(weights[2])
@@ -518,7 +546,11 @@ end
     # and the slope weights θ of the crossing-speed limiter are frozen with the
     # rows of the reconstructed interface: projecting a projected state again
     # changes nothing beyond round-off. (Evaluated from the state it projects,
-    # θ changed the state by 0.36, 0.12, 0.024 over repetitions 2–4, #171.)
+    # θ changes the state by 0.26, 0.11, 0.21 over repetitions 2–4.) The gas
+    # predictor slides past the liquid by 0.1: with the slip 1 of the original
+    # fixture the sliding speed |u_g,x - u_l,x| |n_x| ≈ 0.29 puts every row on
+    # the slope-0.3 interface at θ = 0, so no row would have a weight in (0, 1)
+    # to freeze; with 0.1, 8 of the 40 rows do.
     n = 32
     graph = _triangle(0.5 + 0.37 / n, 0.3)
     mesh = BlockTreeMesh(; base_mesh = (n, n), block_size = (8, 8), periodic = (true, false))
@@ -529,7 +561,7 @@ end
     workspace = CMDGFMProjectionWorkspace(solver)
     velocity = (
         FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ? sinpi(2y) : 0.3cospi(2x)),
-        FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ? 1 + sinpi(2y) : 0.0),
+        FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ? 0.1 + sinpi(2y) : 0.0),
     )
     foreach(phase -> fill!(velocity[phase].boundary, 0.0), 1:2)
     data = CJI._projection_face_data(solver, workspace)
