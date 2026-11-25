@@ -204,7 +204,12 @@ $\dtflow^{\timelevel{n}}=\dtflow(\flowcfl)$ of~\cref{eq:stab:flow-bound} with
 $\flowcfl=0.45$ (keyword \code{cfl}) and sets
 \begin{equation}\label{eq:stab:selection}
   \begin{gathered}
-  {\dtprop}^{\timelevel{n}}=\min\curlypar{{\dtprop}^{\timelevel{n-1}},\ \dtflow^{\timelevel{n}}},\qquad
+  {\dtprop}^{\timelevel{n}}=\begin{cases}
+    \stepsig\,\dtflow^{\timelevel{n}}, & \dtflow^{\timelevel{n}}<{\dtprop}^{\timelevel{n-1}},\\
+    \min\curlypar{\stepgrow\,{\dtprop}^{\timelevel{n-1}},\ \stepsig\,\dtflow^{\timelevel{n}}},
+      & {\dtprop}^{\timelevel{n-1}}<\stepband\,\dtflow^{\timelevel{n}},\\
+    {\dtprop}^{\timelevel{n-1}}, & \text{otherwise},
+  \end{cases}\\
   {\dtref}^{\timelevel{n}}=\max\curlypar{{\dtprop}^{\timelevel{n}},\ {\dtdef}^{\timelevel{n}},\ \dt^{\timelevel{n}}},\\
   \dt^{\timelevel{n}}=\begin{cases}
     \tend-\timevar^{\timelevel{n}}, & \tend-\timevar^{\timelevel{n}}-{\dtprop}^{\timelevel{n}}<10^{-6}\,{\dtprop}^{\timelevel{n}},\\
@@ -218,8 +223,10 @@ $\flowcfl=0.45$ (keyword \code{cfl}) and sets
 \end{equation}
 with ${\dtprop}^{\timelevel{-1}}$ the proposal retained from a previous call
 (below) or $\infty$. If ${\dtprop}^{\timelevel{0}}$ is still infinite, the
-step is capped at $(\tend-\timevar^{\timelevel{0}})/128$, so that a flow at
-rest without forces takes at least $128$ steps. Steps are taken while
+first step is capped at $(\tend-\timevar^{\timelevel{0}})/128$; while the
+bound remains infinite, subsequent proposals grow by $\stepgrow$ per step.
+For the rest fixture below, the call takes $18$ steps. Steps are
+taken while
 $\tend-\timevar^{\timelevel{n}}>16\machineeps\max\{1,\abs{\tend},\abs{\timevar^{\timelevel{0}}}\}$
 (a threshold fixed at the start of the call),
 and the call ends at $\tend$. The reference step $\dtref$ of the incremental
@@ -231,11 +238,19 @@ a stretched last step, which must not exceed its reference
 \code{dt}) the proposal is that step in every step, no bound is evaluated,
 and the rest of~\cref{eq:stab:selection} applies.
 
-The following hold by construction. The proposal never increases: a
-transient velocity peak, a solenoidal correction of an impulsive start or a
-regrid to finer cells lowers the step for the rest of the run, and a decaying
-flow or a coarsening never raises it again. Every step of a call but the last
-equals its proposal. The last step of a call that follows a step of the same
+The three constants of the controller are $\stepsig=0.8$, $\stepband=0.5$
+and $\stepgrow=1.2$, and they are the whole policy. The following hold by
+construction. The proposal never exceeds the bound: it is lowered to the
+margin $\stepsig\dtflow$, kept while it lies in the band
+$[\stepband,1]\dtflow$, and raised by at most $\stepgrow$ per step while it
+lies below the band, never above the margin. The margin is the hysteresis: a
+lowered step lands at $0.8\dtflow>\stepband\dtflow$, so the same bound never
+both lowers and raises the step. A transient velocity peak, a solenoidal
+correction of an impulsive start or a regrid to finer cells can lower the
+step, which can then recover gradually as the bound rises. Before, the rule was
+${\dtprop}^{\timelevel{n}}=\min\curlypar{{\dtprop}^{\timelevel{n-1}},\dtflow^{\timelevel{n}}}$,
+so a single short step fixed the step for the rest of the run.
+Every step of a call but the last equals its proposal. The last step of a call that follows a step of the same
 call lies between $10^{-6}$ and $1+10^{-6}$ times its proposal: a remainder
 below $10^{-6}$ of the proposal is absorbed into the step before it
 (\issue{98}: before, a step of $5\times10^{-14}$ remained), and a remainder
@@ -245,10 +260,11 @@ projection left instead of dividing it by the short step
 (\cref{eq:projection:reference-defect}, \issue{90}).
 
 \emph{Retained proposals.} A call continues the previous one if its
-velocity, pressure and solver are the same objects, its start time equals
-the end time of the previous call, and the mesh topology has not changed
-since; it then starts from the retained proposal (not from a shortened or
-stretched last step) and with $\dtdef$ of the previous step (\issue{91}).
+velocity, pressure and solver are the same objects and its start time equals
+the end time of the previous call; it then starts from the retained proposal
+(not from a shortened or stretched last step), even across a regrid. The
+$\dtdef$ of the previous step is reused only while the mesh topology has not
+changed since (\issue{91}).
 After a call with a prescribed step no proposal is retained, but $\dtdef$
 is; a call that takes no step keeps a finite proposal. A full
 \apifun{step!}\code{(flow, dt)} resets the proposal and retains the defect
@@ -287,16 +303,9 @@ check in \cref{sec:vof:cfl} lies at $(1+2\times10^{-6})\dtwy$ (\issue{115}).
 
 \begin{sloppypar}
 \emph{Checks} (\code{figures/stability.jl}, \code{step_selection_check}).
-On a decaying Taylor--Green vortex of $8\times8$ periodic cells (one phase,
-viscosity $0.05$), \apifun{simulate!} keeps the first proposal for all
-$\chkStabSelSteps$ steps of a run of ten proposals, while the bound grows by
-the factor $\chkStabSelGrowth$; a remainder of $0.5\times10^{-6}$ of the
-proposal stretches the third step to $\chkStabSelStretch$ proposals, whereas
-one of $2\times10^{-6}$ is a fourth step of $\chkStabSelShort$ proposals; a
-call to $2.5$ proposals ends with half a proposal and the next call resumes
-with a whole one, and two calls that end on the step sequence reproduce the
-velocity and pressure of the uninterrupted run bitwise; the fluid at rest takes
-$\chkStabSelCapped$ steps of $1/128$ to $\tend=1$; and \apifun{step!}
+The script replays the controller on a decaying Taylor--Green vortex and
+checks the final-time adjustment, continuation and infinite-bound cap.
+It also checks that \apifun{step!}
 accepts $(1+0.9\times10^{-6})\dtflow(\cflmax)$ and rejects
 $(1+2\times10^{-6})\dtflow(\cflmax)$, with $\cflmax=1$ here. The selection
 rule~\cref{eq:stab:selection} also reproduces every recorded step of the
@@ -317,7 +326,7 @@ check~\cref{eq:stab:check} in \srcsym{src/single_phase/stepping.jl}{_transport_s
 \srcsym{src/two_phase/two_velocity/stepping.jl}{_transport_substep!}, and
 for the WY transport alone in \srcsym{src/vof/fluxes.jl}{_advect_wy!}.
 Tests: \testsym{test/navier_stokes/high_level_api.jl}{tiny final timestep is absorbed},
-\testsym{test/navier_stokes/high_level_api.jl}{infinite initial bound retains the chosen proposal},
+\testsym{test/navier_stokes/high_level_api.jl}{infinite initial bound caps the first step and grows},
 \testsym{test/navier_stokes/high_level_api.jl}{automatic timestep resumes on adaptive cylinder},
 \testsym{test/navier_stokes/high_level_api.jl}{abrupt proposal drops retain the actual preceding step},
 \testsym{test/navier_stokes/high_level_api.jl}{standalone projection invalidates the resumed automatic selection},
@@ -339,10 +348,8 @@ interface fluxes and the CMDGFM) on their coarsest mesh of $8$ cells per
 wavelength; and the combined Kelvin--Helmholtz--Rayleigh--Taylor wave of
 \code{examples/07_interfacial_instability} (density ratio $3$, Weber number
 $0.5$, Bond number $0.75$) on $16$ cells per wavelength. For the first three,
-\apifun{simulate!} then advanced over $\chkStabCaseSteps$ times the first
-step: in $\chkStabCaseSteps$ steps for the wave and the cylinder, whose
-proposals keep the first step, and in $\chkStabKhSteps$ steps for the
-Kelvin--Helmholtz wave, whose falling bound shortens its steps.
+\apifun{simulate!} is advanced for twelve initial bounds; its proposals are
+replayed against the recorded bounds for each flow.
 \end{sloppypar}
 
 \begin{table}[tbp]
@@ -368,11 +375,8 @@ $\chkStabWaveAdvRatio$ times larger than $\dtcap$. In the cylinder flow the
 cut cells reduce the bound of the unit inflow from $\chkStabCylPlain$ on the
 same mesh without the solid to $\chkStabCylAdv$, a factor
 $\chkStabCylReduction$ (the smallest open fraction of a cut cell is
-$\chkStabCylOpen$); the first step projects the impulsive start and raises
-the bound to $\chkStabCylBoundOne$, and it reaches $\chkStabCylBoundEnd$,
-but the proposal keeps the first step, $\chkStabCylGap$ times below the bound
-for the rest of the run. The Kelvin--Helmholtz wave is advection-limited and
-grows; its steps follow the falling bound. In the combined wave all three
+$\chkStabCylOpen$). The Kelvin--Helmholtz wave is advection-limited and
+its steps respond to the falling bound. In the combined wave all three
 bounds are finite and the capillary one is active.
 
 \emph{Empirical stability margin} (\code{stability_margin_check}). From the

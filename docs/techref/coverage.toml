@@ -1982,7 +1982,7 @@ sources = [
 ]
 tests = [
   { file = "test/navier_stokes/high_level_api.jl", testset = "tiny final timestep is absorbed" },
-  { file = "test/navier_stokes/high_level_api.jl", testset = "infinite initial bound retains the chosen proposal" },
+  { file = "test/navier_stokes/high_level_api.jl", testset = "infinite initial bound caps the first step and grows" },
   { file = "test/navier_stokes/high_level_api.jl", testset = "automatic timestep resumes on adaptive cylinder" },
   { file = "test/navier_stokes/high_level_api.jl", testset = "abrupt proposal drops retain the actual preceding step" },
   { file = "test/navier_stokes/high_level_api.jl", testset = "standalone projection invalidates the resumed automatic selection" }

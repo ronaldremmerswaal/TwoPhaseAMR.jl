@@ -591,10 +591,23 @@ temporal accuracy resolution is required. Crank--Nicolson is second-order but
 does not strongly damp unresolved stiff modes, so reduce the time step when a
 viscous transient oscillates even though the implicit solve converges.
 
+The automatic step is a hysteresis controller on that bound. It is kept while
+it lies in `[0.5, 1] * bound`, set to `0.8 * bound` when the bound drops below
+it, and raised by at most a factor `1.2` per step, never above
+`0.8 * bound`, when it falls below `0.5 * bound`. The margin makes the band
+the hysteresis: a lowered step lands well inside the band, so the same bound
+never both lowers and raises the step. A spike can be followed by gradual
+recovery, subject to the growth limit. In single-phase flow each change of
+the step refreshes the shifted viscous hierarchy. In two-phase flow that
+hierarchy is refreshed every step because density and viscosity also change.
+
 When a proposed step would leave less than `1e-6` of that proposal before
 the target time, `simulate!` stretches it to land on the target instead.
+If adding the proposal already reaches the target exactly in time arithmetic,
+the proposal is used unchanged, preserving aligned chunk resumption.
 The unmodified automatic proposal is retained for a subsequent call when the
-fields, system, time, workspace, and topology still match. A full
+fields, system, time and workspace still match, including across a regrid;
+the defect reference is reused only while the topology matches. A full
 `step!(flow, dt)` resets the automatic proposal while retaining its defect
 reference; a field-level `step!` or `project!(flow)` invalidates both.
 Stability checks allow a relative excess of `1e-6` plus roundoff, including for explicitly

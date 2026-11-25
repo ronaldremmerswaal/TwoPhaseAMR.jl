@@ -160,6 +160,17 @@
     )
 end
 
+mutable struct Float32StepObserver <: AbstractObserver
+    types::Vector{DataType}
+end
+
+function TwoPhaseAMR.observe!(
+        observer::Float32StepObserver, event::Symbol, state, info::StepInfo,
+    )
+    event === :step && push!(observer.types, typeof(info.dt))
+    return observer
+end
+
 @testset "FlowSimulation preserves Float32 through a regrid" begin
     mesh = BlockTreeMesh(
         block_size = (4, 4), max_level = 1,
@@ -190,6 +201,22 @@ end
     )
     @test eltype(flow.workspace.old_velocity) === Float32
     @test flow.workspace.elliptic.operator.diffusion === 5.0f-5
+    # The stability query may promote its bound through the default Float64
+    # CFL, but the controller and each actual step must retain flow precision.
+    observer = Float32StepObserver(DataType[])
+    simulate!(
+        flow, 0.02f0; dt = nothing, observer, tolerance = 1.0f-5, max_cycles = 40,
+    )
+    @test !isempty(observer.types)
+    @test all(==(Float32), observer.types)
+    selection = flow.workspace.simulation_step
+    @test all(
+        x -> typeof(x) === Float32,
+        (selection.step, selection.last_dt, selection.defect_dt),
+    )
+    for (proposal, bound) in ((Inf32, 1.0f0), (0.2f0, 1.0f0), (0.6f0, 1.0f0))
+        @test typeof(TwoPhaseAMR._next_step_proposal(proposal, bound)) === Float32
+    end
 end
 
 @testset "time-step safety" begin
@@ -222,7 +249,9 @@ end
     fast = FlowSimulation(mesh, physics; velocity = (1.0, 0.0))
     target = 4stable_timestep(fast; cfl = 0.8)
     result = simulate!(fast, target; cfl = 0.8, tolerance = 1.0e-10, max_cycles = 50)
-    @test result.steps == 4
+    # The controller starts at the margin 0.8 bound and keeps that step while
+    # the bound stays put, so four bounds take five steps.
+    @test result.steps == 5
     @test result.time == target
     # `simulate!` reports an out-of-range cfl even when a prescribed dt makes it
     # unused, and two phases keep the (0, 1/2] range.
@@ -253,8 +282,15 @@ end
     rest = FlowSimulation(
         BlockTreeMesh(block_size = (4, 4), periodic = (false, false)),
         physics; boundary = NoSlip((x, y, t, axis) -> axis == 1 && y > 0.5 ? 1.0 : 0.0),
+        diagnostics = (KineticEnergy(),),
     )
-    @test simulate!(rest, 0.01).steps > 100
+    # With an infinite bound, steps form (interval / 128) * 1.2^k.
+    # Their sum reaches the interval at ceil(log(1 + 128*0.2)/log(1.2)).
+    rest_flow = simulate!(rest, 0.01)
+    capped_steps = ceil(Int, log(1 + 128 * 0.2) / log(1.2))
+    @test rest_flow.steps == capped_steps
+    rest_times = diagnostic_history(rest, :kinetic_energy).times
+    @test rest_times[2] - rest_times[1] ≈ 0.01 / 128
 end
 
 @testset "step validation order and reference-step messages" begin
@@ -460,6 +496,25 @@ end
     end
 end
 
+mutable struct ReferenceStepObserver <: AbstractObserver
+    procedure::Any
+    times::Vector{Float64}
+    references::Vector{Float64}
+end
+
+ReferenceStepObserver() = ReferenceStepObserver(nothing, Float64[], Float64[])
+
+function TwoPhaseAMR.observe!(
+        observer::ReferenceStepObserver, event::Symbol, state, info::StepInfo,
+    )
+    if event === :initial
+        observer.procedure = info.step_procedure
+    elseif event === :step
+        push!(observer.times, state.time)
+        push!(observer.references, observer.procedure.reference_dt)
+    end
+    return observer
+end
 @testset "automatic timestep resumes on adaptive cylinder" begin
     options = (; cfl = 0.25, tolerance = 1.0e-9, max_cycles = 1000)
     probe = _resume_cylinder_flow()
@@ -503,7 +558,9 @@ end
     _check_resume_forces(reference, resumed)
 
     # A cut immediately after regridding must retain the unshortened proposal
-    # both for the reference-step correction and when the run resumes.
+    # for both the resumed step and the reference-step correction. The later
+    # continuation is checked against an independent controller replay rather
+    # than a fixed-dt run, since the recovered bound may now permit growth.
     proposal = times[3] - times[2]
     off_grid = times[2] + 0.01proposal
     stop_time = off_grid + 2.5proposal
@@ -511,8 +568,35 @@ end
     fixed = _resume_cylinder_flow()
     simulate!(automatic, off_grid; options...)
     simulate!(fixed, off_grid; options...)
-    simulate!(automatic, stop_time; options...)
-    simulate!(fixed, stop_time; dt = proposal, options...)
+    unshortened = automatic.workspace.simulation_step.step
+    @test automatic.workspace.simulation_step.last_dt < unshortened
+    observer = ReferenceStepObserver()
+    simulate!(automatic, stop_time; options..., observer)
+    @test observer.times[1] - off_grid ≈ unshortened rtol = 1.0e-12
+    @test observer.references[1] ≈ unshortened rtol = 1.0e-12
+    # Independently replay the controller through physical steps. A fixed-dt
+    # continuation is no longer a valid reference once the bound recovers.
+    selected = fixed.workspace.simulation_step.step
+    while stop_time - fixed.time > 16eps() * max(1.0, abs(stop_time))
+        TwoPhaseAMR._enforce_current_velocity_boundary!(
+            fixed.velocity, fixed.system, fixed.time; preserve_open = true,
+        )
+        bound = stable_timestep(fixed; cfl = options.cfl)
+        selected = if bound < selected
+            0.8bound
+        elseif selected < 0.5bound
+            min(1.2selected, 0.8bound)
+        else
+            selected
+        end
+        remaining = stop_time - fixed.time
+        actual = remaining - selected < 1.0e-6selected ? remaining : selected
+        next_time = actual == remaining ? stop_time : min(stop_time, fixed.time + actual)
+        step!(
+            fixed, actual; _proposal = selected, _next_time = next_time,
+            tolerance = options.tolerance, max_cycles = options.max_cycles,
+        )
+    end
     @test automatic.steps == fixed.steps
     @test automatic.velocity.interior ≈ fixed.velocity.interior rtol = 2.0e-8 atol = 2.0e-8
     _check_resume_forces(fixed, automatic)
@@ -554,9 +638,9 @@ end
     @test flow.workspace.elliptic.operator.diffusion ≈
         0.01 * (target - proposal) / 2
 
-    # An automatically chosen proposal survives a stretched endpoint and is
-    # reused on the next call rather than replaced by the stretched step.
-    flow = make_flow()
+    # A constant finite bound keeps the automatic proposal inside the band:
+    # a stretched endpoint must not replace that retained proposal.
+    flow = make_flow(; velocity = (1.0, 0.0))
     simulate!(flow, 1.28)
     retained = flow.workspace.simulation_step.step
     target = flow.time + 2retained + 0.5e-6retained
@@ -568,10 +652,11 @@ end
     @test resumed.steps == 3
     @test flow.workspace.simulation_step.step == retained
 
-    # A proposal at the hard CFL bound can still absorb the tiny remainder.
+    # The automatic first proposal is 0.8 of the bound; it can absorb a tiny
+    # remainder while remaining below the hard CFL check.
     limited = make_flow(; velocity = (1.0, 0.0))
     bound = stable_timestep(limited; cfl = 0.5)
-    target = bound * (1 + 0.5e-6)
+    target = 0.8bound * (1 + 0.5e-6)
     result = simulate!(limited, target; cfl = 0.5)
     times = diagnostic_history(limited, :kinetic_energy).times
     @test result.steps == 1
@@ -591,7 +676,7 @@ end
             boundary = FreeSlip(),
         )
         bound = stable_timestep(capillary)
-        target = bound * (1 + 0.5e-6)
+        target = (fixed ? bound : 0.8bound) * (1 + 0.5e-6)
         result = fixed ? simulate!(capillary, target; dt = bound) :
             simulate!(capillary, target)
         @test result.steps == 1
@@ -599,19 +684,163 @@ end
     end
 end
 
-@testset "infinite initial bound retains the chosen proposal" begin
+@testset "automatic step hysteresis controller" begin
+    grow = 1.2
+    proposal = TwoPhaseAMR._next_step_proposal
+
+    # Shrink to the margin; keep inside the band; grow by gamma, at most to
+    # the margin.
+    @test proposal(1.0, 0.4) ≈ 0.8 * 0.4
+    @test proposal(0.5, 1.0) == 0.5
+    @test proposal(0.4, 1.0) == 0.48
+    @test proposal(0.1, 1.0) ≈ 0.12
+    @test proposal(Inf, 2.0) == 1.6
+    @test proposal(Inf, Inf) == Inf
+    # A bound that rose above the proposal leaves it: the band is the
+    # hysteresis, and a lowered step never lands on the lower edge.
+    for bound in (0.6, 0.7, 1.19, 1.2)
+        @test proposal(0.6, bound) == 0.6
+    end
+    lowered = proposal(1.0, 0.55)
+    @test lowered ≈ 0.44
+    @test proposal(lowered, 0.55) == lowered
+    # Never above the bound, for any admissible bound.
+    for bound in (0.01, 0.3, 1.0, 7.0), start in (0.001, 0.2, 1.0, 100.0)
+        @test proposal(start, bound) <= bound
+    end
+
+    # A decaying vortex raises its bound; the step follows it inside the band
+    # and never grows faster than gamma per step.
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, true))
+    velocity = (x, y, time, axis) -> axis == 1 ? sinpi(2x) * cospi(2y) :
+        -cospi(2x) * sinpi(2y)
+    make_flow() = FlowSimulation(
+        mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.05);
+        velocity, diagnostics = (KineticEnergy(), CFLTimeStep(cfl = 0.45)),
+    )
+    decaying = make_flow()
+    start = stable_timestep(decaying; cfl = 0.45)
+    result = simulate!(decaying, 10start)
+    history = diagnostic_history(decaying, :cfl_timestep)
+    times = history.times
+    steps = diff(times)
+    bounds = history.values[1:(end - 1)]
+    @test length(steps) == result.steps
+    @test result.time == 10start
+    # A rapidly growing bound can leave the proposal below the lower edge
+    # while growth catches up, but it must never exceed the bound.
+    for index in 1:(length(steps) - 1)
+        @test steps[index] <= bounds[index] * (1 + 1.0e-12)
+    end
+    # No step grows by more than gamma.
+    @test all(
+        steps[index + 1] <= grow * steps[index] * (1 + 1.0e-12) ||
+            steps[index + 1] == times[end] - times[index + 1]
+            for index in 1:(length(steps) - 1)
+    )
+    # Independently replay the stated controller using the recorded bounds:
+    # shrink to 0.8b, hold in [0.5b,b], otherwise grow by at most 1.2.
+    # Apply the same endpoint rule and compare every physical step.
+    selected = Inf
+    for index in eachindex(steps)
+        bound = bounds[index]
+        selected = if selected > bound
+            0.8bound
+        elseif selected < 0.5bound
+            min(1.2selected, 0.8bound)
+        else
+            selected
+        end
+        remaining = 10start - times[index]
+        expected = remaining - selected < 1.0e-6selected ? remaining : selected
+        @test steps[index] ≈ expected rtol = 1.0e-12 atol = 8eps()
+    end
+    @test maximum(steps) > first(steps)
+end
+
+mutable struct DiffusiveShiftObserver <: AbstractObserver
+    dts::Vector{Float64}
+    shifts::Vector{Float64}
+    pivots::Vector{Tuple{Any, Any}}
+end
+DiffusiveShiftObserver() = DiffusiveShiftObserver(Float64[], Float64[], Tuple{Any, Any}[])
+
+function TwoPhaseAMR.observe!(
+        observer::DiffusiveShiftObserver, event::Symbol, state, info::StepInfo,
+    )
+    if event === :step
+        push!(observer.dts, Float64(info.dt))
+        push!(observer.shifts, Float64(state.workspace.elliptic.operator.diffusion))
+        elliptic = state.workspace.elliptic
+        push!(
+            observer.pivots,
+            (
+                elliptic.x.preconditioner.coarse_factorization.factorization.ipiv,
+                elliptic.y.preconditioner.coarse_factorization.factorization.ipiv,
+            ),
+        )
+    end
+    return observer
+end
+
+@testset "the shifted viscous operator follows the step" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, true))
+    velocity = (x, y, time, axis) -> axis == 1 ? sinpi(2x) * cospi(2y) :
+        -cospi(2x) * sinpi(2y)
+    viscosity = 0.05
+    flow = FlowSimulation(
+        mesh, SinglePhase(density = 1.0, dynamic_viscosity = viscosity); velocity,
+    )
+    observer = DiffusiveShiftObserver()
+    start = stable_timestep(flow; cfl = 0.45)
+    result = simulate!(flow, 12start; observer = observer)
+    # Every step solved with the current shift dt * viscosity / 2.
+    @test all(
+        observer.shifts[index] ≈ observer.dts[index] * viscosity / 2
+            for index in eachindex(observer.dts)
+    )
+    # A changed shift re-factorizes both dense bottoms, allocating new pivot
+    # arrays; a retained shift must reuse them. Count actual factorizations,
+    # not just changes to the stored shift.
+    changes = count(
+        index -> observer.dts[index] != observer.dts[index - 1],
+        2:length(observer.dts),
+    )
+    shift_changes = count(
+        index -> observer.shifts[index] != observer.shifts[index - 1],
+        2:length(observer.shifts),
+    )
+    @test shift_changes == changes
+    for axis in 1:2
+        factor_changes = count(
+            index -> observer.pivots[index][axis] !== observer.pivots[index - 1][axis],
+            2:length(observer.pivots),
+        )
+        @test factor_changes == changes
+    end
+    @test changes < result.steps
+end
+
+@testset "infinite initial bound caps the first step and grows" begin
     flow = FlowSimulation(
         BlockTreeMesh(block_size = (4, 4)),
         SinglePhase(density = 1.0, dynamic_viscosity = 0.01),
+        diagnostics = (KineticEnergy(),),
     )
     first_run = simulate!(flow, 0.008)
+    times = diagnostic_history(flow, :kinetic_energy).times
+    # Sum the geometric sequence (interval / 128) * 1.2^k. The smallest
+    # number of terms reaching the interval is ceil(log(26.6)/log(1.2)).
+    capped_steps = ceil(Int, log(1 + 128 * 0.2) / log(1.2))
+    @test times[2] - times[1] ≈ 0.008 / 128
+    @test first_run.steps == capped_steps
+    # The retained proposal is the grown one, so the next 0.001 is one step.
     second_run = simulate!(flow, 0.009)
-    @test first_run.steps == 128
-    @test second_run.steps == 16
+    @test second_run.steps == 1
 
     # An explicit physical step ends the automatic selection history.
     simulate!(flow, 0.01; dt = 0.001)
-    @test simulate!(flow, 0.011).steps == 128
+    @test simulate!(flow, 0.011).steps == capped_steps
 
     # Reusing the low-level workspace for different fields is a new run,
     # even when the caller supplies the previous run's end time.
@@ -621,33 +850,39 @@ end
         other_velocity, other_pressure, flow.system, 0.012, flow.workspace;
         time = 0.011,
     )
-    @test other_run.steps == 128
+    @test other_run.steps == capped_steps
 end
 
-@testset "Float32 flow retains the precision of a Float64 CFL proposal" begin
-    make_flow() = FlowSimulation(
-        BlockTreeMesh(block_size = (4, 4)),
-        SinglePhase(density = 1.0f0, dynamic_viscosity = 0.01f0);
-        T = Float32, velocity = (1.0f0, 0.0f0),
-        diagnostics = (KineticEnergy(),),
-    )
-    force = (x, y, time, axis) -> axis == 1 ? -0.001f0 : 0.0f0
-    options = (; cfl = 0.4, force, tolerance = 1.0f-5, max_cycles = 40)
-    reference = make_flow()
-    simulate!(reference, 8.0f0; options...)
-    resumed = make_flow()
-    fields = VisualizationFieldRegistry()
-    register_field!(fields, :pressure, resumed.pressure)
-    recorder = Recorder(fields; keyframes = nothing, preview = nothing)
-    simulate!(resumed, 4.0f0; options..., observer = recorder)
-    simulate!(resumed, 8.0f0; options..., observer = recorder)
-    @test run_state(recorder) === :completed
-    expected = diagnostic_history(reference, :kinetic_energy)
-    actual = diagnostic_history(resumed, :kinetic_energy)
-    @test resumed.steps == reference.steps
-    @test actual.times == expected.times
-    @test actual.values == expected.values
-    @test resumed.velocity.interior == reference.velocity.interior
+@testset "aligned chunk resumption preserves precision" begin
+    for T in (Float32, Float64)
+        make_flow() = FlowSimulation(
+            BlockTreeMesh(block_size = (4, 4)),
+            SinglePhase(density = T(1), dynamic_viscosity = T(0.01));
+            T, velocity = (T(1), T(0)), diagnostics = (KineticEnergy(),),
+        )
+        force = (x, y, time, axis) -> axis == 1 ? T(-0.001) : zero(T)
+        options = (; cfl = 0.4, force, tolerance = T(1.0e-5), max_cycles = 40)
+        reference = make_flow()
+        simulate!(reference, T(8); options...)
+        expected = diagnostic_history(reference, :kinetic_energy)
+        # Split at a physical step: repeated floating-point steps need not land
+        # at nominal time 4, which would shorten the step before the cut.
+        split_time = expected.times[argmin(abs.(expected.times .- T(4)))]
+        resumed = make_flow()
+        fields = VisualizationFieldRegistry()
+        register_field!(fields, :pressure, resumed.pressure)
+        recorder = Recorder(fields; keyframes = nothing, preview = nothing)
+        simulate!(resumed, split_time; options..., observer = recorder)
+        @test resumed.time === split_time
+        simulate!(resumed, T(8); options..., observer = recorder)
+        @test run_state(recorder) === :completed
+        @test resumed.time == reference.time == T(8)
+        actual = diagnostic_history(resumed, :kinetic_energy)
+        @test resumed.steps == reference.steps
+        @test actual.times == expected.times
+        @test actual.values == expected.values
+        @test resumed.velocity.interior == reference.velocity.interior
+    end
 end
 
 @testset "standalone flow projection retains physical pressure" begin
@@ -733,7 +968,7 @@ end
         auto_velocity = copy(supplied)
         enforce_velocity_boundary!(auto_velocity, boundary; preserve_open = true)
         auto_flow = FlowSimulation(auto_velocity, CellField(mesh), solver)
-        proposal = stable_timestep(auto_flow)
+        proposal = 0.8stable_timestep(auto_flow)
         @test proposal > 0.01
         auto_reference = copy(auto_velocity)
         auto_pressure = CellField(mesh)
@@ -872,25 +1107,6 @@ end
     end
 end
 
-mutable struct ReferenceStepObserver <: AbstractObserver
-    procedure::Any
-    times::Vector{Float64}
-    references::Vector{Float64}
-end
-
-ReferenceStepObserver() = ReferenceStepObserver(nothing, Float64[], Float64[])
-
-function TwoPhaseAMR.observe!(
-        observer::ReferenceStepObserver, event::Symbol, state, info::StepInfo,
-    )
-    if event === :initial
-        observer.procedure = info.step_procedure
-    elseif event === :step
-        push!(observer.times, state.time)
-        push!(observer.references, observer.procedure.reference_dt)
-    end
-    return observer
-end
 
 function _reference_defect_flow(; max_level = 0)
     mesh = BlockTreeMesh(
@@ -934,7 +1150,7 @@ end
         end
         @test first.steps == 1
         @test flow.workspace.simulation_step.last_dt ≈ 0.01
-        small_dt = mode === :fixed ? 0.001 : stable_timestep(flow; cfl = 0.0008)
+        small_dt = mode === :fixed ? 0.001 : 0.8stable_timestep(flow; cfl = 0.0008)
         @test small_dt < 0.2 * 0.01
         expected_velocity, expected_pressure = _reference_step_copy(flow, small_dt, 0.01)
         _, amplified_pressure = _reference_step_copy(flow, small_dt, small_dt)
@@ -967,9 +1183,9 @@ end
         tolerance = 1.0e-10, max_cycles = 100,
     )
     @test length(observer.times) >= 2
-    @test observer.references[1] ≈ initial_bound
+    @test observer.references[1] ≈ 0.8initial_bound
     @test observer.times[2] - observer.times[1] < 0.1initial_bound
-    @test observer.references[2] ≈ initial_bound
+    @test observer.references[2] ≈ 0.8initial_bound
 end
 
 @testset "exact keyframe uses the dropped-step defect reference" begin
@@ -1229,12 +1445,12 @@ end
     )
     @test only(observer.references) ≈ 0.001
 
-    # The automatic proposal is also invalid after an external regrid, even
-    # if a larger new CFL would otherwise expose the old retained proposal.
+    # The proposal persists across an external regrid, while the old defect
+    # reference is invalidated. A larger new CFL permits one 1.2 growth.
     flow = _reference_defect_flow(max_level = 1)
     old_bound = stable_timestep(flow; cfl = 0.01)
     first = simulate!(
-        flow, old_bound; cfl = 0.01, tolerance = 1.0e-12, max_cycles = 100,
+        flow, 0.8old_bound; cfl = 0.01, tolerance = 1.0e-12, max_cycles = 100,
     )
     @test first.steps == 1
     old_proposal = flow.workspace.simulation_step.step
@@ -1251,7 +1467,7 @@ end
         tolerance = 1.0e-12, max_cycles = 100,
     )
     @test result.steps == 1
-    @test only(observer.references) ≈ new_proposal
+    @test only(observer.references) ≈ 1.2old_proposal
 end
 
 @testset "standalone projection invalidates the resumed automatic selection" begin
@@ -1266,7 +1482,7 @@ end
     @test isinf(flow.workspace.simulation_step.step)
     @test iszero(flow.workspace.simulation_step.last_dt)
     cfl = 0.0008
-    proposal = stable_timestep(flow; cfl)
+    proposal = 0.8stable_timestep(flow; cfl)
     @test proposal < 0.2 * 0.01
     observer = ReferenceStepObserver()
     simulate!(

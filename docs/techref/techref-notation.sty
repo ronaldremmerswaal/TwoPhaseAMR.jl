@@ -388,6 +388,15 @@
 \DefineNotation{\dtvisc}{\dt_{\visc}}{\dtvisc}
   {Explicit viscous estimate, not used by the flow solvers
    (\cref{tab:stab:bounds})}{\apifun{stable_timestep}}{new}
+\DefineNotation{\stepsig}{\sigma}{\stepsig}
+  {Shrink target of the step controller, the fraction of the bound a lowered
+   step takes, $0.8$ (\cref{eq:stab:selection})}{}{new}
+\DefineNotation{\stepband}{\sigma_{\mathrm{low}}}{\stepband}
+  {Lower edge of the hysteresis band of the step controller, $0.5$
+   (\cref{eq:stab:selection})}{}{new}
+\DefineNotation{\stepgrow}{\gamma}{\stepgrow}
+  {Largest factor by which the step controller raises the step per step,
+   $1.2$ (\cref{eq:stab:selection})}{}{new}
 \DefineNotation{\capspeed}{c_{\surftens}}{\capspeed}
   {Phase speed of the capillary wave of wavelength $2\minwidth$
    (\cref{sec:stab:bounds})}{}{new}

@@ -302,10 +302,13 @@ of a shared velocity cell by cell on meshes without a solid.
 \emph{Time step} (\cref{ch:stability-accuracy}). The explicit stages bound
 the step: the transport (the staggered bound in one phase, the WY bound in
 two) and, with two phases, the capillary and gravity-wave bounds.
-\apifun{simulate!} chooses steps from these bounds at CFL number $0.45$,
-never increases the step within a run and adjusts the last step to end at
-the final time; \apifun{step!} rejects a step above the bounds at CFL number
-$\half$. No order in time is claimed for the complete step.
+\apifun{simulate!} chooses steps from these bounds at CFL number $0.45$ with
+a hysteresis controller: the step is kept inside a band of the bound, lowered
+to $0.8$ times it when the bound falls below the step and raised by at most
+$1.2$ per step otherwise, so a transient velocity peak lowers the step only
+while it lasts (\cref{eq:stab:selection}); the last step is adjusted to end
+at the final time. \apifun{step!} rejects a step above the bounds at CFL
+number $\half$. No order in time is claimed for the complete step.
 
 \begin{implnote}
 The equation system \apitype{NavierStokesSystem} with its
@@ -537,8 +540,9 @@ call proceeds as follows.
   boundary values at $\timevar^{\timelevel{n}}$ are imposed and the step is
   the proposal of~\cref{eq:stab:selection} from the flow bound at CFL number
   $0.45$; otherwise it is the prescribed step. The last step is stretched or
-  shortened to end at $\tend$, and the reference step $\dtref$ is formed
-  with it.
+  shortened to end at $\tend$, except that a proposal whose floating-point
+  sum with the current time already equals $\tend$ is retained unchanged;
+  the reference step $\dtref$ is formed with it.
 \item \emph{Step.} One \apifun{step!} as in
   \cref{sec:overview:step-one,sec:overview:step-two}. A linear solve that has
   not converged (viscous step, projection, and the projection after a
