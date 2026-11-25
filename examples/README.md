@@ -19,6 +19,7 @@ rather than a time-dependent flow.
 | 10 | [Stokes wave](10_stokes3_wave/) | Nonlinear free-surface wave | One velocity | Level 5, one period; unmeasured |
 | 11 | [Large gas-pocket impact](11_lgpi/) | Gravity wave over bathymetry | Two velocity | Level 4, 1.2 gravity periods; unmeasured (gallery level-3 run 1872 s) |
 | 12 | [Manufactured Poisson](12_manufactured_poisson/) | Pressure projection with density jump | Two velocity | 32×32; 11.86 s setup and solve |
+| 14 | [Rising bubble](14_rising_bubble/) | Hysing et al. benchmark, cases 1 and 2 | One velocity | Level 4, T=3; case 1 130.30 s, case 2 87.07 s, both after a compiling level-3 run |
 
 Warm timings are second calls in one process; first-call compilation is
 additional. See each page for docs-size runs and validation details.
@@ -52,7 +53,7 @@ fields, errors and a `registry`. For most cases, a low `max_level` and short
 
 ## Studio
 
-Examples 01–10 can opt into live browser viewing from the command line:
+Examples 01–10 and 14 can opt into live browser viewing from the command line:
 
 ```sh
 julia -t 2,1 --project=examples examples/06_capillary_wave/capillary_wave.jl --studio
