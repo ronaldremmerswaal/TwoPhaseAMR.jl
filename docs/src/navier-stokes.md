@@ -66,6 +66,13 @@ is second order on the oblique-wall Helmholtz fixtures; this is not an order
 claim for the coupled two-phase equations. Select [`WallDistanceClosure`](@ref)
 to reproduce the legacy, thesis-style wall-distance discretization, which is
 first order at a wall that is not grid aligned.
+[`value_points`](@ref)`(operator, axis)` returns where the closure of a
+componentwise `StaggeredDiffusionOperator` places the unknowns of a velocity
+component, with their global face indices and open staggered volumes (zero for
+a face that the solid covers): LS-STAG at the midpoint of the open part of a
+cut face, which lies in the fluid, wall distance at the face centre. Sample
+initial or exact data there and weigh errors with the volumes, as the disc
+wave example (13) of the gallery does.
 
 | Stationary-solid configuration | Viscous operator used by LS-STAG |
 |:--|:--|

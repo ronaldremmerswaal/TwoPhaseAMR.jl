@@ -54,7 +54,7 @@ export convection!, staggered_inner_product
 export AbstractWallBoundaryCondition, NoSlip, FreeSlip
 export VelocityBoundaryConditions, Inflow, Outflow, ZeroGradientVelocity
 export enforce_velocity_boundary!
-export StaggeredDiffusionOperator, diffusion!
+export StaggeredDiffusionOperator, diffusion!, value_points
 export AbstractViscosityAveraging, HarmonicViscosityAveraging, GeometricViscosityAveraging
 export AbstractEmbeddedViscousClosure, WallDistanceClosure, LSStagClosure
 export LinearSolverOptions, MultigridOptions
