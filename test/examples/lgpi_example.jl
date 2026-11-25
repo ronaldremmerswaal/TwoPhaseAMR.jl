@@ -8,6 +8,19 @@ using Test, TwoPhaseAMR, LinearAlgebra
     @test initial.bathymetry_levelset(0.9, 0.0) ≈ 0.0 atol = 8eps()
 end
 
+@testset "LGPI studio recording" begin
+    example = load_example(:lgpi)
+    run = call_example(
+        example, :run_example; max_level = 0, final_time = 1.0e-6,
+        start_studio = example_start_probe,
+        recorder_options = (; keyframes = EquispacedTimes(2)),
+    )
+    @test isopen(run.app)
+    @test run.result.time == 1.0e-6
+    @test length(keyframes(snapshot_store(run.recorder))) == 2
+    close(run.app)
+end
+
 @testset "Adaptive LGPI example" begin
     example = load_example(:lgpi)
     # Run past the first five-step adaptation check with the corrected

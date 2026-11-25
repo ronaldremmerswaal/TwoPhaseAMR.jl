@@ -17,7 +17,7 @@ rather than a time-dependent flow.
 | 08 | [Sessile droplet](08_sessile_droplet/) | Contact-angle relaxation | One velocity | Level 3, eight capillary times; 40.09 s |
 | 09 | [Sloped sessile droplet](09_sloped_sessile_droplet/) | Embedded inclined wall | One velocity | Level 2, four capillary times; unmeasured at this size (level-3 gallery run 93.79 s) |
 | 10 | [Stokes wave](10_stokes3_wave/) | Nonlinear free-surface wave | One velocity | Level 5, one period; unmeasured |
-| 11 | [Large gas-pocket impact](11_lgpi/) | Gravity wave over bathymetry | Two velocity | Level 4, 1.2 gravity periods; unmeasured (gallery level-3 run 1872 s) |
+| 11 | [Large gas-pocket impact](11_lgpi/) | Gravity wave over bathymetry | Two velocity | Level 4, 1.2 gravity periods; unmeasured (gallery level-3 setup and simulation 2710.5 s) |
 | 12 | [Manufactured Poisson](12_manufactured_poisson/) | Pressure projection with density jump | Two velocity | 32×32; 11.86 s setup and solve |
 
 Warm timings are second calls in one process; first-call compilation is
@@ -45,14 +45,13 @@ To run an example directly, for example,
 `julia --project=examples examples/06_capillary_wave/capillary_wave.jl`.
 Most flow examples return `(; flow, result, recorder, app)`; keyframes are
 available via `snapshot_store(run.recorder)`. Vortex reversal returns its
-interface, prescribed velocity, result, recorder and app. LGPI returns its
-flow, result and recorder, while manufactured Poisson returns its projection
-fields, errors and a `registry`. For most cases, a low `max_level` and short
-`final_time` make a quick initial run.
+interface, prescribed velocity, result, recorder and app. Manufactured Poisson
+returns its projection fields, errors and a `registry`. For most cases, a low
+`max_level` and short `final_time` make a quick initial run.
 
 ## Studio
 
-Examples 01–10 can opt into live browser viewing from the command line:
+Examples 01–11 can opt into live browser viewing from the command line:
 
 ```sh
 julia -t 2,1 --project=examples examples/06_capillary_wave/capillary_wave.jl --studio
@@ -79,8 +78,7 @@ To avoid launching a browser, use
 URL. Treat that tokenized URL as a credential. Interactive runs record
 wall-clock-throttled previews by default; `recorder_options` overrides Recorder
 settings, e.g. `(; preview=EveryStep())`. Headless runs default to keyframes
-only. For LGPI, `studio(run.recorder)` opens its completed recording; the
-static Poisson example does not have a recorder.
+only. The static Poisson example does not have a recorder or a studio.
 
 ## Reproducing figures
 
