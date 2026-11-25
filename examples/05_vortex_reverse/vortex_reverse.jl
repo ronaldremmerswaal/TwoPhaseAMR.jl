@@ -1,7 +1,7 @@
 using TwoPhaseAMR
 
 """
-    run_example(; max_level=5, final_time=8, reconstruction_method=:lhf,
+    run_example(; max_level=6, final_time=8, reconstruction_method=:lhf,
                 start_studio=nothing, recorder_options=(;), kwargs...)
 
 Run the classical direction-reversing VOF transport problem. This prescribed
@@ -13,7 +13,7 @@ fallback. Use `:lhf_ghf` for the original GHF fallback as well, or `:wy` for
 WY PLIC normals throughout.
 """
 function run_example(;
-        max_level = 5,
+        max_level = 6,
         final_time = 8.0,
         reconstruction_method = :lhf,
         start_studio = nothing,
@@ -49,10 +49,15 @@ function run_example(;
             break
         initialize!(interface, levelset; interface_options...)
     end
+    scalar_profile(x, y) = 1 + 0.8sinpi(4x)
+    scalar = PhaseScalar(interface; liquid = scalar_profile, gas = 0)
+    adaptation = AMRWorkspace(mesh, interface, velocity, scalar)
     initial_volume = integrate(interface)
+    initial_scalar = integrate(scalar, :liquid)
     advection_workspace = WYAdvectionWorkspace(interface)
     fields = VisualizationFieldRegistry()
     register_default_fields!(fields, :volume_fraction, interface, :velocity, velocity)
+    register_field!(fields, :liquid_scalar, scalar; label = "Dye (liquid)")
     recorder = Recorder(
         fields;
         merge(
@@ -106,6 +111,7 @@ function run_example(;
                 set_velocity!(time + dt / 2)
                 advect!(
                     interface, velocity, dt, workspace;
+                    scalars = (scalar,),
                     sweep_order = iseven(steps) ? (1, 2) : (2, 1),
                 )
                 time += dt
@@ -128,6 +134,7 @@ function run_example(;
             progress[] = (; time, steps, mesh_updates, dt, workspace)
             return (;
                 time, steps, mesh_updates, stopped,
+                scalar_content_error = abs(integrate(scalar, :liquid) - initial_scalar),
                 volume_error = abs(integrate(interface) - initial_volume),
             )
         catch exception
@@ -157,7 +164,7 @@ function run_example(;
         end
         rethrow()
     end
-    return (; interface, velocity, result, recorder, app)
+    return (; interface, velocity, scalar, scalar_profile, result, recorder, app)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

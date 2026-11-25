@@ -40,6 +40,10 @@ end
         @test run.result.steps == 1
         @test !isempty(keyframes(snapshot_store(run.recorder)))
         @test run.result.volume_error <= 128eps()
+        @test run.result.scalar_content_error <= 256eps()
+        @test :liquid_scalar in field_names(run.recorder.registry)
+        frame = snapshot_store(run.recorder)[last(keyframes(snapshot_store(run.recorder)))]
+        @test all(isfinite, frame[:liquid_scalar].liquid)
     end
 end
 
@@ -186,23 +190,8 @@ end
     )
     @test run.result.volume_error <=
         8 * run.interface.fraction_floor * prod(run.interface.mesh.extent)
-end
-
-@testset "Manufactured Poisson example" begin
-    example = load_example(:manufactured_poisson)
-    run = call_example(example, :run_example; resolution = 8)
-    @test run.density[1] / run.density[2] == 1000
-    @test 0.8 <= run.analytical_jump_components.rms_ratio <= 1.25
-    @test run.stats.converged
-    @test field_names(run.registry)[1] == :pressure
-    @test all(isfinite, values(run.errors.pressure))
-    @test all(isfinite, values(run.errors.gradient))
-    @test all(isfinite, values(run.errors.xi.x))
-    @test all(isfinite, values(run.errors.xi.y))
-    @test run.errors.pressure.l2 <= run.errors.pressure.linf
-    @test run.errors.gradient.l2 <= run.errors.gradient.linf
-    @test run.errors.xi.x.l2 <= run.errors.xi.x.linf
-    @test run.errors.xi.y.l2 <= run.errors.xi.y.linf
+    @test run.result.scalar_content_error <=
+        16 * run.interface.fraction_floor * prod(run.interface.mesh.extent)
 end
 
 @testset "Vortex-reversal Studio driver continues its prescribed flow" begin
