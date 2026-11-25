@@ -192,8 +192,9 @@ function _validate_phase_momentum!(args...)
         )
     )
 end
-@inline function _wy_fraction_in_bounds(c::T, open::Real) where {T}
-    tolerance = T(128) * eps(T)
+@inline function _wy_fraction_in_bounds(c::T, open::Real, scale::T = one(T)) where {T}
+    tolerance = T(128) * eps(T) * scale
+    isfinite(c) && isfinite(scale) || return false
     if iszero(open) || open == one(T)
         return -tolerance <= c <= one(T) + tolerance
     end
@@ -504,9 +505,28 @@ function _advect_wy!(
                     end
                     increments[k][phase].blocks[b][ii, jj] = increment
                 end
-                _wy_fraction_in_bounds(
-                    conditional[ii, jj] + increment_values[ii, jj], open,
-                ) || (failures[(b - 1) * mesh.block_size[2] + j] = Int32(i))
+                c = conditional[ii, jj] + increment_values[ii, jj]
+                if !_wy_fraction_in_bounds(c, open)
+                    # Clipping is performed in full-cell coordinates: each
+                    # nonzero swept phase volume can carry an absolute area
+                    # error even when the volume itself is small. Include
+                    # that geometric scale as well as the summed operands.
+                    scale = one(T) + abs(open * conditional[ii, jj])
+                    for pointer in work.cell_face_offsets[cell]:(
+                            work.cell_face_offsets[cell + 1] - 1
+                        )
+                        face_index = work.cell_faces[pointer]
+                        mesh.faces[face_index].axis == axis || continue
+                        volume = work.open_flux[face_index]
+                        liquid = work.liquid_flux[face_index]
+                        if !iszero(liquid)
+                            scale += one(T)
+                        end
+                        scale += (abs(indicator[ii, jj] * volume) + abs(liquid)) / cellvolume
+                    end
+                    _wy_fraction_in_bounds(c, open, scale) ||
+                        (failures[(b - 1) * mesh.block_size[2] + j] = Int32(i))
+                end
             end
         end
         _throw_wy_fraction_failure(field, work, axis, work.conditional_failure)
