@@ -48,8 +48,8 @@ With the optional baffle, a `1 cm` thick plate of height `h_b` stands on the
 floor at `x = L/2`. It is a [`PolygonIndicator`](../../docs/src/two-phase-flow.md)
 rectangle, so the solid fractions come from exact polygon clipping, turned into
 an embedded solid by `GeometryField(InterfaceField(mesh, polygon))`. Its faces
-cut the cells next to the centre line, it is a no-slip wall for the viscous
-stresses, and the geometry indicator keeps it at the finest level.
+cut the cells next to the centre line and are impermeable with free slip, as
+on the tank walls. The geometry indicator keeps the baffle at the finest level.
 
 The wall probes `:left_elevation` and `:right_elevation` are volume based:
 the liquid volume in the full-height strip of width `w = 1/64 m` next to a wall,
@@ -193,11 +193,10 @@ solutions, not errors against a reference or measurements of the level-3 hero.
 - The contact angle is static (`90°`) and constrains the curvature only;
   there is no contact-angle hysteresis or contact-line friction, which add
   damping in real tanks.
-- The tank walls are free slip, so there are no wall boundary layers; the
-  baffle is a no-slip wall whose boundary layer is not resolved at these
-  levels.
-- The flow is two-dimensional and laminar; the vortices shed by the baffle are
-  resolved only to the finest AMR level around the solid.
+- The tank walls and baffle are free slip in these runs, so they do not
+  model no-slip boundary layers.
+- The simulation is two-dimensional and has no turbulence closure. The
+  vortices shed near the baffle are resolved only to the local AMR spacing.
 - The force callback has no access to the state, so the tank motion must be
   prescribed; coupled tank–liquid dynamics are out of reach.
 
