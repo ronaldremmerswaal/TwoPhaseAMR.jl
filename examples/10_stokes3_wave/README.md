@@ -13,8 +13,8 @@ The wave breaks within the first period. The snapshot comes from a separate leve
 | **Physics** | Two phases, density ratio `850`, `g=1`, Bond number `1000`, Reynolds number `4×10⁴`, steepness `0.55` and depth `0.5`. The domain is `[-0.5,0.5]²`, periodic in `x` with free-slip `y` boundaries. |
 | **Algorithms** | One velocity by default; WY geometric VOF, `:lhf` PLIC with WY fallback, CGFM surface tension, Lax–Wendroff momentum advection and implicit-midpoint viscosity. Pressure and two-phase diffusion use CG with tree-geometric multigrid. AMR combines the interface indicator through `t=0.01`, curvature at 8 cells per radius, and vorticity thresholds `0.2` and `0.2/3`; adaptation is attempted every step with coarsen delay 2. |
 | **Worth varying** | `steepness=0.55` changes the initialized wave and frequency; `bond=1000` changes surface tension; `reynolds=4e4` changes viscosity; `density_ratio=850` changes gas density; `max_level=5` sets the refinement ceiling; `final_time=nothing` selects one nominal period. |
-| **Validated against** | At docs size, the final interface after two periods, at 200 evenly spaced `x` positions, differs from the analytical third-order *initial* profile by sample RMS `0.0436195` and maximum `0.0880803`. This approximate Stokes profile is not an exact solution of the viscous, capillary, two-phase problem. |
-| **Cost** | `run_example` default: `max_level=5`, one period, runtime and final cells unmeasured. Gallery `:docs`: `max_level=4`, two periods (`T≈4.39705`), 2482 steps and 6592 final cells; setup and simulation took 171.9 s on one thread, including first-use compilation, and the separate level-5 first-period hero and impact-location runs took 223.3 s. The whole figure script, with its 81-frame GIFs, took 548.7 s, excluding package loading, measured while other jobs shared the machine. Gallery `:default` uses `max_level=6`, two periods. |
+| **Validated against** | At docs size, the final interface after two periods, at 200 evenly spaced `x` positions, differs from the analytical third-order *initial* profile by sample RMS `0.0502422` and maximum `0.113808`. This approximate Stokes profile is not an exact solution of the viscous, capillary, two-phase problem. |
+| **Cost** | `run_example` default: `max_level=5`, one period, runtime and final cells unmeasured. Gallery `:docs`: `max_level=4`, two periods (`T≈4.39705`), 2165 steps and 6976 final cells; setup and simulation took 168.94 s on one thread, including first-use compilation, and the separate level-5 first-period hero and impact-location runs took 301.0 s. The whole figure script, with its 81-frame GIFs, took 544.4 s, excluding package loading, measured while other jobs shared the machine. Gallery `:default` uses `max_level=6`, two periods. |
 
 Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded unless stated.
 
@@ -52,7 +52,7 @@ press Ctrl+C to close Studio after the run.
 
 ![Computed interface after two periods and the third-order initial profile](assets/profile.png)
 
-After two nominal periods, the sampled interface differs from the third-order initialization by RMS `0.0436195` and maximum `0.0880803`; the wave has broken, so these differences include physical model differences as well as numerical error.
+After two nominal periods, the sampled interface differs from the third-order initialization by RMS `0.0502422` and maximum `0.113808`; the wave has broken, so these differences include physical model differences as well as numerical error.
 
 ![Final vorticity with interface](assets/vorticity.png)
 
@@ -60,7 +60,7 @@ Vorticity at the final retained state, with the PLIC interface. The signed vorti
 
 ![Vorticity animation over two periods with the kinetic energy](assets/wave.gif)
 
-The animation has 81 output frames, one per keyframe, on a uniform simulation-time grid over two periods (spacing `T_end/80`; each keyframe is the completed step nearest its requested time), with one symmetric vorticity range over all frames in 31 colour levels and the kinetic energy with a cursor at the shown time. The committed GIF is frame-optimized after export with `convert wave.gif -coalesce -background white -alpha remove -layers Optimize wave.gif` (ImageMagick; same frames and durations, the transparent padding column filled with the figure's white, 2.37 MB → 0.66 MB). The summary also prints kinetic energy, phase volumes, divergence, momentum, regrids, final cell count and elapsed setup/simulation time.
+The animation has 81 output frames, one per keyframe, on a uniform simulation-time grid over two periods (spacing `T_end/80`; each keyframe is the completed step nearest its requested time), with one symmetric vorticity range over all frames in 31 colour levels and the kinetic energy with a cursor at the shown time. The committed GIF is the exported file itself (`wave.gif`, 930 × 450, 0.61 MB), which is already below the 2 MB gallery limit, so no post-export optimisation is applied. The summary also prints kinetic energy, phase volumes, divergence, momentum, regrids, final cell count and elapsed setup/simulation time.
 
 ## Variations
 
