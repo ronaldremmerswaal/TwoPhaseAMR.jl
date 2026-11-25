@@ -11,8 +11,8 @@ A steep liquid front evolves over an embedded elliptical bathymetry in a scaled 
 | **Physics** | Liquid/gas densities `(1000, 1)`, dynamic viscosities `(10⁻³, 1.75×10⁻⁵)`, surface tension `0.073` and gravity `(0, -9.81)`. At `scale=20` the nonperiodic domain is `1 × 0.6`, with free-slip outer boundaries and an embedded elliptical solid. |
 | **Algorithms** | Two velocities by default (`TwoVelocityModel()`), with frozen-interface WY transport and `CMDGFMProjection()` (a block-preconditioned BiCGSTAB solve); WY geometric VOF, `:lhf` PLIC with WY fallback, CGFM surface tension, monotonized-central (`MonotonizedCentral()`) momentum advection, implicit-midpoint viscosity, and CG/tree-geometric multigrid for diffusion. The interface indicator targets `min(1,max_level)` and the liquid-velocity vorticity indicator refines up to `max_level` at `0.25` and coarsens below `0.25/3`. Both use `ymin=refinement_ymin`; AMR is checked every 5 steps with coarsen delay 10. |
 | **Worth varying** | `scale=20` by default; changing it rescales the prescribed domain and initial geometry while leaving the listed physical coefficients fixed. `max_level=4` changes the vorticity-refinement ceiling; `final_time=nothing` selects `1.2` gravity periods. `refinement_ymin` overrides the default solid-adjacent exclusion height; `velocity_model=OneVelocityModel()` selects a shared velocity; `numerics=NavierStokesOptions(advection=AdvectionOptions(scheme=LaxWendroff()))` selects Lax–Wendroff momentum advection, which can leave visible dispersive noise in the vorticity of this impact. Other supported `FlowSimulation` options can be passed as keywords. |
-| **Validation status** | In the documented level-3 run, liquid volume changes by `−3.65923×10⁻⁹` from about `0.182426` over the full simulation. There are 1625 cumulative unresolved-curvature face events, and the finest blocks touching the solid are at level 1 at the final time; the later fragmented interface is not resolved well enough to validate entrainment. No experimental impact or interface-position error is claimed. |
-| **Cost** | The documented two-velocity run used `max_level=3`, `T≈0.961327` (1.2 gravity periods), 18236 steps, 2386 mesh updates and 10416 final cells; setup and simulation took 8512.8 s and the whole script 8587.9 s on one thread, including first-call compilation, measured while other jobs shared the machine. The example default uses `max_level=4`. |
+| **Validation status** | In the documented level-3 run, liquid volume changes by `−7.02372×10⁻¹⁰` from about `0.182426` over the full simulation. There are 1071 cumulative unresolved-curvature face events, and the finest blocks touching the solid are at level 1 at the final time; the later fragmented interface is not resolved well enough to validate entrainment. No experimental impact or interface-position error is claimed. |
+| **Cost** | The documented two-velocity run used `max_level=3`, `T≈0.961327` (1.2 gravity periods), 5098 steps, 758 mesh updates and 9792 final cells; setup and simulation took 1823.1 s and the whole script 1872 s on one thread, including first-call compilation, measured while other jobs shared the machine. The example default uses `max_level=4`. |
 
 Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded.
 
@@ -91,16 +91,17 @@ filled bathymetry at three times from the level-3 run.
 The GIF shows the same run with block outlines and a synchronized
 kinetic-energy cursor; the energy plot includes the full simulation history.
 The GIF has 80 output frames sampled from 81 equally spaced requested times
-(spacing `T/80`). The first solver step (`Δt≈0.025`) spans two requests, so
+(spacing `T/80`). The first solver step (`Δt≈0.020`) spans two requests, so
 the rendered sequence contains one identical consecutive-frame hold and skips
-one stored keyframe; its first frame (`t=0`) therefore appears twice.
+one stored keyframe (`t≈0.481`); the state at `t≈0.0202` therefore appears
+twice.
 Vorticity uses
-31 colour levels over a symmetric range of ±448.19, the 99.9th percentile of
+31 colour levels over a symmetric range of ±410.577, the 99.9th percentile of
 rasterized magnitudes in the displayed frames. Larger values saturate: the
-sampled peak is 5706.08 near `(x,y)=(0.00125,0.33875)` at `t≈0.4807`.
+sampled peak is 4479.69 near `(x,y)=(0.00125,0.48875)` at `t≈0.4927`.
 The final displayed frame is at `t≈0.9613`. The committed GIF is
 frame-optimized after export with `convert impact.gif -layers Optimize
-impact.gif` (ImageMagick; same frames and durations, 2.28 MB → 0.64 MB).
+impact.gif` (ImageMagick; same frames and durations, 2.30 MB → 0.73 MB).
 
 The later fragmented interface and its wall interaction are under-resolved at
 this level; the full animation is shown for context, not as validated
