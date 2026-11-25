@@ -5,9 +5,9 @@ Base.include(@__MODULE__, joinpath(@__DIR__, "taylor_culick.jl"))
 # In the example's units V_TC = 1, e = 1 and σ = 1/2.
 const SURFACE_TENSION = 0.5
 
-"""Least-squares slope of `values` against `times` on `[t0, t1]`."""
+"""Least-squares slope of the finite `values` against `times` on `[t0, t1]`."""
 function window_slope(times, values, t0, t1)
-    keep = findall(t -> t0 <= t <= t1, times)
+    keep = findall(i -> t0 <= times[i] <= t1 && isfinite(values[i]), eachindex(times))
     t, v = times[keep], values[keep]
     tm, vm = sum(t) / length(t), sum(v) / length(v)
     return sum((t .- tm) .* (v .- vm)) / sum(abs2, t .- tm)
@@ -50,36 +50,14 @@ function rim_profile(profile)
 end
 
 """
-Count after every step the faces to which CGFM surface tension applies no
-force because no curvature is in reach (the test of
-`TwoPhaseAMR._surface_tension_jumps!`): between two pure cells, a
-grid-aligned surface; next to a mixed cell on the edge, `x ≥ x_tip − 3H` with
-`H` the largest thickness (rim, neck and first waves); and next to a mixed
-cell ahead of it.
+Centroid of the liquid the edge has gathered: of the excess `h − e` of the
+column thickness `h` over the sheet thickness `e = 1`, where it is positive.
+Undefined (`NaN`) before any liquid has gathered.
 """
-function add_unresolved_census!(flow)
-    latest = Ref((-1, (0, 0, 0)))
-    function census(state)
-        latest[][1] == state.step && return latest[][2]
-        field = state.interface
-        edge = interface_height(field; direction = :x, position = 0.0) -
-            6liquid_half_thickness(field)
-        pure(c) = iszero(c) || isone(c)
-        counts = [0, 0, 0]
-        for face in field.mesh.faces
-            cm = TwoPhaseAMR._conditional_fraction(field, face.minus)
-            cp = TwoPhaseAMR._conditional_fraction(field, face.plus)
-            (cm > 0.5) == (cp > 0.5) && continue
-            isnothing(TwoPhaseAMR._face_curvature(field, face)) || continue
-            counts[pure(cm) && pure(cp) ? 1 : face.center[1] >= edge ? 2 : 3] += 1
-        end
-        latest[] = (state.step, Tuple(counts))
-        return latest[][2]
-    end
-    for (k, name) in enumerate((:unresolved_aligned, :unresolved_edge, :unresolved_other))
-        add_diagnostic!(flow, name, state -> census(state)[k]; kind = :count)
-    end
-    return flow
+function gathered_centroid(interface, width)
+    (; x, h) = thickness_profile(interface, width)
+    excess = max.(h .- 1, 0)
+    return sum(x .* excess) / sum(excess)
 end
 
 """
@@ -87,10 +65,14 @@ Run one case and reduce it to its histories and summary; `keep=true` also
 records `keyframes` frames for the field figures.
 """
 function retraction_case(label; keep = false, keyframes = 21, final_time = 12.0, kwargs...)
-    local flow, recorder
+    local flow, recorder, result
     elapsed = @elapsed begin
         flow = run_example(; final_time = 0.0, kwargs...).flow
-        add_unresolved_census!(flow)
+        width = 1 / 2^kwargs[:max_level]
+        add_diagnostic!(
+            flow, :gathered_centroid, state -> gathered_centroid(state.interface, width);
+            label = "Gathered-liquid centroid", dimension = PhysicalDimension(0, 1, 0),
+        )
         recorder = if keep
             fields = VisualizationFieldRegistry()
             register_default_fields!(fields, flow)
@@ -99,21 +81,25 @@ function retraction_case(label; keep = false, keyframes = 21, final_time = 12.0,
                 preview = nothing,
             )
         end
-        simulate!(flow, final_time; observer = something(recorder, NoObserver()))
+        result = simulate!(flow, final_time; observer = something(recorder, NoObserver()))
     end
     names = (
         :tip_position, :edge_thickness, :liquid_momentum, :liquid_kinetic_energy,
-        :kinetic_energy, :surface_energy, :phase_volume, :unresolved_edge,
-        :unresolved_aligned, :unresolved_other,
+        :kinetic_energy, :surface_energy, :phase_volume, :gathered_centroid,
     )
     histories = Dict(name => diagnostic_history(flow, name) for name in names)
     times = histories[:tip_position].times
     tip = histories[:tip_position].values
-    # Centre of a circular rim: the tip minus half the largest thickness.
+    # A proxy for the centre of a round rim: the tip minus half the largest
+    # thickness. For a club-shaped edge it is the centre of the rounded nose.
     centre = tip .- histories[:edge_thickness].values ./ 2
+    gathered = histories[:gathered_centroid]
     windows = collect(0.5:0.5:(final_time - 0.5))
-    unit_speed(values) = [-window_slope(times, values, t - 0.5, t + 0.5) for t in windows]
-    speeds = (; times = windows, tip = unit_speed(tip), centre = unit_speed(centre))
+    unit_speed(t, values) = [-window_slope(t, values, w - 0.5, w + 0.5) for w in windows]
+    speeds = (;
+        times = windows, tip = unit_speed(times, tip), centre = unit_speed(times, centre),
+        gathered = unit_speed(gathered.times, gathered.values),
+    )
     first_above(speed) = (i = findfirst(>=(0.9), speed); isnothing(i) ? NaN : windows[i])
     # The surface tension of the two flat surfaces pulls the liquid with 2σ,
     # so its momentum is -2σt from rest.
@@ -124,39 +110,33 @@ function retraction_case(label; keep = false, keyframes = 21, final_time = 12.0,
     late = (final_time - 4, final_time)
     rate(values) = window_slope(times, values, final_time / 2, final_time)
     volume = histories[:phase_volume].values
-    # Last census sample with a face of each kind, on the census's own times.
-    last_time(name) = (
-        history = histories[name]; i = findlast(>(0), history.values);
-        isnothing(i) ? 0.0 : history.times[i]
-    )
     summary = (;
         label, elapsed, steps = flow.steps,
         cells = TwoPhaseAMR.ncells(flow.system.mesh), final_time,
         tip = last(tip), thickness = last(histories[:edge_thickness].values),
         tip_speed = -window_slope(times, tip, late...),
         centre_speed = -window_slope(times, centre, late...),
+        gathered_speed = -window_slope(gathered.times, gathered.values, late...),
         tip_90 = first_above(speeds.tip), centre_90 = first_above(speeds.centre),
+        gathered_90 = first_above(speeds.gathered),
         momentum = last(momentum),
         momentum_error = maximum(abs.(momentum[times .>= 1] .- 1)),
         released = last(released), liquid = last(liquid),
         gas = last(kinetic) - last(liquid), dissipated = last(released) - last(kinetic),
         liquid_rate = rate(liquid), release_rate = rate(released),
         volume_change = last(volume)[1] - first(volume)[1],
-        unresolved = flow.unresolved_curvature_faces,
-        unresolved_aligned = sum(histories[:unresolved_aligned].values),
-        unresolved_aligned_until = last_time(:unresolved_aligned),
-        unresolved_edge = sum(histories[:unresolved_edge].values),
-        unresolved_edge_max = maximum(histories[:unresolved_edge].values),
-        unresolved_edge_until = last_time(:unresolved_edge),
-        unresolved_other = sum(histories[:unresolved_other].values),
+        unresolved = result.total_unresolved_curvature_faces,
     )
     @printf(
-        "%s: %.1f s, %d steps, %d final cells, t=%.4f; tip %.4f, largest thickness \
-        %.4f; speed on [T-4,T]: tip %.4f, rim centre %.4f; first unit window at 0.9 V: \
-        tip %.1f, centre %.1f; momentum/(2σt) %.4f, largest deviation for t >= 1 %.4f\n",
-        label, elapsed, summary.steps, summary.cells, final_time, summary.tip,
-        summary.thickness, summary.tip_speed, summary.centre_speed, summary.tip_90,
-        summary.centre_90, summary.momentum, summary.momentum_error
+        "%s: %.1f s, %d steps, %d final cells, t=%.4f, faces without curvature %d; tip \
+        %.4f, largest thickness %.4f; speeds on [T-4,T]: tip %.4f, round-rim centre \
+        %.4f, gathered-liquid centroid %.4f; first unit window at 0.9 V: tip %.1f, \
+        round-rim centre %.1f, gathered %.1f; momentum/(2σt) %.4f, largest deviation \
+        for t >= 1 %.4f\n",
+        label, elapsed, summary.steps, summary.cells, final_time, summary.unresolved,
+        summary.tip, summary.thickness, summary.tip_speed, summary.centre_speed,
+        summary.gathered_speed, summary.tip_90, summary.centre_90, summary.gathered_90,
+        summary.momentum, summary.momentum_error
     )
     @printf(
         "  energy: released %.4f, liquid kinetic %.4f (%.3f), gas kinetic %.4f (%.3f), \
@@ -166,14 +146,6 @@ function retraction_case(label; keep = false, keyframes = 21, final_time = 12.0,
         summary.gas / summary.released, summary.dissipated,
         summary.dissipated / summary.released, summary.release_rate, summary.liquid_rate,
         summary.liquid_rate / summary.release_rate, summary.volume_change
-    )
-    @printf(
-        "  faces without curvature: %d in the solver's steps; after-step census: \
-        between pure cells %d (last at t=%.3f), mixed on the edge %d (at most %d in a \
-        step, last at t=%.3f), mixed ahead of the edge %d\n",
-        summary.unresolved, summary.unresolved_aligned, summary.unresolved_aligned_until,
-        summary.unresolved_edge, summary.unresolved_edge_max, summary.unresolved_edge_until,
-        summary.unresolved_other
     )
     profile = thickness_profile(flow.interface, 1 / 2^kwargs[:max_level])
     flow = nothing
@@ -191,15 +163,28 @@ function varicose_wavelength()
     return pi / q
 end
 
-"""Tip and rim-centre speeds on the unit windows centred at `times`."""
+"""Speeds on the unit windows centred at `times`, and dissipated energy shares."""
 function speed_report(case, times)
     (; speeds) = case
     for t in times
         i = findfirst(==(t), speeds.times)
         isnothing(i) && continue
         @printf(
-            "  %s, unit window at t=%.1f: tip %.4f, rim centre %.4f, (1 - centre speed) t %.3f\n",
-            case.summary.label, t, speeds.tip[i], speeds.centre[i], (1 - speeds.centre[i]) * t
+            "  %s, unit window at t=%.1f: tip %.4f, round-rim centre %.4f, gathered \
+            centroid %.4f, (1 - V_tip/V) sqrt(t) %.3f, (1 - V_gathered/V) t %.3f\n",
+            case.summary.label, t, speeds.tip[i], speeds.centre[i], speeds.gathered[i],
+            (1 - speeds.tip[i]) * sqrt(t), (1 - speeds.gathered[i]) * t
+        )
+    end
+    surface = case.histories[:surface_energy]
+    kinetic = case.histories[:kinetic_energy]
+    for t in (2.0, 4.0, 8.0, 12.0, 16.0, 20.0)
+        t <= case.summary.final_time || continue
+        i = argmin(abs.(surface.times .- t))
+        released = first(surface.values) - surface.values[i]
+        @printf(
+            "  %s, t=%.3f: dissipated share of the released surface energy %.3f\n",
+            case.summary.label, surface.times[i], (released - kinetic.values[i]) / released
         )
     end
     return nothing
@@ -274,7 +259,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     )
     speed = Axis(
         figure[1, 2]; xlabel = "t V/e", ylabel = "speed / V",
-        title = "Tip (solid) and rim-centre (dashed) speed",
+        title = "Tip (solid) and gathered-liquid centroid (dashed) speed",
     )
     lines!(distance, [0, 20], [0, 20]; color = :gray50, linestyle = :dot, label = "V t")
     hlines!(speed, [1.0]; color = :gray50, linestyle = :dot)
@@ -288,7 +273,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
         end
         finest = last(cases)
         lines!(speed, finest.speeds.times, finest.speeds.tip; color, label = finest.summary.label)
-        lines!(speed, finest.speeds.times, finest.speeds.centre; color, linestyle = :dash)
+        lines!(speed, finest.speeds.times, finest.speeds.gathered; color, linestyle = :dash)
     end
     axislegend(distance; position = :lt, labelsize = 10)
     axislegend(speed; position = :rb, labelsize = 10)

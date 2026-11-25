@@ -11,8 +11,8 @@ A planar liquid sheet retracts from its free end under surface tension. At `Oh =
 | **Physics** | A liquid sheet of thickness `e` in a gas with `ρ_l/ρ_g = 1000`, no gravity. The example's units are `e = 1`, `ρ_l = 1` and the Taylor–Culick speed `V = √(2σ/(ρ_l e)) = 1`, so `σ = 1/2` and times are in `e/V`. The liquid viscosity follows from `Oh = μ_l/√(ρ_l σ e)` (default `0.1`); the gas viscosity is `μ_g = 2×10⁻³ √(ρ_l σ e)` for every `Oh` (`μ_l/μ_g = 50` at `Oh = 0.1`, `1500` at `Oh = 3`). The sheet `\|y\| < e/2` reaches from the free-slip wall `x = 0`, a symmetry plane (the run is half of a free sheet with two ends), to a semicircular end at `x = 24`, in the closed free-slip box `[0, 32] × [−8.2, 7.8]`. |
 | **Algorithms** | `TwoVelocityModel()` with `CMDGFMProjection()` (block-preconditioned BiCGSTAB) and the default interphase drag, frozen-interface WY transport, `:lhf` PLIC with WY fallback, CGFM surface tension, Lax–Wendroff momentum advection and implicit-midpoint viscosity. `InterfaceRefinementIndicator` refines the sheet and the rim to `max_level`, checked every 5 steps with coarsening delay 2: unit cells on level 0 and `2^max_level` cells across the thickness, 8 at the default level 3. |
 | **Worth varying** | `ohnesorge=0.1`; `density_ratio=1000` and `gas_ohnesorge=2e-3` (the gas viscosity in units of `√(ρ_l σ e)`); `sheet_length=24`, which lengthens the box with it; `max_level=3`; `final_time=12.0`; `velocity_model=OneVelocityModel()` for one shared velocity. |
-| **Validated against** | The Taylor–Culick speed `V` and the exact liquid momentum `2σt`. At `Oh = 0.1` and level 4 the rim centre moves at `0.986V` over `t = 8–12` (within 5% of `V` from `t = 1` on), the tip at `0.902V`, lagging by `0.31(Vt/e)^(−1/2)`, and the momentum stays within 1.1% of `2σt` for `t ≥ 1`. At `Oh = 3` the rim centre reaches `0.923V` over `t = 16–20`, about 9 viscous times `τ_vis = 2.12e/V`, as in [Savva & Bush (2009)](https://doi.org/10.1017/S0022112009005795), whose largest-thickness law `e(1 + t/(4τ_vis))` holds within 2% up to `t = 4`. The capillary waves ahead of the `Oh = 0.1` rim have a crest spacing of `2.50e`, against `2.62e` for inviscid varicose waves standing in the rim's frame. Culick's energy split, the gas density and the velocity model are measured below. |
-| **Cost** | Default (level 3, `T = 12`): 851 steps, 8192 final cells, 70.6 s. In the figure script, level 4 took 733.9 s (2406 steps, 17216 final cells) and `Oh = 3` on level 3 with `sheet_length = 56` to `T = 20` 281.8 s (1418 steps, 15616 final cells); all eight runs and the rendering took 1478 s including package loading and compilation. |
+| **Validated against** | The Taylor–Culick speed `V` and the ideal liquid momentum `2σt`. At `Oh = 0.1` and level 4 the gathered-liquid centroid moves at `0.990V` over `t = 8–12`, the tip at `0.902V`, and the momentum stays within 1.1% of `2σt` for `t ≥ 1`. At `Oh = 3` and level 3 the tip is still accelerating (`0.879V` over `t = 16–20`) while the centroid moves at `0.975V`. The largest thickness follows the [Savva & Bush (2009)](https://doi.org/10.1017/S0022112009005795) law within 2% up to `t = 4`. The `Oh = 0.1` capillary-wave crest spacing is `2.50e`, against `2.62e` for inviscid varicose waves standing in the rim's frame. |
+| **Cost** | Default (level 3, `T = 12`): 851 steps, 8192 final cells, 71.9 s. In the figure script, level 4 took 668.6 s (2406 steps, 17216 final cells) and `Oh = 3` on level 3 with `sheet_length = 56` to `T = 20` took 316.9 s (1418 steps, 15616 final cells); all eight runs and the rendering took 1475 s including package loading and compilation. |
 
 Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded unless stated. These runs shared the machine with other jobs.
 
@@ -27,13 +27,13 @@ V=\sqrt{\frac{2\sigma}{\rho_l e}},\qquad
 \tau_\mathrm{vis}=\frac{\mu_l e}{2\sigma}=\frac{\mathrm{Oh}}{\sqrt2}\,\tau_\mathrm{inv},
 ```
 
-which is also the speed of long antisymmetric waves on the sheet (Taylor). The speed does not depend on the viscosity, which shapes the edge and sets the transient. [Savva & Bush (2009)](https://doi.org/10.1017/S0022112009005795), whose `Oh` is `μ_l/√(2ρ_lσe)`, find the transient on the inertial time `τ_inv` below `Oh = √2` and on the viscous time `τ_vis` above it, capillary waves ahead of the rim below `Oh ≈ 0.14`, and a rim that spreads into the sheet up to `Oh ≈ 14`. By [Brenner & Gueyffier (1999)](https://doi.org/10.1063/1.869942) a rim forms only when the Stokes length `ν_l/V = Oh e/√2` is shorter than the sheet; on a sheet that the viscous region spans, the edge slows down instead of reaching `V` ([Deka & Pierson 2020](https://doi.org/10.1103/PhysRevFluids.5.093603)). The liquid momentum is exactly `2σt` from rest as long as the sheet ahead is undisturbed and the gas exerts no force, whatever the shape of the edge. The kinetic energy of a steady rim grows at `σV`, half of the surface energy `2σV` that the shortening sheet releases; Culick attributed the other half to dissipation in the inelastic accretion of the sheet ([Sanjay et al. 2022](https://doi.org/10.1017/jfm.2022.671), appendix A).
+which is also the speed of long antisymmetric waves on the sheet (Taylor). The speed does not depend on the viscosity, which shapes the edge and sets the transient. [Savva & Bush (2009)](https://doi.org/10.1017/S0022112009005795), whose `Oh` is `μ_l/√(2ρ_lσe)`, find the transient on the inertial time `τ_inv` below `Oh = √2` and on the viscous time `τ_vis` above it, and their regime map (Fig. 2) has capillary waves ahead of the rim below `Oh ≈ 0.14` and a rim that spreads into the sheet up to `Oh ≈ 14`. By [Brenner & Gueyffier (1999)](https://doi.org/10.1063/1.869942) a rim forms only when the Stokes length `ν_l/V = Oh e/√2` is shorter than the sheet; on a sheet that the viscous region spans, the edge slows down instead of reaching `V` ([Deka & Pierson 2020](https://doi.org/10.1103/PhysRevFluids.5.093603)). The liquid momentum is exactly `2σt` from rest as long as the sheet ahead is undisturbed and the gas exerts no force, whatever the shape of the edge. The kinetic energy of a steady rim grows at `σV`, half of the surface energy `2σV` that the shortening sheet releases; Culick attributed the other half to dissipation in the inelastic accretion of the sheet ([Sanjay et al. 2022](https://doi.org/10.1017/jfm.2022.671), appendix A).
 
 The level set is `|y| − 1/2` for `x ≤ 23.5` and the distance to the circle of radius `1/2` about `(23.5, 0)` beyond; both phases start at rest. The box is shifted by `0.2` in `y` so that no sheet surface lies on a cell face of any level: such a surface has pure cells on both sides, no PLIC segment and no curvature. The diagnostics are `:tip_position`, the liquid length on the midplane (`interface_height` in `x` at `y = 0`); `:edge_thickness`, twice the largest `|y|` on the PLIC interface; the liquid `x`-momentum `:liquid_momentum` and `:liquid_kinetic_energy`, with the mass-compatible face fractions of `mixture_density`; and `KineticEnergy()`, `SurfaceEnergy()`, `LinearMomentum()` and `PhaseVolume()`.
 
 At `Oh = 3` the viscous stresses spread the retraction along the sheet like a diffusion with the extensional coefficient `4ν_l`, over about `2√(4ν_l t) = 26e` by `t = 20`. In exploratory runs with `sheet_length = 24` and `40` the region reached the symmetry wall and the liquid momentum fell 19% (by `t = 16`) and 3% (by `t = 20`) below `2σt`; the figure script therefore uses `sheet_length = 56` there.
 
-The two-velocity CMDGFM projection is the documented choice for thin films ([choosing a model](../../docs/src/choosing-a-model.md)); `MimeticProjection()` is not used, because, unlike the CMDGFM, it does not bound the light-phase values next to the interface. One shared velocity gives the same retraction within 0.3% at level 3 (see below).
+The two-velocity CMDGFM projection is the documented choice for thin films ([choosing a model](../../docs/src/choosing-a-model.md)); `MimeticProjection()` is not used, because, unlike the CMDGFM, it does not bound the light-phase values next to the interface. One shared velocity gives the same late tip speed within 0.3% at level 3 (see below).
 
 ## Run
 
@@ -62,25 +62,25 @@ press Ctrl+C to close Studio after the run.
 
 ### Retraction speed
 
-![Tip retraction of every run against Vt, and the tip and rim-centre speeds of the finest runs](assets/retraction.png)
+![Tip retraction against Vt, and the tip and gathered-liquid centroid speeds of the finest runs](assets/retraction.png)
 
-Speeds are in units of `V`: least-squares slopes of the tip position, and of the rim centre (the tip minus half the largest thickness, the centre of a circular rim), on windows of one `e/V`. The table gives the slopes over the last four time units, `t = 8–12` for `Oh = 0.1` and `t = 16–20` for `Oh = 3`, and the liquid momentum against the exact `2σt`.
+Speeds are in units of `V`, measured from least-squares slopes of position on windows of one `e/V`. The gathered-liquid centroid weights each column by `max(h − e, 0)`, where `h` is its liquid thickness; it tracks the excess liquid in the thickened edge, not a material point. The table gives slopes over the last four time units, `t = 8–12` for `Oh = 0.1` and `t = 16–20` for `Oh = 3`, and the liquid momentum against the ideal `2σt`.
 
-| Run | Cells per `e` | Steps | Final cells | Time | Tip speed | Rim-centre speed | `P/(2σt)` at the end | Largest deviation for `t ≥ 1` |
+| Run | Cells per `e` | Steps | Final cells | Time | Tip speed | Gathered-liquid centroid speed | `P/(2σt)` at the end | Largest deviation for `t ≥ 1` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `Oh = 0.1`, level 2 | 4 | 301 | 3200 | 81.9 s* | 0.908 | 1.015 | 0.968 | 9.4% |
-| `Oh = 0.1`, level 3 | 8 | 851 | 8192 | 70.6 s | 0.896 | 0.981 | 0.979 | 2.1% |
-| `Oh = 0.1`, level 4 | 16 | 2406 | 17216 | 733.9 s | 0.902 | 0.986 | 0.990 | 1.1% |
-| `Oh = 3`, level 2 | 4 | 502 | 7552 | 34.8 s | 0.887 | 0.933 | 0.974 | 13.6% |
-| `Oh = 3`, level 3 | 8 | 1418 | 15616 | 281.8 s | 0.879 | 0.923 | 0.985 | 3.3% |
+| `Oh = 0.1`, level 2 | 4 | 301 | 3200 | 77.5 s* | 0.908 | 0.985 | 0.968 | 9.4% |
+| `Oh = 0.1`, level 3 | 8 | 851 | 8192 | 71.9 s | 0.896 | 0.981 | 0.979 | 2.1% |
+| `Oh = 0.1`, level 4 | 16 | 2406 | 17216 | 668.6 s | 0.902 | 0.990 | 0.990 | 1.1% |
+| `Oh = 3`, level 2 | 4 | 502 | 7552 | 40.8 s | 0.887 | 0.977 | 0.974 | 13.6% |
+| `Oh = 3`, level 3 | 8 | 1418 | 15616 | 316.9 s | 0.879 | 0.975 | 0.985 | 3.3% |
 
 \* Includes the first-call compilation of the script.
 
 The momentum balance converges with the resolution, to 1.1% at 16 cells per thickness: the CGFM force on the curved edge adds up to the `2σ` of the flat surfaces. The speeds change by at most 1.5% between levels 3 and 4 (`Oh = 0.1`) and 2 and 3 (`Oh = 3`), and the level-4 and level-3 tips end within `0.0003e`.
 
-At `Oh = 0.1` the rim centre reaches `V` within the first `e/V` (`1.03V` and `1.04V` on the windows around `t = 1` and `2`) and stays within 3% of it afterwards (`0.970–0.987V` for `t = 4–11`), the inertial transient of a few `τ_inv` that Savva & Bush and [Gordillo et al. (2011)](https://doi.org/10.1063/1.3663577) report. The tip is the trailing edge of a rim whose radius grows like `√t`, so it lags by the growth rate: on level 4, `(1 − V_tip/V)√(Vt/e)` stays at `0.31 ± 0.01` from `t = 4` to `11`, the `t^(−1/2)` approach of Gordillo et al.'s asymptotics. The tip passes `0.9V` at `t ≈ 9.5` and would reach `0.95V` near `t ≈ 40`.
+At `Oh = 0.1` the gathered-liquid centroid is at `0.980V` on the window around `t = 2` and `0.9876–0.9958V` for `t = 3–11` at level 4, consistent with an inertial transient of a few `τ_inv` ([Savva & Bush (2009)](https://doi.org/10.1017/S0022112009005795); [Gordillo et al. (2011)](https://doi.org/10.1063/1.3663577)). The tip lies behind the centre of the growing rim and lags by the growth rate: `(1 − V_tip/V)√(Vt/e)` stays at `0.31 ± 0.02` from `t = 4` to `11`, consistent with the `t^(−1/2)` asymptotic rate. The first half-unit-spaced window with tip speed at or above `0.9V` is centred at `t = 9.5`. If that scaling persists, the tip would reach `0.95V` near `t = 40`, beyond the measured interval.
 
-At `Oh = 3` the approach is the long viscous transient, not a missing force: the momentum is within 3.3% of `2σt` for `t ≥ 1` on level 3. The rim centre passes `0.9V` at `t = 14.5 = 6.8τ_vis` and reaches `0.927V` on the window around `t = 19`; from `t = 7` on, `(1 − V_c/V)Vt/e` stays at `1.38–1.45`, so the rim centre would reach `0.95V` near `t ≈ 28 = 13τ_vis` and `0.98V` near `t ≈ 70`, consistent with Savva & Bush's viscous sheets, which settle on a scale of about `10τ_vis`. The tip is at `0.884V` on that window. Early on, the largest thickness follows their law for a semicircular end at high `Oh`, `e(1 + t/(4τ_vis))` (eq. 2.29): `+1.7%`, `+0.8%` and `−0.2%` at `t = 1`, `2` and `4` on level 3. It then falls below, by 2.2%, 5.2% and 10.3% at `t = 8`, `12` and `20`: the law is the limit `Oh ≫ 1`, and their `Oh` is 2.1 here.
+At `Oh = 3` there is no nearly circular rim. The centroid can move quickly as the thickened region spreads, even while the tip is still accelerating: on the level-3 window around `t = 19`, the centroid moves at `0.975V` and the tip at `0.884V`. The liquid momentum is within 3.3% of `2σt` for `t ≥ 1`, consistent with a long viscous transient rather than a missing capillary force. Early on, the largest thickness follows the high-viscosity law for a semicircular end, `e(1 + t/(4τ_vis))` (Savva & Bush, eq. 2.29): `+1.7%`, `+0.8%` and `−0.2%` at `t = 1`, `2` and `4` on level 3. It then falls below the law by 2.2%, 5.2% and 10.3% at `t = 8`, `12` and `20`. The law is for `Oh ≫ 1`; in their convention the run has `Oh = 2.1`.
 
 ### Rim, neck and capillary waves
 
@@ -105,18 +105,18 @@ Energies are per unit depth, in units of `ρ_l V² e²`, with shares of the rele
 
 ### Faces without curvature
 
-CGFM surface tension applies no force on a face whose curvature is not resolved. After every step `make_figures` counts the faces with a CGFM jump and no curvature in reach, between pure cells, next to a mixed cell on the edge (`x ≥ x_tip − 3H`, `H` the largest thickness) or next to a mixed cell ahead of it; all three counts and the solver's own count are zero in all eight runs. In exploratory runs with the box centred on the sheet, the flat surfaces lay on cell faces: the solver counted 5189 such faces on level 3 and 91507 on level 4, which a level-3 census placed between pure cells on the flat sheet, where the curvature is zero anyway; after the first step none lay next to the rim or neck. Shifting the box changed the level-4 tip at `t = 12` from `13.9577` to `13.9576`. Resolution, not missing curvature, is what fails on level 1: with two cells across, the edge does not retract (the tip has moved `0.23e` forward at `t = 1`, and the liquid holds 12% of `2σt`), although no face lacks a curvature.
+CGFM surface tension applies no force on a face whose curvature is not resolved. The solver counts such faces (`total_unresolved_curvature_faces` in the `simulate!` result), and the count is zero in all eight runs. In exploratory runs with the box centred on the sheet, the flat surfaces lay on cell faces: the solver then counted 5189 such faces on level 3 and 91507 on level 4. A one-off level-3 census with a scratch script placed all of them between pure cells on the flat sheet, where the curvature is zero anyway, and none next to the rim or neck after the first step; shifting the box changed the level-4 tip at `t = 12` from `13.9577` to `13.9576`. Resolution, not missing curvature, is what fails on level 1: with two cells across, the edge does not retract (the tip has moved `0.23e` forward at `t = 1`, and the liquid holds 12% of `2σt`), although no face lacks a curvature.
 
 ### Gas density and velocity model
 
-| Level-3 `Oh = 0.1` variant | Tip speed | Rim-centre speed | `P/(2σt)` at `t = 12` | Gas kinetic share | Time |
+| Level-3 `Oh = 0.1` variant | Tip speed | Gathered-liquid centroid speed | `P/(2σt)` at `t = 12` | Gas kinetic share | Time |
 | --- | --- | --- | --- | --- | --- |
-| default: `ρ_l/ρ_g = 1000`, two velocities | 0.896 | 0.981 | 0.979 | 0.003 | 70.6 s |
-| `ρ_l/ρ_g = 100` | 0.883 | 0.968 | 0.955 | 0.019 | 53.1 s |
-| `ρ_l/ρ_g = 10` | 0.807 | 0.885 | 0.816 | 0.114 | 49.6 s |
-| `OneVelocityModel()` | 0.898 | 0.984 | 0.985 | 0.003 | 79.5 s |
+| default: `ρ_l/ρ_g = 1000`, two velocities | 0.896 | 0.981 | 0.979 | 0.003 | 71.9 s |
+| `ρ_l/ρ_g = 100` | 0.883 | 0.969 | 0.955 | 0.019 | 58.9 s |
+| `ρ_l/ρ_g = 10` | 0.807 | 0.893 | 0.816 | 0.114 | 56.8 s |
+| `OneVelocityModel()` | 0.898 | 0.987 | 0.985 | 0.003 | 82.8 s |
 
-The theory assumes a vacuum. The gas, pushed aside by the rim in the closed box, takes momentum from the liquid: 2.4% and 16% of `2σt` at density ratios 100 and 10, which slows the rim centre by 1.3% and 10% relative to the default. A rim that drags the added mass `ρ_g πR²` of a cylinder would move at `V/√(1 + ρ_g/ρ_l)`, only 0.5% and 4.7% slower (an estimate, not a literature result). The literature's gas effect on thin sheets is rather an instability, the flapping of [Lhuissier & Villermaux (2009)](https://doi.org/10.1103/PhysRevLett.103.054501), which a symmetric planar run does not excite. One shared velocity reproduces the two-velocity retraction within 0.3% in a similar time.
+The theory assumes a vacuum. Compared with the default, the liquid momentum at `t = 12` falls by 2.4 and 16.2 percentage points of `2σt` at density ratios 100 and 10, and the gathered-liquid centroid slows by 1.3% and 9.0%. A rim that drags the added mass `ρ_g πR²` of a cylinder would move at `V/√(1 + ρ_g/ρ_l)`, only 0.5% and 4.7% slower (an estimate, not a literature result). The gas can also cause sheet flapping ([Lhuissier & Villermaux (2009)](https://doi.org/10.1103/PhysRevLett.103.054501)), which this symmetric planar run does not excite. One shared velocity reproduces the two-velocity tip speed within 0.3% and the centroid speed within 0.6%.
 
 ## Variations
 
@@ -130,7 +130,7 @@ run_example(velocity_model = OneVelocityModel())           # one shared velocity
 ## Files
 
 - [taylor_culick.jl](taylor_culick.jl) – setup, diagnostics and the `run_example` entry point.
-- [make_figures.jl](make_figures.jl) – the eight runs, their speed, momentum, energy and face-census reductions, the figures and the animation.
+- [make_figures.jl](make_figures.jl) – the eight runs, their speed, momentum and energy reductions, the figures and the animation.
 
 ## References
 
