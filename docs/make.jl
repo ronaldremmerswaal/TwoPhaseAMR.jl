@@ -135,6 +135,7 @@ makedocs(
             "Adding an equation system" =>
                 "adding-an-equation-system.md",
             "Testing and validation" => "testing.md",
+            "Two-velocity verification" => "two-velocity-verification.md",
             "Literature coverage TODOs" => "literature-todos.md",
         ],
     ],
