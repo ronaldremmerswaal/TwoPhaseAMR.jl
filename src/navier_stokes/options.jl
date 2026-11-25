@@ -40,7 +40,7 @@ end
                         diffusion=LinearSolverOptions(),
                         multigrid=MultigridOptions(),
                         viscosity_averaging=HarmonicViscosityAveraging(),
-                        embedded_viscous_closure=WallDistanceClosure())
+                        embedded_viscous_closure=LSStagClosure())
 
 Numerical configuration for the incompressible Navier--Stokes equation
 system. Physics, velocity-model choices, runtime AMR fields, and evolving
@@ -56,9 +56,10 @@ with it and gives both phases the common increment, so the rule applies to
 one- and two-velocity flows alike.
 
 `embedded_viscous_closure` selects the closure at a stationary embedded
-solid, for either velocity model. [`LSStagClosure`](@ref) uses open-face
-midpoints, Green normal stresses and coupled shear for two-phase viscosity.
-[`WallDistanceClosure`](@ref) selects the legacy wall-distance rows (default).
+solid, for either velocity model. [`LSStagClosure`](@ref) (default) uses
+open-face midpoints, Green normal stresses and coupled shear for two-phase
+viscosity. [`WallDistanceClosure`](@ref) selects the legacy thesis
+wall-distance rows.
 """
 struct NavierStokesOptions{
         A <: AdvectionOptions,
@@ -116,7 +117,7 @@ function NavierStokesOptions(;
         diffusion = LinearSolverOptions(),
         multigrid = MultigridOptions(),
         viscosity_averaging = HarmonicViscosityAveraging(),
-        embedded_viscous_closure = WallDistanceClosure(),
+        embedded_viscous_closure = LSStagClosure(),
     )
     return NavierStokesOptions(
         advection, pressure, diffusion, multigrid, viscosity_averaging,

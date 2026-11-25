@@ -1,12 +1,14 @@
 """Cut-cell viscous closure at a stationary embedded solid ([`GeometryField`](@ref)):
-[`LSStagClosure`](@ref) or the legacy [`WallDistanceClosure`](@ref).
+[`LSStagClosure`](@ref), the default, or the legacy [`WallDistanceClosure`](@ref).
 """
 abstract type AbstractEmbeddedViscousClosure end
 
 """
     WallDistanceClosure()
 
-Legacy, thesis-style wall-distance discretization. In the single-phase viscous operator every
+Legacy, thesis-style wall-distance discretization. It is selected explicitly
+and is no longer a default; [`LSStagClosure`](@ref) is the default everywhere
+a closure default exists. In the single-phase viscous operator every
 velocity value sits at its face centre, the interior contacts of a cut cell
 use rebuilt open measures, and the wall flux of a cut-cell PLIC segment is
 split among the dual faces, each piece divided by the perpendicular distance
@@ -25,7 +27,10 @@ struct WallDistanceClosure <: AbstractEmbeddedViscousClosure end
 
 LS-STAG viscous closure at a stationary embedded solid (Cheny and
 Botella, J. Comput. Phys. 229 (2010) 1043, doi:10.1016/j.jcp.2009.10.007),
-built from the PLIC data of the [`GeometryField`](@ref). It replaces the rows
+built from the PLIC data of the [`GeometryField`](@ref). This is the default
+closure for `NavierStokesOptions()` and for the standalone diffusion
+constructors; [`WallDistanceClosure`](@ref) remains selectable as the legacy
+thesis closure. It replaces the rows
 of the velocity values on and next to cut cells; the rest of the operator,
 the mass (the open staggered volumes), the divergence and the gradient are
 unchanged.

@@ -106,20 +106,22 @@ end
 
 """
     cylinder_flow_setup(; reynolds=100, base_level=1, max_level=2,
-                        geometry_level=max_level, ...)
+                        geometry_level=max_level, closure=LSStagClosure(), ...)
 
 Construct the cylinder case of Verstappen and Dröge (2005): diameter one,
 unit inflow four diameters upstream, an outlet ten diameters downstream, and
 lateral boundaries eight diameters apart. The lateral and outlet velocity
 conditions are zero normal derivative. `geometry_level > base_level` enables
 fixed-level tree refinement around the PLIC cylinder while retaining 14×8
-cells per leaf block, which gives square cells in the 14D×8D domain.
+cells per leaf block, which gives square cells in the 14D×8D domain. `closure`
+is the embedded viscous closure of the cylinder wall, the LS-STAG default
+unless a legacy wall-distance reference is requested.
 """
 function cylinder_flow_setup(;
         reynolds = 100.0, block_size = (14, 8),
         base_level = 2, max_level = 3,
         geometry_level = max_level, adaptation_interval = 5,
-        perturbation = 1.0e-3,
+        perturbation = 1.0e-3, closure = LSStagClosure(),
     )
     reynolds > 0 || throw(ArgumentError("reynolds must be positive"))
     0 <= base_level <= geometry_level <= max_level || throw(
@@ -176,6 +178,7 @@ function cylinder_flow_setup(;
         ); velocity = initial_velocity, geometry, boundary,
         numerics = NavierStokesOptions(
             advection = AdvectionOptions(scheme = Centred()),
+            embedded_viscous_closure = closure,
         ),
         adaptivity = Adaptivity(
             criteria = geometry_level > base_level ? (indicator,) : (),

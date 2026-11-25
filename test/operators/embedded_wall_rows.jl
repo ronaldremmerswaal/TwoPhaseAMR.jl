@@ -316,7 +316,8 @@ end
     # normal rows keep an h/(2|grad d|) residual, 0.091 rms at 32 cells.
     # `LSStagClosure()` resolves both sources (values at the open midpoints,
     # cell-Green normal stresses) and is second order on these fixtures; its
-    # gates are in `embedded_ls_stag.jl`. These gates pin the default closure.
+    # gates are in `embedded_ls_stag.jl`. These gates pin the wall-distance
+    # closure, which the operator of `oblique_errors` selects explicitly.
     margin = 0.2
     for slope in (0.1, 0.5), refined in (false, true)
         history = [oblique_errors(n, refined, slope) for n in (16, 32, 64)]

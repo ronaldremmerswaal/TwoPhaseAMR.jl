@@ -31,6 +31,7 @@ mutable struct VariableStaggeredDiffusionOperator{T, M, B, C <: AbstractEmbedded
     stiffness_stresses::Vector{Int}
     stiffness_factors::Vector{T}
     stiffness_refresh_offsets::Vector{Int}
+    box_traces::Union{Nothing, Vector{_LSBoxPatch{T}}}
 end
 
 """One sample of velocity component `k` in the shear partition: an owned face
@@ -157,6 +158,9 @@ The refresh map lists, for stored entry `p`, the shared stresses `s` in the
 same order in `stresses[offsets[p]:(offsets[p + 1] - 1)]` with the factors
 `E[s, r] E[s, c]`; `pointers` repeats `p` once per contribution. A refresh
 sums `W[s] * factor` in that order.
+For a condensed box patch the row marker `1` reserves the dense face
+pattern once, and `-1` omits its remaining rows. These rows have no entries
+in the scalar refresh map; their weighted Gram block is added separately.
 
 The columns are built by a merge of the rows of `strain_transpose` at the
 stresses of each column: a count pass, a prefix sum and a fill pass, threaded
@@ -165,6 +169,7 @@ outputs, so the result is the same for every thread count.
 """
 function _symmetric_stiffness!(
         pointers, stresses, factors, offsets, cache, strain, strain_transpose, weights,
+        box_rows = nothing,
     )
     T = eltype(strain)
     number_of_faces = size(strain, 2)
@@ -176,10 +181,17 @@ function _symmetric_stiffness!(
     transpose_values = nonzeros(strain_transpose)
     width = 0
     for column in 1:number_of_faces
-        width = max(width, strain_pointers[column + 1] - strain_pointers[column])
+        entries = nzrange(strain, column)
+        count = isnothing(box_rows) ? length(entries) :
+            sum(p -> box_rows[stress_rows[p]] >= 0, entries; init = 0)
+        width = max(width, count)
     end
     chunks = cld(number_of_faces, _STIFFNESS_COLUMN_CHUNK)
-    merge_heads = resize!(cache.stiffness_heads, chunks * width)
+    # For patch columns keep a compact list of contributing strain entries.
+    # A side-length patch must not force every column or merge to scan all
+    # its eliminated rows. Ordinary operators use implicit consecutive indices.
+    heads_size = chunks * width
+    merge_heads = resize!(cache.stiffness_heads, isnothing(box_rows) ? heads_size : 2heads_size)
     column_counts = resize!(cache.stiffness_column_counts, number_of_faces)
     contribution_counts = resize!(cache.stiffness_contribution_counts, number_of_faces)
     @_parallel work = _STIFFNESS_COLUMN_CHUNK for chunk in 1:chunks
@@ -189,6 +201,7 @@ function _symmetric_stiffness!(
             entries, contributions = _stiffness_column!(
                 nothing, column, head_offset, merge_heads, strain_pointers, stress_rows,
                 strain_values, face_pointers, face_rows, transpose_values, weights,
+                box_rows,
             )
             @inbounds column_counts[column] = entries
             @inbounds contribution_counts[column] = contributions
@@ -217,6 +230,7 @@ function _symmetric_stiffness!(
             _stiffness_column!(
                 outputs, column, head_offset, merge_heads, strain_pointers, stress_rows,
                 strain_values, face_pointers, face_rows, transpose_values, weights,
+                box_rows,
             )
         end
     end
@@ -234,14 +248,25 @@ refresh contributions of the column."""
 @inline function _stiffness_column!(
         outputs, column, head_offset, merge_heads, strain_pointers, stress_rows,
         strain_values, face_pointers, face_rows, transpose_values, weights,
+        box_rows,
     )
     first_stress = @inbounds strain_pointers[column]
     stress_count = (@inbounds strain_pointers[column + 1]) - first_stress
     contributions = 0
+    active = 0
     for local_stress in 1:stress_count
         stress = @inbounds stress_rows[first_stress + local_stress - 1]
-        @inbounds merge_heads[head_offset + local_stress] = face_pointers[stress]
-        contributions += (@inbounds face_pointers[stress + 1]) - face_pointers[stress]
+        kind = isnothing(box_rows) ? 0 : (@inbounds box_rows[stress])
+        kind < 0 && continue
+        pointer = first_stress + local_stress - 1
+        active += 1
+        if !isnothing(box_rows)
+            @inbounds merge_heads[length(merge_heads) ÷ 2 + head_offset + active] = pointer
+        end
+        @inbounds merge_heads[head_offset + active] = face_pointers[stress]
+        if iszero(kind)
+            contributions += (@inbounds face_pointers[stress + 1]) - face_pointers[stress]
+        end
     end
     if outputs !== nothing
         column_pointers, contribution_starts, rows, stiffness_values,
@@ -253,8 +278,10 @@ refresh contributions of the column."""
     while true
         # The next face of the column: the smallest head over all stresses.
         row = typemax(Int)
-        for local_stress in 1:stress_count
-            stress = @inbounds stress_rows[first_stress + local_stress - 1]
+        for local_stress in 1:active
+            p = isnothing(box_rows) ? first_stress + local_stress - 1 :
+                (@inbounds merge_heads[length(merge_heads) ÷ 2 + head_offset + local_stress])
+            stress = @inbounds stress_rows[p]
             head = @inbounds merge_heads[head_offset + local_stress]
             head < (@inbounds face_pointers[stress + 1]) &&
                 (row = min(row, @inbounds face_rows[head]))
@@ -267,16 +294,19 @@ refresh contributions of the column."""
             upper = zero(eltype(stiffness_values))
         end
         shared = 0
-        for local_stress in 1:stress_count
-            stress = @inbounds stress_rows[first_stress + local_stress - 1]
+        for local_stress in 1:active
+            p = isnothing(box_rows) ? first_stress + local_stress - 1 :
+                (@inbounds merge_heads[length(merge_heads) ÷ 2 + head_offset + local_stress])
+            stress = @inbounds stress_rows[p]
             head = @inbounds merge_heads[head_offset + local_stress]
             head < (@inbounds face_pointers[stress + 1]) &&
                 (@inbounds face_rows[head]) == row || continue
             @inbounds merge_heads[head_offset + local_stress] = head + 1
             outputs === nothing && continue
+            !isnothing(box_rows) && !iszero(@inbounds box_rows[stress]) && continue
             shared += 1
             row_value = @inbounds transpose_values[head]
-            column_value = @inbounds strain_values[first_stress + local_stress - 1]
+            column_value = @inbounds strain_values[p]
             weight = @inbounds weights[stress]
             # SparseArrays assigns the first product and adds the others.
             lower_term = (row_value * weight) * column_value
