@@ -40,6 +40,10 @@ end
         @test run.result.steps == 1
         @test !isempty(keyframes(snapshot_store(run.recorder)))
         @test run.result.volume_error <= 128eps()
+        @test run.result.scalar_content_error <= 256eps()
+        @test :liquid_scalar in field_names(run.recorder.registry)
+        frame = snapshot_store(run.recorder)[last(keyframes(snapshot_store(run.recorder)))]
+        @test all(isfinite, frame[:liquid_scalar].liquid)
     end
 end
 
@@ -186,6 +190,8 @@ end
     )
     @test run.result.volume_error <=
         8 * run.interface.fraction_floor * prod(run.interface.mesh.extent)
+    @test run.result.scalar_content_error <=
+        16 * run.interface.fraction_floor * prod(run.interface.mesh.extent)
 end
 
 @testset "Vortex-reversal Studio driver continues its prescribed flow" begin
