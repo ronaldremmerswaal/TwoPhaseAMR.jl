@@ -324,10 +324,14 @@ clamped and snapped with the fraction floor $\ffloor$
 right-hand side of~\cref{eq:vof:sweep} without $\snapchange{j}{c}$, the code
 raises an error if the liquid volume
 $\meas{\opencell{c}}\preclamp{\liq,\splitlevel{j}}{c}$ leaves
-$[0,\meas{\opencell{c}}]$ by more than $128\machineeps\meas{c}$
-(\srcsym{src/vof/fluxes.jl}{_wy_fraction_in_bounds}): the round-off of the
-clipped and summed volumes is measured in units of the full cell, not
-amplified by a small open fraction (since \issue{55}), while genuine
+$[0,\meas{\opencell{c}}]$ beyond its round-off allowance
+(\srcsym{src/vof/fluxes.jl}{_wy_fraction_in_bounds}). In full-cell units
+this allowance is $128\machineeps$ times the sum of one, the absolute old
+liquid fraction, the number of nonzero liquid face fluxes, and the absolute
+carrier-dilation and liquid flux contributions divided by the cell volume.
+The unit per flux accounts for clipping in normalized cell coordinates, whose
+absolute area error need not shrink with a small swept volume. The check is
+not amplified by a small open fraction (since \issue{55}), and genuine
 violations still raise, including those produced by an excessive step.
 Otherwise it clamps $\preclamp{\liq,\splitlevel{j}}{c}$ to $[0,1]$ and
 snaps it, which together give
@@ -342,7 +346,7 @@ snaps it, which together give
 The reconstruction that follows applies~\cref{eq:interface:floor} again,
 which leaves these values unchanged up to rounding. Each snap changes the
 liquid volume by at most $\ffloor\meas{\opencell{c}}$, each clamp by at most
-$128\machineeps\meas{c}$, and both enter the balance
+the above round-off allowance times $\meas{c}$, and both enter the balance
 \cref{eq:vof:step} (\cref{dev:interface:floor}).
 
 \emph{Boundedness.}\phantomsection\label{prop:vof:boundedness} The
