@@ -58,13 +58,11 @@ The hero shows liquid fraction and reconstructed interface at the initial state,
 
 ![Initial and final interfaces and liquid-volume error at retained keyframes](assets/recovery.png)
 
-![Volume fraction during the reversing vortex flow](assets/reversal.gif)
-
 ![Liquid scalar snapshots with interface and AMR blocks](assets/scalar_snapshots.png)
 
 ![Liquid scalar during the reversing vortex flow](assets/scalar_reversal.gif)
 
-The GIF has 81 output frames, one per keyframe, on a uniform simulation-time grid with spacing `0.1` over the whole run; each keyframe is the completed step nearest its requested time. The circle is stretched into a spiral until `T/2` and returns as the flow reverses.
+The scalar GIF has 81 output frames, one per keyframe, on a uniform simulation-time grid with spacing `0.1` over the whole run; each keyframe is the completed step nearest its requested time. It also shows the PLIC interface and AMR blocks, so it covers the interface evolution as well: the circle is stretched into a spiral until `T/2` and returns as the flow reverses.
 
 The overlay compares the retained initial and final PLIC segments; the volume curve integrates the stored fractions over actual AMR cell areas. The final absolute volume error is `3.82e-12`; this is not a measurement of geometric shape recovery.
 

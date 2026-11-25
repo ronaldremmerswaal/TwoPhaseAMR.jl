@@ -84,7 +84,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
         phase_rendering = :plic
     )
 
-    figure = Figure(size = (760, 340))
+    figure = Figure(size = (1000, 340))
     axis = fieldaxis(
         figure[1, 1]; camera = (0, 1, 0, 1), decorations = :full,
         title = "Interface recovery"
@@ -98,17 +98,17 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
         linesegments!(axis, points; color, linewidth = 2, label)
     end
     axislegend(axis; position = :lb)
+    content_drift = abs.(contents .- first(contents))
     axis = Axis(
-        figure[1, 2]; title = "Liquid volume error", xlabel = "t",
-        ylabel = "|V(t) − V(0)|"
+        figure[1, 2]; title = "Conservation", xlabel = "t",
+        ylabel = "absolute drift"
     )
-    lines!(axis, times, errors; color = :dodgerblue)
+    lines!(axis, times, errors; color = :dodgerblue, label = "liquid volume |V(t) − V(0)|")
     scatter!(axis, times, errors; color = :dodgerblue, markersize = 5)
+    lines!(axis, times, content_drift; color = :orangered, label = "dye content |∫fs(t) − ∫fs(0)|")
+    scatter!(axis, times, content_drift; color = :orangered, markersize = 5)
+    Legend(figure[1, 3], axis; framevisible = false)
     save(joinpath(outdir, "recovery.png"), figure)
-    export_animation(
-        joinpath(outdir, "reversal.gif"), store; field = :volume_fraction,
-        fps = 10, nframes = length(keyframes(store)), size = (520, 450), blocks = true
-    )
     export_animation(
         joinpath(outdir, "scalar_reversal.gif"), store; field = :liquid_scalar,
         fps = 10, nframes = length(keyframes(store)), size = (520, 450),
