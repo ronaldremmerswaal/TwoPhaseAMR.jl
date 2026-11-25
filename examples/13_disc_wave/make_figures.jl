@@ -69,9 +69,9 @@ end
 # Open dual volume of every interior face that carries a fluid unknown.
 function fluid_weights(run)
     weights = zeros(length(run.displacement.interior))
-    for component in (run.operator.x, run.operator.y)
-        _, values = disc_wave_value_points(run.geometry, component, run.operator.closure)
-        weights[component.local_to_global] .= values
+    for axis in 1:2
+        nodes = value_points(run.operator, axis)
+        weights[nodes.faces] .= nodes.volumes
     end
     return weights
 end

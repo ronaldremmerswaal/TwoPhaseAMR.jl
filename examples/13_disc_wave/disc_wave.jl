@@ -130,39 +130,11 @@ function disc_wave_mesh(resolution; radius = 1.0, composite = false)
     )
 end
 
-"""
-    disc_wave_value_points(geometry, component, closure)
-
-Where the unknowns of one velocity component of the viscous operator sit, and
-the open (fluid) dual volume of each, zero for a covered face.
-`LSStagClosure()` places the value of a cut face at the midpoint of its open
-part, which lies in the fluid; `WallDistanceClosure()` keeps it at the face
-centre, which may lie in the solid.
-"""
-function disc_wave_value_points(geometry, component, closure)
-    mesh = geometry.mesh
-    points = Vector{NTuple{2, Float64}}(undef, length(component.local_to_global))
-    weights = zeros(length(component.local_to_global))
-    for (index, face_index) in pairs(component.local_to_global)
-        face = mesh.faces[face_index]
-        aperture = geometry.aperture[face_index]
-        points[index] = face.center
-        aperture > 0 || continue
-        weights[index] = geometry.face_dual_volumes[face_index]
-        if closure isa LSStagClosure && aperture < 1
-            _, _, lower, upper, _, _ =
-                TwoPhaseAMR._ls_stag_open_part(geometry, face, aperture)
-            middle = (lower + upper) / 2
-            points[index] = face.axis == 1 ? (face.center[1], middle) :
-                (middle, face.center[2])
-        end
-    end
-    return points, weights
-end
-
 # One velocity component: its unknowns, the operator's mass `V` and symmetric
-# positive semidefinite stiffness `K` (`V⁻¹K = -Δ_h`), the value points and
-# the open dual volumes that weigh the error norms and the modal projections.
+# positive semidefinite stiffness `K` (`V⁻¹K = -Δ_h`), and from `value_points`
+# where the closure places each value (LS-STAG: the midpoint of the open part
+# of a cut face, in the fluid; wall distance: the face centre) and its open
+# dual volume, which weighs the error norms and the modal projections.
 struct DiscWaveComponent
     faces::Vector{Int}
     volumes::Vector{Float64}
@@ -173,12 +145,13 @@ struct DiscWaveComponent
     product::Vector{Float64}
 end
 
-function DiscWaveComponent(geometry, component, closure)
-    points, weights = disc_wave_value_points(geometry, component, closure)
-    unknowns = length(component.local_to_global)
+function DiscWaveComponent(operator, axis)
+    component = axis == 1 ? operator.x : operator.y
+    nodes = value_points(operator, axis)
+    unknowns = length(nodes.faces)
     return DiscWaveComponent(
-        component.local_to_global, component.volumes, component.stiffness,
-        points, weights, zeros(unknowns), zeros(unknowns),
+        nodes.faces, component.volumes, component.stiffness,
+        nodes.points, nodes.volumes, zeros(unknowns), zeros(unknowns),
     )
 end
 
@@ -375,10 +348,7 @@ function run_example(;
         StaggeredEllipticOperator(operator; reaction = 1, diffusion = (speed * dt / 2)^2);
         preconditioner_options = (; geometry),
     )
-    components = (
-        DiscWaveComponent(geometry, operator.x, closure),
-        DiscWaveComponent(geometry, operator.y, closure),
-    )
+    components = (DiscWaveComponent(operator, 1), DiscWaveComponent(operator, 2))
     displacement = FaceVelocity(mesh)
     rate = FaceVelocity(mesh)
     midpoint = FaceVelocity(mesh)
