@@ -2,16 +2,100 @@ using CairoMakie, Printf
 
 Base.include(@__MODULE__, joinpath(@__DIR__, "lgpi.jl"))
 
-# README hero: the impact and wall jet, slowed down. Request 101 times in the
-# impact window in addition to the 81 full-run requests. Output times select
-# the nearest stored states, which can differ slightly from the requests.
+# The hero resolves the impact at level 4 and includes the full domain height,
+# from the submerged bathymetry to the top wall.
 const HERO_WINDOW = (0.42, 0.62)
-const HERO_CAMERA = (0.0, 0.5, 0.08, 0.6)
+const HERO_CAMERA = (0.0, 0.5, 0.0, 0.6)
 const HERO_FRAMES = 101
 const HERO_FPS = 10
-const HERO_SIZE = (700, 620)
+const HERO_SIZE = (620, 740)
 const IMPACT_FPS = 8
 const COLOR_LEVELS = 31
+
+function render_hero(
+        path, store; window = HERO_WINDOW, camera = HERO_CAMERA,
+        nframes = HERO_FRAMES, fps = HERO_FPS, size = HERO_SIZE
+    )
+    infos = [
+        info for info in keyframes(store)
+            if any(t -> window[1] <= t <= window[2], info.requested_times)
+    ]
+    length(infos) >= 2 || error("The hero window needs at least two stored states")
+    frames = [store[info] for info in infos]
+    magnitudes = Float32[]
+    for frame in frames, value in rasterize(frame, :velocity_vorticity, camera, (250, 300))
+        isfinite(value) && push!(magnitudes, abs(value))
+    end
+    limit = sort!(magnitudes)[ceil(Int, 0.999length(magnitudes))]
+    limit > 0 || (limit = 1.0f0)
+    # Colour the liquid pale blue, and make near-zero vorticity transparent so
+    # both phases remain visible beneath the balance-coloured vorticity.
+    colors = [
+        begin
+            c = get(CairoMakie.Makie.ColorSchemes.balance, x)
+            RGBAf(c.r, c.g, c.b, 0.9 * min(1, 5abs(2x - 1)))
+        end for x in range(0, 1; length = COLOR_LEVELS)
+    ]
+    figure = Figure(; size)
+    current = Observable(first(frames))
+    axis = fieldaxis(
+        figure[1, 1]; camera,
+        title = lift(frame -> @sprintf("t = %.3f", frame.time), current),
+    )
+    amrfield!(
+        axis, current, :volume_fraction;
+        colormap = [RGBf(1, 1, 1), RGBf(0.72, 0.86, 0.96)],
+        colorrange = (0, 1), interface = false, geometry = false,
+    )
+    vort = amrfield!(
+        axis, current, :velocity_vorticity; colormap = cgrad(colors, COLOR_LEVELS; categorical = true),
+        colorrange = (-limit, limit), blocks = true,
+    )
+    Colorbar(figure[1, 2], vort; label = "Vorticity")
+    times = range(first(infos).time, last(infos).time; length = nframes)
+    record(figure, path, times; framerate = fps, px_per_unit = 1) do time
+        current[] = frame_at(store, time)
+    end
+    println(
+        "Hero: level 4, ", nframes, " frames, t = ", first(times), "–", last(times),
+        ", vorticity limit = ", limit, ", camera = ", camera
+    )
+    return path
+end
+
+function make_hero(;
+        outdir = joinpath(@__DIR__, "assets"), window = HERO_WINDOW,
+        camera = HERO_CAMERA, nframes = HERO_FRAMES, fps = HERO_FPS, size = HERO_SIZE
+    )
+    mkpath(outdir)
+    local flow, recorder, result
+    elapsed = @elapsed begin
+        flow = run_example(max_level = 4, final_time = 0).flow
+        fields = VisualizationFieldRegistry()
+        register_field!(
+            fields, :velocity_vorticity, flow.velocity, flow.interface, Vorticity();
+            label = "Vorticity", colormap = :balance,
+        )
+        register_field!(
+            fields, :volume_fraction, flow.interface.fraction;
+            label = "Liquid fraction", colorrange = (0, 1),
+        )
+        register_interface!(fields, flow.interface)
+        recorder = Recorder(
+            fields; diagnostics = flow,
+            keyframes = AtTimes(range(window[1], window[2]; length = nframes)),
+            preview = nothing,
+        )
+        result = simulate!(flow, window[2]; observer = recorder)
+    end
+    println("Level-4 hero setup and simulation time (s): ", elapsed)
+    print_simulation_summary(flow, result)
+    render_hero(
+        joinpath(outdir, "impact_hero.gif"), snapshot_store(recorder);
+        window, camera, nframes, fps, size
+    )
+    return (; flow, result, recorder)
+end
 
 function make_figures(;
         outdir = joinpath(@__DIR__, "assets"), size = :docs,
@@ -86,10 +170,6 @@ function make_figures(;
     limit = quantile > 0 && peak.value > 3quantile ? quantile : peak.value
     println("Vorticity peak ", peak, "; 99.9% magnitude = ", quantile, "; display limit = ", limit)
     colormap = cgrad(:balance, COLOR_LEVELS; categorical = true)
-    hero_display = filter(
-        info -> hero_window[1] - 1.0e-9 <= info.time <= min(hero_window[2], display_end),
-        selected,
-    )
     CairoMakie.activate!(px_per_unit = 1)
     export_figure(
         joinpath(outdir, "hero.png"), store; field = :velocity_vorticity,
@@ -104,23 +184,10 @@ function make_figures(;
         fps = IMPACT_FPS, nframes = max(2, round(Int, 80 * last(times) / target_time)),
         size = (900, 355), colorrange = (-limit, limit), colormap
     )
-    if length(hero_display) < 2
-        @warn "No hero frames in the requested window; skipping the hero animation"
-    else
-        export_animation(
-            joinpath(outdir, "impact_hero.gif"), store; field = :velocity_vorticity,
-            window = (first(hero_display).time, last(hero_display).time),
-            camera = hero_camera, blocks = true, fps = hero_fps,
-            nframes = min(hero_frames, length(hero_display)), size = hero_size,
-            colorrange = (-limit, limit), colormap,
-            title = frame -> @sprintf("t = %.3f", frame.time)
-        )
-        println(
-            "Hero animation: ", min(hero_frames, length(hero_display)), " frames from t = ",
-            first(hero_display).time, " to ", last(hero_display).time, " at ",
-            hero_fps, " fps, camera ", hero_camera
-        )
-    end
+    make_hero(;
+        outdir, window = hero_window, camera = hero_camera,
+        nframes = hero_frames, fps = hero_fps, size = hero_size
+    )
     return (; flow, result, recorder, store)
 end
 

@@ -4,7 +4,7 @@ A steep liquid front evolves over an embedded elliptical bathymetry in a scaled 
 
 ![Slowed-down zoom on the gas-pocket entrapment and the wall jet](assets/impact_hero.gif)
 
-*Vorticity with the PLIC interface, filled bathymetry and AMR block outlines, zoomed to `0 ≤ x ≤ 0.5` and `0.08 ≤ y ≤ 0.6` over `t = 0.42–0.62`: the front reaches the left wall and the jet climbs it. The 101 frames at 10 fps span about 10 seconds of video for 0.20 of simulation time, approximately 4.8 times slower than the [full-length animation](#results). Both come from the same level-3 run.*
+*A level-4 zoom of the wall impact and jet, showing the full height `0 ≤ y ≤ 0.6` and `0 ≤ x ≤ 0.5` over `t = 0.42–0.62`. Pale blue marks liquid beneath translucent vorticity; the PLIC interface, bathymetry and AMR blocks are also shown. At 101 frames and 10 fps the window plays approximately 4.8 times slower than the [full-length animation](#results).*
 
 ## At a glance
 
@@ -14,7 +14,7 @@ A steep liquid front evolves over an embedded elliptical bathymetry in a scaled 
 | **Algorithms** | Two velocities by default (`TwoVelocityModel()`), with frozen-interface WY transport and `CMDGFMProjection()` (a block-preconditioned BiCGSTAB solve); WY geometric VOF, `:lhf` PLIC with WY fallback, CGFM surface tension, monotonized-central (`MonotonizedCentral()`) momentum advection, implicit-midpoint viscosity, and CG/tree-geometric multigrid for diffusion. The interface indicator targets `min(1,max_level)` and the liquid-velocity vorticity indicator refines up to `max_level` at `0.25` and coarsens below `0.25/3`. Both use `ymin=refinement_ymin`; AMR is checked every 5 steps with coarsen delay 10. |
 | **Worth varying** | `scale=20` by default; changing it rescales the prescribed domain and initial geometry while leaving the listed physical coefficients fixed. `max_level=4` changes the vorticity-refinement ceiling; `final_time=nothing` selects `1.2` gravity periods. `refinement_ymin` overrides the default solid-adjacent exclusion height; `velocity_model=OneVelocityModel()` selects a shared velocity; `numerics=NavierStokesOptions(advection=AdvectionOptions(scheme=LaxWendroff()))` selects Lax–Wendroff momentum advection, which can leave visible dispersive noise in the vorticity of this impact. Other supported `FlowSimulation` options can be passed as keywords. |
 | **Validation status** | In the documented level-3 run, liquid volume changes by `−7.02372×10⁻¹⁰` from about `0.182426` over the full simulation. There are 1071 cumulative unresolved-curvature face events, and the finest blocks touching the solid are at level 1 at the final time; the later fragmented interface is not resolved well enough to validate entrainment. No experimental impact or interface-position error is claimed. |
-| **Cost** | The documented two-velocity run used `max_level=3`, `T≈0.961327` (1.2 gravity periods), 5098 steps, 758 mesh updates and 9792 final cells; setup and simulation took 2710.5 s, excluding package loading, and the full command took 2826.5 s including package loading and rendering. Timings include first-call compilation and were measured on one thread while other jobs shared the machine. The example default uses `max_level=4`. |
+| **Cost** | The level-3 run to `T≈0.961327` used 5098 steps, 758 mesh updates and 9792 final cells; setup and simulation took 2710.5 s. The separate level-4 hero to `t = 0.62` used 6551 steps, 877 mesh updates and 9792 final cells in 1734.0 s including setup. Timings are for one thread, exclude package loading and include first-call compilation. |
 
 Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X.
 
@@ -62,10 +62,10 @@ run = run_example(max_level=1, final_time=0.1)
 print_simulation_summary(run.flow, run.result)
 ```
 
-The first command runs the full two-velocity level-3 calculation and regenerates
-the docs assets; the second runs the level-4 default without exporting
-figures. Both use the full end time and are subject to the validation caveat
-above:
+The first command runs a full level-3 calculation for the three-panel figure
+and full-length animation, then a separate level-4 calculation to `t = 0.62`
+for the hero. The second runs the level-4 default without exporting figures.
+The results are subject to the validation caveat above:
 
 ```sh
 julia --project=examples -t 1 examples/11_lgpi/make_figures.jl
@@ -77,9 +77,9 @@ press Ctrl+C to close Studio after the run. `run_example` also accepts
 `start_studio = studio` and `recorder_options` from Julia and returns the
 Studio app in `(; flow, result, recorder, app)`.
 
-The figure generator always runs the simulation. It accepts `final_time` to
-change the simulated end time and `display_time` to limit the exported frames
-without shortening the simulation:
+The figure generator runs both simulations. `final_time` changes the full-run
+end time and `display_time` limits its exported frames; the separate hero run
+always continues to the end of its window:
 
 ```julia
 include("examples/11_lgpi/make_figures.jl")
@@ -111,16 +111,16 @@ saturate: the sampled peak is 4853.604 near `(x,y)=(0.01375,0.59875)` at
 is frame-optimized after export with `convert impact.gif -layers Optimize
 impact.gif` (ImageMagick; 2,274,303 → 790,864 bytes).
 
-The README hero zooms to `0 ≤ x ≤ 0.5` and `0.08 ≤ y ≤ 0.6` and shows
-`t = 0.42–0.62` — the steep front's last approach to the left wall and the
-jet that climbs it — in 101 frames at 10 fps. The recorder requests 101
-uniform times in this window; output times select the nearest stored state,
-which may differ slightly from the requested time. It shares the field,
-colour levels, range and AMR-block overlay of the full-length animation. The
-committed GIF is 791,886 bytes. Its displayed states span approximately
-`t = 0.42063–0.61795`. The window covers about 0.20 of simulation time
-in about 10 seconds of video, against `T≈0.96` in about 10 seconds for the
-full-length animation: approximately 4.8 times slower.
+The README hero uses a separate level-4 simulation to `t = 0.62`, zoomed to
+`0 ≤ x ≤ 0.5` and the full domain height `0 ≤ y ≤ 0.6`. Liquid volume fraction
+is shown in pale blue beneath translucent vorticity; gas is white. PLIC,
+bathymetry and AMR blocks are overlaid. The recorder requests 101 uniformly
+spaced times over `t = 0.42–0.62`, and the 101 output frames select the nearest
+stored states. At 10 fps, about 0.20 of simulation time plays over 10 seconds,
+approximately 4.8 times slower than the full-length level-3 animation.
+The 620 × 740 GIF uses a vorticity range of `±894.41`, the 99.9th percentile
+in the zoom window. All level-4 pressure projections converged, and the
+liquid-volume change was `−4.07×10⁻¹⁰`.
 
 The later fragmented interface and its wall interaction are under-resolved at
 this level; the full animation is shown for context, not as validated
