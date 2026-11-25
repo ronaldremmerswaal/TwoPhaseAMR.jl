@@ -438,7 +438,18 @@ end
     k = length(history.times) - 10
     time = history.times[k]
     proposal = history.times[k + 1] - time
-    before, after = history.values[k], history.values[k + 1]
+    before = history.values[k]
+    # The reference force increment alternates with the step parity (a two-step
+    # cycle at constant dt and cell count), so the single step k -> k+1 is not
+    # a stable scale; the largest change over the five nearby normal steps is.
+    # Measured maximum-excursion / maximum-variation: 2.25, 2.09, 2.54, 2.63
+    # at 10 % and 1.30, 1.35, 1.29, 1.37 at 50 % (main before #210, main, the
+    # automatic-step controller before #210, HEAD); 4 allows trajectory
+    # variation. The shortened step deliberately keeps the inherited
+    # divergence defect (projection.jl:132-155), so its pressure increment is
+    # a full step's increment rather than of order dt; a step that instead
+    # scaled the increment as 1/f, the defect of issue #90, would give about
+    # 10 at 10 %, which this bound still rejects.
     # Falling CFL proposals use the preceding actual step as their defect
     # reference, so compare the normal-step form with a separate full-pressure
     # trajectory rather than hard-coding the pre-policy adaptive forces.
@@ -486,12 +497,13 @@ end
         @test short_history.times[end] - short_history.times[end - 1] ≈
             fraction * proposal atol = 1.0e-14 rtol = 0
         for axis in 1:2
-            variation = abs(after[axis] - before[axis])
+            variation = maximum(
+                abs(history.values[j + 1][axis] - history.values[j][axis])
+                    for j in (k - 2):(k + 2)
+            )
             excursion = abs(short_force[axis] - before[axis])
             @test variation > 0
-            # Five nearby steps gave maxima 8.50 (10%) and 4.89 (50%)
-            # over both force components; 12 allows trajectory variation.
-            @test excursion <= 12variation
+            @test excursion <= 4variation
         end
     end
 end
