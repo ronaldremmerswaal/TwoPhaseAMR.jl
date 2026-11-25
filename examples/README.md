@@ -2,9 +2,10 @@
 
 These standalone examples each define `run_example` and run headlessly by
 default. The tables on each page describe physical parameters, algorithms,
-validation and cost. The manufactured Poisson projection that used to be
-example 12 is now case T7 of the two-velocity verification suite
-(`benchmark/two_velocity`).
+validation and cost. The disc wave integrates the linear wave equation
+with the cut-cell viscous operator as its Laplacian. The manufactured
+Poisson projection that used to be example 12 is now case T7 of the
+two-velocity verification suite (`benchmark/two_velocity`).
 
 | # | Example | Physics | Default model | Default cost |
 | --- | --- | --- | --- | --- |
@@ -19,6 +20,7 @@ example 12 is now case T7 of the two-velocity verification suite
 | 09 | [Sloped sessile droplet](09_sloped_sessile_droplet/) | Embedded inclined wall | One velocity | Level 2, four capillary times; unmeasured at this size (level-3 gallery run 93.79 s) |
 | 10 | [Stokes wave](10_stokes3_wave/) | Nonlinear free-surface wave | One velocity | Level 5, one period; unmeasured |
 | 11 | [Large gas-pocket impact](11_lgpi/) | Gravity wave over bathymetry | Two velocity | Level 4, 1.2 gravity periods; unmeasured (gallery level-3 run 1872 s) |
+| 13 | [Disc wave](13_disc_wave/) | Staggered wave equation on a cut-cell disc | Implicit midpoint, LS-STAG | 128×128, one period in 128 steps; 0.48 s setup, 1.26 s stepping |
 | 18 | [Taylor–Culick retraction](18_taylor_culick/) | Capillary retraction of a planar sheet | Two velocity | Level 3, T=12; 851 steps, 71.9 s |
 
 Warm timings are second calls in one process; first-call compilation is
@@ -47,12 +49,14 @@ To run an example directly, for example,
 Most flow examples return `(; flow, result, recorder, app)`; keyframes are
 available via `snapshot_store(run.recorder)`. Vortex reversal returns its
 interface, prescribed velocity, result, recorder and app. LGPI returns its
-flow, result and recorder. For most cases, a low `max_level` and short
+flow, result and recorder. The disc wave returns its geometry, operator,
+fields, energy history, recorder and app; its `disc_wave_analysis.jl` measures
+them against the exact solution. For most cases, a low `max_level` and short
 `final_time` make a quick initial run.
 
 ## Studio
 
-Examples 01–10 and 18 can opt into live browser viewing from the command line:
+Examples 01–10, 13, and 18 can opt into live browser viewing from the command line:
 
 ```sh
 julia -t 2,1 --project=examples examples/06_capillary_wave/capillary_wave.jl --studio
