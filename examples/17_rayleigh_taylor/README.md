@@ -28,13 +28,21 @@ The heavy fluid (the `TwoPhase` liquid) lies above `y = η(x)` and the light flu
 
 The fluids start at rest. The single mode is `m = 1`, `φ = 0`, `a = 0.002` (`ka = 0.013`), so the bubble rises on the axis `x = 0` and the spike falls on `x = 1/2`; its diagnostics `:bubble_height` and `:spike_height` are the tips on these axes: the highest light fluid in the cell column at `x = 0` and the lowest heavy fluid at `x = 1/2`. In the multimode run they are the penetration depths of the mixing zone, the heights where the horizontally averaged heavy-fluid fraction leaves 1 % of its pure values (rows on the finest spacing). The dye `PhaseScalar` starts as `s = y` in both fluids and is transported conservatively with the phase fluxes; `:spike_origin` is the mean initial height of the heavy fluid now below `y = 0`, `:bubble_origin` the mean initial depth of the light fluid above it.
 
-**Linear growth.** The growth rate `n` of the normal mode `exp(ikx + nt)`, `k = 2π/λ`, is the root of the interface conditions for two semi-infinite viscous fluids (continuous velocity and tangential stress, normal stress balanced by gravity and capillarity), the classical result of Chandrasekhar (1961, §94). `linear_growth_rate` solves its 4×4 determinant; the root satisfies the implicit form printed by Xie, Tao & Li (2017) and, for equal kinematic viscosities, Chandrasekhar's characteristic equation, to round-off. Without viscosity it reduces to
+**Linear growth.** The growth rate `n` of the normal mode `exp(ikx + nt)`,
+`k = 2π/λ`, is the root of the interface conditions for two semi-infinite
+viscous fluids: continuous velocity and tangential stress, with normal
+stress balanced by gravity and capillarity (Chandrasekhar 1961, §94).
+`linear_growth_rate` solves the resulting 4×4 determinant. The tests check
+the root against the equivalent implicit relation of Xie, Tao & Li (2017)
+for equal and unequal kinematic viscosities. Without viscosity it reduces to
 
 ```math
 n^2 = Agk-\frac{\sigma k^3}{\rho_h+\rho_l}
 ```
 
-(Sharp 1984). The explicit approximation `√(Agk + ν²k⁴) − νk²` (Bellman & Pennington 1954) is not exact here: for `Re_p = 1000` it gives `1.74982`, the viscous root is `1.68219` and the inviscid rate `1.77245`.
+(Sharp 1984). The explicit approximation `√(Agk + ν²k⁴) − νk²` (Bellman &
+Pennington 1954) gives `1.74981` for `Re_p = 1000`, compared with the viscous
+root `1.68219` and the inviscid rate `1.77245`.
 
 **Terminal bubble velocity.** In two dimensions the potential-flow bubble of a periodic array saturates at
 
@@ -132,7 +140,7 @@ phase, not a diffusing concentration.
 ## Variations
 
 ```julia
-run_example(case = :single_mode, bond = 80.0)                  # capillary: k/k_c = 0.71
+run_example(case = :single_mode, bond = 80.0)                  # capillary: k/k_c ≈ 0.70
 run_example(case = :single_mode, velocity_model = TwoVelocityModel(), max_level = 3)
 run_example(seed = 1, max_level = 4)                            # another realization
 run_example(modes = 4:8, max_level = 4)                         # longer initial modes
