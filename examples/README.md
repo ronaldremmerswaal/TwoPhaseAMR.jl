@@ -2,8 +2,10 @@
 
 These standalone examples each define `run_example` and run headlessly by
 default. The tables on each page describe physical parameters, algorithms,
-validation and cost. The manufactured Poisson case is a static projection
-rather than a time-dependent flow.
+validation and cost. The disc wave integrates the linear wave equation
+with the cut-cell viscous operator as its Laplacian. The manufactured
+Poisson projection that used to be example 12 is now case T7 of the
+two-velocity verification suite (`benchmark/two_velocity`).
 
 | # | Example | Physics | Default model | Default cost |
 | --- | --- | --- | --- | --- |
@@ -11,14 +13,14 @@ rather than a time-dependent flow.
 | 02 | [Lid-driven cavity](02_lid_driven_cavity/) | Moving-wall recirculation | Single phase | Level 1, T=15; 2206 automatic steps, 1.90 s warm |
 | 03 | [Decaying turbulence](03_decaying_turbulence/) | Random vortices and adaptive refinement | Single phase | Level 4, T=10; 7690 steps, 95.04 s |
 | 04 | [Cylinder flow](04_cylinder_flow/) | Cut-cell wake and drag | Single phase | Level 3, T=40; unmeasured (gallery level 4, T=50: 22673 steps, 1171 s) |
-| 05 | [Vortex reversal](05_vortex_reverse/) | Geometric VOF transport | Prescribed velocity | Level 5, T=8; unmeasured |
+| 05 | [Vortex reversal](05_vortex_reverse/) | Geometric VOF and passive scalar transport | Prescribed velocity | Level 6, T=8; unmeasured |
 | 06 | [Capillary wave](06_capillary_wave/) | Viscous wave damping | One velocity | Level 4, one period; 74.90 s, two velocities 111.89 s |
 | 07 | [Interfacial instability](07_interfacial_instability/) | Kelvin–Helmholtz and Rayleigh–Taylor growth | Two velocity | Level 4, until doubled amplitude; 70.39 s, one velocity 25.18 s |
 | 08 | [Sessile droplet](08_sessile_droplet/) | Contact-angle relaxation | One velocity | Level 3, eight capillary times; 40.09 s |
 | 09 | [Sloped sessile droplet](09_sloped_sessile_droplet/) | Embedded inclined wall | One velocity | Level 2, four capillary times; unmeasured at this size (level-3 gallery run 93.79 s) |
 | 10 | [Stokes wave](10_stokes3_wave/) | Nonlinear free-surface wave | One velocity | Level 5, one period; unmeasured |
 | 11 | [Large gas-pocket impact](11_lgpi/) | Gravity wave over bathymetry | Two velocity | Level 4, 1.2 gravity periods; unmeasured (gallery level-3 run 1872 s) |
-| 12 | [Manufactured Poisson](12_manufactured_poisson/) | Pressure projection with density jump | Two velocity | 32×32; 11.86 s setup and solve |
+| 13 | [Disc wave](13_disc_wave/) | Staggered wave equation on a cut-cell disc | Implicit midpoint, LS-STAG | 128×128, one period in 128 steps; 0.48 s setup, 1.26 s stepping |
 | 15 | [Forced sloshing](15_sloshing/) | Shaken tank, baffle as an exact polygon | One velocity | Level 2, T=10; 975 steps, 49.8 s |
 
 Warm timings are second calls in one process; first-call compilation is
@@ -47,13 +49,14 @@ To run an example directly, for example,
 Most flow examples return `(; flow, result, recorder, app)`; keyframes are
 available via `snapshot_store(run.recorder)`. Vortex reversal returns its
 interface, prescribed velocity, result, recorder and app. LGPI returns its
-flow, result and recorder, while manufactured Poisson returns its projection
-fields, errors and a `registry`. For most cases, a low `max_level` and short
+flow, result and recorder. The disc wave returns its geometry, operator,
+fields, energy history, recorder and app; its `disc_wave_analysis.jl` measures
+them against the exact solution. For most cases, a low `max_level` and short
 `final_time` make a quick initial run.
 
 ## Studio
 
-Examples 01–10 can opt into live browser viewing from the command line:
+Examples 01–10, 13, and 15 can opt into live browser viewing from the command line:
 
 ```sh
 julia -t 2,1 --project=examples examples/06_capillary_wave/capillary_wave.jl --studio
