@@ -21,6 +21,7 @@ two-velocity verification suite (`benchmark/two_velocity`).
 | 10 | [Stokes wave](10_stokes3_wave/) | Nonlinear free-surface wave | One velocity | Level 5, one period; unmeasured |
 | 11 | [Large gas-pocket impact](11_lgpi/) | Gravity wave over bathymetry | Two velocity | Level 4, 1.2 gravity periods; unmeasured (gallery level-3 run 1872 s) |
 | 13 | [Disc wave](13_disc_wave/) | Staggered wave equation on a cut-cell disc | Implicit midpoint, LS-STAG | 128×128, one period in 128 steps; 0.48 s setup, 1.26 s stepping |
+| 15 | [Forced sloshing](15_sloshing/) | Shaken tank, baffle as an exact polygon | One velocity | Level 2, T=10; 975 steps, 49.8 s |
 | 18 | [Taylor–Culick retraction](18_taylor_culick/) | Capillary retraction of a planar sheet | Two velocity | Level 3, T=12; 851 steps, 71.9 s |
 
 Warm timings are second calls in one process; first-call compilation is
@@ -56,7 +57,7 @@ them against the exact solution. For most cases, a low `max_level` and short
 
 ## Studio
 
-Examples 01–10, 13, and 18 can opt into live browser viewing from the command line:
+Examples 01–10, 13, 15, and 18 can opt into live browser viewing from the command line:
 
 ```sh
 julia -t 2,1 --project=examples examples/06_capillary_wave/capillary_wave.jl --studio
