@@ -2250,7 +2250,6 @@ sources = [
 ]
 tests = [
   { file = "test/examples/basic_examples.jl", testset = "Adaptive vortex-reversal example" },
-  { file = "test/examples/basic_examples.jl", testset = "Manufactured Poisson example" },
   { file = "test/examples/basic_examples.jl", testset = "Adaptive decaying turbulence example" },
   { file = "test/examples/stokes3_example.jl", testset = "Stokes-wave refinement window" },
   { file = "test/examples/lgpi_example.jl", testset = "Adaptive LGPI example" },
