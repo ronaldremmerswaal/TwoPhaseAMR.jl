@@ -755,7 +755,7 @@ function _staggered_diffusion_operator(
         mesh::M, viscosity, boundary, T;
         construction_cache = nothing, reuse = nothing,
         geometry = nothing,
-        closure::AbstractEmbeddedViscousClosure = WallDistanceClosure(),
+        closure::AbstractEmbeddedViscousClosure = LSStagClosure(),
         averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     ) where {M <: BlockTreeMesh}
     isnothing(geometry) || throw(

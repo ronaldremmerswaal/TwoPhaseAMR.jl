@@ -392,12 +392,28 @@ and \testsym{test/operators/staggered_diffusion.jl}{orphan transverse rows conve
 \end{implnote}
 
 \subsection{LS-STAG closure from PLIC data}\label{sec:viscosity:lsstag}
-With \code{closure=LSStagClosure()} of the operator, or
-\code{NavierStokesOptions(embedded_viscous_closure=LSStagClosure())} for a
-flow, the rows of the faces next to cut cells are replaced by the LS-STAG
+The LS-STAG closure is the default: with the keywords omitted,
+\code{StaggeredDiffusionOperator(...)}
+and \code{NavierStokesOptions()} select \code{closure=LSStagClosure()} and
+\code{embedded_viscous_closure=LSStagClosure()}. The rows of the faces next to
+cut cells are then replaced by the LS-STAG
 closure of Cheny and Botella~\cite{cheny2010} (\issue{110}, \issue{13}),
 assembled from the PLIC data of the \apitype{GeometryField}. The explicit
 \code{WallDistanceClosure()} selects the legacy closure described above.
+
+The default was switched to LS-STAG after measuring both closures, and the
+owner judged the regressions benign. Developed $\mathrm{Re}=100$ flow around a
+cylinder at 16 cells per diameter gives mean drag, pressure drag, maximum lift
+and Strouhal number $1.25876$, $0.92661$, $0.2154$, $0.1447$ with LS-STAG
+against $1.14227$, $0.83327$, $0.1534$, $0.1495$ with wall distance
+(reference $1.24$, $0.93$, $0.30$, $0.165$): pressure drag and lift move
+towards the reference, viscous drag and shedding frequency do not. A
+zero-gravity sessile cap on a $15^\circ$ slope at a quarter capillary time
+changes its open-volume-fraction shape error by $+6.70\,\%$ at $60^\circ$ with
+16 cells across the domain and $-13.73\,\%$ at 32 cells, and by $+0.21\,\%$
+and $+1.54\,\%$ at $90^\circ$, where the kinetic energy grows by $2.36\,\%$
+and $3.52\,\%$.
+
 For a single-phase component $k$ the \emph{replaced faces} are the faces of the cut cells (solid fraction
 strictly between zero and one), their neighbours on the same grid line (the
 line $x_k=\text{const}$ through the face) and, recursively, the fine faces
@@ -651,9 +667,12 @@ The normal rows are the open Green gradients in \cref{eq:viscosity:rows}.
 At an open vertex $v$, let $D_v u$ denote the \emph{sum}
 $\partial_y u_x+\partial_x u_y$, formed from the two open-midpoint
 differences. Where a fine grid line ends, the directional derivative uses
-the affine stencil through the neighbouring coarse faces. The same stencil
-interpolates the component to the vertex. A clipped endpoint on a no-slip
-solid instead has the prescribed value zero.
+the affine stencil through the neighbouring coarse faces if both are open.
+When a coarse partner is covered, or the fluid line ends exactly at a grid
+vertex on the solid, both boundary conditions instead take the endpoint
+trace from the fluid side; no shared shear rectangle straddles a missing
+sample. An endpoint clipped in the interior of a face has zero prescribed
+value in the uncondensed Green map.
 
 For an open cell of area $V_c$, define $Q_c$ as the outward flux of
 $(u_y,u_x)$ through its boundary. Each Cartesian edge uses its open length
@@ -670,10 +689,10 @@ and $R_c=V_c-\sum_v a_{cv}>0$, its additional shear row is
     \frac{Q_c(u)-\sum_v a_{cv}D_vu}{R_c}.
     \label{eq:viscosity:lsstress}
 \end{equation}
-Thus the area-weighted shear of the cell is exactly its Green flux, and
-the stress work remains a sum of positive squares. The $a_{cv}$ also give
-the viscosity interpolation weights of the shared vertex; the remaining
-row uses the cell viscosity. For an uncut uniform cell $R_c=0$ and the
+Thus the area-weighted strains sum to the cell Green flux for each choice
+of boundary trace. The $a_{cv}$ also give the viscosity interpolation weights
+of the shared vertex; the remaining row uses the cell viscosity.
+For an uncut uniform cell $R_c=0$ and the
 four vertex rows already give the Green flux. In the Cartesian free-slip
 limit there is no wall-shear row. If a slip wall ends at a grid vertex,
 an adjacent full cell uses the one-sided fluid trace extrapolated from open
@@ -690,6 +709,84 @@ a wall-distance penalty. The uncondensed identity is checked in every cut
 cell of uniform and composite periodic planar bands in
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{Uncondensed LS-STAG FreeSlip rows reproduce the PLIC tangent}.
 
+At each Cartesian box-wall vertex $v$ use one tangential velocity $s_v$ in
+\emph{both} terms of \cref{eq:viscosity:lsstress}: the endpoint trace in
+$Q_c$ is $s_v$, and the wall derivative in $D_v$ is
+$\pm(u_f-s_v)/d$, where $u_f$ is the closest open midpoint at distance $d$.
+The normal component is prescribed; both components are prescribed at a box
+corner. Stationary no slip sets $s_v=0$, including in cells where a level
+transition meets the box. Free slip minimizes the weighted strain work over
+the $s_v$. A trace seen only by its vertex releases that square. If several
+traces enter one completion, their minimization is coupled; the cell and
+vertex viscosities need not agree, so the minimum is updated when they change.
+
+To see the stiffness ordering, write the complete no-slip energy as
+$\|W^{1/2}Eu\|_2^2$. Let $B$ contain the box and tilted PLIC trace
+columns. For each aligned embedded wall whose remaining shear row is
+omitted in free slip, also include the coordinate vector of that row:
+minimizing over its coefficient deletes exactly that square. If $P$ is the
+orthogonal projector onto the range of $W^{1/2}B$, the minimized energy is
+$\|(I-P)W^{1/2}Eu\|_2^2$. Hence the released energy is
+$\|PW^{1/2}Eu\|_2^2\ge0$ for every $u$, even when the trace columns are
+dependent. The implementation first eliminates the cell-local tilted
+PLIC trace from \emph{both} $E$ and the box columns, then the remaining
+shared box traces in their connected groups
+(\srcsym{src/two_phase/diffusion/variable_diffusion_box_traces.jl}{_ls_update_box_strain!}).
+A direct weighted projection,
+including the aligned-wall case and refreshed viscosities, is checked in
+\testsym{test/indicator/geometry.jl}{Embedded free slip omits only physical wall-shear stresses};
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{LS-STAG free-slip energy nests at terminating grid lines}
+checks the stiffness ordering on uniform and composite planar bands.
+On the right-half-refined Helmholtz fixture,
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{LS-STAG NoSlip Helmholtz convergence at box-boundary T-junction},
+the no-slip maximum error at $n=32,64,128$ is
+$9.76\times10^{-5},\,2.65\times10^{-5},\,6.99\times10^{-6}$
+(orders $1.88,1.93$). Using a wall midpoint quotient only at the vertex
+and a fluid extrapolation in the adjacent Green remainder instead gave
+$6.57\times10^{-5}$ at $n=128$ and order $1.03$.
+
+\paragraph{Cost of a thin Cartesian free-slip gap.}
+If a wall runs parallel, or nearly parallel, to a box side only one to
+two cells away, successive Green remainders may share traces along the
+entire side. Eliminating them jointly is then nonlocal: on a patch with
+$r$ stress rows and $f$ faces the stiffness contains a dense $f\times f$
+block. This is a consequence of the exact minimum, not a cutoff in the
+closure. With $S=W^{1/2}E_{\mathrm{patch}}$ after projection,
+\srcsym{src/two_phase/diffusion/variable_diffusion_box_traces.jl}{_ls_add_box_stiffness!}
+forms $S^\top S$ in a preallocated block and adds one triangle to both
+orientations of the sparse stiffness. Ordinary stress rows retain their
+separate sparse refresh map. For a strip with $r,f$ and trace rank all
+proportional to the side length in cells, the stored patch data now grow
+quadratically, not cubically. Dense arithmetic still costs cubic work
+per refresh. The strip regression checks storage, nesting, and agreement
+with fresh assembly after changing the viscosity:
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{LS-STAG thin-gap FreeSlip box traces are compact and refresh exactly}.
+
+For a straight $1.5h$ fluid strip on a uniform $n\times n$ mesh (blocks of
+$4\times4$, viscosity pair $2.5,0.4$), the table gives the complete retained
+patch storage, warm construction time and cumulative construction allocation,
+median of five viscosity refreshes, and stored stiffness entries. Julia
+1.12.7, \texttt{Float64}, and one Julia and BLAS thread were used.
+\begin{center}
+\begin{tabular}{rlrrrrr}
+\toprule
+$n$ & Wall & Patch (MiB) & Build (ms) & Build (MiB) & Refresh (ms) & $\mathrm{nnz}(K)$ \\
+\midrule
+64  & No slip   & 0     & 4.04   & 9.97   & 0.081 & 9\,936 \\
+64  & Free slip & 1.44  & 6.83   & 15.74  & 0.914 & 43\,974 \\
+128 & No slip   & 0     & 15.48  & 40.29  & 0.315 & 36\,304 \\
+128 & Free slip & 5.75  & 29.11  & 62.58  & 5.645 & 178\,054 \\
+256 & No slip   & 0     & 107.06 & 154.33 & 1.317 & 138\,192 \\
+256 & Free slip & 23.00 & 203.97 & 236.72 & 41.726 & 716\,550 \\
+\bottomrule
+\end{tabular}
+\end{center}
+The measured refresh allocated zero bytes in each configuration. At $n=256$ the
+free-slip patch has 513 stress rows, 766 faces and trace rank 257;
+enumerating the row/face/face products previously cost over 6\,GiB for
+the tuples alone. The dense block is substantially cheaper, but it still
+costs more to store and refresh than the no-slip stencil.
+
 This PLIC extension to variable stress is implemented in
 \srcsym{src/two_phase/diffusion/variable_diffusion_ls_stag.jl}{_ls_stress_rows!}.
 One-velocity flow and both two-velocity projections support it with either
@@ -700,7 +797,7 @@ The two-layer manufactured channel of
 has an aligned no-slip wall and continuous tangential traction across its
 $2:1$ viscosity jump. From $n=16$ to $32$ to $64$, the volume-weighted
 $L^2$ orders for LS-STAG are $1.88,1.97$ and $1.97,2.00$ for the two
-components on the uniform mesh, and $1.94,1.99$ and $2.02,2.03$ with
+components on the uniform mesh, and $1.95,1.99$ and $2.03,2.03$ with
 the right half refined. This is not an order result for an oblique liquid
 contact line.
 

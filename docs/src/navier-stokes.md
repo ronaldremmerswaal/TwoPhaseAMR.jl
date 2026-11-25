@@ -54,16 +54,18 @@ package's geometric V-cycle preconditioner. The V-cycle objects contain no
 Krylov logic. The unchanged operator, preconditioner, and workspaces are reused
 for a fixed `dt`, and LU appears only in the two geometric bottom solves.
 
-For a **stationary embedded solid**, the default remains `WallDistanceClosure()`.
-Select LS-STAG with `NavierStokesOptions(embedded_viscous_closure = LSStagClosure())`,
-or with `closure = LSStagClosure()` on `StaggeredDiffusionOperator(geometry; ...)` and
-`StaggeredDiffusionOperator(interface; ...)`. [`LSStagClosure`](@ref) samples
+For a **stationary embedded solid**, the default is `LSStagClosure()`:
+`NavierStokesOptions(embedded_viscous_closure = LSStagClosure())`, and
+`closure = LSStagClosure()` on `StaggeredDiffusionOperator(geometry; ...)` and
+`StaggeredDiffusionOperator(interface; ...)`, are what the omitted keyword
+selects. [`LSStagClosure`](@ref) samples
 velocity at the midpoint of the open part of each face and uses the cell
 Green gradient for normal stress. The single-phase scheme of
 [Cheny and Botella (2010)](https://doi.org/10.1016/j.jcp.2009.10.007)
 is second order on the oblique-wall Helmholtz fixtures; this is not an order
 claim for the coupled two-phase equations. Select [`WallDistanceClosure`](@ref)
-to reproduce the legacy, thesis-style wall-distance discretization.
+to reproduce the legacy, thesis-style wall-distance discretization, which is
+first order at a wall that is not grid aligned.
 
 | Stationary-solid configuration | Viscous operator used by LS-STAG |
 |:--|:--|
@@ -95,7 +97,9 @@ reference is `1.24 (0.93 + 0.31), 0.30, 0.165`: pressure drag and lift
 improve, but neither viscous drag nor shedding frequency improves at this
 resolution.
 
-The default is retained because the sloped sessile drop is a trade-off.
+`LSStagClosure()` is the default: the owner weighed these two measurements
+against the second-order wall treatment and judged the regressions benign. The
+sloped sessile drop is the trade-off.
 At zero Bond number the reference is a stationary circular cap. After a
 quarter capillary time on a 15° slope, the open-volume-fraction shape
 errors (integrated absolute difference, wall distance → LS-STAG) were:

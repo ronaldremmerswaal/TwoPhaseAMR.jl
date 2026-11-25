@@ -110,7 +110,7 @@ function TwoPhaseFlowWorkspace(
         multigrid::MultigridOptions = MultigridOptions(),
         viscosity_averaging::AbstractViscosityAveraging =
             HarmonicViscosityAveraging(),
-        closure = WallDistanceClosure(),
+        closure = LSStagClosure(),
         diffusion_cache = VariableDiffusionConstructionCache(T),
         reuse_diffusion = nothing,
         reuse_diffusion_preconditioner = nothing,

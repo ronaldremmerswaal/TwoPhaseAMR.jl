@@ -2,7 +2,7 @@ function _staggered_diffusion_operator(
         mesh::BlockTreeMesh, viscosity::CellField, boundary, T;
         construction_cache = nothing, reuse = nothing,
         geometry = nothing,
-        closure = WallDistanceClosure(),
+        closure = LSStagClosure(),
         averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     )
     cache = isnothing(construction_cache) ?
@@ -17,7 +17,7 @@ function _variable_staggered_diffusion(
         mesh, viscosity::CellField, boundary, ::Type{T};
         cache = VariableDiffusionConstructionCache(T), reuse = nothing,
         geometry = nothing,
-        closure = WallDistanceClosure(),
+        closure = LSStagClosure(),
         averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     ) where {T}
     viscosity.mesh === mesh || throw(ArgumentError("viscosity field must share the operator mesh"))
@@ -137,6 +137,7 @@ function _variable_staggered_diffusion(
             push!(vals, one(T))
         end
     end
+    box_traces = ls_solid && boundary isa FreeSlip ? _ls_box_traces!(cache, length(measures)) : nothing
     if !isempty(dirichlet_faces)
         # Separate the original prescribed columns before adding algebraic
         # rows. Keeping their stress-row indices makes the wall reaction
@@ -193,6 +194,10 @@ function _variable_staggered_diffusion(
         weights, measures, stress_work, cell_inverse_work,
         interpolation_transpose, cell_work, averaging,
     )
+    if !isnothing(box_traces)
+        _ls_box_slots!(box_traces, strain, strain_transpose, wall_reaction_strain, isempty(dirichlet_faces) ? dirichlet_faces : reaction_column)
+        _ls_update_box_strain!(box_traces, strain, strain_transpose, wall_reaction_strain, weights)
+    end
     stiffness_pointers = isnothing(reuse) ? Int[] : reuse.stiffness_pointers
     stiffness_stresses = isnothing(reuse) ? Int[] : reuse.stiffness_stresses
     stiffness_factors = isnothing(reuse) ? T[] : reuse.stiffness_factors
@@ -201,7 +206,12 @@ function _variable_staggered_diffusion(
     stiffness = _symmetric_stiffness!(
         stiffness_pointers, stiffness_stresses, stiffness_factors,
         stiffness_refresh_offsets, cache, strain, strain_transpose, weights,
+        _ls_box_stiffness_rows(box_traces, length(weights)),
     )
+    if !isnothing(box_traces)
+        _ls_box_stiffness_slots!(box_traces, stiffness)
+        _ls_add_box_stiffness!(box_traces, stiffness)
+    end
     volumes = isnothing(reuse) ? T[] : reuse.volumes
     resize!(volumes, length(mesh.faces))
     if isnothing(geometry)
@@ -216,7 +226,7 @@ function _variable_staggered_diffusion(
         wall_reaction_strain, dirichlet_faces, interpolation, interpolation_transpose,
         measures, weights, cell_work, cell_inverse_work, stress_work,
         stiffness_pointers, stiffness_stresses, stiffness_factors,
-        stiffness_refresh_offsets,
+        stiffness_refresh_offsets, box_traces,
     )
 end
 
@@ -274,8 +284,8 @@ function _fill_stress_weights!(
     return weights
 end
 
-"""Refresh the stress-location mixture viscosity without rebuilding geometric
-strain and interpolation stencils. This is used after every VOF update."""
+"""Refresh the stress viscosities after a VOF update. Geometry is fixed;
+on free-slip box patches the new weights also determine the trace minimizer."""
 function _update_log_dynamic_viscosity!(
         operator::VariableStaggeredDiffusionOperator{T},
         cell_log_viscosity::AbstractVector,
@@ -291,7 +301,14 @@ function _update_log_dynamic_viscosity!(
         operator.stress_interpolation_transpose, operator.cell_work,
         operator.averaging,
     )
-    isempty(operator.stiffness_pointers) && return operator
+    box_traces = operator.box_traces
+    if !isnothing(box_traces)
+        _ls_update_box_strain!(
+            box_traces, operator.strain, operator.strain_transpose,
+            operator.wall_reaction_strain, operator.stress_weights,
+        )
+    end
+    isempty(operator.stiffness_pointers) && isnothing(box_traces) && return operator
     stiffness_values = nonzeros(operator.stiffness)
     offsets = operator.stiffness_refresh_offsets
     @_parallel for pointer in 1:length(stiffness_values)
@@ -303,6 +320,7 @@ function _update_log_dynamic_viscosity!(
         end
         @inbounds stiffness_values[pointer] = value
     end
+    isnothing(box_traces) || _ls_add_box_stiffness!(box_traces, operator.stiffness)
     return operator
 end
 
@@ -360,7 +378,7 @@ end
 function _staggered_diffusion_operator(
         field::InterfaceField; viscosity::NTuple{2}, boundary = NoSlip(),
         construction_cache = nothing, reuse = nothing,
-        closure = WallDistanceClosure(),
+        closure = LSStagClosure(),
         averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     )
     mu = dynamic_viscosity(field; viscosity, averaging)
@@ -375,17 +393,18 @@ end
     StaggeredDiffusionOperator(field::InterfaceField;
                                viscosity, boundary=NoSlip(),
                                averaging=HarmonicViscosityAveraging(),
-                               closure=WallDistanceClosure())
+                               closure=LSStagClosure())
 
 Assemble the two-phase stress operator `div(2 mu D(u))` of an interface field.
 `viscosity` is the `(liquid, gas)` dynamic-viscosity tuple and `averaging` the
 phase-viscosity mixture rule, see [`HarmonicViscosityAveraging`](@ref).
-For a stationary embedded solid, `closure` selects the legacy wall rows or
-the coupled open-face Green and vertex rows of [`LSStagClosure`](@ref).
+For a stationary embedded solid, `closure` selects the coupled open-face Green
+and vertex rows of [`LSStagClosure`](@ref), the default, or the legacy wall
+rows of [`WallDistanceClosure`](@ref).
 """
 function StaggeredDiffusionOperator(
         field::InterfaceField; viscosity::NTuple{2}, boundary = NoSlip(),
-        closure = WallDistanceClosure(),
+        closure = LSStagClosure(),
         averaging::AbstractViscosityAveraging = HarmonicViscosityAveraging(),
     )
     return _staggered_diffusion_operator(

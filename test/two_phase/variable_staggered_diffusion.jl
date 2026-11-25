@@ -2088,6 +2088,28 @@ function _ls2p_exact_slip_band(mesh, slope, offset)
     return GeometryField(solid)
 end
 
+@testset "LS-STAG free-slip energy nests at terminating grid lines" begin
+    for composite in (false, true), (slope, offset) in ((0.5, 0.0), (-0.5, 1 / 128))
+        mesh = BlockTreeMesh(;
+            base_mesh = (8, 8), block_size = (4, 4), max_level = 1, periodic = (true, true),
+            refine = (key, origin, _) -> composite && key.level == 0 && origin[1] >= 0.5,
+        )
+        # The first band has walls through vertices. The second misses the
+        # vertices, but cuts the coarse partner of a hanging grid line.
+        geometry = _ls2p_exact_slip_band(mesh, slope, offset)
+        phase = InterfaceField(mesh, (x, _) -> abs(x - 0.5) - 0.25; geometry, lipschitz = 1.0)
+        no_slip = StaggeredDiffusionOperator(phase; viscosity = (0.2, 0.03), boundary = NoSlip())
+        free_slip = StaggeredDiffusionOperator(phase; viscosity = (0.2, 0.03), boundary = FreeSlip())
+        loss = no_slip.stiffness - free_slip.stiffness
+        @test eigmin(Symmetric(Matrix(loss))) >= -1024eps()
+        # Unlike in a closed box, this rigid translation is admissible on
+        # the whole periodic band. Releasing the trace must remove its work.
+        u = [geometry.aperture[i] > 0 ? (1.0, slope)[f.axis] : 0.0 for (i, f) in pairs(mesh.faces)]
+        @test dot(u, loss * u) > 0
+        @test maximum(abs, free_slip.strain * u) <= 1024eps()
+    end
+end
+
 @testset "Uncondensed LS-STAG FreeSlip rows reproduce the PLIC tangent" begin
     for composite in (false, true), (slope, offset) in ((0.5, 0.0), (-0.5, 1 / 128))
         # Straight parallel walls on a torus: every cut cell, including ones
@@ -2111,7 +2133,7 @@ end
         construction = TwoPhaseAMR.VariableDiffusionConstructionCache(Float64)
         refs = TwoPhaseAMR._cached_cell_references!(construction.cell_references, mesh)
         topology = TwoPhaseAMR._ls_stress_topology!(
-            TwoPhaseAMR._LSStressCache(Float64), geometry, FreeSlip(),
+            TwoPhaseAMR._LSStressCache(Float64), geometry,
         )
         sites = Tuple{Int, Int, NTuple{3, Float64}}[]
         for (c, ref) in pairs(refs)
@@ -2160,5 +2182,145 @@ end
             "shared_vertices=$(length(shared)) max_abs_normal_shear=$(Tuple(row_max)) ",
             "max_scaled=$max_scaled",
         )
+    end
+end
+
+@testset "LS-STAG NoSlip Helmholtz convergence at box-boundary T-junction" begin
+    # psi = [x(1-x)y(1-y)(y-c)]^2, u = (psi_y, -psi_x).
+    # Its gradient vanishes on the box and on the stationary solid y = c,
+    # and div(u) = 0. With constant viscosity, div(2D(u)) = Laplacian(u).
+    c = 0.25
+    levelset(x, y) = y - c
+    function manufactured(x, y, axis)
+        g, gx = x * (1 - x), 1 - 2x
+        p, px = g^2, 2g * gx
+        pxx, pxxx = 2(gx^2 - 2g), -12gx
+        h, hy = y * (1 - y), 1 - 2y
+        q = h * (y - c)
+        qy = hy * (y - c) + h
+        qyy = -2(y - c) + 2hy
+        qyyy = -6
+        Q, Qy = q^2, 2q * qy
+        Qyy = 2(qy^2 + q * qyy)
+        Qyyy = 2(3qy * qyy + q * qyyy)
+        return axis == 1 ? (p * Qy, pxx * Qy + p * Qyyy) :
+            (-px * Q, -pxxx * Q - px * Qyy)
+    end
+
+    errors = Float64[]
+    for n in (16, 32, 64)
+        mesh = BlockTreeMesh(;
+            base_mesh = (n, n), block_size = (4, 4), max_level = 1,
+            periodic = (false, false),
+            refine = (key, origin, _) -> key.level == 0 && origin[1] >= 0.5,
+        )
+        geometry = GeometryField(mesh, levelset; lipschitz = 1.0)
+        interface = InterfaceField(mesh, (x, y) -> y - 5; geometry, lipschitz = 1.0)
+        operator = StaggeredDiffusionOperator(
+            interface; viscosity = (1.0, 1.0), boundary = NoSlip(),
+            closure = LSStagClosure(),
+        )
+        exact = zeros(length(mesh.faces))
+        rhs = similar(exact)
+        fill!(rhs, 0)
+        active = falses(length(mesh.faces))
+        for (index, face) in pairs(mesh.faces)
+            open_length, midpoint = _ls2p_open_segment(face, levelset)
+            open_length > 64eps() * face.area || continue
+            geometry.face_dual_volumes[index] > 0 || continue
+            index in operator.dirichlet_faces && continue
+            active[index] = true
+            u, laplacian = manufactured(midpoint..., face.axis)
+            exact[index] = u
+            # The discrete mass is the operator's dual volume, including
+            # the algebraic treatment of covered and constrained faces.
+            rhs[index] = operator.volumes[index] * (u - laplacian)
+        end
+        @test any(active)
+        solution = (spdiagm(0 => operator.volumes) + operator.stiffness) \ rhs
+        push!(errors, maximum(abs, (solution - exact)[active]))
+    end
+    # The coarsest pair is slightly pre-asymptotic (reviewed EOC ~1.77);
+    # the two-level slope and final pair both exceed 1.8 for second order,
+    # while a first-order T-junction error fails either criterion.
+    @test log2(errors[1] / errors[3]) / 2 >= 1.8
+    @test log2(errors[2] / errors[3]) >= 1.8
+end
+
+@testset "LS-STAG thin-gap FreeSlip box traces are compact and refresh exactly" begin
+    n = 64
+    mesh = BlockTreeMesh(;
+        base_mesh = (n, n), block_size = (4, 4), periodic = (false, false),
+    )
+    # A 1.5-cell fluid gap separates x=0 from the parallel embedded solid.
+    geometry = GeometryField(mesh, (x, y) -> 1.5 / n - x; lipschitz = 1.0)
+    lower = InterfaceField(mesh, (x, y) -> y - 0.5; geometry, lipschitz = 1.0)
+    crossing = InterfaceField(
+        mesh, (x, y) -> y - 0.25 + 0.05x; geometry, lipschitz = hypot(1.0, 0.05),
+    )
+    initial = (lower, (2.5, 0.4))
+    states = ((crossing, (0.35, 1.9)), initial)
+    construct(field, viscosity, boundary) =
+        StaggeredDiffusionOperator(field; viscosity, boundary, closure = LSStagClosure())
+    free = construct(initial..., FreeSlip())
+    patches = free.box_traces
+    @test patches isa Vector
+    @test any(p -> min(length(p.rows), length(p.faces)) >= n ÷ 2, patches)
+    patch_rows = falses(length(free.stress_weights))
+    for patch in patches
+        @test size(patch.basis, 1) == length(patch.rows)
+        @test 0 < size(patch.basis, 2) <= length(patch.rows)
+        patch_rows[patch.rows] .= true
+    end
+    # Count all retained arrays, including coefficient/CSC-slot matrices and
+    # both trace bases. The old 24-byte tuples per (row,face,face) exceed
+    # this quadratic envelope by more than an order of magnitude at n=64.
+    entries = sum(p -> length(p.rows) * length(p.faces) + length(p.faces)^2, patches)
+    @test Base.summarysize(patches) <= 16 * sizeof(Int) * entries + 4096 * (1 + length(patches))
+    @test !any(row -> patch_rows[row], free.stiffness_stresses)
+
+    peak(A) = maximum(abs, nonzeros(A); init = 0.0)
+    for (field, viscosity) in states
+        old_weights = free.stress_weights[patch_rows]
+        old_strain, old_stiffness = copy(free.strain), copy(free.stiffness)
+        TwoPhaseAMR._update_dynamic_viscosity!(free, field, viscosity)
+        fresh = construct(field, viscosity, FreeSlip())
+        @test free.stress_weights[patch_rows] != old_weights
+        @test peak(free.strain - old_strain) > 0
+        @test peak(free.stiffness - old_stiffness) > 1.0e-6 * peak(fresh.stiffness)
+        for name in (:strain, :stiffness, :wall_reaction_strain)
+            actual, expected = getproperty(free, name), getproperty(fresh, name)
+            @test actual.colptr == expected.colptr
+            @test rowvals(actual) == rowvals(expected)
+            @test peak(actual - expected) <= 512eps() * max(1.0, peak(expected))
+        end
+        @test free.dirichlet_faces == fresh.dirichlet_faces
+        @test free.stress_weights ≈ fresh.stress_weights rtol = 64eps()
+        @test free.stiffness_factors == fresh.stiffness_factors
+        @test free.stiffness_stresses == fresh.stiffness_stresses
+        @test free.stiffness_pointers == fresh.stiffness_pointers
+        @test free.stiffness_refresh_offsets == fresh.stiffness_refresh_offsets
+        for op in (free, fresh)
+            E, K = op.strain, op.stiffness
+            @test op.strain_transpose == transpose(E)
+            @test issymmetric(K)
+            @test peak(K - transpose(E) * (Diagonal(op.stress_weights) * E)) <=
+                1024eps() * peak(K)
+        end
+
+        no_slip = construct(field, viscosity, NoSlip())
+        @test isnothing(no_slip.box_traces)
+        loss = dropzeros!(no_slip.stiffness - free.stiffness)
+        @test issymmetric(loss)
+        @test peak(loss) > 1.0e-6 * peak(no_slip.stiffness)
+        # All other columns (and by symmetry rows) vanish exactly. This
+        # principal block has the full nonzero spectrum; no mode is sampled
+        # or discarded by a numerical support threshold.
+        support = findall(c -> !isempty(nzrange(loss, c)), axes(loss, 2))
+        @test 0 < length(support) <= 16n
+        if 0 < length(support) <= 16n
+            @test eigmin(Symmetric(Matrix(loss[support, support]))) >=
+                -1024eps() * peak(no_slip.stiffness)
+        end
     end
 end

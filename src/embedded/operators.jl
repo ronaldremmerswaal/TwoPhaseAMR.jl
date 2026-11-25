@@ -1677,10 +1677,10 @@ end
 
 """
     StaggeredDiffusionOperator(geometry; viscosity=1, boundary=NoSlip(),
-                               closure=WallDistanceClosure())
+                               closure=LSStagClosure())
 
-`closure` selects [`LSStagClosure`](@ref) or the default
-[`WallDistanceClosure`](@ref), whose legacy rows are described below.
+`closure` selects [`LSStagClosure`](@ref), the default, or the legacy
+[`WallDistanceClosure`](@ref), whose rows are described below.
 A cell field of dynamic viscosity selects the coupled stress operator.
 The conservative cut-cell stiffness is symmetric positive semidefinite.
 Embedded walls include surfaces aligned with cell faces as well as PLIC cuts.
@@ -1710,7 +1710,7 @@ that is not grid aligned (#110).
 """
 function StaggeredDiffusionOperator(
         geometry::GeometryField{T, M}; viscosity = 1,
-        boundary = NoSlip(), closure = WallDistanceClosure(),
+        boundary = NoSlip(), closure = LSStagClosure(),
     ) where {T, M}
     if viscosity isa CellField
         return _staggered_diffusion_operator(geometry.mesh; viscosity, geometry, boundary, closure, T)
