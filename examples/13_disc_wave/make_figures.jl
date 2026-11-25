@@ -1,22 +1,46 @@
 using TwoPhaseAMR, CairoMakie, Printf
 
 Base.include(@__MODULE__, joinpath(@__DIR__, "disc_wave.jl"))
+Base.include(@__MODULE__, joinpath(@__DIR__, "disc_wave_analysis.jl"))
 
 const STUDY_TIME = 1.0
 const STUDY_STEPS = 2000
 const STUDY_RESOLUTIONS = (32, 64, 128, 256)
 const STUDY_CASES = (
-    (; label = "LS-STAG", closure = LSStagClosure(), composite = false, initial_data = :projected),
-    (; label = "LS-STAG, composite", closure = LSStagClosure(), composite = true, initial_data = :projected),
-    (; label = "wall distance", closure = WallDistanceClosure(), composite = false, initial_data = :projected),
-    (; label = "wall distance, composite", closure = WallDistanceClosure(), composite = true, initial_data = :projected),
-    (; label = "LS-STAG, sampled data", closure = LSStagClosure(), composite = false, initial_data = :sampled),
+    (; label = "LS-STAG", closure = LSStagClosure(), composite = false, sampled = false),
+    (; label = "LS-STAG, composite", closure = LSStagClosure(), composite = true, sampled = false),
+    (; label = "wall distance", closure = WallDistanceClosure(), composite = false, sampled = false),
+    (; label = "wall distance, composite", closure = WallDistanceClosure(), composite = true, sampled = false),
+    (; label = "LS-STAG, sampled data", closure = LSStagClosure(), composite = false, sampled = true),
 )
 
 const ERROR_NAMES = (:displacement_l2, :displacement_max, :rate_l2, :rate_max)
 
 rate_label(name, coarse, fine) =
     @sprintf("%.2f", log2(getproperty(coarse, name) / getproperty(fine, name)))
+
+# `run_example` with the measurements of the studies: errors against the exact
+# solution at t = 0 and at the end, mode frequencies and the explicit limit.
+function analysed_run(; options...)
+    tracker = PhaseTracker()
+    initial_errors = Ref{Any}(nothing)
+    function on_step(state)
+        state.step == 0 && (
+            initial_errors[] = disc_wave_errors(
+                state.operator, state.displacement, state.rate, state.modes, 0.0;
+                state.radius, state.speed,
+            )
+        )
+        return tracker(state)
+    end
+    run = run_example(; merge((; keyframes = nothing), (; options...))..., on_step)
+    return (;
+        run..., errors = disc_wave_errors(run), initial_errors = initial_errors[],
+        frequencies = mode_frequencies(tracker, run),
+        explicit_limit = explicit_limit(run.operator; run.speed),
+        times = collect(range(0.0, run.time; length = run.steps + 1)),
+    )
+end
 
 # Spatial convergence at t = 1 with 2000 steps (dt = 5e-4), small enough that
 # the time error stays below 1 % of the spatial error at 256 cells. Errors are
@@ -26,10 +50,11 @@ function spatial_study(; resolutions = STUDY_RESOLUTIONS, steps = STUDY_STEPS)
     for case in STUDY_CASES
         series = results[case.label] = Any[]
         for resolution in resolutions
-            run = run_example(;
-                resolution, case.closure, case.composite, case.initial_data,
-                final_time = STUDY_TIME, steps, tolerance = 1.0e-12,
-                keyframes = nothing,
+            run = analysed_run(;
+                resolution, case.closure, case.composite, final_time = STUDY_TIME, steps,
+                tolerance = 1.0e-12,
+                initial_displacement! = case.sampled ? sample_initial_displacement! :
+                    project_initial_displacement!,
             )
             relative = NamedTuple{ERROR_NAMES}(relative_error.(Ref(run.errors), ERROR_NAMES))
             push!(
@@ -38,7 +63,7 @@ function spatial_study(; resolutions = STUDY_RESOLUTIONS, steps = STUDY_STEPS)
                     cells = ncells(run.geometry.mesh),
                     frequency = [entry.spatial / entry.exact - 1 for entry in run.frequencies],
                     drift = maximum(abs, run.energy ./ first(run.energy) .- 1),
-                    run.cycles, run.run_seconds,
+                    run.iterations, run.run_seconds,
                 )
             )
             line = @sprintf(
@@ -57,7 +82,7 @@ function spatial_study(; resolutions = STUDY_RESOLUTIONS, steps = STUDY_STEPS)
                 "    initial u L2/max ",
                 @sprintf("%.2e/%.2e", run.initial_errors.displacement_l2, run.initial_errors.displacement_max),
                 ", spatial frequency errors ", join((@sprintf("%.3e", value) for value in series[end].frequency), ", "),
-                ", CG iterations per step ", @sprintf("%.2f", run.cycles / run.steps),
+                ", CG iterations per step ", @sprintf("%.2f", run.iterations / run.steps),
             )
             flush(stdout)
         end
@@ -79,8 +104,8 @@ end
 # Temporal self-convergence on one mesh: differences to a run with 5120 steps,
 # relative to the exact norms at t = 1.
 function temporal_study(; resolution = 128, steps = (20, 40, 80, 160, 320, 640))
-    options = (; resolution, final_time = STUDY_TIME, tolerance = 1.0e-12, keyframes = nothing)
-    reference = run_example(; options..., steps = 5120)
+    options = (; resolution, final_time = STUDY_TIME, tolerance = 1.0e-12)
+    reference = analysed_run(; options..., steps = 5120)
     norms = reference.errors.norms
     weights = fluid_weights(reference)
     open = weights .> 0
@@ -89,7 +114,7 @@ function temporal_study(; resolution = 128, steps = (20, 40, 80, 160, 320, 640))
         return sqrt(sum(weights[open] .* error .^ 2) / sum(weights[open])) / l2, maximum(error) / maximum_norm
     end
     series = map(steps) do count
-        run = run_example(; options..., steps = count)
+        run = analysed_run(; options..., steps = count)
         u_l2, u_max = difference(run.displacement, reference.displacement, norms.displacement_l2, norms.displacement_max)
         v_l2, v_max = difference(run.rate, reference.rate, norms.rate_l2, norms.rate_max)
         (; dt = run.dt, u_l2, u_max, v_l2, v_max, exact = relative_error(run.errors, :displacement_l2))
@@ -114,9 +139,9 @@ end
 # several solver tolerances.
 function energy_study(; resolution = 128, periods = 4, tolerances = (1.0e-6, 1.0e-8, 1.0e-10, 1.0e-12))
     return map(tolerances) do tolerance
-        run = run_example(;
+        run = analysed_run(;
             resolution, tolerance, final_time = periods * 2pi / DISC_WAVE_MODES[1].root,
-            steps = 128periods, keyframes = nothing,
+            steps = 128periods,
         )
         change = run.energy ./ first(run.energy) .- 1
         println(
@@ -124,34 +149,10 @@ function energy_study(; resolution = 128, periods = 4, tolerances = (1.0e-6, 1.0
                 "tolerance %.0e: dt %.5f (%.1f × leapfrog limit), largest |E/E0 - 1| %.2e, ",
                 tolerance, run.dt, run.dt / run.explicit_limit, maximum(abs, change),
             ),
-            @sprintf("%.2f CG iterations per step, %.2f s", run.cycles / run.steps, run.run_seconds),
+            @sprintf("%.2f CG iterations per step, %.2f s", run.iterations / run.steps, run.run_seconds),
         )
         (; tolerance, times = run.times, change, period = run.time / periods)
     end
-end
-
-# The trajectory of test/examples/disc_wave_example.jl, t = 1/4 in 20 steps
-# per 32 cells, refined in space and time together (Δt ∝ h). The test bounds
-# each relative error e(n) of LS-STAG by C (32/n)², C the largest
-# e(n) (n/32)² printed here, and checks the orders against these.
-function regression_study(; resolutions = STUDY_RESOLUTIONS)
-    for closure in (LSStagClosure(), WallDistanceClosure()), resolution in resolutions
-        run = run_example(;
-            resolution, closure, final_time = 0.25, steps = 20 * resolution ÷ 32,
-            tolerance = 1.0e-12, keyframes = nothing,
-        )
-        relative = relative_error.(Ref(run.errors), ERROR_NAMES)
-        println(
-            @sprintf("%-20s n=%3d relative u L2/max ", typeof(closure), resolution),
-            join((@sprintf("%.4e", value) for value in relative[1:2]), "/"),
-            "  ∂u/∂t L2/max ", join((@sprintf("%.4e", value) for value in relative[3:4]), "/"),
-            "  times (n/32)² ", join((@sprintf("%.4e", value * (resolution / 32)^2) for value in relative), "/"),
-            "  frequency errors ", join(
-                (@sprintf("%.3e", entry.spatial / entry.exact - 1) for entry in run.frequencies), ", ",
-            ),
-        )
-    end
-    return nothing
 end
 
 # Both displacement components over one period of the (0,1) mode, one output
@@ -292,14 +293,14 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     mkpath(outdir)
     docs = size === :docs
     started = time()
-    hero = run_example()
+    hero = analysed_run(; keyframes = EquispacedTimes(65))
     println(
         "hero: 128 cells, ", hero.steps, " steps, dt = ", hero.dt, " = ",
         hero.dt / hero.explicit_limit, " × leapfrog limit ", hero.explicit_limit,
         "; relative errors at t = ", hero.time, ": ", NamedTuple{ERROR_NAMES}(relative_error.(Ref(hero.errors), ERROR_NAMES)),
         "; largest |E/E0 - 1| ", maximum(abs, hero.energy ./ first(hero.energy) .- 1),
-        "; ", hero.cycles, " CG iterations (at most ", hero.maximum_cycles, " per step); setup ",
-        hero.setup_seconds, " s, stepping ", hero.run_seconds, " s",
+        "; ", hero.iterations, " CG iterations; setup ", hero.setup_seconds, " s, stepping ",
+        hero.run_seconds, " s",
     )
     for entry in hero.frequencies
         println(
@@ -312,7 +313,6 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     spatial = spatial_study()
     temporal = temporal_study()
     energy = energy_study()
-    regression_study()
     convergence_figure(joinpath(outdir, "convergence.png"), spatial; size = docs ? (1020, 470) : (1360, 620))
     time_figure(joinpath(outdir, "time.png"), temporal, energy; size = docs ? (860, 430) : (1150, 570))
     println("figure script: ", time() - started, " s")

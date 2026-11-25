@@ -10,7 +10,7 @@ Both components of a staggered field ring as exact Bessel standing waves on a cu
 | --- | --- |
 | **Physics** | The linear wave equation `u_tt = c²Δu`, `c = 1`, for both components of a staggered (MAC) field `u` on the disc `r < R = 1`, centred in the box `[-1.25, 1.25]²`. Outside the disc the box is an embedded solid, and `u = 0` on the circle (`NoSlip()`), so each component is a scalar Dirichlet problem. `u_x` starts as the (0,1) and (2,1) Bessel modes and `u_y` as the (1,1) and (3,2) modes, at rest; the solution is exact for all time. |
 | **Algorithms** | `Δ_h = −V⁻¹K` from `StaggeredDiffusionOperator(geometry; closure)` with the default `LSStagClosure()`: a cut face's value sits at the midpoint of its open part, `K` is the symmetric positive semidefinite stiffness and `V` holds the open staggered volumes. The implicit midpoint rule (Crank–Nicolson, Newmark's average acceleration) for `u_t = v`, `v_t = c²Δ_h u` needs one shifted solve `(V + (cΔt/2)²K)ū = V(uⁿ + Δt vⁿ/2)` per step, by `StaggeredEllipticSolver`: conjugate gradients with the geometry-aware tree multigrid, the path of the Navier–Stokes viscous step. Uniform `n × n` mesh in 8×8 blocks, or a composite mesh whose blocks along the circle are refined once. |
-| **Worth varying** | `resolution=128` cells per side; `composite=false`; `closure=LSStagClosure()` or `WallDistanceClosure()`; `steps=128` over `final_time=nothing`, one period of the (0,1) mode; the relative solver `tolerance=1e-10`; `initial_data=:projected` or `:sampled`; `modes`. |
+| **Worth varying** | `resolution=128` cells per side; `composite=false`; `closure=LSStagClosure()` or `WallDistanceClosure()`; `steps=128` over `final_time=nothing`, one period of the (0,1) mode; the relative solver `tolerance=1e-10`; `modes`; `initial_displacement!`, `project_initial_displacement!` or `sample_initial_displacement!` from `disc_wave_analysis.jl`. |
 | **Validated against** | The exact solution at the value points, the frequency of each mode and the discrete energy. LS-STAG is second order in space in the L2 and maximum norms of `u` and `∂u/∂t` (orders 1.98–1.99 from 128 to 256 cells; relative errors at 256 cells `3.42e-4`/`5.28e-4` for `u`), and so is every mode's frequency; the legacy wall-distance closure is first order. Time integration is second order, and the energy changes by less than the solver tolerance with steps 31 times the explicit limit. |
 | **Cost** | Default (`:docs` and `:default` alike): 128 cells, one period in 128 steps; setup 0.48 s and stepping 1.26 s in a warm process, about 10 conjugate-gradient iterations per step for both components. The whole figure script, with the space, time and energy studies (32 runs, the largest 2000 steps on 84736 cells), took 1161 s on one thread. |
 
@@ -45,9 +45,9 @@ E = \tfrac12\bigl(v^\top V v + c^2\,u^\top K u\bigr)
 
 is conserved for every `Δt`; an inexact solve changes it by about the solver tolerance. A discrete mode of frequency `ω_h` turns by `2 arctan(ω_hΔt/2)` per step, a relative phase lag of `(ω_hΔt)²/12`.
 
-Explicit schemes are limited by the small cut cells. Leapfrog is stable for `Δt ≤ 2/(c√λ_max)`, `λ_max` the largest eigenvalue of `−Δ_h`; `run.explicit_limit` uses the largest absolute row sum of `Δ_h` (`1/stable_timestep(operator; cfl=1)`), which at 128 cells is within 1 % of the power-iteration eigenvalue `9.15e6`. That limit is `6.59e-4`, against `h/(c√2) = 0.0138` for the same mesh without cut cells; the default `Δt = T₀₁/128 = 0.0204` is 31 times larger.
+Explicit schemes are limited by the small cut cells. Leapfrog is stable for `Δt ≤ 2/(c√λ_max)`, `λ_max` the largest eigenvalue of `−Δ_h`; `explicit_limit(operator)` in `disc_wave_analysis.jl` uses the largest absolute row sum of `Δ_h` (`1/stable_timestep(operator; cfl=1)`), which at 128 cells is within 1 % of the power-iteration eigenvalue `9.15e6`. That limit is `6.59e-4`, against `h/(c√2) = 0.0138` for the same mesh without cut cells; the default `Δt = T₀₁/128 = 0.0204` is 31 times larger.
 
-The initial displacement is not sampled from the modes: `initial_data=:projected` solves the discrete Helmholtz problem `(I − h²Δ_h)u₀ = (I − h²Δ)u(·,0)` (one solve, `h` the base cell size), whose exact solution is the initial displacement. Sampled values excite the stiff modes of the small cut cells, which the energy-conserving scheme never damps (see Results).
+The initial displacement is not sampled from the modes: `project_initial_displacement!` solves the discrete Helmholtz problem `(I − h²Δ_h)u₀ = (I − h²Δ)u(·,0)` (one solve, `h` the base cell size), whose exact solution is the initial displacement. Sampled values excite the stiff modes of the small cut cells, which the energy-conserving scheme never damps (see Results).
 
 Errors are measured where the closure places the values, from `value_points(operator, axis)`: LS-STAG at the midpoint of the open part of a cut face, the wall-distance closure at the face centre, which can lie in the solid, where the Bessel functions continue smoothly. L2 is the root mean square weighted by the open staggered volumes that `value_points` returns for both components, max the largest error over the faces with a positive open volume; both are relative to the same norm of the exact solution at that time (at `t = 1`: `‖u‖ = 0.332/0.740`, `‖∂u/∂t‖ = 0.970/2.36` in L2/max). A mode's frequency is the least-squares slope of its unwrapped phase `atan(−b/ω, a)`, from the projections `a`, `b` of `u` and `∂u/∂t` on its exact shape; `(2/Δt) tan(ΩΔt/2)` removes the implicit-midpoint lag and leaves the spatial frequency `ω_h`.
 
@@ -58,17 +58,23 @@ From the repository root, in a Julia session started with `--project=examples`:
 ```julia
 include("examples/13_disc_wave/disc_wave.jl")
 run = run_example(resolution = 64)
-run.errors                                  # absolute errors and exact norms at the final time
-maximum(abs, run.energy ./ run.energy[1] .- 1)
-[(f.mode.m, f.mode.k, f.spatial / f.exact - 1) for f in run.frequencies]
+maximum(abs, run.energy ./ run.energy[1] .- 1)      # relative energy change
+include("examples/13_disc_wave/disc_wave_analysis.jl")
+errors = disc_wave_errors(run)                      # absolute errors and exact norms at run.time
+relative_error(errors, :displacement_l2)
 ```
 
-Run the default case headlessly, or regenerate the figures with all studies:
+`run_example(; on_step = PhaseTracker())` records the phase of each mode for
+`mode_frequencies`. Run the default case headlessly, or regenerate the figures
+with all studies:
 
 ```sh
 julia --project=examples examples/13_disc_wave/disc_wave.jl
 julia --project=examples examples/13_disc_wave/make_figures.jl
 ```
+
+Append `--studio` to the example command to follow the run in a browser;
+press Ctrl+C to close Studio after the run.
 
 ## Results
 
@@ -103,12 +109,14 @@ The legacy `WallDistanceClosure()` is first order at the curved wall. Its relati
 run_example(closure = WallDistanceClosure())        # legacy first-order wall closure
 run_example(composite = true)                       # refine the blocks along the wall once
 run_example(steps = 32)                             # larger steps: stable, energy conserved, more phase lag
-run_example(initial_data = :sampled)                # sampled modes excite stiff cut-cell modes
+run_example(initial_displacement! = sample_initial_displacement!)   # stiff cut-cell modes (disc_wave_analysis.jl)
 run_example(modes = (DiscMode(1, 4, 1), DiscMode(2, 0, 2)))   # other standing waves
 ```
 
 ## Files
 
-- [disc_wave.jl](disc_wave.jl): Bessel zeros and modes, mesh and geometry, the implicit-midpoint integrator, initial data, errors, frequencies and energy.
+- [disc_modes.jl](disc_modes.jl): the exact solution, Bessel zeros and modes, shared with the figure script and `test/integration/disc_wave.jl`.
+- [disc_wave.jl](disc_wave.jl): mesh and geometry, the LS-STAG operator, the Helmholtz-projected initial data, the implicit-midpoint loop, energy, recording and Studio.
+- [disc_wave_analysis.jl](disc_wave_analysis.jl): errors against the exact solution, mode phases and frequencies, sampled initial data, the explicit limit.
 - [make_figures.jl](make_figures.jl): the animation and the space, time and energy studies.
 - `assets/`: generated GIF and PNGs.

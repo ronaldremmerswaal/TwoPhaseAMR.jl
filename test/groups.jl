@@ -16,6 +16,7 @@ const TEST_GROUPS = [
     "aqua" => ["aqua.jl"],
     "integration/wave_equation" => ["integration/wave_equation.jl"],
     "integration/staggered_wave_equation" => ["integration/staggered_wave_equation.jl"],
+    "integration/disc_wave" => ["integration/disc_wave.jl"],
     "integration/amr_manufactured_flow" => ["integration/amr_manufactured_problem.jl", "integration/amr_manufactured_flow.jl"],
     "integration/two_phase_vortex" => ["integration/vortex_problem.jl", "integration/two_phase_vortex.jl"],
     "integration/two_velocity_transport" => ["integration/two_velocity_transport.jl"],

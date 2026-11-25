@@ -50,12 +50,13 @@ available via `snapshot_store(run.recorder)`. Vortex reversal returns its
 interface, prescribed velocity, result, recorder and app. LGPI returns its
 flow, result and recorder, while manufactured Poisson returns its projection
 fields, errors and a `registry`. The disc wave returns its geometry, operator,
-fields, errors against the exact solution, energy history and recorder. For
-most cases, a low `max_level` and short `final_time` make a quick initial run.
+fields, energy history, recorder and app; its `disc_wave_analysis.jl` measures
+them against the exact solution. For most cases, a low `max_level` and short
+`final_time` make a quick initial run.
 
 ## Studio
 
-Examples 01–10 can opt into live browser viewing from the command line:
+Examples 01–10 and 13 can opt into live browser viewing from the command line:
 
 ```sh
 julia -t 2,1 --project=examples examples/06_capillary_wave/capillary_wave.jl --studio
