@@ -118,6 +118,35 @@ jobs:
       - uses: julia-actions/julia-buildpkg@v1
       - run: julia --project=. -e 'using Pkg; Pkg.test(test_args=["threading_equivalence"])'
 
+  two-velocity-verification:
+    # Tier 1 of the two-velocity verification suite (benchmark/two_velocity):
+    # single projections with exact answers for every two-velocity projection,
+    # compared with benchmark/two_velocity/baseline.toml. Fails on a metric
+    # worse than its baseline beyond the documented tolerance, a missing metric
+    # or a failed case; an intentional change re-records the baseline in the
+    # same pull request. Same trigger as the other T0 jobs, so ci-ok never sees
+    # it skipped.
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      JULIA_NUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1.12'
+      - uses: julia-actions/cache@v3
+      - run: julia --project=benchmark -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate()'
+      - run: julia --project=benchmark benchmark/two_velocity/run.jl --tier=1 --compare
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: two-velocity-verification-tier1
+          path: benchmark/two_velocity/output
+
   thread-scaling:
     # Manual measurement tier: the ten target cases at 1, 2 and 4 threads.
     #   gh workflow run CI.yml --ref <branch> -f tier=scaling
@@ -294,7 +323,7 @@ jobs:
     # A run cancelled by a newer run on the same branch must not report a
     # failing ci-ok for its commit; the newer run reports the result.
     if: ${{ !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))) }}
-    needs: [format, unit, threading-equivalence, makie, studio, frontend]
+    needs: [format, unit, threading-equivalence, two-velocity-verification, makie, studio, frontend]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
@@ -304,7 +333,8 @@ jobs:
           FORMAT_RESULT: ${{ needs.format.result }}
           UNIT_RESULT: ${{ needs.unit.result }}
           EQUIVALENCE_RESULT: ${{ needs.threading-equivalence.result }}
+          VERIFICATION_RESULT: ${{ needs.two-velocity-verification.result }}
           MAKIE_RESULT: ${{ needs.makie.result }}
           STUDIO_RESULT: ${{ needs.studio.result }}
           FRONTEND_RESULT: ${{ needs.frontend.result }}
-        run: test "$FORMAT_RESULT" = success && test "$UNIT_RESULT" = success && test "$EQUIVALENCE_RESULT" = success && test "$MAKIE_RESULT" = success && test "$STUDIO_RESULT" = success && test "$FRONTEND_RESULT" = success
+        run: test "$FORMAT_RESULT" = success && test "$UNIT_RESULT" = success && test "$EQUIVALENCE_RESULT" = success && test "$VERIFICATION_RESULT" = success && test "$MAKIE_RESULT" = success && test "$STUDIO_RESULT" = success && test "$FRONTEND_RESULT" = success
