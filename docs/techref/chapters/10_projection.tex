@@ -665,9 +665,12 @@ gradient is removed exactly for any $\slopeweight_f$; without a staggered
 normal or a mixture velocity, $\slopeweight_f=1$. The workspace keeps
 $\slopeweight_f$ with the rows of the reconstructed interface: a further
 projection with the same interface and limiter reuses it, so the projection
-stays idempotent. In the tilted-interface sliding-limiter fixture,
-reevaluating the weights from the projected state instead would change it by
-$0.26$, $0.11$, $0.21$ of the velocity scale over three repetitions.
+stays idempotent. In the tilted-interface fixtures of the two limiters,
+reevaluating the weights from the projected state instead would change the
+largest face velocity component by $0.26$, $0.11$, $0.21$ over three
+repetitions with the sliding limiter and by $0.33$, $0.21$, $0.062$ with the
+default one (a slip of one velocity unit; $7$ of the $40$ weighted rows carry
+$0<\slopeweight_f<1$, against $8$ for the sliding fixture).
 A flow releases the frozen weights before each of its
 projections, so each step evaluates them from its own predictor. The
 smoothstep makes $\slopeweight_f$ a continuous function of that state, so the
