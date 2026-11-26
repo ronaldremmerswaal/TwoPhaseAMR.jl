@@ -2692,12 +2692,12 @@ end
     @test _pw_eigmin(Float64.(mixed.stiffness - build(FreeSlip()).stiffness)) >= -4096eps(T) * scale
 end
 
-# Keep the allocation check in compiled code and exclude threaded launcher metadata.
-function _pw_thin_gap_refresh_allocations(operator, lower, crossing)
+# Keep the allocation check in compiled code, warming each launch path.
+function _pw_thin_gap_refresh_allocations(operator, lower, crossing, selected_grain)
     grain = TwoPhaseAMR._PARALLEL_GRAIN
     previous = grain[]
     try
-        grain[] = typemax(Int)
+        grain[] = selected_grain
         TwoPhaseAMR._update_dynamic_viscosity!(operator, lower, (2.5, 0.4))
         TwoPhaseAMR._update_dynamic_viscosity!(operator, crossing, (0.35, 1.9))
         return @allocated TwoPhaseAMR._update_dynamic_viscosity!(operator, lower, (2.5, 0.4))
@@ -2706,7 +2706,7 @@ function _pw_thin_gap_refresh_allocations(operator, lower, crossing)
     end
 end
 
-@testset "LS-STAG per-side thin-gap traces refresh exactly with no serial allocations" begin
+@testset "LS-STAG per-side thin-gap traces refresh exactly with bounded allocations" begin
     n = 32
     mesh = BlockTreeMesh(; base_mesh = (n, n), block_size = (4, 4), periodic = (false, false))
     # A 1.5-cell fluid gap runs along the left side.
@@ -2742,7 +2742,18 @@ end
         @test 0 < length(support) <= 16n
         @test _pw_eigmin(loss[support, support]) >= -1024eps() * peak(no_slip.stiffness)
     end
-    @test _pw_thin_gap_refresh_allocations(operator, lower, crossing) == 0
+    # Two threads, bounds checking: 0 B serial; 48 B on Julia 1.11 and
+    # 0 B on 1.12 for both default and forced threaded grains. Allow the
+    # same 64 B launcher bound as the threaded maximum test on Julia 1.11.
+    default_grain = TwoPhaseAMR._PARALLEL_GRAIN[]
+    for grain in (typemax(Int), default_grain, 1)
+        allocated = _pw_thin_gap_refresh_allocations(operator, lower, crossing, grain)
+        if grain == typemax(Int) || Threads.nthreads(:default) == 1 || VERSION >= v"1.12"
+            @test allocated == 0
+        else
+            @test allocated <= 64
+        end
+    end
 end
 
 @testset "Per-side walls key the variable diffusion hierarchy" begin

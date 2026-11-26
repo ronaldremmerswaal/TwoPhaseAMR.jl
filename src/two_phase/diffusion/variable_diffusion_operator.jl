@@ -329,12 +329,15 @@ function _update_log_dynamic_viscosity!(
     isempty(operator.stiffness_pointers) && isnothing(box_traces) && return operator
     stiffness_values = nonzeros(operator.stiffness)
     offsets = operator.stiffness_refresh_offsets
+    stiffness_stresses = operator.stiffness_stresses
+    stiffness_factors = operator.stiffness_factors
+    stress_weights = operator.stress_weights
     @_parallel for pointer in 1:length(stiffness_values)
         value = zero(T)
         for index in offsets[pointer]:(offsets[pointer + 1] - 1)
-            stress = @inbounds operator.stiffness_stresses[index]
-            factor = @inbounds operator.stiffness_factors[index]
-            @inbounds value += operator.stress_weights[stress] * factor
+            stress = @inbounds stiffness_stresses[index]
+            factor = @inbounds stiffness_factors[index]
+            @inbounds value += stress_weights[stress] * factor
         end
         @inbounds stiffness_values[pointer] = value
     end
@@ -360,37 +363,36 @@ function _update_dynamic_viscosity!(
     nx, ny = mesh.block_size
     h = mesh.halo
     cells_per_block = nx * ny
+    fraction_blocks = field.conditional_fraction.blocks
+    cell_work = operator.cell_work
+    # Stage the block-backed fractions into the existing flat workspace:
+    # Polyester cannot pack a vector of matrices without boxing its launch.
+    for b in eachindex(fraction_blocks)
+        fraction = @inbounds fraction_blocks[b]
+        offset = (b - 1) * cells_per_block
+        @inbounds for j in 1:ny, i in 1:nx
+            cell_work[offset + (j - 1) * nx + i] = fraction[i + h, j + h]
+        end
+    end
     if operator.averaging isa HarmonicViscosityAveraging
         # log of the series mixture 1 / (c / liquid + (1 - c) / gas) is not
         # affine in the fraction, unlike the geometric one.
         inverse_liquid = inv(phases[1])
         inverse_jump = inverse_liquid - inv(phases[2])
         inverse_gas = inv(phases[2])
-        _parallel_block_columns(mesh) do b, first_j, last_j
-            fraction = @inbounds field.conditional_fraction.blocks[b]
-            offset = (b - 1) * cells_per_block
-            @inbounds for j in first_j:last_j, i in 1:nx
-                index = offset + (j - 1) * nx + i
-                operator.cell_work[index] = -log(
-                    muladd(fraction[i + h, j + h], inverse_jump, inverse_gas),
-                )
-            end
+        @_parallel for index in eachindex(cell_work)
+            @inbounds cell_work[index] = -log(
+                muladd(cell_work[index], inverse_jump, inverse_gas),
+            )
         end
     else
         log_gas = log(phases[2])
         log_jump = log(phases[1]) - log_gas
-        _parallel_block_columns(mesh) do b, first_j, last_j
-            fraction = @inbounds field.conditional_fraction.blocks[b]
-            offset = (b - 1) * cells_per_block
-            @inbounds for j in first_j:last_j, i in 1:nx
-                index = offset + (j - 1) * nx + i
-                operator.cell_work[index] = muladd(
-                    fraction[i + h, j + h], log_jump, log_gas,
-                )
-            end
+        @_parallel for index in eachindex(cell_work)
+            @inbounds cell_work[index] = muladd(cell_work[index], log_jump, log_gas)
         end
     end
-    return _update_log_dynamic_viscosity!(operator, operator.cell_work)
+    return _update_log_dynamic_viscosity!(operator, cell_work)
 end
 
 function _staggered_diffusion_operator(
