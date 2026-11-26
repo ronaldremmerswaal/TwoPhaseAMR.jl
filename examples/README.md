@@ -21,6 +21,7 @@ two-velocity verification suite (`benchmark/two_velocity`).
 | 10 | [Stokes wave](10_stokes3_wave/) | Nonlinear free-surface wave | One velocity | Level 5, one period; unmeasured |
 | 11 | [Large gas-pocket impact](11_lgpi/) | Gravity wave over bathymetry | Two velocity | Level 4, 1.2 gravity periods; unmeasured (gallery level-3 setup and simulation 2710.5 s) |
 | 13 | [Disc wave](13_disc_wave/) | Staggered wave equation on a cut-cell disc | Implicit midpoint, LS-STAG | 128×128, one period in 128 steps; 0.48 s setup, 1.26 s stepping |
+| 14 | [Rising bubble](14_rising_bubble/) | Hysing et al. benchmark, cases 1 and 2 | One velocity | Level 4, T=3; case 1 114.59 s, case 2 70.22 s, both after a compiling level-3 run |
 | 15 | [Forced sloshing](15_sloshing/) | Shaken tank, baffle as an exact polygon | One velocity | Level 2, T=10; 975 steps, 49.8 s |
 | 17 | [Rayleigh–Taylor instability](17_rayleigh_taylor/) | Single-mode growth and multimode mixing with a dye | One velocity | Level 5 multimode, T=4; 1363 steps, 1676.9 s |
 | 18 | [Taylor–Culick retraction](18_taylor_culick/) | Capillary retraction of a planar sheet | Two velocity | Level 3, T=12; 851 steps, 71.9 s |
@@ -57,7 +58,7 @@ cases, a low `max_level` and short `final_time` make a quick initial run.
 
 ## Studio
 
-Examples 01–11, 13, 15, 17, and 18 can opt into live browser viewing from the command line:
+Examples 01–11, 13–15, 17, and 18 can opt into live browser viewing from the command line:
 
 ```sh
 julia -t 2,1 --project=examples examples/06_capillary_wave/capillary_wave.jl --studio
