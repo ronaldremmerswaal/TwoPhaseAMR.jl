@@ -487,8 +487,9 @@ function tier1_t7!(suite, m)
             (x, y) -> hypot(x - 0.5, y - 0.5) - R0, 1.0, dpin, dpout, pex,
         )
     end
-    # Example 12 was designed so that the normal and tangential parts of the
-    # scaled jump have nearly equal surface rms (its former test: 0.8–1.25).
+    # The former gallery Example 12 was designed so that the normal and tangential
+    # parts of the scaled jump have nearly equal surface rms (its former test:
+    # 0.8–1.25).
     normal, tangential = manufactured_jump_rms((1000.0, 1.0))
     @assert 0.8 <= tangential / normal <= 1.25
     for n in suite.resolutions

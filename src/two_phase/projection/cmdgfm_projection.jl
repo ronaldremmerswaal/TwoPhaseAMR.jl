@@ -1087,7 +1087,7 @@ The same recursion runs without any interface motion where the phases slide
 past each other along an inclined interface, one write per step of the
 interface staircase passed ([`_cmdgfm_sliding_speed`](@ref)). The optional
 `:sliding` limiter takes the larger of the interface normal and sliding speeds.
-Example 07 run to twice its default time (density ratio 3, We 0.5, Bo 0.75,
+Example 13 run to twice its default time (density ratio 3, We 0.5, Bo 0.75,
 level 4) shows the sliding case: with the normal speed alone 97 % of its rows
 stay below 1/32 until `t = 1.5`, keep `θ = 1`, and a band of grid-scale
 vorticity builds up in the resolved phase velocities on the flank where both

@@ -370,7 +370,7 @@ function _rollup_ripple(height, single, h)
 end
 
 @testset "Two-velocity Kelvin--Helmholtz roll-up stays free of grid-scale ripples" begin
-    # Example 07's README case (inviscid, density ratio 1.2, We 3, Bo 0, level
+    # Example 13's README case (inviscid, density ratio 1.2, We 3, Bo 0, level
     # 5, h = 1/256): from t ≈ 1.5 the interface rolls up and sweeps through the
     # finest faces at crossing ratios w/U of 0.025-0.21 (10th-90th
     # percentile, median 0.12). With the crossing-speed ramp [1/16, 3/16]
