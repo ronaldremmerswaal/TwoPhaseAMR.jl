@@ -798,17 +798,20 @@ per-side configuration, with either solid, lies between them, and releasing
 the solid at fixed sides only removes dissipation. The shear rows
 of~\cref{eq:viscosity:shear} (legacy closure, or no solid) drop the one-sided
 difference of a free-slip wall contact instead and nest as well.
-In an offline sweep over all sixteen side combinations, each with a no-slip
-and with a free-slip solid, the fixtures include a box without a solid, a
-sloping, aligned and disk solid, a $1.5h$ gap and a disk that cuts a corner
-cell. The sweep uses uniform and right- or top-refined meshes, both closures
-and viscosity ratios up to $1000$. The smallest eigenvalue of every
-difference along these chains, and of every stiffness, relative to the
-largest entry of the all-no-slip stiffness is $-3.8\times10^{-16}$. A subset
-on uniform and right-refined meshes is covered by
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{Mixed per-side walls nest between no-slip and free-slip walls}
-and \testsym{test/two_phase/variable_staggered_diffusion.jl}{Per-side walls with a free-slip solid nest and keep its rigid tangent}.
-Equal sides and solid reproduce the uniform operators bitwise. The released
+and \testsym{test/two_phase/variable_staggered_diffusion.jl}{Per-side walls with a free-slip solid nest and keep its rigid tangent}
+check all sixteen side combinations with both closures and viscosity ratios
+up to $1000$. The first checks a box without a solid, a sloping no-slip solid
+on a right-half-refined mesh and a disk cutting a corner cell on a uniform
+mesh; the second checks a sloping free-slip solid on a right-half-refined
+mesh. The tests require the smallest eigenvalue of each checked stiffness and
+difference to be at least $-1024\epsilon_{\mathrm{fl}}$ times the largest absolute
+entry of the all-no-slip stiffness.
+The broader fixture sweep is not part of the test suite.
+Equal sides and solid reproduce the uniform
+operators bitwise
+(\testsym{test/two_phase/variable_staggered_diffusion.jl}{Per-side variable-stress walls match uniform walls and reject open sides}).
+The released
 stiffness is the joint weighted elimination of the free sides' traces and,
 for a free-slip solid, of its parameters
 (\testsym{test/indicator/geometry.jl}{Per-side free slip releases only the traces of its own sides}),
@@ -822,27 +825,16 @@ whatever the sides.
 
 The manufactured streamfunctions vanish with their normal derivative on the
 no-slip walls and with their second normal derivative on the free-slip
-sides, whose tangential velocity is not zero. An offline refinement study
-measures these orders for the LS-STAG shifted Helmholtz solve between
-$n=64$ and $128$ on uniform and right- or top-refined meshes:
-\begin{center}
-\begin{tabular}{llcc}
-\toprule
-Sides & Solid & $L^2$ & Maximum \\
-\midrule
-free sides, no-slip floor, lid & none & $1.99$--$2.01$ & $1.94$--$1.98$ \\
-free sides, no-slip lid & $y=c+sx$ meets free sides & $1.99$--$2.03$ & $1.74$--$1.96$ \\
-free sides, no-slip lid & $y=sx$ through $(0,0)$ & $2.00$ & $1.96$--$1.97$ \\
-no-slip sides, free lid & $y=c+sx$ & $2.00$--$2.06$ & $1.92$--$1.98$ \\
-\bottomrule
-\end{tabular}
-\end{center}
-The $1.74$ is a maximum in the interior, on the top-refined mesh where the
-transition crosses the solid; it is $1.84$ between $n=128$ and $256$, while
-the maximum within five cells of the box converges at $1.99$. The regression
-test \testsym{test/two_phase/variable_staggered_diffusion.jl}{Mixed per-side walls keep second-order manufactured solutions}
-checks convergence on four of these configurations, including the corner,
-at $n=16$, $32$ and $64$.
+sides, whose tangential velocity is not zero. The regression test
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{Mixed per-side walls keep second-order manufactured solutions}
+solves the LS-STAG shifted Helmholtz problem for a box with free sides and a
+no-slip floor and lid, and for a no-slip sloping solid with either free sides
+and a no-slip lid or no-slip sides and a free lid. It includes a solid through
+the box corner. On right- or top-half-refined meshes at $n=16$, $32$ and $64$,
+it requires both the two-level slope from $16$ to $64$ and the final step from
+$32$ to $64$ to be at least $1.8$, in the volume-weighted $L^2$ norm and the
+maximum norm. Finer refinement studies are not part of the test suite, and
+their orders are not quoted here.
 
 \paragraph{Cost of a thin Cartesian free-slip gap.}
 If a wall runs parallel, or nearly parallel, to a box side only one to
