@@ -83,9 +83,23 @@ Two velocities (CMDGFM) and `Oh = 0.01` give the same bridge within 1% at `R/128
 
 ![Mode-2 deformation of the merged drop with the linear half-periods, and the energy budget](assets/oscillation.png)
 
-**Oscillation and energy.** The deformation extrema are `−0.713`, `0.702`, and `−0.696` at `t = 2.698`, `5.643`, and `7.982`. The intervals, 2.945 and 2.339, exceed the linear half-period 2.159. The linear period is a reference, not a quantitative prediction for these amplitudes. At the end, `E_s` has fallen from 11.9426 to 10.0681 and `E_k = 0.6134`; the residual is 1.2612. Liquid volume changes by `3.9×10⁻⁹`.
+**Oscillation and energy.** The deformation extrema are `−0.713`, `0.702`, and `−0.696` at `t = 2.6975`, `5.6429`, and `7.9817`. The intervals, 2.945 and 2.339, exceed the linear half-period 2.159. The linear period is a reference, not a quantitative prediction for these amplitudes. At the end, `E_s` has fallen from 11.9426 to 10.0681 and `E_k = 0.6134`; the residual is 1.2612. Liquid volume changes by `3.9×10⁻⁹`.
 
 In a separate `R/256` run to `t = 0.06`, measured PLIC surface energy outside the neck rises by up to 0.055, while the total residual reaches −0.0284 before turning positive. The neck residual briefly reaches −0.0137 near startup and is positive at the later sampled times. Far-field interface-length bias is comparable to the total energy imbalance; the negative residual alone is not evidence of energy creation. These runs do not establish energy convergence.
+
+### Optional MC momentum advection
+
+At the same level-5 neck resolution (`R/128`), monotonized central (MC) reduced the cell-scale vorticity near the upper neck. The diagnostic subtracts the four-neighbour mean on an `R/128` raster, rejects stencils that cross the interface, and averages the resulting per-phase RMS over ten snapshots through `t = 0.1`. It measures grid-scale content, not vorticity error against a reference.
+
+| Matched run metric | Lax–Wendroff (default) | MC |
+| --- | ---: | ---: |
+| Mean near-neck high-pass vorticity RMS, liquid | 32.08 | 12.48 |
+| Mean near-neck high-pass vorticity RMS, gas | 50.82 | 21.36 |
+| Bridge half-width at `t = 0.1` | 0.46841 | 0.46766 |
+| Decay between the two negative mode-2 extrema | 2.45% | 1.96% |
+| Time between those extrema | 5.284 | 5.295 |
+
+The largest matched-time difference in bridge half-width through `t = 0.1` was `0.00145R` (0.543%). MC did not increase the measured mode-2 decay, but it redistributed the final kinetic and measured surface energies; the final total-energy residual changed by only `0.0022`. These comparisons give no independent reference for late-time damping. The main figures and animation use Lax–Wendroff.
 
 ## Variations
 
@@ -94,6 +108,10 @@ run_example(final_time = 0.1, max_level = 6)       # bridge phase at R/256
 run_example(final_time = 0.1, bridge = 0.25)       # larger initial bridge
 run_example(ohnesorge = 0.01)                      # weakly viscous drops
 run_example(velocity_model = TwoVelocityModel(pressure_projection = CMDGFMProjection()))
+run_example(
+    final_time = 0.1,
+    numerics = NavierStokesOptions(advection = AdvectionOptions(scheme = MonotonizedCentral())),
+)
 ```
 
 ## Files

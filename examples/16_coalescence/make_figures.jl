@@ -191,10 +191,7 @@ function deformation_extrema(t, d; after)
     return result
 end
 
-function oscillation_figure(path, flow; period)
-    deformation = diagnostic_history(flow, :deformation)
-    surface = diagnostic_history(flow, :surface_energy).values
-    kinetic = diagnostic_history(flow, :kinetic_energy).values
+function oscillation_figure(path, deformation, surface, kinetic; period)
     t = deformation.times
     extrema = deformation_extrema(t, deformation.values; after = 1)
     figure = Figure(size = (1000, 380))
@@ -220,9 +217,10 @@ function oscillation_figure(path, flow; period)
     released = first(surface) .- surface
     lines!(axis, t, released; label = "released surface energy")
     lines!(axis, t, kinetic; label = "kinetic energy")
-    lines!(axis, t, released .- kinetic; label = "numerical dissipation")
+    lines!(axis, t, released .- kinetic; label = "energy residual")
     axislegend(axis; position = :lt, labelsize = 11)
-    save(path, figure; px_per_unit = 1.5)
+    # Leave headroom below the gallery's 150 kB PNG limit.
+    save(path, figure; px_per_unit = 1.4)
     return extrema
 end
 
@@ -260,12 +258,13 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     coarse = bridge_summary(merger.flow, 5)
     bridge_figure(joinpath(outdir, "bridge.png"), [coarse, fine])
     neck_figure(joinpath(outdir, "neck.png"), fine.store)
-    extrema = oscillation_figure(joinpath(outdir, "oscillation.png"), merger.flow; period)
+    deformation = diagnostic_history(merger.flow, :deformation)
+    surface = diagnostic_history(merger.flow, :surface_energy).values
+    kinetic = diagnostic_history(merger.flow, :kinetic_energy).values
+    extrema = oscillation_figure(joinpath(outdir, "oscillation.png"), deformation, surface, kinetic; period)
     for e in extrema
         @printf("  deformation extremum at t = %.4f: %.5f\n", e.time, e.value)
     end
-    surface = diagnostic_history(merger.flow, :surface_energy).values
-    kinetic = diagnostic_history(merger.flow, :kinetic_energy).values
     volume = diagnostic_history(merger.flow, :phase_volume).values
     @printf(
         "  linear mode-2 period %.4f; E_s %.5f -> %.5f, E_k %.5f; liquid volume %.10f -> %.10f\n",
