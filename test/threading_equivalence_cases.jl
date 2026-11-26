@@ -227,6 +227,35 @@ function solid_lsstag_flow(; diagnostics = (), model = OneVelocityModel())
     return flow, 0.5 * stable_timestep(flow)
 end
 
+"""Two velocities (CMDGFM) with per-side walls: the cut cells where a sloping
+solid meets the free-slip sides share their box traces; no-slip floor and
+lid."""
+function solid_sides_flow(; diagnostics = ())
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
+    geometry = GeometryField(
+        mesh, (x, y) -> y - 0.2 - 0.1x; lipschitz = hypot(1.0, 0.1),
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> y - 0.65; geometry, lipschitz = 1.0,
+    )
+    shared = (x, y, time, axis) -> 0.15 * (
+        axis == 1 ? sinpi(x) * cospi(y) : -cospi(x) * sinpi(y)
+    )
+    flow = FlowSimulation(
+        mesh,
+        TwoPhase(
+            interface; density = (4.0, 1.0),
+            dynamic_viscosity = (0.2, 0.002),
+        );
+        geometry, velocity_model = CMDGFM, velocity = (shared, shared),
+        boundary = VelocityBoundaryConditions(
+            left = FreeSlip(), right = FreeSlip(), bottom = NoSlip(), top = NoSlip(),
+        ),
+        diagnostics,
+    )
+    return flow, 0.5 * stable_timestep(flow)
+end
+
 function stokes3_flow(max_level)
     run = Stokes3.run_example(;
         max_level, final_time = 0.0, velocity_model = CMDGFM,
@@ -256,6 +285,10 @@ const CASES = (
             diagnostics = TWO_PHASE_DIAGNOSTICS,
             model = TwoVelocityModel(pressure_projection = MimeticProjection()),
         ),
+    ),
+    (
+        "solid_lsstag_sides", 6,
+        () -> solid_sides_flow(diagnostics = TWO_PHASE_DIAGNOSTICS),
     ),
     ("stokes3_two", 6, () -> stokes3_flow(3)),
     ("cylinder", 6, () -> cylinder_flow(2)),

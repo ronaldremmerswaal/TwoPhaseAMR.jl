@@ -76,8 +76,8 @@ wave example (13) of the gallery does.
 
 | Stationary-solid configuration | Viscous operator used by LS-STAG |
 |:--|:--|
-| Single phase, including moving *domain* walls | Componentwise cut-cell diffusion; the embedded solid remains at rest |
-| One velocity; two velocities with CMDGFM or Mimetic projection | Coupled `div(2μD)` with positive viscosity mixed at each stress row; viscous domain walls are stationary `NoSlip()` or `FreeSlip()` |
+| Single phase, including moving *domain* walls | Componentwise cut-cell diffusion; the embedded solid remains at rest, no-slip unless `FreeSlip()` or `VelocityBoundaryConditions(; embedded=FreeSlip())` releases it |
+| One velocity; two velocities with CMDGFM or Mimetic projection | Coupled `div(2μD)` with positive viscosity mixed at each stress row; viscous domain walls are stationary `NoSlip()` or `FreeSlip()`, uniform or per side with `VelocityBoundaryConditions`, whose `embedded` keyword sets the solid's condition |
 | Embedded contact angle | The same variable-stress operator; contact-angle reconstruction and capillary forces are independent of the closure |
 | Uniform mesh, fixed composite mesh, adaptive regrid | Open-face metrics and strain stencils are rebuilt from the current solid; geometry-aware coarse viscous levels use the fine closure |
 
@@ -405,8 +405,11 @@ The viscous closure is independent:
 - `NoSlip(wall_velocity)` supports a moving wall such as a cavity lid; and
 - `FreeSlip()` imposes zero tangential shear.
 
-For open boundaries, `VelocityBoundaryConditions(; left, right, bottom, top)`
-selects a condition per side (unspecified sides default to `NoSlip()`).
+A uniform condition also applies to an embedded solid, which is always at
+rest. `VelocityBoundaryConditions(; left, right, bottom, top, embedded)`
+selects a condition per side (unspecified sides default to `NoSlip()`) and,
+separately, the viscous condition of an embedded solid: `embedded=NoSlip()`,
+the default, or `embedded=FreeSlip()`.
 `Inflow(f)` prescribes velocity from `f(x, y, time, axis)`.
 When applied to initialize a boundary, `ZeroGradientVelocity()` extrapolates
 the normal velocity from the interior. `Outflow()` uses area- and
@@ -414,6 +417,26 @@ aperture-weighted extrapolation, then applies a uniform outward correction
 over outflow faces to make the total boundary flux zero. Without either kind
 of open side, prescribed boundary velocities must already have zero net flux.
 WY interface transport requires impermeable boundaries.
+
+The two-phase viscous stress accepts stationary walls only: a uniform
+`NoSlip()` or `FreeSlip()`, or `VelocityBoundaryConditions` whose sides and
+`embedded` solid are each `NoSlip()` or `FreeSlip()`. The Hysing
+rising-bubble benchmark, for example, has a no-slip floor and lid and
+free-slip side walls:
+
+```julia
+boundary = VelocityBoundaryConditions(
+    left=FreeSlip(), right=FreeSlip(), bottom=NoSlip(), top=NoSlip())
+flow = FlowSimulation(mesh, physics; boundary)
+```
+
+This works for one velocity and both two-velocity projections, with either
+embedded closure, on composite and adaptive meshes. Each side releases or
+fixes the tangential velocity of its own wall vertices, and the solid follows
+`embedded`. At a corner, each velocity component is the normal velocity of
+one of the two sides, prescribed zero by both kinds, so the corner velocity is
+zero whichever conditions meet there. Moving `NoSlip(f)` sides and open sides
+raise `ArgumentError` once the flow is viscous.
 
 The two-velocity pressure projection retains its supplied phase boundary
 fluxes instead of applying an open-pressure correction. Its boundary

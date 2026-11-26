@@ -210,6 +210,21 @@ solid-aware reconstruction. For compatibility, a scalar `contact_angle`
 supplied with a geometry selects the embedded angle instead. Closed solid
 faces carry no phase, surface-tension, or gravity flux.
 
+The viscous wall conditions are stationary: `boundary=NoSlip()` or
+`FreeSlip()` applies to every domain wall and to the solid. To choose them
+per side, and the solid separately, pass `VelocityBoundaryConditions` with
+`NoSlip()` or `FreeSlip()` sides and its `embedded` keyword (`NoSlip()` by
+default):
+
+```julia
+boundary = VelocityBoundaryConditions(
+    left=FreeSlip(), right=FreeSlip(), bottom=NoSlip(), top=NoSlip(),
+    embedded=FreeSlip())
+```
+
+See [Boundary conditions](navier-stokes.md#boundary-conditions) for the
+treatment of corners where a no-slip and a free-slip side meet.
+
 ## Adaptive refinement
 
 Use [`InterfaceRefinementIndicator`](@ref) for a fixed band around the phase
