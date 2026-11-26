@@ -418,6 +418,70 @@ end
     @test no_tendency.interior[drag_face] < 0
 end
 
+@testset "Per-side walls carry their own embedded-solid condition" begin
+    mesh = BlockTreeMesh(;
+        base_mesh = (16, 16), block_size = (4, 4), max_level = 1,
+        periodic = (false, false),
+        refine = (key, origin, _) -> key.level == 0 && origin[1] >= 0.5,
+    )
+    geometry = GeometryField(mesh, (x, y) -> y - 0.25 - 0.5x; lipschitz = hypot(1.0, 0.5))
+    @test VelocityBoundaryConditions().embedded isa NoSlip
+    for embedded in (NoSlip((x, y, time, axis) -> 1.0), Outflow())
+        @test_throws ArgumentError VelocityBoundaryConditions(; embedded)
+        @test_throws ArgumentError VelocityBoundaryConditions(NoSlip(), NoSlip(), NoSlip(), NoSlip(), embedded)
+    end
+    sides = (left = FreeSlip(), right = NoSlip(), bottom = NoSlip(), top = FreeSlip())
+    free = (left = FreeSlip(), right = FreeSlip(), bottom = FreeSlip(), top = FreeSlip())
+    for closure in (LSStagClosure(), WallDistanceClosure())
+        function stiffness(boundary)
+            operator = StaggeredDiffusionOperator(geometry; viscosity = 0.3, boundary, closure)
+            return (operator.x.stiffness, operator.y.stiffness)
+        end
+        # The default solid is a stationary no-slip wall, as before; a solid
+        # and sides that all match a uniform condition reproduce it bitwise.
+        no_slip_solid = stiffness(VelocityBoundaryConditions(; sides...))
+        @test no_slip_solid == stiffness(VelocityBoundaryConditions(; sides..., embedded = NoSlip()))
+        @test no_slip_solid == stiffness(VelocityBoundaryConditions(values(sides)...))
+        @test stiffness(VelocityBoundaryConditions()) == stiffness(NoSlip())
+        @test stiffness(VelocityBoundaryConditions(; free..., embedded = FreeSlip())) ==
+            stiffness(FreeSlip())
+        # Releasing the solid at fixed sides removes dissipation only.
+        free_solid = stiffness(VelocityBoundaryConditions(; sides..., embedded = FreeSlip()))
+        @test free_solid == stiffness(VelocityBoundaryConditions(values(sides)..., FreeSlip()))
+        for (no, released) in zip(no_slip_solid, free_solid)
+            loss = no - released
+            @test any(!iszero, loss)
+            @test eigmin(Symmetric(Matrix(loss))) >= -1024eps() * maximum(abs, no)
+        end
+    end
+    # A constant velocity along a free-slip solid has no strain there under a
+    # no-slip lid; a no-slip solid damps it.
+    channel = BlockTreeMesh(
+        block_size = (16, 16), periodic = (true, false),
+        origin = (0.0, 0.0), extent = (1.0, 1.0),
+    )
+    floor = GeometryField(channel, (x, y) -> y - 0.25; lipschitz = 1.0)
+    velocity = FaceVelocity(channel, (x, y, time, axis) -> axis == 1 ? 1.0 : 0.0)
+    for index in eachindex(velocity.interior)
+        floor.face_dual_volumes[index] > 0 || (velocity.interior[index] = 0.0)
+    end
+    near_floor = [
+        index for (index, face) in pairs(channel.faces) if face.axis == 1 && face.center[2] < 0.5
+    ]
+    for embedded in (FreeSlip(), NoSlip())
+        operator = StaggeredDiffusionOperator(
+            floor; viscosity = 1.0, closure = LSStagClosure(),
+            boundary = VelocityBoundaryConditions(; top = NoSlip(), embedded),
+        )
+        velocity.interior[operator.x.dirichlet_faces] .= 0.0
+        tendency = FaceVelocity(channel)
+        diffusion!(tendency, velocity, operator)
+        damping = maximum(index -> abs(tendency.interior[index]), near_floor)
+        @test embedded isa FreeSlip ? damping <= 256eps() : damping > 1.0e-3
+        @test maximum(abs, tendency.interior) > 1.0e-3
+    end
+end
+
 @testset "LS-STAG wall traction of a linear shear" begin
     mesh = BlockTreeMesh(
         block_size = (16, 16), periodic = (true, false),

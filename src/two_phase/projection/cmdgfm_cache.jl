@@ -156,10 +156,11 @@ mutable struct CMDGFMPressureCache{T, M <: BlockTreeMesh}
     pressure_triplets::CMDGFMTriplets{T}
     jump_triplets::CMDGFMTriplets{T}
     # LinearJumpInference: crossing-speed slope weights θ by face, frozen for
-    # one reconstructed interface (see `_cmdgfm_limit_extrapolation!`).
+    # one reconstructed interface and limiter (see `_cmdgfm_limit_extrapolation!`).
     crossing_slope::Vector{T}
     crossing_reconstructions::UInt
     crossing_frozen::Bool
+    crossing_sliding::Bool
     # Local Schur complement J - C D⁻¹ B of the jump block that the block
     # preconditioner factorizes (`_cmdgfm_jump_schur!`): the matrix, its
     # triplets and the rows of D⁻¹ B by pressure unknown.
@@ -177,7 +178,7 @@ mutable struct CMDGFMPressureCache{T, M <: BlockTreeMesh}
             nothing, Int[], nothing, nothing, nothing, spzeros(T, 0, 0),
             Int[], T[], spzeros(T, 0, 0), T[], CMDGFMStencilStorage(T), Int[],
             spzeros(T, 0, 0), spzeros(T, 0, 0), spzeros(T, 0, 0), T[], T[],
-            CMDGFMTriplets(T), CMDGFMTriplets(T), T[], UInt(0), false,
+            CMDGFMTriplets(T), CMDGFMTriplets(T), T[], UInt(0), false, false,
             spzeros(T, 0, 0), CMDGFMTriplets(T), Int[], Int[], T[],
         )
     end

@@ -471,7 +471,7 @@ end
             # On the original main fixture the block solve took 16 iterations
             # with the published rows and 19 with the linear inference when
             # the jump factor was the ILU of J; with the ILU of the local
-            # Schur complement J - C D⁻¹ B it takes 18 and 19 (#171), and 18
+            # Schur complement J - C D⁻¹ B it takes 18 and 19 (#171), 18
             # and 11 with the crossing ramp (1/32, 3/32) (fewer extrapolated
             # rows on this fixture).
             println("cmdgfm_126_block_iterations ", jump_inference, " ", stats.iterations)
