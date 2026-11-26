@@ -9,9 +9,9 @@ A bubble rises through a heavier liquid in the two-dimensional benchmark of Hysi
 | | |
 | --- | --- |
 | **Physics** | Test cases 1 and 2 of [Hysing et al. (2009)](https://doi.org/10.1002/fld.1934): a bubble of radius `0.25` starts at rest at `(0.5, 0.5)` in `[0,1] × [0,2]` under gravity `0.98`, `t ∈ [0, 3]`. Case 1: `ρ = (1000, 100)`, `μ = (10, 1)`, `σ = 24.5` (`Re = 35`, `Eo = 10`); case 2: `ρ = (1000, 1)`, `μ = (10, 0.1)`, `σ = 1.96` (`Re = 35`, `Eo = 125`), liquid first. Both cases use free-slip side walls and no-slip top and bottom walls, matching the benchmark. |
-| **Algorithms** | Default `OneVelocityModel()` for both cases, with WY geometric VOF, LHF PLIC normals with WY fallback, CGFM surface tension, Lax–Wendroff momentum transport, implicit-midpoint variable-viscosity diffusion (harmonic mean) and pressure projection with CG/tree-multigrid solvers. Interface AMR refines a band around the interface to `max_level` (update interval 5, coarsening delay 2); the rest of the domain stays at least at `far_field_level = max_level - 2`. Square cells: `dx = dy = 1/8` on level 0, `1/128` at the default level 4 around the interface (64 cells per bubble diameter) and `1/32` in the far field. The step is capillary-limited. Circularity, centroid height and rise velocity are custom diagnostics of the gas phase. |
+| **Algorithms** | Default `OneVelocityModel()` for both cases, with WY geometric VOF, LHF PLIC normals with WY fallback, CGFM surface tension, Lax–Wendroff momentum transport, implicit-midpoint variable-viscosity diffusion (harmonic mean) and pressure projection with CG/tree-multigrid solvers. Interface AMR refines a band around the interface to `max_level` (update interval 5, coarsening delay 2); the rest of the domain stays at least at `far_field_level = max_level - 2`. Square cells: `dx = dy = 1/8` on level 0, `1/128` at the default level 4 around the interface (64 cells per bubble diameter) and `1/32` in the far field. Circularity, centroid height and rise velocity are custom diagnostics of the gas phase. |
 | **Worth varying** | `case=1` selects the test case; `max_level=4` the interface resolution; `far_field_level=max_level-2` the background mesh; `final_time=3.0` the end time; `velocity_model=OneVelocityModel()`, or `TwoVelocityModel(pressure_projection = CMDGFMProjection())` for separate phase velocities. `boundary=FreeSlip()` or `boundary=NoSlip()` overrides the benchmark and uses the same condition on all four walls. |
-| **Validated against** | The benchmark quantities and finest-grid time series of TP2D, FreeLIFE and MooNMD, and the paper's relative error norms. At level 5 (`1/h = 256`), case 1 gives `c_min = 0.9008`, `V_c,max = 0.2419`, `y_c(3) = 1.0820` against TP2D's `0.9013`, `0.2417`, `1.0813`; filtering short perimeter spikes gives `c_min = 0.9014`. Case 2's velocity peaks, `0.2508` and `0.2401`, are within the three codes' spread, but `y_c(3) = 1.1400` is `0.0020` above it. The codes disagree on late breakup, so the case-2 time-series norms stop at `t = 1.75`. |
+| **Validated against** | The benchmark quantities and finest-grid time series of TP2D, FreeLIFE and MooNMD, and the paper's relative error norms. At level 5 (`1/h = 256`), case 1 gives `c_min = 0.9008`, `V_c,max = 0.2419`, `y_c(3) = 1.0820` against TP2D's `0.9013`, `0.2417`, `1.0813`. Case 2's velocity peaks, `0.2508` and `0.2401`, are within the three codes' spread. Hysing et al. caution that the final case-2 centroid is not meaningful because the final shape is unknown. The case-2 time-series norms stop at `t = 1.75`. |
 | **Cost** | Default and `:docs`: level 4. Case 1 took 2874 steps and ended with 7808 cells; case 2 took 931 steps and ended with 12224 cells. At level 4, setup and simulation took 114.59 s and 70.22 s, respectively, after the level-3 runs (50.17 s and 12.27 s). The full figure script took 283.29 s, including both resolutions, figures and the 81-frame GIF, but excluding package loading. |
 
 Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded.
@@ -35,7 +35,7 @@ V_c=\frac{1}{A_b}\int_{\Omega_b} v\,\mathrm{d}\mathbf{x}.
 
 **Walls.** The default is `VelocityBoundaryConditions(left = FreeSlip(), right = FreeSlip(), bottom = NoSlip(), top = NoSlip())`. All four walls are impermeable. The vertical walls allow tangential flow; the floor and lid fix tangential velocity to zero.
 
-**Circularity spikes.** The PLIC perimeter produces short spikes in `c(t)`. At `t = 0`, the circle touches grid lines at four vertices; the PLIC segments in the adjacent sliver cells shorten the summed perimeter by about `1.5h`. This gives `c(0) = 1.0144`, `1.0074`, `1.0037` at levels 3, 4, 5. Similar short dips occur when the moving interface passes a grid line almost tangentially. In case 1, over `0 < t ≤ 2`, the per-sample RMS deviation from a 0.04-wide running median falls from `8.0e-4` to `3.4e-4` to `1.3e-4`. The tables give both the raw minimum defined by the benchmark and the minimum of that running median.
+**Circularity spikes.** The PLIC perimeter produces short spikes in `c(t)`. At `t = 0`, the circle touches grid lines at four vertices; the PLIC segments in the adjacent sliver cells shorten the summed perimeter by about `1.5h`. This gives `c(0) = 1.0144`, `1.0074`, `1.0037` at levels 3, 4, 5. Similar short dips occur when the moving interface passes a grid line almost tangentially. The tables give the raw minima defined by the benchmark.
 
 See the [method reference](../../docs/src/method.md) for the interface transport, surface tension, viscous step and projection.
 
@@ -72,29 +72,29 @@ The reference curves are the benchmark's published time series on each code's fi
 
 ![Case 1: circularity, centroid height and rise velocity at levels 3 and 4 against the three reference codes](assets/case1.png)
 
-Circularity, centroid height and rise velocity against time, with close-ups below. At level 3 the raw circularity falls to `0.8997`; its running-median minimum is `0.9014`.
+Circularity, centroid height and rise velocity against time, with close-ups below.
 
-| Run | `1/h` | `c_min` (t) | running-median `c_min` (t) | `V_c,max` (t) | `y_c(3)` | Steps | Final cells | Time |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Level 3, one velocity | 64 | 0.8997 (1.760) | 0.9014 (1.751) | 0.2428 (0.922) | 1.0837 | 1016 | 3584 | 50 s |
-| Level 3, two velocities | 64 | 0.9021 (1.979) | 0.9031 (1.743) | 0.2429 (0.898) | 1.0842 | 1016 | 3584 | 76 s |
-| Level 4, one velocity | 128 | 0.9006 (1.951) | 0.9013 (1.932) | 0.2422 (0.922) | 1.0826 | 2874 | 7808 | 115 s |
-| Level 4, two velocities | 128 | 0.9014 (1.890) | 0.9022 (1.895) | 0.2423 (0.921) | 1.0829 | 2874 | 7808 | 193 s |
-| Level 5, one velocity | 256 | 0.9008 (1.860) | 0.9014 (1.895) | 0.2419 (0.922) | 1.0820 | 8127 | 22784 | 837 s |
-| TP2D | 320 | 0.9013 (1.9041) | | 0.2417 (0.9213) | 1.0813 | | | |
-| FreeLIFE | 160 | 0.9011 (1.8750) | | 0.2421 (0.9313) | 1.0799 | | | |
-| MooNMD | 900 DOF | 0.9013 (1.9000) | | 0.2417 (0.9239) | 1.0817 | | | |
+| Run | `1/h` | `c_min` (t) | `V_c,max` (t) | `y_c(3)` | Steps | Final cells | Time |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Level 3, one velocity | 64 | 0.8997 (1.760) | 0.2428 (0.922) | 1.0837 | 1016 | 3584 | 50 s |
+| Level 3, two velocities | 64 | 0.9021 (1.979) | 0.2429 (0.898) | 1.0842 | 1016 | 3584 | 76 s |
+| Level 4, one velocity | 128 | 0.9006 (1.951) | 0.2422 (0.922) | 1.0826 | 2874 | 7808 | 115 s |
+| Level 4, two velocities | 128 | 0.9014 (1.890) | 0.2423 (0.921) | 1.0829 | 2874 | 7808 | 193 s |
+| Level 5, one velocity | 256 | 0.9008 (1.860) | 0.2419 (0.922) | 1.0820 | 8127 | 22784 | 837 s |
+| TP2D | 320 | 0.9013 (1.9041) | 0.2417 (0.9213) | 1.0813 | | | |
+| FreeLIFE | 160 | 0.9011 (1.8750) | 0.2421 (0.9313) | 1.0799 | | | |
+| MooNMD | 900 DOF | 0.9013 (1.9000) | 0.2417 (0.9239) | 1.0817 | | | |
 
-The one-velocity timings at levels 3 and 4 are from the single `:docs` figure run. The other timings include setup and compilation in fresh processes. All were measured with other jobs sharing the machine.
+The one-velocity timings at levels 3 and 4 are from the single `:docs` figure run: the case-1 level-3 run includes compilation, while case 2 follows it in the same process. The other timings include setup and compilation in fresh processes. All were measured with other jobs sharing the machine.
 
-At level 5, the three quantities differ from TP2D by `−0.0005`, `+0.0002` and `+0.0007`. The peak speed is within the codes' spread; the final centroid is `0.0003` above it. The raw circularity minimum is a perimeter spike; the running-median minimum at `t = 1.895` is within `0.0001` of the reference values and within the reference timespan `1.875–1.904`.
+At level 5, the three quantities differ from TP2D by `−0.0005`, `+0.0002` and `+0.0007`. The peak speed is within the codes' spread; the final centroid is `0.0003` above it. The raw circularity minimum is a perimeter spike.
 Raising the far field from level 2 to 3 at the same level-4 interface resolution changes `c_min`, `V_c,max` and `y_c(3)` by `−4.5e-5`, `+1.4e-5` and `+2.9e-5`, respectively.
 
 ### Case 2
 
 ![Case 2: circularity, centroid height and rise velocity at levels 3 and 4 against the three reference codes](assets/case2.png)
 
-The same quantities for case 2. The codes' benchmark quantities "agree very well with each other up until t=1.75–2.0" (Hysing et al., §5.4); afterwards the filaments of the skirt break up differently in TP2D and FreeLIFE and not at all in MooNMD, so the shapes and the circularity have no reference after `t ≈ 1.75` (gray band): the paper calls these results "rather inconclusive". The second velocity maximum and `y_c(3)` are integral quantities on which the codes still roughly agree; their spread is quoted, not a converged value.
+The same quantities for case 2. The codes' benchmark quantities "agree very well with each other up until t=1.75–2.0" (Hysing et al., §5.4); afterwards the filaments of the skirt break up differently in TP2D and FreeLIFE and not at all in MooNMD. The paper calls the late results "rather inconclusive" and the final centroid "quite meaningless" because the final shape is unknown. The listed final centroids are therefore not a validation band.
 
 | Run | `1/h` | `V_c,max1` (t) | `V_c,max2` (t) | `y_c(3)` | `c_min` (t) | Steps | Final cells | Time |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -108,17 +108,17 @@ The same quantities for case 2. The codes' benchmark quantities "agree very well
 | FreeLIFE | 160 | 0.2514 (0.7281) | 0.2440 (1.9844) | 1.1249 | 0.4647 (3.0) | | | |
 | MooNMD | 900 DOF | 0.2502 (0.7317) | 0.2393 (2.0600) | 1.1376 | 0.5144 (3.0) | | | |
 
-The first maximum falls from `0.2533` to `0.2508` under refinement, from above TP2D's value to between FreeLIFE's and MooNMD's. The level-3 second maximum is `0.0006` below the reference spread, and the level-4 and level-5 values are inside it. The level-5 second peak occurs at `t = 2.048`, between FreeLIFE's `1.984` and MooNMD's `2.060`. `y_c(3)` stays `0.002–0.004` above the highest reference result. `c_min` falls near `t = 3` and depends on the filaments, for which there is no agreed reference.
+The first maximum falls from `0.2533` to `0.2508` under refinement, from above TP2D's value to between FreeLIFE's and MooNMD's. The level-3 second maximum is `0.0006` below the reference spread, and the level-4 and level-5 values are inside it. The level-5 second peak occurs at `t = 2.048`, between FreeLIFE's `1.984` and MooNMD's `2.060`. The one-velocity `y_c(3)` values lie `0.0020–0.0039` above TP2D's result, and the two-velocity values `0.0023–0.0047` above it; these late centroids are subject to the caveat above. `c_min` falls near `t = 3` and depends on the filaments, for which there is no agreed reference.
 
 ![Case-2 vorticity, interface and AMR blocks while the bubble rises, with its rise velocity against TP2D's](assets/case2.gif)
 
-The level-4 case-2 run until `t = 3`: vorticity of the one-velocity field on a fixed `±8` range, the PLIC interface and the AMR blocks, next to the rise velocity with TP2D's `1/h = 640` curve and a cursor at the shown time. The GIF has 81 output frames, one per keyframe, on a uniform simulation-time grid with spacing `3/80 = 0.0375`; each keyframe is the completed step nearest its requested time. The range saturates on purpose inside the skirt, where the thin gas layer reaches `|ω|` of several tens, so that the liquid wake stays visible; the hero at the top shows the same run at `t = 0.75`, `1.5`, `2.25` and `3` on the same saturated range. The bubble flattens, its rim folds down into a skirt from `t ≈ 1`, and the skirt's tips thin into filaments that shed satellite bubbles from `t ≈ 2.2–2.4`, the breakup window TP2D reports.
+The level-4 case-2 run until `t = 3`: vorticity of the one-velocity field on a fixed `±8` range, the PLIC interface and the AMR blocks, next to the rise velocity with TP2D's `1/h = 640` curve and a cursor at the shown time. The GIF has 81 output frames, one per keyframe, on a uniform simulation-time grid with spacing `3/80 = 0.0375`; each keyframe is the completed step nearest its requested time. The range saturates on purpose inside the skirt so that the liquid wake stays visible; the hero at the top shows the same run at `t = 0.75`, `1.5`, `2.25` and `3`. The bubble flattens, its rim folds into a skirt, and the skirt's tips thin into filaments and shed satellites. Hysing et al. report breakup around `t = 2.2–2.4` for TP2D at `1/h = 160`.
 
 ### Shapes at t = 3
 
-![Bubble shapes at t = 3 at levels 3 and 4 against the reference codes, case 1 and case 2](assets/shapes.png)
+![Bubble shapes at t = 3 at levels 3 and 4 against TP2D in case 1 and three reference codes in case 2](assets/shapes.png)
 
-Final PLIC segments of the figure runs against the codes' shapes at `t = 3` (FeatFlow reference data, chained into curves and decimated to within `2e-4` into `hysing_shapes.csv`). In case 1 the level-4 interface nearly overlaps the three reference shapes. In case 2 the cap agrees closely with all three codes, but the ends of the skirts differ: MooNMD keeps long filaments, TP2D and FreeLIFE shed satellites, and the example shows finer fragments at level 4.
+Final PLIC segments of the figure runs against the codes' shapes at `t = 3` (FeatFlow reference data, chained into curves and decimated to within `2e-4` into `hysing_shapes.csv`). In case 1 the level-4 interface visually nearly overlaps the available TP2D shape. In case 2 the cap visually agrees closely with all three codes, but the ends of the skirts differ: MooNMD keeps long filaments, TP2D and FreeLIFE shed satellites, and the example shows finer fragments at level 4.
 
 ### Error norms
 
@@ -130,7 +130,7 @@ Hysing et al. (2009, §2.6) measure a whole time series `q_t` against a referenc
 \|e\|_\infty=\frac{\max_t |q_{t,\mathrm{ref}}-q_t|}{\max_t |q_{t,\mathrm{ref}}|},
 ```
 
-and the rate of convergence `ROC = log10(‖e^{l−1}‖/‖e^l‖)/log10(h^{l−1}/h^l)`, with linear interpolation between the sample times. Here both series are interpolated linearly onto `t_k = 0.001 k`, `k = 1, …, 3000` (case 2: up to `t = 1.75`, where the codes part ways); like the paper's sums over time steps this leaves out the initial state. The references are the subsampled series of `hysing_reference.csv`; the complete published series change the example's norms by less than 3 % and those between the codes by up to 2 %, except MooNMD's rise-velocity `‖e‖∞` against TP2D in case 1 (`3.08e-3` instead of `2.66e-3`). `make_figures` prints all norms, also against FreeLIFE and MooNMD and between the codes.
+and the rate of convergence `ROC = log10(‖e^{l−1}‖/‖e^l‖)/log10(h^{l−1}/h^l)`, with linear interpolation between the sample times. Here both series are interpolated linearly onto `t_k = 0.001 k`, `k = 1, …, 3000` (case 2: up to `t = 1.75`, where the codes part ways); like the paper's sums over time steps this leaves out the initial state. The references are the subsampled series of `hysing_reference.csv`. For case-1 level-5 rise velocity, using the complete published series instead changes the three norms by 5.0–7.3 %. `make_figures` prints all norms, also against FreeLIFE and MooNMD and between the codes.
 
 | Case | Quantity | `1/h` | `‖e‖₁` | ROC₁ | `‖e‖₂` | ROC₂ | `‖e‖∞` | ROC∞ |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -162,7 +162,7 @@ One velocity against TP2D. For scale, the codes differ from TP2D by
 | 2, `t ≤ 1.75` | FreeLIFE | 3.61e-3 / 4.98e-3 / 9.92e-3 | 2.97e-3 / 3.55e-3 / 5.17e-3 | 6.84e-3 / 6.93e-3 / 8.63e-3 |
 | 2, `t ≤ 1.75` | MooNMD | 4.07e-4 / 5.36e-4 / 1.02e-3 | 3.95e-4 / 5.75e-4 / 1.09e-3 | 1.06e-2 / 1.11e-2 / 1.46e-2 |
 
-At level 5 in case 1, the relative `‖e‖₁` against TP2D is `5.51e-4` in centroid and `7.35e-4` in rise velocity (FreeLIFE: `9.44e-4` and `2.17e-3`). The earlier all-free-slip level-5 run gives `‖e‖₁ = 2.24e-3` in rise velocity. Against the full published series, the peak absolute speed error between `t = 0.35` and `0.70` falls from `1.09e-3` to `4.0e-4`; between `t = 1.50` and `1.75` it falls from `6.3e-4` to `8.1e-5`. The all-free-slip level-5 run predates the per-wall API and WY round-off fix. At level 4, rerunning all-free-slip with the current code reproduces the earlier exported diagnostic histories; changing only the floor and lid there reduces the speed `‖e‖₁` from `2.18e-3` to `1.71e-3`.
+At level 5 in case 1, the relative `‖e‖₁` against TP2D is `5.51e-4` in centroid and `7.35e-4` in rise velocity (FreeLIFE: `9.44e-4` and `2.17e-3`). The earlier all-free-slip level-5 run gives `‖e‖₁ = 2.24e-3` in rise velocity and predates the per-wall API and WY round-off fix. At level 4, rerunning all-free-slip with the current code reproduces the earlier exported diagnostic histories; changing only the floor and lid there reduces the speed `‖e‖₁` from `2.18e-3` to `1.71e-3`.
 
 In case 2 the level-5 rise velocity is farther from TP2D than at level 4 (`‖e‖₁ = 6.92e-3` versus `2.99e-3` over `t ≤ 1.75`), near the difference between FreeLIFE and TP2D (`6.84e-3`). The first speed maximum moves below TP2D's toward MooNMD's. At matched level 4, changing only the floor and lid reduces `‖e‖₁` from `3.89e-3` to `2.99e-3`. The final centroid changes by only `+3.1e-5` from the earlier all-free-slip level-5 run and remains higher than all three reference results.
 
@@ -181,7 +181,7 @@ The paper measures each code against its own finest grid. The example against it
 | This example, case 2, `t ≤ 1.75` | `1/h = 128`, against 256 | 1.27e-3 / 1.92e-3 / 6.01e-3 | 5.23e-4 / 6.97e-4 / 1.32e-3 | 4.66e-3 / 4.94e-3 / 7.24e-3 |
 | | ROC | 1.17 / 1.10 / 1.66 | 1.37 / 1.39 / 1.43 | 1.62 / 1.61 / 1.47 |
 
-Using level 5 as the reference gives observed `‖e‖₁` and `‖e‖₂` rates of 1.1–1.6 for these runs; TP2D reports 1.7–2.0 over its finer levels in case 1. Since each code is measured against its own finest grid, these rates are not direct accuracy comparisons or evidence of an asymptotic order. The paper has no error norms for case 2.
+Using level 5 as the reference gives observed `‖e‖₁` and `‖e‖₂` rates of 1.10–1.62 for these runs; TP2D reports 1.7–2.0 over its finer levels in case 1. Since each code is measured against its own finest grid, these rates are not direct accuracy comparisons or evidence of an asymptotic order. The paper has no error norms for case 2.
 
 ### Wall sensitivity
 
