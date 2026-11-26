@@ -1,6 +1,6 @@
 # 17 – Rayleigh–Taylor instability
 
-Heavy fluid over light: a single mode is checked against viscous linear theory and the two-dimensional terminal bubble velocity, then a multimode layer grows into a mixing zone whose dye shows where its fluid came from.
+Heavy fluid over light: a single mode is checked against viscous linear theory and compared with the two-dimensional potential-flow bubble speed, then a multimode layer grows into a mixing zone whose dye shows where its fluid came from.
 
 ![Multimode Rayleigh–Taylor mixing: dye carrying each parcel's initial height, with the interface, next to the bubble and spike penetration](assets/multimode.gif)
 
@@ -11,8 +11,8 @@ Heavy fluid over light: a single mode is checked against viscous linear theory a
 | **Physics** | Viscous, immiscible two-phase Rayleigh–Taylor instability at Atwood number `A=0.5` (heavy density 3 over light density 1), gravity `g=1` downward, equal kinematic viscosities in both fluids. The box `[0,1] × [y₀,y₁]` is periodic in `x` with free-slip walls at the bottom and top. **Single mode** (`case=:single_mode`): one wavelength `λ=1`, initial amplitude `0.002`, `[0,1] × [-3,2]`, perturbation Reynolds number `Re_p = λ√(Agλ/(1+A))/ν = 1000`, no surface tension, until `t=6.5`. **Multimode** (`case=:multimode`, the default): modes 8–16 with random phases from `MersenneTwister(2026)` and root-mean-square amplitude `0.001`, `[0,1] × [-1,1]`, `Re = 3000` on the box width, Bond number `(ρ_h-ρ_l)gL²/σ = 4·10⁴` (capillary cutoff wavelength `2π/√Bo = 0.031`), until `t=4`. A passive phase scalar, the dye, carries each parcel's initial height. |
 | **Algorithms** | `OneVelocityModel()`: one shared velocity, VOF/PLIC interface (height-function normals with WY fallback) with Weymouth–Yue transport, Lax–Wendroff momentum advection, implicit-midpoint variable-viscosity diffusion and the CG/tree-multigrid pressure projection; CGFM surface tension in the multimode run. AMR refines the interface band to `max_level` and, through a `VorticityRefinementIndicator` (refine where `h|ω| > 0.02`, coarsen below a third of it), the vortical regions up to `max_level`, checking every 5 steps with coarsening delay 2. Blocks of 8×8 cells sit on a level-0 mesh of spacing `1/8`, so level 4 resolves the single wavelength with `λ/Δx = 128` and level 5 gives the multimode run `Δx = 1/256`, 16 cells across its shortest initial mode. The dye is a `PhaseScalar` registered with `TwoPhase(...; scalars = (dye,))`: the phase fluxes transport it and the AMR transfer conserves it. Steps are automatic (CFL 0.45 with the gravity-wave and capillary bounds); the linear-stage study fixes `dt = 0.005`. |
 | **Worth varying** | `case=:multimode` or `:single_mode`; `atwood=0.5`; `reynolds` (1000 single mode, 3000 multimode) and `bond` (`Inf` single mode, `4e4` multimode); `max_level` (4 single mode, 5 multimode); `final_time` (6.5, 4); `modes`, `amplitude` and `seed` of the initial interface; `velocity_model=TwoVelocityModel()` for two intrinsic velocities with the CMDGFM projection (one vorticity criterion per phase); `vorticity_tolerance=0.02`. |
-| **Validated against** | Viscous single-mode linear theory (Chandrasekhar). The nonlinear bubble speed is compared with Goncharov's two-dimensional potential-flow law, but the measured terminal velocity does not converge across these grids. |
-| **Cost** | Level-5 multimode to `t = 4`: 1363 steps, 117 mesh updates, 55,232 final and peak cells, 1676.9 s including setup. Single-mode nonlinear runs at levels 2, 3 and 4: 320, 747 and 1501 steps in 10.9, 61.9 and 374.2 s, respectively. |
+| **Validated against** | Viscous single-mode linear theory (Chandrasekhar). The nonlinear bubble speed is compared with Goncharov's two-dimensional potential-flow law, but the measured late-time slopes do not converge across these grids. |
+| **Cost** | Level-5 multimode to `t = 4`: 1363 steps, 117 mesh updates, 55,232 final and peak cells, 1676.9 s including setup. In a separate single-mode run, levels 2, 3 and 4 took 320, 747 and 1501 steps in 10.9, 61.9 and 374.2 s, respectively (`finish_single_mode.log`); the figure run timings differ. |
 
 Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded.
 
@@ -82,7 +82,7 @@ press Ctrl+C to close Studio after the run.
 
 ### Single mode
 
-![Single-mode growth rates and nonlinear bubble and spike histories](assets/single_mode.png)
+![Single-mode growth rates and nonlinear bubble histories](assets/single_mode.png)
 
 With fixed `dt = 0.005`, fitting the logarithm of the mean tip amplitude
 from 6 to 20 times its initial value gives the rates below. The theoretical
@@ -130,9 +130,9 @@ throughout the run.
 ![Level-5 dye and interface snapshots at three times](assets/dye.png)
 
 The horizontally averaged fraction thresholds measure the extent of the
-mixing layer, not individual tips. The fitted rates depend on the time
-window, threshold, finite box, initial spectrum, surface tension, and
-resolution. This seeded two-dimensional run has no matching reference
+mixing layer, not individual tips. The fitted rates vary with the time
+window. Threshold, finite box, initial spectrum, surface tension, and
+resolution may also affect them. This seeded two-dimensional run has no matching reference
 dataset and does not establish convergence or three-dimensional turbulent
 mixing coefficients. The colour marks the initial height carried by each
 phase, not a diffusing concentration.
