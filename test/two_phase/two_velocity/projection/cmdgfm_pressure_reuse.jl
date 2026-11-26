@@ -263,7 +263,7 @@ function _cmdgfm_fresh_reference(solver, work, velocity, dt)
     all_stencils = CPR._cmdgfm_jump_stencils(solver, data)
     stencils = filter(s -> s.resolved, all_stencils)
     CPR._linear_jump_inference(solver) &&
-        CPR._cmdgfm_limit_extrapolation!(stencils, data, velocity, solver.interface)
+        CPR._cmdgfm_limit_extrapolation!(stencils, data, velocity, solver.interface, solver.jump_inference)
     mixed = [s.face for s in stencils]
     Ip = incidence[:, indices]
     PP = op.stiffness[indices, indices]

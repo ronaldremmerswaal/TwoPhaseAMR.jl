@@ -577,7 +577,7 @@ end
 """Tangential derivative of component `axis` on every contact.
 
 A wall contact is the one-sided difference to the zero no-slip velocity (none
-for free slip). Two nodes of equal control-volume width, or a contact whose
+on a free-slip side). Two nodes of equal control-volume width, or a contact whose
 narrower node has no other contact on that side, are collinear and use the
 two-point difference. Otherwise the narrower node `a` is the anchor of all
 contacts on that side: its partners `b` with measures `m_b` are centred,
@@ -599,8 +599,9 @@ function _shear_stencils!(partition, mesh, lattice, axis, boundary, ::Type{T}) w
     for (index, contact) in pairs(contacts)
         @inbounds offsets[index] = length(faces) + 1
         if iszero(contact.lower) || iszero(contact.upper)
-            boundary isa NoSlip || continue
             lower_wall = iszero(contact.lower)
+            # The contact ends on the side normal to the tangent.
+            _variable_side_wall(boundary, tangent, lower_wall ? -1 : 1) isa NoSlip || continue
             node = nodes[lower_wall ? contact.upper : contact.lower]
             distance = (contact.t_high - contact.t_low) * spacing
             _push_shear_coefficient!(

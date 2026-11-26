@@ -55,30 +55,40 @@ struct BoundaryExtrapolationSchedule
 end
 
 """
-    VelocityBoundaryConditions(; left, right, bottom, top)
+    VelocityBoundaryConditions(; left, right, bottom, top, embedded=NoSlip())
 
 Side-specific velocity conditions. Each side accepts `NoSlip()`, `FreeSlip()`,
-`Inflow(f)`, `Outflow()`, or `ZeroGradientVelocity()`. This object can be
-passed through the existing `boundary` keyword. The default remains four
-stationary no-slip walls.
+`Inflow(f)`, `Outflow()`, or `ZeroGradientVelocity()`. `embedded` is the
+viscous condition of a stationary embedded solid ([`GeometryField`](@ref)):
+`NoSlip()`, the default, or `FreeSlip()`; its normal velocity is zero either
+way. This object can be passed through the existing `boundary` keyword. The
+default remains four stationary no-slip walls and a no-slip solid.
 """
-struct VelocityBoundaryConditions{L, R, B, U} <: AbstractWallBoundaryCondition
+struct VelocityBoundaryConditions{L, R, B, U, E} <: AbstractWallBoundaryCondition
     left::L
     right::R
     bottom::B
     top::U
+    embedded::E
     cache::Base.RefValue{Union{Nothing, BoundaryExtrapolationSchedule}}
+
+    function VelocityBoundaryConditions(left::L, right::R, bottom::B, top::U, embedded::E) where {L, R, B, U, E}
+        embedded isa Union{FreeSlip, NoSlip{StationaryWall}} || throw(
+            ArgumentError("an embedded solid is stationary: embedded must be NoSlip() or FreeSlip()"),
+        )
+        return new{L, R, B, U, E}(
+            left, right, bottom, top, embedded,
+            Ref{Union{Nothing, BoundaryExtrapolationSchedule}}(nothing),
+        )
+    end
 end
 
 VelocityBoundaryConditions(left, right, bottom, top) =
-    VelocityBoundaryConditions(
-    left, right, bottom, top,
-    Ref{Union{Nothing, BoundaryExtrapolationSchedule}}(nothing)
-)
+    VelocityBoundaryConditions(left, right, bottom, top, NoSlip())
 
 function VelocityBoundaryConditions(;
         left = NoSlip(), right = NoSlip(),
-        bottom = NoSlip(), top = NoSlip(),
+        bottom = NoSlip(), top = NoSlip(), embedded = NoSlip(),
     )
     conditions = (left, right, bottom, top)
     all(
@@ -92,7 +102,7 @@ function VelocityBoundaryConditions(;
                 "Outflow(), or ZeroGradientVelocity()",
         )
     )
-    return VelocityBoundaryConditions(left, right, bottom, top)
+    return VelocityBoundaryConditions(left, right, bottom, top, embedded)
 end
 
 @inline function _side_boundary(boundary::VelocityBoundaryConditions, axis, side)
@@ -262,6 +272,10 @@ struct StaggeredDiffusionComponent{Axis, T}
     dirichlet_faces::Vector{Int}
     wall_connections::Vector{WallDiffusionConnection{T}}
     wall_reactions::Vector{WallDiffusionReaction{T}}
+    # Where the closure places each unknown's value, and the open staggered
+    # volume of the fluid unknowns (zero elsewhere); see `value_points`.
+    value_points::Vector{NTuple{2, T}}
+    open_volumes::Vector{T}
     input::Vector{T}
     output::Vector{T}
     maximum_row_sum::T
@@ -477,7 +491,9 @@ end
         boundary::VelocityBoundaryConditions,
         connection::WallDiffusionConnection,
     )
-    iszero(connection.boundary_axis) && return true # embedded stationary wall
+    # An embedded stationary wall has its own condition.
+    iszero(connection.boundary_axis) &&
+        return _include_wall_connection(boundary.embedded, connection)
     side = _side_boundary(
         boundary, connection.boundary_axis, connection.boundary_side,
     )
@@ -736,9 +752,11 @@ function _staggered_diffusion_component(
         )
     end
     laplacian = sparse(-spdiagm(0 => inv.(volumes)) * stiffness)
+    # Without a solid every value sits at its face centre in the fluid.
+    centres = NTuple{2, T}[T.(mesh.faces[index].center) for index in local_to_global]
     return StaggeredDiffusionComponent{Axis, T}(
         stiffness, laplacian, volumes, local_to_global, Int[], wall_connections,
-        WallDiffusionReaction{T}[],
+        WallDiffusionReaction{T}[], centres, copy(volumes),
         zeros(T, length(local_to_global)), zeros(T, length(local_to_global)),
         _maximum_absolute_row_sum(laplacian)
     )
@@ -878,6 +896,40 @@ function diffusion!(
     )
     fill!(destination.boundary, zero(T))
     return destination
+end
+
+"""
+    value_points(operator::StaggeredDiffusionOperator, axis) -> (; faces, points, volumes)
+
+Where the unknowns of velocity component `axis` (`1` or `2`) of `operator`
+sit, in the order of the operator's unknowns:
+
+- `faces`: the global interior-face index of each unknown, an index into
+  `FaceVelocity.interior`;
+- `points`: the point `(x, y)` at which the operator's closure places the value;
+- `volumes`: the open staggered (dual) volume of the unknown, the fluid part of
+  its control volume. It is zero where the face has no open aperture (for
+  `LSStagClosure()`, none above `1e-10`) or no open staggered volume, as for a
+  face that the solid covers: that value is not a fluid value, and its point is
+  the face centre.
+
+For an operator on an embedded [`GeometryField`](@ref),
+[`LSStagClosure`](@ref) places the value of a face that the solid cuts at the
+midpoint of the open part of the face, which lies in the fluid, and
+[`WallDistanceClosure`](@ref) at the face centre, which can lie in the solid
+(#110). Without a solid every value sits at its face centre with the full dual
+volume. Sample initial or exact data at `points` and weigh errors with
+`volumes`. The arrays are copies; the two-phase stress operator
+([`VariableStaggeredDiffusionOperator`](@ref)) is not covered.
+"""
+function value_points(operator::StaggeredDiffusionOperator, axis::Integer)
+    axis in (1, 2) || throw(ArgumentError("axis must be 1 or 2"))
+    component = axis == 1 ? operator.x : operator.y
+    return (;
+        faces = copy(component.local_to_global),
+        points = copy(component.value_points),
+        volumes = copy(component.open_volumes),
+    )
 end
 
 """Absolute-row-sum explicit time-step estimate for the assembled operator."""

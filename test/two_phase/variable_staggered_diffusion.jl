@@ -2324,3 +2324,531 @@ end
         end
     end
 end
+
+# Per-side walls (`VelocityBoundaryConditions` with stationary `NoSlip()` and
+# `FreeSlip()` sides). A box vertex frees its tangential trace only on a
+# FreeSlip side; at a box corner each velocity component is the normal
+# velocity of a side, so the corner trace stays zero for every combination.
+# The trace sets nest from all no-slip sides through every mixed
+# configuration to all free-slip sides. An embedded solid takes the
+# `embedded` condition, a stationary no-slip wall by default, as in the
+# single-phase operator.
+_pw_sides(left, right, bottom, top; embedded = NoSlip()) =
+    VelocityBoundaryConditions(; left, right, bottom, top, embedded)
+_pw_all_sides(wall; embedded = NoSlip()) = _pw_sides(wall, wall, wall, wall; embedded)
+_pw_combinations() = vec(
+    [
+        _pw_sides(left, right, bottom, top)
+            for left in (NoSlip(), FreeSlip()), right in (NoSlip(), FreeSlip()),
+            bottom in (NoSlip(), FreeSlip()), top in (NoSlip(), FreeSlip())
+    ],
+)
+_pw_eigmin(matrix) = eigmin(Symmetric(Matrix(matrix)))
+
+"""Composite fixture with the right (`axis = 1`) or top (`axis = 2`) half
+refined, without and with the sloping solid, and a phase interface that
+touches no wall."""
+function _pw_fields(; axis = 1, n = 8, T = Float64)
+    mesh = BlockTreeMesh(;
+        base_mesh = (n, n), block_size = (4, 4), max_level = 1,
+        origin = (zero(T), zero(T)), extent = (one(T), one(T)),
+        periodic = (false, false),
+        refine = (key, origin, _) -> key.level == 0 && origin[axis] >= T(0.5),
+    )
+    phase(x, y) = hypot(x - T(0.45), y - T(0.62)) - T(0.21)
+    fluid = InterfaceField(mesh, phase; lipschitz = one(T))
+    solid = InterfaceField(mesh, phase; geometry = _ls2p_geometry(mesh; T), lipschitz = one(T))
+    return mesh, (fluid, solid)
+end
+
+@testset "Per-side variable-stress walls match uniform walls and reject open sides" begin
+    mesh, fields = _pw_fields()
+    viscosity = (0.2, 0.03)
+    for field in fields, closure in (LSStagClosure(), WallDistanceClosure())
+        build(boundary) = StaggeredDiffusionOperator(field; viscosity, boundary, closure)
+        # Equal sides and solid reproduce the uniform operator bitwise.
+        for wall in (NoSlip(), FreeSlip())
+            sides = _pw_all_sides(wall; embedded = wall)
+            reference, operator = build(wall), build(sides)
+            @test operator.boundary === sides
+            @test operator.strain == reference.strain
+            @test operator.stress_weights == reference.stress_weights
+            @test operator.stiffness == reference.stiffness
+            @test operator.dirichlet_faces == reference.dirichlet_faces
+        end
+        for invalid in (
+                _pw_sides(Inflow((x, y, time, axis) -> 0.0), NoSlip(), NoSlip(), NoSlip()),
+                _pw_sides(NoSlip(), Outflow(), NoSlip(), NoSlip()),
+                _pw_sides(NoSlip(), NoSlip(), ZeroGradientVelocity(), NoSlip()),
+                _pw_sides(NoSlip(), NoSlip(), NoSlip(), NoSlip((x, y, time, axis) -> 1.0)),
+                NoSlip((x, y, time, axis) -> 1.0),
+            )
+            @test_throws ArgumentError build(invalid)
+        end
+    end
+    for embedded in (NoSlip((x, y, time, axis) -> 1.0), Outflow())
+        @test_throws ArgumentError VelocityBoundaryConditions(; embedded)
+    end
+    # The default solid is a no-slip wall: free-slip sides then release only
+    # box traces, so the released stiffness stays within two coarse cells of
+    # the box, and uniform FreeSlip(), which also releases the solid, lies
+    # below it.
+    field = last(fields)
+    no_slip = StaggeredDiffusionOperator(field; viscosity, boundary = NoSlip())
+    sides = StaggeredDiffusionOperator(field; viscosity, boundary = _pw_all_sides(FreeSlip()))
+    free_slip = StaggeredDiffusionOperator(field; viscosity, boundary = FreeSlip())
+    released = dropzeros!(no_slip.stiffness - sides.stiffness)
+    support = [mesh.faces[c].center for c in axes(released, 2) if !isempty(nzrange(released, c))]
+    @test !isempty(support)
+    @test all(x -> min(x[1], 1 - x[1], x[2], 1 - x[2]) < 2 / 8, support)
+    scale = maximum(abs, nonzeros(no_slip.stiffness))
+    solid_release = sides.stiffness - free_slip.stiffness
+    @test maximum(abs, nonzeros(solid_release)) > 1.0e-6 * scale
+    @test _pw_eigmin(solid_release) >= -1024eps() * scale
+end
+
+@testset "Mixed per-side walls nest between no-slip and free-slip walls" begin
+    _, fields = _pw_fields()
+    # A solid disk next to the bottom-left corner cuts the corner cell, whose
+    # Green completion then sees the traces of both sides at the corner.
+    corner_mesh = BlockTreeMesh(; base_mesh = (16, 16), block_size = (4, 4), periodic = (false, false))
+    corner_geometry = GeometryField(corner_mesh, (x, y) -> hypot(x - 0.12, y - 0.12) - 0.1; lipschitz = 1.0)
+    @test 0 < TwoPhaseAMR._get(corner_geometry.open_fraction, TwoPhaseAMR.CellRef(1, 1, 1)) < 1
+    corner = InterfaceField(
+        corner_mesh, (x, y) -> hypot(x - 0.6, y - 0.55) - 0.2;
+        geometry = corner_geometry, lipschitz = 1.0,
+    )
+    for field in (fields..., corner), closure in (LSStagClosure(), WallDistanceClosure()),
+            viscosity in ((0.2, 0.03), (1.0, 1.0e-3))
+        build(boundary) = StaggeredDiffusionOperator(field; viscosity, boundary, closure)
+        no_slip = build(NoSlip())
+        free = (build(FreeSlip()), build(_pw_all_sides(FreeSlip())))
+        scale = maximum(abs, nonzeros(no_slip.stiffness))
+        for sides in _pw_combinations()
+            mixed = build(sides)
+            @test issymmetric(mixed.stiffness)
+            @test _pw_eigmin(mixed.stiffness) >= -1024eps() * scale
+            @test _pw_eigmin(no_slip.stiffness - mixed.stiffness) >= -1024eps() * scale
+            for lower in free
+                @test _pw_eigmin(mixed.stiffness - lower.stiffness) >= -1024eps() * scale
+            end
+        end
+    end
+end
+
+@testset "LS-STAG per-side box traces follow their side and never a corner" begin
+    mesh, fields = _pw_fields(; axis = 2)
+    lattice = TwoPhaseAMR._finest_lattice_size(mesh)
+    construction = TwoPhaseAMR.VariableDiffusionConstructionCache(Float64)
+    for sides in _pw_combinations()
+        TwoPhaseAMR._staggered_diffusion_operator(
+            last(fields); viscosity = (0.2, 0.03), boundary = sides,
+            closure = LSStagClosure(), construction_cache = construction,
+        )
+        cache = construction.ls_stag
+        corners = 0
+        counts = Dict((axis, side) => 0 for axis in 1:2, side in (-1, 1))
+        for vertex in cache.box_vertices
+            key = cache.keys[vertex]
+            on = map(d -> key[d] == 0 || key[d] == lattice[d], (1, 2))
+            if all(on)
+                corners += 1
+            else
+                axis = on[1] ? 1 : 2
+                counts[(axis, iszero(key[axis]) ? -1 : 1)] += 1
+            end
+        end
+        @test corners == 0
+        for ((axis, side), count) in counts
+            # The solid covers the bottom side; every other free side has
+            # released fluid traces, and a no-slip side has none.
+            free = TwoPhaseAMR._side_boundary(sides, axis, side) isa FreeSlip
+            @test (count > 0) == (free && (axis, side) != (2, -1))
+        end
+    end
+end
+
+@testset "Mixed per-side walls keep the rigid tangent of a free-slip side" begin
+    # Channel periodic along x with hanging vertices on the floor (right half
+    # refined), viscosity jumps that meet the floor and a no-slip solid next
+    # to the no-slip lid. A constant tangential velocity has no strain at a
+    # free-slip floor; a no-slip floor damps it.
+    mesh = BlockTreeMesh(;
+        base_mesh = (16, 16), block_size = (4, 4), max_level = 1,
+        periodic = (true, false),
+        refine = (key, origin, _) -> key.level == 0 && origin[1] >= 0.5,
+    )
+    geometry = GeometryField(mesh, (x, y) -> hypot(x - 0.5, y - 0.75) - 0.12; lipschitz = 1.0)
+    interface = InterfaceField(mesh, (x, y) -> abs(x - 0.5) - 0.2; geometry, lipschitz = 1.0)
+    floor = [i for (i, face) in pairs(mesh.faces) if face.center[2] < 0.4]
+    for closure in (LSStagClosure(), WallDistanceClosure())
+        build(bottom) = StaggeredDiffusionOperator(
+            interface; viscosity = (2.5, 0.4), closure,
+            boundary = _pw_sides(NoSlip(), NoSlip(), bottom, NoSlip()),
+        )
+        free_floor, no_slip_floor = build(FreeSlip()), build(NoSlip())
+        @test free_floor.dirichlet_faces == no_slip_floor.dirichlet_faces
+        closure isa LSStagClosure && @test !isnothing(free_floor.box_traces)
+        u = [geometry.aperture[i] > 0 && face.axis == 1 ? 1.0 : 0.0 for (i, face) in pairs(mesh.faces)]
+        u[free_floor.dirichlet_faces] .= 0.0
+        force = free_floor.stiffness * u
+        magnitude = abs.(free_floor.stiffness) * abs.(u)
+        largest = maximum(magnitude)
+        @test maximum(i -> abs(force[i]) / max(magnitude[i], 1.0e-12 * largest), floor) <= 1.0e-9
+        damping = no_slip_floor.stiffness * u
+        @test count(i -> abs(damping[i]) > 1.0e-6 * largest, floor) > 0
+        @test dot(u, no_slip_floor.stiffness * u) > dot(u, free_floor.stiffness * u) > 0
+    end
+end
+
+@testset "Per-side walls with a free-slip solid nest and keep its rigid tangent" begin
+    # At fixed sides, releasing the solid only removes dissipation; with a
+    # free-slip solid the side traces still nest down to uniform FreeSlip().
+    _, fields = _pw_fields()
+    field = last(fields)
+    for closure in (LSStagClosure(), WallDistanceClosure()), viscosity in ((0.2, 0.03), (1.0, 1.0e-3))
+        build(boundary) = StaggeredDiffusionOperator(field; viscosity, boundary, closure)
+        scale = maximum(abs, nonzeros(build(NoSlip()).stiffness))
+        no_slip_sides = build(_pw_all_sides(NoSlip(); embedded = FreeSlip()))
+        free_slip = build(FreeSlip())
+        for sides in _pw_combinations()
+            no_slip_solid = build(sides)
+            free_solid = build(
+                _pw_sides(sides.left, sides.right, sides.bottom, sides.top; embedded = FreeSlip()),
+            )
+            K = free_solid.stiffness
+            @test issymmetric(K)
+            @test _pw_eigmin(K) >= -1024eps() * scale
+            @test _pw_eigmin(no_slip_solid.stiffness - K) >= -1024eps() * scale
+            @test _pw_eigmin(no_slip_sides.stiffness - K) >= -1024eps() * scale
+            @test _pw_eigmin(K - free_slip.stiffness) >= -1024eps() * scale
+        end
+    end
+    # A constant velocity tangent to the sloping free-slip solid has no
+    # strain away from the box, whatever the sides; a no-slip solid damps it.
+    mesh = _ls2p_mesh()
+    geometry = _ls2p_geometry(mesh)
+    interface = InterfaceField(mesh, _ls2p_phase_levelset; geometry, lipschitz = 1.0)
+    _, tangent, _ = _ls2p_affine_fields()
+    h = 1.0 / mesh.block_size[1]
+    inside(center) = 1.5h < center[1] < 1 - 1.5h && 1.5h < center[2] < 1 - 1.5h
+    for embedded in (FreeSlip(), NoSlip())
+        operator = StaggeredDiffusionOperator(
+            interface; viscosity = (1.0, 1.0), closure = LSStagClosure(),
+            boundary = _pw_sides(NoSlip(), FreeSlip(), FreeSlip(), NoSlip(); embedded),
+        )
+        u = [geometry.aperture[i] > 0 ? tangent[face.axis] : 0.0 for (i, face) in pairs(mesh.faces)]
+        u[operator.dirichlet_faces] .= 0.0
+        force = operator.stiffness * u
+        magnitude = abs.(operator.stiffness) * abs.(u)
+        largest = maximum(magnitude)
+        inner = [
+            i for (i, face) in pairs(mesh.faces) if geometry.face_dual_volumes[i] > 0 &&
+                !(i in operator.dirichlet_faces) && inside(face.center)
+        ]
+        @test length(inner) > 20
+        ratio = maximum(i -> abs(force[i]) / max(magnitude[i], 1.0e-12 * largest), inner)
+        @test embedded isa FreeSlip ? ratio <= 1.0e-9 : ratio > 1.0e-6
+    end
+end
+
+# Bivariate polynomials, `P[i + 1, j + 1]` the coefficient of `x^i y^j`, for
+# exact manufactured streamfunctions with mixed side conditions.
+function _pw_poly_mul(A, B)
+    C = zeros(size(A, 1) + size(B, 1) - 1, size(A, 2) + size(B, 2) - 1)
+    for i in axes(A, 1), j in axes(A, 2), k in axes(B, 1), l in axes(B, 2)
+        C[i + k - 1, j + l - 1] += A[i, j] * B[k, l]
+    end
+    return C
+end
+_pw_poly_mul(A, B, C...) = _pw_poly_mul(_pw_poly_mul(A, B), C...)
+function _pw_poly_add(A, B)
+    C = zeros(max(size(A, 1), size(B, 1)), max(size(A, 2), size(B, 2)))
+    C[axes(A)...] .+= A
+    C[axes(B)...] .+= B
+    return C
+end
+_pw_poly_add(A, B, C...) = _pw_poly_add(_pw_poly_add(A, B), C...)
+_pw_poly_dx(A) = size(A, 1) == 1 ? zero(A) : [i * A[i + 1, j] for i in 1:(size(A, 1) - 1), j in axes(A, 2)]
+_pw_poly_dy(A) = size(A, 2) == 1 ? zero(A) : [j * A[i, j + 1] for i in axes(A, 1), j in 1:(size(A, 2) - 1)]
+_pw_poly(A, x, y) = sum(A[i, j] * x^(i - 1) * y^(j - 1) for i in axes(A, 1), j in axes(A, 2))
+_pw_x(c...) = reshape(collect(Float64, c), :, 1)
+_pw_y(c...) = reshape(collect(Float64, c), 1, :)
+
+"""Velocity `(psi_y, -psi_x)` and its Laplacian for the streamfunction `psi`."""
+function _pw_manufactured(psi)
+    velocity = (_pw_poly_dy(psi), -_pw_poly_dx(psi))
+    laplacian = map(u -> _pw_poly_add(_pw_poly_dx(_pw_poly_dx(u)), _pw_poly_dy(_pw_poly_dy(u))), velocity)
+    return velocity, laplacian
+end
+
+@testset "Mixed per-side walls keep second-order manufactured solutions" begin
+    # psi vanishes with its normal derivative on no-slip walls and with its
+    # second normal derivative on free-slip sides, whose tangential velocity
+    # is not zero. Free side walls: `x - 2x^3 + x^4`; no-slip floor and lid:
+    # `y^2 (1 - y)^2`. With the solid y = c + s x (no slip, fluid above),
+    # psi = l^2 x(1 - x)(1 - y)^2 H, l = y - c - s x, with H the cubic in x
+    # that makes psi_xx vanish on x = 0 and 1 (free sides meeting the solid);
+    # psi = l^2 x^2 (1 - x)^2 (1 - y)(3 - c - s x - 2y) has a free lid
+    # between no-slip sides, with mixed corners. For c = 0 the solid passes
+    # through the corner (0, 0), whose cell is cut on every mesh.
+    s = 0.5
+    level(c) = _pw_poly_add(_pw_x(-c, -s), _pw_y(0, 1))
+    free_sides(c) = _pw_poly_mul(
+        level(c), level(c), _pw_x(0, 1, -1), _pw_y(1, -2, 1),
+        _pw_poly_add(
+            _pw_poly_mul(_pw_x(1, 0, -3, 2), _pw_y(-c, 1)),
+            _pw_poly_mul(_pw_x(0, 1, -2, 1), _pw_y(2s - c, 1)),
+            _pw_poly_mul(_pw_x(0, 0, 3, -2), _pw_y(-c - s, 1)),
+            _pw_poly_mul(_pw_x(0, 0, -1, 1), _pw_y(c + 3s, -1)),
+        ),
+    )
+    free_lid(c) = _pw_poly_mul(
+        level(c), level(c), _pw_x(0, 0, 1, -2, 1), _pw_y(1, -1),
+        _pw_poly_add(_pw_x(3 - c, -s), _pw_y(0, -2)),
+    )
+    wall(c) = (x, y) -> y - c - s * x
+    F, N = FreeSlip(), NoSlip()
+    cases = (
+        # (streamfunction, sides, solid level set or nothing, refined axis)
+        (_pw_poly_mul(_pw_x(0, 1, 0, -2, 1), _pw_y(0, 0, 1, -2, 1)), _pw_sides(F, F, N, N), nothing, 2),
+        (free_sides(0.25), _pw_sides(F, F, N, N), wall(0.25), 1),
+        (free_lid(0.25), _pw_sides(N, N, N, F), wall(0.25), 1),
+        (free_sides(0.0), _pw_sides(F, F, N, N), wall(0.0), 2),
+    )
+    for (psi, sides, solid, axis) in cases
+        velocity, laplacian = _pw_manufactured(psi)
+        inside(x, y) = isnothing(solid) || solid(x, y) >= 0
+        # The fixture satisfies its own wall conditions.
+        residual = 0.0
+        for t in range(0.0, 1.0; length = 33), (wall_axis, side) in ((1, -1), (1, 1), (2, -1), (2, 1))
+            x, y = wall_axis == 1 ? (side < 0 ? 0.0 : 1.0, t) : (t, side < 0 ? 0.0 : 1.0)
+            inside(x, y) || continue
+            tangent = 3 - wall_axis
+            normal_velocity = _pw_poly(velocity[wall_axis], x, y)
+            slip = TwoPhaseAMR._side_boundary(sides, wall_axis, side) isa FreeSlip
+            shear = _pw_poly(wall_axis == 1 ? _pw_poly_dx(velocity[tangent]) : _pw_poly_dy(velocity[tangent]), x, y)
+            residual = max(residual, abs(normal_velocity), abs(slip ? shear : _pw_poly(velocity[tangent], x, y)))
+        end
+        @test residual <= 1.0e-12
+        l2 = Float64[]
+        peak = Float64[]
+        for n in (16, 32, 64)
+            mesh = BlockTreeMesh(;
+                base_mesh = (n, n), block_size = (4, 4), max_level = 1,
+                periodic = (false, false),
+                refine = (key, origin, _) -> key.level == 0 && origin[axis] >= 0.5,
+            )
+            geometry = isnothing(solid) ? nothing : GeometryField(mesh, solid; lipschitz = hypot(1.0, s))
+            interface = isnothing(geometry) ? InterfaceField(mesh, (x, y) -> y - 5) :
+                InterfaceField(mesh, (x, y) -> y - 5; geometry, lipschitz = 1.0)
+            operator = StaggeredDiffusionOperator(
+                interface; viscosity = (1.0, 1.0), boundary = sides, closure = LSStagClosure(),
+            )
+            weights = isnothing(geometry) ? operator.volumes : geometry.face_dual_volumes
+            exact = zeros(length(mesh.faces))
+            rhs = zeros(length(mesh.faces))
+            active = falses(length(mesh.faces))
+            for (index, face) in pairs(mesh.faces)
+                open_length, midpoint = isnothing(solid) ? (face.area, face.center) :
+                    _ls2p_open_segment(face, solid)
+                open_length > 64eps() * face.area || continue
+                weights[index] > 0 || continue
+                index in operator.dirichlet_faces && continue
+                active[index] = true
+                exact[index] = _pw_poly(velocity[face.axis], midpoint...)
+                rhs[index] = operator.volumes[index] *
+                    (exact[index] - _pw_poly(laplacian[face.axis], midpoint...))
+            end
+            solution = (spdiagm(0 => operator.volumes) + operator.stiffness) \ rhs
+            misfit = (solution - exact)[active]
+            push!(l2, sqrt(sum(weights[active] .* misfit .^ 2) / sum(weights[active])))
+            push!(peak, maximum(abs, misfit))
+        end
+        # Two-level slope and final pair, as for the no-slip T-junction: a
+        # first-order wall, junction or corner error fails either criterion.
+        for errors in (l2, peak)
+            @test log2(errors[1] / errors[3]) / 2 >= 1.8
+            @test log2(errors[2] / errors[3]) >= 1.8
+        end
+    end
+end
+
+@testset "LS-STAG per-side free-slip traces in Float32" begin
+    T = Float32
+    _, fields = _pw_fields(; T)
+    field = last(fields)
+    viscosity = (T(2.5), T(0.4))
+    build(boundary) = StaggeredDiffusionOperator(field; viscosity, boundary, closure = LSStagClosure())
+    mixed = build(_pw_sides(FreeSlip(), NoSlip(), NoSlip(), FreeSlip()))
+    @test eltype(mixed.stiffness) == T
+    @test eltype(mixed.stress_weights) == T
+    @test !isnothing(mixed.box_traces)
+    @test all(patch -> eltype(patch.gram) == T, mixed.box_traces)
+    scale = maximum(abs, nonzeros(build(NoSlip()).stiffness))
+    @test isapprox(mixed.stiffness, transpose(mixed.stiffness); rtol = T(32) * eps(T))
+    @test _pw_eigmin(Float64.(mixed.stiffness)) >= -4096eps(T) * scale
+    @test _pw_eigmin(Float64.(build(NoSlip()).stiffness - mixed.stiffness)) >= -4096eps(T) * scale
+    @test _pw_eigmin(Float64.(mixed.stiffness - build(FreeSlip()).stiffness)) >= -4096eps(T) * scale
+end
+
+# Keep the allocation check in compiled code and exclude threaded launcher metadata.
+function _pw_thin_gap_refresh_allocations(operator, lower, crossing)
+    grain = TwoPhaseAMR._PARALLEL_GRAIN
+    previous = grain[]
+    try
+        grain[] = typemax(Int)
+        TwoPhaseAMR._update_dynamic_viscosity!(operator, lower, (2.5, 0.4))
+        TwoPhaseAMR._update_dynamic_viscosity!(operator, crossing, (0.35, 1.9))
+        return @allocated TwoPhaseAMR._update_dynamic_viscosity!(operator, lower, (2.5, 0.4))
+    finally
+        grain[] = previous
+    end
+end
+
+@testset "LS-STAG per-side thin-gap traces refresh exactly with no serial allocations" begin
+    n = 32
+    mesh = BlockTreeMesh(; base_mesh = (n, n), block_size = (4, 4), periodic = (false, false))
+    # A 1.5-cell fluid gap runs along the left side.
+    geometry = GeometryField(mesh, (x, y) -> 1.5 / n - x; lipschitz = 1.0)
+    lower = InterfaceField(mesh, (x, y) -> y - 0.5; geometry, lipschitz = 1.0)
+    crossing = InterfaceField(
+        mesh, (x, y) -> y - 0.25 + 0.05x; geometry, lipschitz = hypot(1.0, 0.05),
+    )
+    construct(field, viscosity, boundary) =
+        StaggeredDiffusionOperator(field; viscosity, boundary, closure = LSStagClosure())
+    gap_free = _pw_sides(FreeSlip(), NoSlip(), NoSlip(), NoSlip())
+    ends_free = _pw_sides(NoSlip(), NoSlip(), FreeSlip(), FreeSlip())
+    # Only a free gap side couples its traces along the whole side.
+    long_patch(operator) = !isnothing(operator.box_traces) && any(
+        patch -> min(length(patch.rows), length(patch.faces)) >= n ÷ 2, operator.box_traces,
+    )
+    operator = construct(lower, (2.5, 0.4), gap_free)
+    @test long_patch(operator)
+    @test !long_patch(construct(lower, (2.5, 0.4), ends_free))
+    peak(A) = maximum(abs, nonzeros(A); init = 0.0)
+    for (field, viscosity) in ((crossing, (0.35, 1.9)), (lower, (2.5, 0.4)))
+        TwoPhaseAMR._update_dynamic_viscosity!(operator, field, viscosity)
+        fresh = construct(field, viscosity, gap_free)
+        for name in (:strain, :stiffness, :wall_reaction_strain)
+            actual, expected = getproperty(operator, name), getproperty(fresh, name)
+            @test actual.colptr == expected.colptr
+            @test rowvals(actual) == rowvals(expected)
+            @test peak(actual - expected) <= 512eps() * max(1.0, peak(expected))
+        end
+        no_slip = construct(field, viscosity, NoSlip())
+        loss = dropzeros!(no_slip.stiffness - operator.stiffness)
+        support = findall(c -> !isempty(nzrange(loss, c)), axes(loss, 2))
+        @test 0 < length(support) <= 16n
+        @test _pw_eigmin(loss[support, support]) >= -1024eps() * peak(no_slip.stiffness)
+    end
+    @test _pw_thin_gap_refresh_allocations(operator, lower, crossing) == 0
+end
+
+@testset "Per-side walls key the variable diffusion hierarchy" begin
+    _, fields = _pw_fields()
+    fluid = first(fields)
+    density = TwoPhaseAMR.mixture_density(fluid, (1.0, 0.25))
+    multigrid = MultigridOptions(coarse_size = 32)
+    solver(boundary; reuse = nothing) = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        StaggeredDiffusionOperator(fluid; viscosity = (2.5, 0.4), boundary), density, 0.02;
+        multigrid, reuse_preconditioner = reuse,
+    )
+    sides = _pw_sides(FreeSlip(), FreeSlip(), NoSlip(), NoSlip())
+    transposed = _pw_sides(NoSlip(), NoSlip(), FreeSlip(), FreeSlip())
+    first_solver = solver(sides)
+    @test length(first_solver.preconditioner.operators) > 1
+    @test all(level -> level.boundary === sides, first_solver.preconditioner.operators)
+    # Another side configuration rebuilds every coarse level for its sides.
+    other = solver(transposed; reuse = first_solver.preconditioner)
+    @test all(level -> level.boundary === transposed, other.preconditioner.operators)
+    reference = solver(transposed)
+    for (level, expected) in zip(other.preconditioner.operators, reference.preconditioner.operators)
+        @test level.stiffness == expected.stiffness
+    end
+end
+
+@testset "Two-phase flows with per-side walls for every velocity model" begin
+    # A bubble above a sloping solid between free-slip side walls, with a
+    # no-slip floor and lid and a no-slip or free-slip solid; the first step
+    # refines the mesh around the bubble and rebuilds the operator on the new
+    # mesh.
+    sides = _pw_sides(FreeSlip(), FreeSlip(), NoSlip(), NoSlip())
+    free_solid = _pw_sides(FreeSlip(), FreeSlip(), NoSlip(), NoSlip(); embedded = FreeSlip())
+    energies = Dict{Tuple{Int, Symbol}, Float64}()
+    models = (
+        OneVelocityModel(),
+        TwoVelocityModel(pressure_projection = CMDGFMProjection()),
+        TwoVelocityModel(pressure_projection = MimeticProjection()),
+    )
+    walls = ((:sides, sides), (:free_solid, free_solid), (:no_slip, NoSlip()), (:free_slip, FreeSlip()))
+    for (index, velocity_model) in pairs(models), (name, boundary) in walls
+        mesh = BlockTreeMesh(;
+            base_mesh = (16, 16), block_size = (4, 4), max_level = 1,
+            periodic = (false, false),
+        )
+        geometry = GeometryField(mesh, (x, y) -> y - 0.12 - 0.1x; lipschitz = hypot(1, 0.1))
+        interface = InterfaceField(mesh, (x, y) -> 0.2 - hypot(x - 0.5, y - 0.45); geometry, lipschitz = 1)
+        flow = FlowSimulation(
+            mesh,
+            TwoPhase(
+                interface; density = (10.0, 1.0), dynamic_viscosity = (0.1, 0.01),
+                surface_tension = 0.05, gravity = (0.0, -1.0),
+            );
+            geometry, velocity_model, boundary,
+            adaptivity = Adaptivity(criteria = (InterfaceRefinementIndicator(interface; level = 1),)),
+        )
+        for _ in 1:3
+            # The first step refines the mesh, which lowers the stable step.
+            dt = 0.5 * stable_timestep(flow)
+            simulate!(flow, flow.time + dt; dt, tolerance = 1.0e-10)
+        end
+        values = flow.velocity isa TwoPhaseVelocity ?
+            [value for phase in flow.velocity for value in phase.interior if !isnan(value)] :
+            flow.velocity.interior
+        @test all(isfinite, values)
+        energies[(index, name)] = sum(abs2, values)
+        boundary isa VelocityBoundaryConditions || continue
+        @test flow.mesh_updates > 0
+        operator = flow.diffusion_operator
+        @test operator.boundary === boundary
+        hierarchy = flow.workspace.two_phase.diffusion_solver.preconditioner
+        @test hierarchy isa TwoPhaseAMR.TreeVariableDiffusionPreconditioner
+        @test length(hierarchy.operators) > 1
+        @test all(level -> level.boundary === boundary, hierarchy.operators)
+        fresh = StaggeredDiffusionOperator(flow.interface; viscosity = (0.1, 0.01), boundary)
+        @test maximum(abs, nonzeros(operator.stiffness - fresh.stiffness)) <=
+            64eps() * maximum(abs, nonzeros(fresh.stiffness))
+    end
+    # The side and solid conditions are in effect: every configuration
+    # gives a different flow.
+    for index in eachindex(models)
+        @test allunique(energies[(index, name)] for (name, _) in walls)
+    end
+end
+
+@testset "Per-side walls with a contact line on the no-slip floor" begin
+    # The wall contact angles are curvature conditions per side and do not
+    # read the velocity conditions; the drop spreads on a no-slip floor.
+    mesh = BlockTreeMesh(; base_mesh = (16, 16), block_size = (4, 4), periodic = (false, false))
+    sides = _pw_sides(FreeSlip(), FreeSlip(), NoSlip(), NoSlip())
+    interface = InterfaceField(
+        mesh, (x, y) -> hypot(x - 0.5, y + 0.1) - 0.3;
+        contact_angle = (pi / 2, pi / 2, pi / 3, pi / 2), lipschitz = 1,
+    )
+    flow = FlowSimulation(
+        mesh,
+        TwoPhase(
+            interface; density = (10.0, 1.0), dynamic_viscosity = (0.1, 0.01),
+            surface_tension = 0.05,
+        );
+        boundary = sides,
+    )
+    for _ in 1:3
+        dt = 0.5 * stable_timestep(flow)
+        simulate!(flow, flow.time + dt; dt, tolerance = 1.0e-10)
+    end
+    @test flow.diffusion_operator.boundary === sides
+    @test all(isfinite, flow.velocity.interior)
+    @test maximum(abs, flow.velocity.interior) > 0
+end

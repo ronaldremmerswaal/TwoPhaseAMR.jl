@@ -66,11 +66,18 @@ is second order on the oblique-wall Helmholtz fixtures; this is not an order
 claim for the coupled two-phase equations. Select [`WallDistanceClosure`](@ref)
 to reproduce the legacy, thesis-style wall-distance discretization, which is
 first order at a wall that is not grid aligned.
+[`value_points`](@ref)`(operator, axis)` returns where the closure of a
+componentwise `StaggeredDiffusionOperator` places the unknowns of a velocity
+component, with their global face indices and open staggered volumes (zero for
+a face that the solid covers): LS-STAG at the midpoint of the open part of a
+cut face, which lies in the fluid, wall distance at the face centre. Sample
+initial or exact data there and weigh errors with the volumes, as the disc
+wave example (13) of the gallery does.
 
 | Stationary-solid configuration | Viscous operator used by LS-STAG |
 |:--|:--|
-| Single phase, including moving *domain* walls | Componentwise cut-cell diffusion; the embedded solid remains at rest |
-| One velocity; two velocities with CMDGFM or Mimetic projection | Coupled `div(2μD)` with positive viscosity mixed at each stress row; viscous domain walls are stationary `NoSlip()` or `FreeSlip()` |
+| Single phase, including moving *domain* walls | Componentwise cut-cell diffusion; the embedded solid remains at rest, no-slip unless `FreeSlip()` or `VelocityBoundaryConditions(; embedded=FreeSlip())` releases it |
+| One velocity; two velocities with CMDGFM or Mimetic projection | Coupled `div(2μD)` with positive viscosity mixed at each stress row; viscous domain walls are stationary `NoSlip()` or `FreeSlip()`, uniform or per side with `VelocityBoundaryConditions`, whose `embedded` keyword sets the solid's condition |
 | Embedded contact angle | The same variable-stress operator; contact-angle reconstruction and capillary forces are independent of the closure |
 | Uniform mesh, fixed composite mesh, adaptive regrid | Open-face metrics and strain stencils are rebuilt from the current solid; geometry-aware coarse viscous levels use the fine closure |
 
@@ -261,15 +268,20 @@ each phase linearly from two donors, so a resolved shear layer keeps its
 velocity continuous across the interface (the published one-donor rule,
 `CMDGFMProjection(jump_inference=ConstantJumpInference())`, creates a
 tangential phase-velocity jump of order `2U'h` there, issue #171). Where the
-interface moves through a face, a ramp in the crossing speed `w/U` (the normal
-mixture speed over the local mixture speed, `[1/32, 3/32]`) blends the
-extrapolation back to one donor: the values that a sweeping interface leaves
-behind would otherwise accumulate the extrapolation slope. The weight is
-evaluated once from the state the projection receives (a step's predictor)
-and kept with the rows of that interface, so projecting a projected state
-again changes nothing; it is also capped, with the interpolation weight `β` of
-the row lowered accordingly, so that the jump block stays weakly diagonally
-dominant. Mixed faces without
+interface moves through a face, a ramp in the crossing speed `w/U` blends the
+extrapolation back to one donor (`w = |ū · n|`, `U` the local mixture speed,
+ramp `[1/32, 3/32]`). The optional sliding limiter sets `w` to the larger of
+the normal mixture speed and `|u_g,a - u_l,a| |n_a|` along the face's axis `a`.
+This also limits extrapolation where phases slide past an inclined interface
+that barely moves. To opt in, pass
+`CMDGFMProjection(jump_inference=LinearJumpInference(limiter=:sliding))` as the
+`pressure_projection` of `TwoVelocityModel`. `limiter=:normal` is the default.
+The sliding option reduces late-time grid-scale vorticity in the interfacial
+instability example but can increase jump errors against exact solutions.
+Both limiters evaluate the weight from the predictor and freeze it for
+repeated projections on the same interface with the same limiter. Each flow
+step evaluates it again. The weight is also capped, and the interpolation
+weight `β` lowered, to keep the jump block weakly diagonally dominant. Mixed faces without
 a regular row get a row that removes the interpolated normal jump (or, for a
 normal closer to the transverse axis, a `β = 0` row), and faces with an exactly
 tangential normal get a `β = 0` row imposed as an increment of their own jump.
@@ -393,8 +405,11 @@ The viscous closure is independent:
 - `NoSlip(wall_velocity)` supports a moving wall such as a cavity lid; and
 - `FreeSlip()` imposes zero tangential shear.
 
-For open boundaries, `VelocityBoundaryConditions(; left, right, bottom, top)`
-selects a condition per side (unspecified sides default to `NoSlip()`).
+A uniform condition also applies to an embedded solid, which is always at
+rest. `VelocityBoundaryConditions(; left, right, bottom, top, embedded)`
+selects a condition per side (unspecified sides default to `NoSlip()`) and,
+separately, the viscous condition of an embedded solid: `embedded=NoSlip()`,
+the default, or `embedded=FreeSlip()`.
 `Inflow(f)` prescribes velocity from `f(x, y, time, axis)`.
 When applied to initialize a boundary, `ZeroGradientVelocity()` extrapolates
 the normal velocity from the interior. `Outflow()` uses area- and
@@ -402,6 +417,26 @@ aperture-weighted extrapolation, then applies a uniform outward correction
 over outflow faces to make the total boundary flux zero. Without either kind
 of open side, prescribed boundary velocities must already have zero net flux.
 WY interface transport requires impermeable boundaries.
+
+The two-phase viscous stress accepts stationary walls only: a uniform
+`NoSlip()` or `FreeSlip()`, or `VelocityBoundaryConditions` whose sides and
+`embedded` solid are each `NoSlip()` or `FreeSlip()`. The Hysing
+rising-bubble benchmark, for example, has a no-slip floor and lid and
+free-slip side walls:
+
+```julia
+boundary = VelocityBoundaryConditions(
+    left=FreeSlip(), right=FreeSlip(), bottom=NoSlip(), top=NoSlip())
+flow = FlowSimulation(mesh, physics; boundary)
+```
+
+This works for one velocity and both two-velocity projections, with either
+embedded closure, on composite and adaptive meshes. Each side releases or
+fixes the tangential velocity of its own wall vertices, and the solid follows
+`embedded`. At a corner, each velocity component is the normal velocity of
+one of the two sides, prescribed zero by both kinds, so the corner velocity is
+zero whichever conditions meet there. Moving `NoSlip(f)` sides and open sides
+raise `ArgumentError` once the flow is viscous.
 
 The two-velocity pressure projection retains its supplied phase boundary
 fluxes instead of applying an open-pressure correction. Its boundary
