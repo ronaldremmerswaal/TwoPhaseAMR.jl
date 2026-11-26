@@ -336,6 +336,19 @@ end
             # dt = 5.51e-4 (0.00620/0.0148/0.00830/0.00238 at dt/2), and the
             # time-L^2 differences to n = 64 give rates -0.53 and 1.06.
             @test endpoint_rate >= (density_ratio == 1.0 ? 1.6 : minimum_rate)
+            if density_ratio == 1.0
+                # NUMERICS CONCERN (#178): the endpoint gate above is dominated
+                # by the n = 8 point (errors 0.0468/0.00563/0.00468 at
+                # n = 8/16/32), and the last pair does not approach the
+                # asymptotic order: log2(0.00563/0.00468) = 0.27, so a plateau
+                # at n = 32 passes it. The cause is stated above: the
+                # hysteresis controller's step sizes no longer let the time and
+                # space errors cancel, and with a fixed small step the theory
+                # errors are not even monotone on these grids.
+                @test_broken log2(
+                    two_velocity_errors[2] / two_velocity_errors[3],
+                ) >= minimum_rate
+            end
             two_velocity_series = [
                 timestep_factor == 1 ? two_velocity_results[2] : wave_case(
                         :uniform, 16, density_ratio, mode;
