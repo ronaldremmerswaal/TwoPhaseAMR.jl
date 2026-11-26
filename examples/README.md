@@ -20,8 +20,8 @@ two-velocity verification suite (`benchmark/two_velocity`).
 | 09 | [Sloped sessile droplet](09_sloped_sessile_droplet/) | Embedded inclined wall | One velocity | Level 2, four capillary times; unmeasured at this size (level-3 gallery run 93.79 s) |
 | 10 | [Stokes wave](10_stokes3_wave/) | Nonlinear free-surface wave | One velocity | Level 5, one period; unmeasured |
 | 11 | [Large gas-pocket impact](11_lgpi/) | Gravity wave over bathymetry | Two velocity | Level 4, 1.2 gravity periods; unmeasured (gallery level-3 setup and simulation 2710.5 s) |
-| 13 | [Disc wave](13_disc_wave/) | Staggered wave equation on a cut-cell disc | Implicit midpoint, LS-STAG | 128×128, one period in 128 steps; 0.48 s setup, 1.26 s stepping |
-| 14 | [Rising bubble](14_rising_bubble/) | Hysing et al. benchmark, cases 1 and 2 | One velocity | Level 4, T=3; case 1 114.59 s, case 2 70.22 s, both after a compiling level-3 run |
+| 13 | [Disc wave](13_disc_wave/) | Staggered wave equation on a cut-cell disc | Staggered wave field | 128×128, one period in 128 steps |
+| 14 | [Rising bubble](14_rising_bubble/) | Hysing et al. benchmark, cases 1 and 2 | One velocity | Level 4, T=3; case 1 114.59 s, case 2 70.22 s, after level-3 runs in the same process |
 | 15 | [Forced sloshing](15_sloshing/) | Shaken tank, baffle as an exact polygon | One velocity | Level 2, T=10; 975 steps, 49.8 s |
 | 17 | [Rayleigh–Taylor instability](17_rayleigh_taylor/) | Single-mode growth and multimode mixing with a dye | One velocity | Level 5 multimode, T=4; 1363 steps, 1676.9 s |
 | 18 | [Taylor–Culick retraction](18_taylor_culick/) | Capillary retraction of a planar sheet | Two velocity | Level 3, T=12; 851 steps, 71.9 s |
@@ -85,7 +85,7 @@ To avoid launching a browser, use
 URL. Treat that tokenized URL as a credential. Interactive runs record
 wall-clock-throttled previews by default; `recorder_options` overrides Recorder
 settings, e.g. `(; preview=EveryStep())`. Headless runs default to keyframes
-only. For LGPI, `studio(run.recorder)` opens its completed recording.
+only.
 
 ## Reproducing figures
 
