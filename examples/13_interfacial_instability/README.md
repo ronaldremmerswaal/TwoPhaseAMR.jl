@@ -1,8 +1,10 @@
-# 07 – Interfacial instability
+# 13 – Interfacial instability
 
 A tangential velocity jump and gravity perturb a heavy-over-light interface, comparing one- and two-velocity closures with linear theory.
 
-![Two-velocity and one-velocity interface amplitudes against linear theory](assets/amplitude.png)
+![Horizontal velocity and interface of the two-velocity run, with the amplitude against linear theory](assets/instability.gif)
+
+*The two-velocity run until the amplitude doubles: horizontal phase velocities and the interface in a one-wavelength window, next to the numerical and linear amplitudes with a cursor at the shown time.*
 
 ## At a glance
 
@@ -33,7 +35,7 @@ The velocity jump is `(ρ_l+ρ_g)√(We/(ρ_lρ_g))/k`, with phase speeds chosen
 From the repository root, in a Julia session started with `--project=examples`:
 
 ```julia
-include("examples/07_interfacial_instability/interfacial_instability.jl")
+include("examples/13_interfacial_instability/interfacial_instability.jl")
 run = run_example()
 @show diagnostic_history(run.flow, :amplitude).values[end]
 @show diagnostic_history(run.flow, :analytical_amplitude).values[end]
@@ -42,8 +44,8 @@ run = run_example()
 Run the example headlessly or regenerate the Cairo figures:
 
 ```sh
-julia --project=examples examples/07_interfacial_instability/interfacial_instability.jl
-julia --project=examples -e 'include("examples/07_interfacial_instability/make_figures.jl"); make_figures()'
+julia --project=examples examples/13_interfacial_instability/interfacial_instability.jl
+julia --project=examples -e 'include("examples/13_interfacial_instability/make_figures.jl"); make_figures()'
 ```
 
 Append `--studio` to the example command to follow the run in a browser;
@@ -55,11 +57,11 @@ press Ctrl+C to close Studio after the run.
 
 The two-velocity amplitude reaches `0.0195150` against the linear reference `0.02`, with maximum sampled absolute difference `4.84994e-4`. The one-velocity result reaches `0.00260146`; its difference from the same reference reflects a different closure, not just discretization error.
 
+![Two-velocity and one-velocity interface amplitudes against linear theory](assets/amplitude.png)
+
 ![Initial interface and final interfaces for the two velocity models](assets/interfaces.png)
 
 The interface panels show the initial two-velocity state and the final state from each model in a window of one wavelength by 0.4 wavelengths with square cells. Keyframe titles use the actual nearest completed-step times, and gray outlines mark AMR blocks.
-
-![Horizontal velocity and interface of the two-velocity run, with the amplitude against linear theory](assets/instability.gif)
 
 The two-velocity run until the amplitude doubles: the horizontal phase velocities and the interface in the same window, next to the numerical and linear amplitudes with a cursor at the shown time.
 

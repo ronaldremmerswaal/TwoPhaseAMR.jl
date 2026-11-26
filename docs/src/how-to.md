@@ -116,7 +116,7 @@ Every example is a standalone file exposing `run_example`. Start headlessly
 from the REPL:
 
 ```julia
-include("examples/06_capillary_wave/capillary_wave.jl")
+include("examples/07_capillary_wave/capillary_wave.jl")
 run_example(max_level=1, final_time=0.01)
 ```
 
@@ -126,7 +126,7 @@ example live from a terminal, instantiate that environment and pass
 
 ```sh
 julia --project=examples -e 'using Pkg; Pkg.instantiate()'
-julia --project=examples -t 2,1 examples/06_capillary_wave/capillary_wave.jl --studio
+julia --project=examples -t 2,1 examples/07_capillary_wave/capillary_wave.jl --studio
 ```
 
 In the REPL, `using TwoPhaseAMRStudio` followed by

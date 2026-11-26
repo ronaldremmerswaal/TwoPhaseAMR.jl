@@ -4,6 +4,8 @@ A moving lid spins up a viscous fluid in a square cavity, exposing the transient
 
 ![Cavity speed at the end of the run](assets/speed.png)
 
+*Speed at the end of the run, reconstructed from the face velocity to the cell centres; gray lines show leaf-block boundaries.*
+
 ## At a glance
 
 | | |

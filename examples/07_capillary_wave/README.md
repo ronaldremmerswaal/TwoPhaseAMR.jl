@@ -1,8 +1,10 @@
-# 06 – Capillary wave
+# 07 – Capillary wave
 
 A small standing wave damps under viscosity and surface tension, and its amplitude is compared with Prosperetti's linear solution.
 
-![Numerical one- and two-velocity amplitudes compared with Prosperetti's solution](assets/amplitude.png)
+![Velocity magnitude and interface over one period, with the amplitude against Prosperetti's solution](assets/wave.gif)
+
+*One period of the one-velocity run: speed and interface in a one-wavelength window, next to the numerical and analytical amplitude with a cursor at the shown time.*
 
 ## At a glance
 
@@ -33,7 +35,7 @@ The default end time is `2π/ω₀`; viscosity is included in the Prosperetti re
 From the repository root, in a Julia session started with `--project=examples`:
 
 ```julia
-include("examples/06_capillary_wave/capillary_wave.jl")
+include("examples/07_capillary_wave/capillary_wave.jl")
 run = run_example()
 @show diagnostic_history(run.flow, :amplitude).values[end]
 @show diagnostic_history(run.flow, :analytical_amplitude).values[end]
@@ -42,8 +44,8 @@ run = run_example()
 Run the example headlessly or regenerate the Cairo figures:
 
 ```sh
-julia --project=examples examples/06_capillary_wave/capillary_wave.jl
-julia --project=examples -e 'include("examples/06_capillary_wave/make_figures.jl"); make_figures()'
+julia --project=examples examples/07_capillary_wave/capillary_wave.jl
+julia --project=examples -e 'include("examples/07_capillary_wave/make_figures.jl"); make_figures()'
 ```
 
 Append `--studio` to the example command to follow the run in a browser;
@@ -55,11 +57,11 @@ Both `size=:docs` and `size=:default` use the example's level-4, one-period sett
 
 The one-velocity amplitude ends at `0.00619187` versus `0.00614806` for Prosperetti; its maximum sampled absolute error is `1.11614e-4`. The two-velocity run ends at `0.00619062`, with maximum sampled absolute error `1.10096e-4`.
 
+![Numerical one- and two-velocity amplitudes compared with Prosperetti's solution](assets/amplitude.png)
+
 ![Initial and final one-velocity interface and volume fraction in a one-wavelength window](assets/interface.png)
 
 The interface snapshots show the one-velocity calculation at the nearest retained start and end states, in a window of one wavelength by 0.4 wavelengths with square cells; the 0.01 displacement spans about one finest cell. Gray lines show AMR block boundaries.
-
-![Velocity magnitude and interface over one period, with the amplitude against Prosperetti's solution](assets/wave.gif)
 
 One period of the one-velocity run: speed and interface in the same window, next to the numerical and analytical amplitude with a cursor at the shown time. The GIF has 81 output frames, one per keyframe, on a uniform simulation-time grid with spacing `T/80≈0.0050`; each keyframe is the completed step nearest its requested time.
 

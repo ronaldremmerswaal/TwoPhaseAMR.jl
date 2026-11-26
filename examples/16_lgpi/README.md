@@ -1,4 +1,4 @@
-# 11 – Large gas-pocket impact
+# 16 – Large gas-pocket impact
 
 A steep liquid front evolves over an embedded elliptical bathymetry in a scaled two-phase impact benchmark.
 
@@ -57,7 +57,7 @@ indicator uses the liquid velocity, not the gas velocity.
 From the repository root, a short headless run is:
 
 ```julia
-include("examples/11_lgpi/lgpi.jl")
+include("examples/16_lgpi/lgpi.jl")
 run = run_example(max_level=1, final_time=0.1)
 print_simulation_summary(run.flow, run.result)
 ```
@@ -68,8 +68,8 @@ for the hero. The second runs the level-4 default without exporting figures.
 The results are subject to the validation caveat above:
 
 ```sh
-julia --project=examples -t 1 examples/11_lgpi/make_figures.jl
-julia --project=examples -t 1 examples/11_lgpi/lgpi.jl
+julia --project=examples -t 1 examples/16_lgpi/make_figures.jl
+julia --project=examples -t 1 examples/16_lgpi/lgpi.jl
 ```
 
 Append `--studio` to the example command to follow the run in a browser;
@@ -82,7 +82,7 @@ end time and `display_time` limits its exported frames; the separate hero run
 always continues to the end of its window:
 
 ```julia
-include("examples/11_lgpi/make_figures.jl")
+include("examples/16_lgpi/make_figures.jl")
 make_figures(display_time=0.9)
 ```
 

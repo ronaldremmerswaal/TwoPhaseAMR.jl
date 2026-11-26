@@ -5,12 +5,12 @@
 # Cases (`_fine`: one level finer):
 #   taylor_green[_fine]  128² (256²) Taylor–Green, hierarchical: one 16² root
 #                        refined to level 3 (4), no adaptation;
-#   cylinder[_fine]      example 04 at max_level 3 (4), wake/geometry AMR and the
+#   cylinder[_fine]      example 06 at max_level 3 (4), wake/geometry AMR and the
 #                        example's diagnostics; `cylinder[_fine]_noforce` drops
 #                        the example's serial `pressure_force` diagnostics;
-#   stokes3_one[_fine]   example 10 with OneVelocityModel() at max_level 5 (6);
-#   stokes3_two[_fine]   example 10 with TwoVelocityModel() at max_level 5 (6);
-#   capillary[_fine]     CMDGFM capillary wave k = 4 (example 06 setup, base mesh
+#   stokes3_one[_fine]   example 15 with OneVelocityModel() at max_level 5 (6);
+#   stokes3_two[_fine]   example 15 with TwoVelocityModel() at max_level 5 (6);
+#   capillary[_fine]     CMDGFM capillary wave k = 4 (example 07 setup, base mesh
 #                        32×96 cells in 8² blocks) with interface AMR to
 #                        max_level 2 (3); the interface barely moves, so no regrid.
 # The probe takes 5 warm-up steps, then STEPS fixed-dt steps in one `simulate!`
@@ -33,10 +33,10 @@ using TwoPhaseAMR
 
 const EXAMPLES = joinpath(pkgdir(TwoPhaseAMR), "examples")
 module Cylinder
-    include(joinpath(Main.EXAMPLES, "04_cylinder_flow", "cylinder_flow.jl"))
+    include(joinpath(Main.EXAMPLES, "06_cylinder_flow", "cylinder_flow.jl"))
 end
 module Stokes3
-    include(joinpath(Main.EXAMPLES, "10_stokes3_wave", "stokes3_wave.jl"))
+    include(joinpath(Main.EXAMPLES, "15_stokes3_wave", "stokes3_wave.jl"))
 end
 
 function taylor_green_flow(level)

@@ -1,8 +1,10 @@
-# 10 – Third-order Stokes wave
+# 15 – Third-order Stokes wave
 
 A steep, finite-depth wave propagates for two nominal periods on an adaptively refined two-phase mesh.
 
 ![Plunging breaker just after its jet hits the forward face and traps a gas pocket: vorticity and PLIC interface](assets/hero.png)
+
+*The jet has just hit the forward face and trapped a gas pocket under the crest tip; vorticity is on a symmetric range with the PLIC interface, half a wavelength wide.*
 
 The wave breaks within the first period. The snapshot comes from a separate level-5 run of the first period (finest `dx = dy = 1/256`): the first state with an entrapped gas pocket (`t/T≈0.626`), located by re-running the bracketing keyframe interval with every step stored as a keyframe; half a wavelength wide, vorticity with a symmetric range. The animation and profile below come from the level-4 docs run.
 
@@ -35,14 +37,14 @@ The viscosity pair is `(1/Re, 1/(51.15Re))`. The plotted reference is the third-
 From the repository root:
 
 ```julia
-include("examples/10_stokes3_wave/stokes3_wave.jl")
+include("examples/15_stokes3_wave/stokes3_wave.jl")
 run = run_example(max_level=3)  # one nominal wave period
 print_simulation_summary(run.flow, run.result)
 ```
 
 ```sh
-julia --project=examples examples/10_stokes3_wave/make_figures.jl
-julia --project=examples examples/10_stokes3_wave/stokes3_wave.jl
+julia --project=examples examples/15_stokes3_wave/make_figures.jl
+julia --project=examples examples/15_stokes3_wave/stokes3_wave.jl
 ```
 
 Append `--studio` to the example command to follow the run in a browser;

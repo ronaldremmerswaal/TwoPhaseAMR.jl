@@ -1,12 +1,12 @@
 using Test, TwoPhaseAMR
 using LinearAlgebra: dot
 
-# The exact Bessel standing waves of example 13 and its error measures.
-include(joinpath(@__DIR__, "..", "..", "examples", "13_disc_wave", "disc_modes.jl"))
-include(joinpath(@__DIR__, "..", "..", "examples", "13_disc_wave", "disc_wave_analysis.jl"))
+# The exact Bessel standing waves of example 05 and its error measures.
+include(joinpath(@__DIR__, "..", "..", "examples", "05_disc_wave", "disc_modes.jl"))
+include(joinpath(@__DIR__, "..", "..", "examples", "05_disc_wave", "disc_wave_analysis.jl"))
 
 # The box [-1.25, 1.25]² in n × n cells in 8 × 8 blocks; with `composite` the
-# base blocks that the circle r = 1 crosses are refined once (example 13).
+# base blocks that the circle r = 1 crosses are refined once (example 05).
 function disc_wave_integration_mesh(n; composite = false)
     crosses_wall(lower, upper) =
         hypot(max.(lower, 0.0, .-upper)...) <= 1.0 <=
@@ -20,7 +20,7 @@ function disc_wave_integration_mesh(n; composite = false)
     )
 end
 
-# The implicit-midpoint wave solver of example 13 on the package API: both
+# The implicit-midpoint wave solver of example 05 on the package API: both
 # components of u_tt = Δu on the disc r < 1, `NoSlip()` on the circle, from the
 # discrete Helmholtz projection of the default modes (`initial_data =
 # :sampled` starts from their values at the value points instead), one shifted

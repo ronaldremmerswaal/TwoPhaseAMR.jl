@@ -2,7 +2,9 @@
 
 A liquid drop relaxes against an inclined embedded wall under capillarity and wall-normal gravity.
 
-![Drop and inclined wall at three times](assets/hero.png)
+![Drop spreading on the inclined wall, with the kinetic energy](assets/relaxation.gif)
+
+*Drop spreading on the inclined wall: volume fraction, interface and wall, next to the kinetic energy with a cursor at the shown time.*
 
 ## At a glance
 
@@ -50,15 +52,15 @@ press Ctrl+C to close Studio after the run.
 
 ## Results
 
-The hero shows liquid volume fraction and reconstructed interface, with the filled wall and block outlines, at the completed states nearest `0`, `2t_c` and `4t_c`; panel titles give the actual retained times.
+The snapshots show liquid volume fraction and reconstructed interface, with the filled wall and block outlines, at the completed states nearest `0`, `2t_c` and `4t_c`; panel titles give the actual retained times.
+
+![Drop and inclined wall at three times](assets/hero.png)
 
 ![Kinetic energy over time](assets/kinetic_energy.png)
 
 At the end of the run `:kinetic_energy` is `0.00884495`, while liquid volume changed by `−1.80331e-11` from its initial discrete value.
 
 The interface stays one connected cap from the initial state to four capillary times: no detached liquid fragments appear ahead of the advancing front, the crest is smooth and the run reports no unresolved curvature faces. The assets this page previously carried were made before the contact-line refinement fix of #152, which is the only numerically visible change since; they showed a scalloped contact line, detached liquid fragments in the late frames and unresolved curvature faces. The contact line still follows the block grid, so the receding foot shows a one-cell step and the drawn interface breaks into short segments where it crosses the sloped cut cells, and the shape error is that of 10 cells per radius rather than of an analytic drop profile.
-
-![Drop spreading on the inclined wall, with the kinetic energy](assets/relaxation.gif)
 
 The GIF samples 81 output frames on a uniform simulation-time grid, each showing the nearest retained keyframe: volume fraction, interface and wall, next to the kinetic energy with a cursor at the shown time.
 

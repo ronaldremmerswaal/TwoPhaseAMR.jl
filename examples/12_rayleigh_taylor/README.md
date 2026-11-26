@@ -1,8 +1,10 @@
-# 17 – Rayleigh–Taylor instability
+# 12 – Rayleigh–Taylor instability
 
 Heavy fluid over light: a single mode is checked against viscous linear theory and compared with the two-dimensional potential-flow bubble speed, then a multimode layer grows into a mixing zone whose dye shows where its fluid came from.
 
 ![Multimode Rayleigh–Taylor mixing: dye carrying each parcel's initial height, with the interface, next to the bubble and spike penetration](assets/multimode.gif)
+
+*Level-5 multimode mixing: the dye carries each parcel's initial height, the interface is drawn on top, and the panel next to it tracks the bubble and spike penetration with a cursor at the shown time.*
 
 ## At a glance
 
@@ -60,7 +62,7 @@ U_b=\sqrt{\frac{2A}{1+A}\,\frac{g}{3k}},\qquad
 From the repository root, in a Julia session started with `--project=examples`:
 
 ```julia
-include("examples/17_rayleigh_taylor/rayleigh_taylor.jl")
+include("examples/12_rayleigh_taylor/rayleigh_taylor.jl")
 run = run_example(case = :single_mode, max_level = 3)
 @show diagnostic_history(run.flow, :bubble_height).values[end]
 multimode = run_example(max_level = 4, final_time = 2.0)
@@ -69,8 +71,8 @@ multimode = run_example(max_level = 4, final_time = 2.0)
 Run the multimode default headlessly or regenerate the Cairo figures:
 
 ```sh
-julia --project=examples examples/17_rayleigh_taylor/rayleigh_taylor.jl
-julia --project=examples -e 'include("examples/17_rayleigh_taylor/make_figures.jl"); make_figures()'
+julia --project=examples examples/12_rayleigh_taylor/rayleigh_taylor.jl
+julia --project=examples -e 'include("examples/12_rayleigh_taylor/make_figures.jl"); make_figures()'
 ```
 
 Append `--studio` to the example command to follow the run in a browser;

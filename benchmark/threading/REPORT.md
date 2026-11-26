@@ -23,8 +23,8 @@ a Polyester batch (any Polyester/ThreadingUtilities frame on the stack).
 | case | setup | cells | blocks | dt |
 |---|---|---:|---:|---:|
 | `taylor_green` | 128² TG, hierarchical: one 16² root refined to level 3, ν = 0.02, periodic | 16 384 | 64 | 0.45 CFL = 1.105e-2 |
-| `capillary` | capillary wave k = 4 (example 06 setup, base mesh 32×96 cells, 8² blocks, interface AMR `max_level = 2`), `TwoVelocityModel(CMDGFMProjection())` | 7 680 | 120 | 0.5 × stable = 9.74e-5 |
-| `cylinder` | example 04 `run_example(final_time = 0)` (default `max_level = 3`, Re 100, embedded cylinder, wake AMR, example diagnostics) | 2 944 | 184 | 0.45 CFL = 6.48e-4 |
+| `capillary` | capillary wave k = 4 (example 07 setup, base mesh 32×96 cells, 8² blocks, interface AMR `max_level = 2`), `TwoVelocityModel(CMDGFMProjection())` | 7 680 | 120 | 0.5 × stable = 9.74e-5 |
+| `cylinder` | example 06 `run_example(final_time = 0)` (default `max_level = 3`, Re 100, embedded cylinder, wake AMR, example diagnostics) | 2 944 | 184 | 0.45 CFL = 6.48e-4 |
 
 No topology change occurred in any timed window (block counts unchanged).
 

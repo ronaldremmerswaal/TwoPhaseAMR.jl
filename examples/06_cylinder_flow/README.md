@@ -1,8 +1,10 @@
-# 04 – Cylinder flow
+# 06 – Cylinder flow
 
 A uniform inflow passes an embedded circular cylinder while adaptive blocks follow the solid and vorticity.
 
-![Vorticity and embedded cylinder with block boundaries](assets/vorticity.png)
+![Vortex shedding behind the cylinder](assets/shedding.gif)
+
+*Vortex shedding behind the embedded cylinder over the last 20 time units of the docs run: vorticity on a fixed `±3` range, AMR block outlines and the solid in gray.*
 
 ## At a glance
 
@@ -33,7 +35,7 @@ From the repository root, use the gallery settings headlessly:
 
 ```julia
 using TwoPhaseAMR
-include("examples/04_cylinder_flow/cylinder_flow.jl")
+include("examples/06_cylinder_flow/cylinder_flow.jl")
 run = run_example(max_level = 2, final_time = 10.0)
 drag = diagnostic_history(run.flow, :pressure_drag)
 ```
@@ -41,8 +43,8 @@ drag = diagnostic_history(run.flow, :pressure_drag)
 The direct example records keyframes in `run.recorder` (accessible via `snapshot_store(run.recorder)`) with the longer defaults. The second command renders the gallery run, which uses `max_level=4` and `T=50`, with CairoMakie:
 
 ```sh
-julia --project=examples examples/04_cylinder_flow/cylinder_flow.jl
-julia --project=examples examples/04_cylinder_flow/make_figures.jl
+julia --project=examples examples/06_cylinder_flow/cylinder_flow.jl
+julia --project=examples examples/06_cylinder_flow/make_figures.jl
 ```
 
 Append `--studio` to the example command to follow the run in a browser;
@@ -52,13 +54,13 @@ Both figure sizes run the gallery configuration; `size=:default` only enlarges t
 
 ## Results
 
-The hero shows final vorticity, gray leaf-block outlines and the reconstructed solid cylinder in black, on the fixed `±3` range used by the animation: the 99.9th percentile of `|ω|` over the animation's 97 frames is `13.1`, far outside that range, so an automatic range taken from it would flatten the wake.
+The vorticity snapshot shows final vorticity, gray leaf-block outlines and the reconstructed solid cylinder in black, on the fixed `±3` range used by the animation: the 99.9th percentile of `|ω|` over the animation's 97 frames is `13.1`, far outside that range, so an automatic range taken from it would flatten the wake.
+
+![Vorticity and embedded cylinder with block boundaries](assets/vorticity.png)
 
 ![Pressure drag coefficient as a function of time](assets/pressure_drag.png)
 
-![Vortex shedding behind the cylinder](assets/shedding.gif)
-
-The last 20 time units of the docs run, `t=30–50`: the GIF has 97 output frames, one per keyframe, on a uniform simulation-time grid with spacing `20/96≈0.208` (each keyframe is the completed step nearest its requested time), over vorticity with a fixed range of ±3, AMR block outlines and the embedded cylinder in gray. The drag oscillates at twice the shedding frequency, so this window holds about eight drag cycles and four lift cycles. The repository README GIFs show the same 97 keyframes at 950 × 500 pixels.
+The lead animation covers the last 20 time units of the docs run, `t=30–50`: the GIF has 97 output frames, one per keyframe, on a uniform simulation-time grid with spacing `20/96≈0.208` (each keyframe is the completed step nearest its requested time), over vorticity with a fixed range of ±3, AMR block outlines and the embedded cylinder in gray. The drag oscillates at twice the shedding frequency, so this window holds about eight drag cycles and four lift cycles. The repository README GIFs show the same 97 keyframes at 950 × 500 pixels.
 
 For the frequency estimate, lift was sampled every 0.05 time units, averaged over an 11-sample window, and its upward mean crossings used to estimate the period. Over `t=30–50` the upward crossings are `34.163`, `39.059`, `43.954` and `48.848`, giving `St=0.20428`. The residual of the raw sampled lift minus the smoothed signal has RMS `0.010168`, about 1.6% of the smoothed lift amplitude. Initial pressure force samples are deliberately `NaN`, because the impulsive-start state is not a developed force. These diagnostics exclude viscous stresses.
 

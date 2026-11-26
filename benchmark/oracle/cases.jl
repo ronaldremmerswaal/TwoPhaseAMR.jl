@@ -12,7 +12,7 @@ module Cavity
     include(joinpath(@__DIR__, "../../examples/02_lid_driven_cavity/lid_driven_cavity.jl"))
 end
 module Capillary
-    include(joinpath(@__DIR__, "../../examples/06_capillary_wave/capillary_wave.jl"))
+    include(joinpath(@__DIR__, "../../examples/07_capillary_wave/capillary_wave.jl"))
 end
 module Sessile
     include(joinpath(@__DIR__, "../../examples/08_sessile_droplet/sessile_droplet.jl"))
@@ -21,13 +21,13 @@ module Sloped
     include(joinpath(@__DIR__, "../../examples/09_sloped_sessile_droplet/sloped_sessile_droplet.jl"))
 end
 module Vortex
-    include(joinpath(@__DIR__, "../../examples/05_vortex_reverse/vortex_reverse.jl"))
+    include(joinpath(@__DIR__, "../../examples/03_vortex_reverse/vortex_reverse.jl"))
 end
 module Stokes
-    include(joinpath(@__DIR__, "../../examples/10_stokes3_wave/stokes3_wave.jl"))
+    include(joinpath(@__DIR__, "../../examples/15_stokes3_wave/stokes3_wave.jl"))
 end
 module Cylinder
-    include(joinpath(@__DIR__, "../../examples/04_cylinder_flow/cylinder_flow.jl"))
+    include(joinpath(@__DIR__, "../../examples/06_cylinder_flow/cylinder_flow.jl"))
 end
 
 const CASES = [

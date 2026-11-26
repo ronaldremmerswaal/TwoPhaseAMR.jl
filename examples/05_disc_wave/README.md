@@ -1,8 +1,10 @@
-# 13 – Staggered wave equation on a disc
+# 05 – Staggered wave equation on a disc
 
 Both components of a staggered field ring as exact Bessel standing waves on a cut-cell disc, with the LS-STAG viscous operator as the Laplacian and implicit time steps far above the explicit limit. This example addresses the staggered Dirichlet problem in [#15](https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/issues/15); the issue's centred scalar and staggered Neumann variants are not part of it.
 
 ![Both displacement components on the disc over one period of the fundamental mode](assets/wave.gif)
+
+*Both staggered displacement components of the default run over one period of the fundamental mode; grey is the PLIC solid and the black line the exact circle.*
 
 ## At a glance
 
@@ -56,10 +58,10 @@ Errors are measured where the closure places the values, from `value_points(oper
 From the repository root, in a Julia session started with `--project=examples`:
 
 ```julia
-include("examples/13_disc_wave/disc_wave.jl")
+include("examples/05_disc_wave/disc_wave.jl")
 run = run_example(resolution = 64)
 maximum(abs, run.energy ./ run.energy[1] .- 1)      # relative energy change
-include("examples/13_disc_wave/disc_wave_analysis.jl")
+include("examples/05_disc_wave/disc_wave_analysis.jl")
 errors = disc_wave_errors(run)                      # absolute errors and exact norms at run.time
 relative_error(errors, :displacement_l2)
 ```
@@ -69,8 +71,8 @@ relative_error(errors, :displacement_l2)
 with all studies:
 
 ```sh
-julia --project=examples examples/13_disc_wave/disc_wave.jl
-julia --project=examples examples/13_disc_wave/make_figures.jl
+julia --project=examples examples/05_disc_wave/disc_wave.jl
+julia --project=examples examples/05_disc_wave/make_figures.jl
 ```
 
 Append `--studio` to the example command to follow the run in a browser;

@@ -2,7 +2,9 @@
 
 A circular liquid cap relaxes under gravity and surface tension while maintaining a prescribed static contact angle at the lower wall.
 
-![Droplet interface and volume fraction at three times](assets/snapshots.png)
+![Speed and droplet interface during relaxation, with the kinetic energy](assets/relaxation.gif)
+
+*Relaxation after release: speed and interface in the lower half of the domain, largest in the wall-adjacent cells at the two contact lines, next to the kinetic energy with a cursor at the shown time.*
 
 ## At a glance
 
@@ -53,11 +55,11 @@ Both sizes use the level-3 default.
 
 ## Results
 
-The hero shows volume fraction and reconstructed interface near `0`, `4t_c` and `8t_c`; titles are actual nearest completed-step times, and gray outlines show AMR blocks.
+The snapshots show volume fraction and reconstructed interface near `0`, `4t_c` and `8t_c`; titles are actual nearest completed-step times, and gray outlines show AMR blocks.
+
+![Droplet interface and volume fraction at three times](assets/snapshots.png)
 
 ![Kinetic energy and liquid phase volume against time](assets/diagnostics.png)
-
-![Speed and droplet interface during relaxation, with the kinetic energy](assets/relaxation.gif)
 
 The GIF has 81 output frames, one per keyframe, on a uniform simulation-time grid with spacing `T/80≈0.0089`; each keyframe is the completed step nearest its requested time. It shows speed and interface in the lower half of the domain, next to the kinetic energy with a cursor at the shown time. The drop stays a cap; during the first oscillations the speed is largest in the cells next to the wall at the two contact lines, just outside the interface, and these corner peaks decay with the kinetic energy.
 

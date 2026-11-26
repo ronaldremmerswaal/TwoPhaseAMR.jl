@@ -143,8 +143,8 @@ every loop:
 | `capillary_mimetic` | the capillary wave with `MimeticProjection()`, uniform mesh |
 | `mimetic_amr` | a drop translating through an adapting interface band with `MimeticProjection()`; must regrid |
 | `droplet` | two-phase CMDGFM on an embedded sloped wall (example 09), AMR |
-| `stokes3_two` | the two-velocity Stokes-3 wave (example 10); must regrid |
-| `cylinder` | the one-phase cylinder (example 04) with geometry and vorticity AMR |
+| `stokes3_two` | the two-velocity Stokes-3 wave (example 15); must regrid |
+| `cylinder` | the one-phase cylinder (example 06) with geometry and vorticity AMR |
 | `taylor_green` | one-phase Taylor--Green vortices, 16² root block refined to level 3 |
 
 Each process prints a SHA-256 over every state field (velocity components per

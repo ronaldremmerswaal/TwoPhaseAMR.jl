@@ -7,25 +7,25 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="examples/10_stokes3_wave/assets/readme_dark.gif">
-  <img alt="Vorticity and interface of a third-order Stokes wave that plunges, traps a gas pocket, and splashes up on an adaptive quadtree mesh" src="examples/10_stokes3_wave/assets/readme_light.gif">
+  <source media="(prefers-color-scheme: dark)" srcset="examples/15_stokes3_wave/assets/readme_dark.gif">
+  <img alt="Vorticity and interface of a third-order Stokes wave that plunges, traps a gas pocket, and splashes up on an adaptive quadtree mesh" src="examples/15_stokes3_wave/assets/readme_light.gif">
 </picture>
 
-*[Third-order Stokes wave breaking on an adaptive quadtree mesh: vorticity, PLIC interface, and blocks over the second half of the first period (one-velocity model, level 5)](examples/10_stokes3_wave/)*
+*[Third-order Stokes wave breaking on an adaptive quadtree mesh: vorticity, PLIC interface, and blocks over the second half of the first period (one-velocity model, level 5)](examples/15_stokes3_wave/)*
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="examples/07_interfacial_instability/assets/readme_dark.gif">
-  <img alt="Horizontal velocity and interface of a Kelvin–Helmholtz billow rolling up: the liquid and gas velocities jump sharply across the interface" src="examples/07_interfacial_instability/assets/readme_light.gif">
+  <source media="(prefers-color-scheme: dark)" srcset="examples/13_interfacial_instability/assets/readme_dark.gif">
+  <img alt="Horizontal velocity and interface of a Kelvin–Helmholtz billow rolling up: the liquid and gas velocities jump sharply across the interface" src="examples/13_interfacial_instability/assets/readme_light.gif">
 </picture>
 
-*[Kelvin–Helmholtz roll-up with the two-velocity model: liquid and gas keep separate velocities, so the shear layer is a sharp velocity jump at the interface](examples/07_interfacial_instability/)*
+*[Kelvin–Helmholtz roll-up with the two-velocity model: liquid and gas keep separate velocities, so the shear layer is a sharp velocity jump at the interface](examples/13_interfacial_instability/)*
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="examples/04_cylinder_flow/assets/readme_dark.gif">
-  <img alt="Vortex shedding behind an embedded cylinder on an adaptive quadtree mesh" src="examples/04_cylinder_flow/assets/readme_light.gif">
+  <source media="(prefers-color-scheme: dark)" srcset="examples/06_cylinder_flow/assets/readme_dark.gif">
+  <img alt="Vortex shedding behind an embedded cylinder on an adaptive quadtree mesh" src="examples/06_cylinder_flow/assets/readme_light.gif">
 </picture>
 
-*[Vortex shedding behind a cylinder: embedded cut-cell geometry on an adaptive quadtree mesh (Re = 200)](examples/04_cylinder_flow/)*
+*[Vortex shedding behind a cylinder: embedded cut-cell geometry on an adaptive quadtree mesh (Re = 200)](examples/06_cylinder_flow/)*
 
 TwoPhaseAMR.jl is a Julia package for two-dimensional, incompressible
 single- and two-phase flow on block-structured quadtree meshes. It combines
@@ -210,9 +210,9 @@ The [examples gallery](examples/README.md) collects standalone, illustrated
 programs, including:
 
 - [Taylor–Green](examples/01_taylor_green/) — single-phase verification.
-- [Capillary wave](examples/06_capillary_wave/) — comparison with
+- [Capillary wave](examples/07_capillary_wave/) — comparison with
   Prosperetti's analytical solution.
-- [Interfacial instability](examples/07_interfacial_instability/) — comparison
+- [Interfacial instability](examples/13_interfacial_instability/) — comparison
   of one- and two-velocity models.
 
 Each example defines `run_example`, runs headlessly when included, and prints

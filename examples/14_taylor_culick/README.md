@@ -1,8 +1,10 @@
-# 18 – Taylor–Culick sheet retraction
+# 14 – Taylor–Culick sheet retraction
 
 A planar liquid sheet retracts from its free end under surface tension. At `Oh = 0.1` the edge gathers into a rim with a neck and capillary waves ahead of it; at `Oh = 3` it thickens into a club without a neck. The tip speeds are compared with the Taylor–Culick speed.
 
 ![Horizontal phase velocity and interface of the retracting sheet at Oh = 0.1, above the tip position against the Taylor–Culick line](assets/retraction.gif)
+
+*The `Oh = 0.1` retraction: horizontal phase velocity and interface of the sheet, above the tip position against the Taylor–Culick line, with a cursor at the shown time.*
 
 ## At a glance
 
@@ -40,7 +42,7 @@ The two-velocity CMDGFM projection is the documented choice for thin films ([cho
 From the repository root, in a Julia session started with `--project=examples`:
 
 ```julia
-include("examples/18_taylor_culick/taylor_culick.jl")
+include("examples/14_taylor_culick/taylor_culick.jl")
 run = run_example()
 tip = diagnostic_history(run.flow, :tip_position)
 @show (tip.values[1] - tip.values[end]) / tip.times[end]
@@ -49,8 +51,8 @@ tip = diagnostic_history(run.flow, :tip_position)
 Run the example headlessly or regenerate the Cairo figures:
 
 ```sh
-julia --project=examples examples/18_taylor_culick/taylor_culick.jl
-julia --project=examples -e 'include("examples/18_taylor_culick/make_figures.jl"); make_figures()'
+julia --project=examples examples/14_taylor_culick/taylor_culick.jl
+julia --project=examples -e 'include("examples/14_taylor_culick/make_figures.jl"); make_figures()'
 ```
 
 Append `--studio` to the example command to follow the run in a browser;

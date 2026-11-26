@@ -1,8 +1,10 @@
-# 03 – Decaying turbulence
+# 04 – Decaying turbulence
 
 A seeded periodic velocity field decays while pressure-driven adaptation changes the block mesh.
 
-![Initial and final vorticity with adaptive block boundaries](assets/vorticity.png)
+![Animation of adaptive vorticity](assets/vorticity.gif)
+
+*Vorticity over the run's 81 keyframes in one symmetric range of 31 colour levels, next to the kinetic energy and active cell count with a cursor at the shown time.*
 
 ## At a glance
 
@@ -33,7 +35,7 @@ From the repository root, reproduce the gallery's simulation settings headlessly
 
 ```julia
 using TwoPhaseAMR
-include("examples/03_decaying_turbulence/decaying_turbulence.jl")
+include("examples/04_decaying_turbulence/decaying_turbulence.jl")
 run = run_example(max_level = 3, final_time = 2.0)
 cells = diagnostic_history(run.flow, :cells)
 ```
@@ -41,8 +43,8 @@ cells = diagnostic_history(run.flow, :cells)
 The direct example records keyframes in `run.recorder` (accessible via `snapshot_store(run.recorder)`) using the larger example defaults. The figure command uses CairoMakie and the smaller gallery settings:
 
 ```sh
-julia --project=examples examples/03_decaying_turbulence/decaying_turbulence.jl
-julia --project=examples examples/03_decaying_turbulence/make_figures.jl
+julia --project=examples examples/04_decaying_turbulence/decaying_turbulence.jl
+julia --project=examples examples/04_decaying_turbulence/make_figures.jl
 ```
 
 Append `--studio` to the example command to follow the run in a browser;
@@ -52,13 +54,13 @@ Use `make_figures(; outdir=..., size=:default)` for the level-4, `T=10` simulati
 
 ## Results
 
-The hero compares the initial and final retained vorticity states, with leaf-block boundaries. Each panel uses its own symmetric color scale.
+The snapshots compare the initial and final retained vorticity states, with leaf-block boundaries. Each panel uses its own symmetric color scale.
+
+![Initial and final vorticity with adaptive block boundaries](assets/vorticity.png)
 
 ![Kinetic energy and active cell count over time](assets/energy_cells.png)
 
 The projected energy falls from `715.044` to `355.295`, while active cells fall from 4096 to 1984. The figure registers `:projected_kinetic_energy` after the initial projection.
-
-![Animation of adaptive vorticity](assets/vorticity.gif)
 
 The GIF has 81 output frames, one per keyframe, on a uniform simulation-time grid with spacing `0.025` over the two simulated time units; each keyframe is the completed step nearest its requested time. Vorticity uses one symmetric range over all frames in 31 colour levels, next to the kinetic energy and active cell count with a cursor at the shown time.
 

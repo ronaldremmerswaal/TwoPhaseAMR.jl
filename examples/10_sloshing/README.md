@@ -1,8 +1,10 @@
-# 15 – Forced sloshing
+# 10 – Forced sloshing
 
 Water sloshes in a closed tank that is shaken horizontally, with and without a bottom-mounted baffle, against linear potential-flow theory and a published benchmark.
 
 ![Strongly forced sloshing in the baffled tank: vorticity, PLIC surface in black and the baffle in gray](assets/sloshing.gif)
+
+*The strongly forced level-3 baffled run: vorticity, the PLIC surface in black and the bottom-mounted baffle in gray, over the animation's keyframes.*
 
 ## At a glance
 
@@ -105,7 +107,7 @@ noticeably only when its tip comes close to the surface.
 From the repository root, in a Julia session started with `--project=examples`:
 
 ```julia
-include("examples/15_sloshing/sloshing.jl")
+include("examples/10_sloshing/sloshing.jl")
 run = run_example()                                   # plain tank, A = 2 mm, ω = 5.29 rad/s
 @show diagnostic_history(run.flow, :left_elevation).values[end]
 @show diagnostic_history(run.flow, :linear_elevation).values[end]
@@ -115,8 +117,8 @@ baffled = run_example(baffle_height = 0.375)          # the same forcing with th
 Run the example headlessly or regenerate the Cairo figures:
 
 ```sh
-julia --project=examples examples/15_sloshing/sloshing.jl
-julia --project=examples examples/15_sloshing/make_figures.jl
+julia --project=examples examples/10_sloshing/sloshing.jl
+julia --project=examples examples/10_sloshing/make_figures.jl
 ```
 
 Append `--studio` to the example command to follow the run in a browser;
