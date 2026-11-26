@@ -546,45 +546,49 @@ end
     end
 end
 
-@testset "Linear jump inference: the projection is idempotent" begin
-    # Every row, including the normal rows of the faces that the constant
-    # inference leaves without one, is a condition on the projected state,
-    # and the slope weights θ of the crossing-speed limiter are frozen with the
-    # rows of the reconstructed interface: projecting a projected state again
-    # changes nothing beyond round-off. (Evaluated from the state it projects,
-    # θ changes the state by 0.26, 0.11, 0.21 over repetitions 2–4.) The gas
-    # predictor slides past the liquid by 0.1: with the slip 1 of the original
-    # fixture the sliding speed |u_g,x - u_l,x| |n_x| ≈ 0.29 puts every row on
-    # the slope-0.3 interface at θ = 0, so no row would have a weight in (0, 1)
-    # to freeze; with 0.1, 8 of the 40 rows do.
+_slope_weights(rows) = Dict(
+    stencil.face => stencil.slope for stencil in rows if stencil.gas_extrapolation_face > 0
+)
+_frozen_slope_weights(workspace) =
+    _slope_weights(workspace.pressure_cache.stencil_storage.resolved)
+
+"""
+Project the #171 idempotence fixture four times: a triangle at the slope 0.3,
+the density ratio 10, the crossing-speed `limiter` and a gas predictor that
+slides past the liquid by `slip`. With `frozen` the slope weights of the first
+projection stay in the rows; without it every projection evaluates them from
+the state it receives (what a history-free θ would do). Returns the largest
+change of either phase velocity over repetitions 2–4, the first projection's
+weights and the objects a later projection reuses.
+"""
+function _idempotence_fixture(; limiter, slip, frozen = true)
     n = 32
     graph = _triangle(0.5 + 0.37 / n, 0.3)
     mesh = BlockTreeMesh(; base_mesh = (n, n), block_size = (8, 8), periodic = (true, false))
     interface = InterfaceField(mesh, (x, y) -> y - graph[1](x); lipschitz = 1)
-    inference = LinearJumpInference(; limiter = :sliding)
+    inference = LinearJumpInference(; limiter)
     density = (10.0, 1.0)
     solver = CMDGFMProjectionSolver(interface; density, jump_inference = inference)
     workspace = CMDGFMProjectionWorkspace(solver)
-    function initial_velocity()
+    initial_velocity = () -> begin
         fields = (
             FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ? sinpi(2y) : 0.3cospi(2x)),
-            FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ? 0.1 + sinpi(2y) : 0.0),
+            FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ? slip + sinpi(2y) : 0.0),
         )
         foreach(phase -> fill!(fields[phase].boundary, 0.0), 1:2)
-        return fields
+        fields
     end
     velocity = initial_velocity()
     data = CJI._projection_face_data(solver, workspace)
     stencils = filter(stencil -> stencil.resolved, CJI._cmdgfm_jump_stencils(solver, data))
-    predictor = CJI._cmdgfm_limit_extrapolation!(copy(stencils), data, velocity, interface, inference)
-    @test any(stencil -> 0 < stencil.slope < 1, predictor)
-    weights(rows) = Dict(
-        stencil.face => stencil.slope for stencil in rows if stencil.gas_extrapolation_face > 0
+    predictor = CJI._cmdgfm_limit_extrapolation!(
+        copy(stencils), data, velocity, interface, inference,
     )
-    slopes(work) = weights(work.pressure_cache.stencil_storage.resolved)
     tolerance = 1.0e-12
+    changes = Float64[]
     for repetition in 1:4
         before = (copy(velocity[1].interior), copy(velocity[2].interior))
+        frozen || CJI._cmdgfm_release_crossing!(workspace)
         stats = project!(
             velocity, CellField(mesh), solver, 1.0, workspace;
             tolerance, max_iterations = 4000,
@@ -592,42 +596,95 @@ end
         @test stats.converged
         @test stats.jump_inference.normal_rows > 0
         # The weights of the first projection, evaluated from the predictor.
-        @test slopes(workspace) == weights(predictor)
+        frozen && @test _frozen_slope_weights(workspace) == _slope_weights(predictor)
         repetition == 1 && continue
-        change = maximum(
-            phase -> maximum(
-                index -> isfinite(before[phase][index]) ?
-                    abs(velocity[phase].interior[index] - before[phase][index]) : 0.0,
-                eachindex(before[phase]),
+        push!(
+            changes,
+            maximum(
+                phase -> maximum(
+                    index -> isfinite(before[phase][index]) ?
+                        abs(velocity[phase].interior[index] - before[phase][index]) : 0.0,
+                    eachindex(before[phase]),
+                ),
+                1:2,
             ),
-            1:2,
         )
-        @test change <= 1.0e-10
     end
-    # Released (as a flow does before each projection), the weights are
-    # evaluated again, from the projected state.
-    projected = CJI._cmdgfm_limit_extrapolation!(copy(stencils), data, velocity, interface, inference)
-    CJI._cmdgfm_release_crossing!(workspace)
-    @test project!(
-        velocity, CellField(mesh), solver, 1.0, workspace;
-        tolerance, max_iterations = 4000,
-    ).converged
-    @test slopes(workspace) == weights(projected)
-    @test slopes(workspace) != weights(predictor)
+    released_matches = released_differs = false
+    if frozen
+        # Released (as a flow does before each projection), the weights are
+        # evaluated again, from the projected state.
+        projected = CJI._cmdgfm_limit_extrapolation!(
+            copy(stencils), data, velocity, interface, inference,
+        )
+        CJI._cmdgfm_release_crossing!(workspace)
+        @test project!(
+            velocity, CellField(mesh), solver, 1.0, workspace;
+            tolerance, max_iterations = 4000,
+        ).converged
+        released_matches = _frozen_slope_weights(workspace) == _slope_weights(projected)
+        released_differs = _frozen_slope_weights(workspace) != _slope_weights(predictor)
+    end
+    return (;
+        mesh, interface, solver, workspace, data, stencils, predictor, initial_velocity,
+        changes, released_matches, released_differs,
+        fractional = count(stencil -> 0 < stencil.slope < 1, predictor),
+        weighted = count(stencil -> stencil.gas_extrapolation_face > 0, predictor),
+    )
+end
+
+@testset "Linear jump inference: the projection is idempotent" begin
+    # Every row, including the normal rows of the faces that the constant
+    # inference leaves without one, is a condition on the projected state,
+    # and the slope weights θ of the crossing-speed limiter are frozen with the
+    # rows of the reconstructed interface: projecting a projected state again
+    # changes nothing. Both limiters run on the #171 fixture. The default
+    # `:normal` fixture keeps its original slip 1 and has 7 of its 40 weighted
+    # rows with θ in (0, 1); `:sliding` needs the gas 0.1 past the liquid,
+    # because at slip 1 the sliding speed |u_g,x - u_l,x| |n_x| ≈ 0.29 puts
+    # every row on the slope-0.3 interface at θ = 0 and no row would have a
+    # weight to freeze, and then has 8 of the 40. Evaluated from the state each
+    # projection receives instead (released), θ changes the largest phase
+    # velocity by 0.33, 0.21, 0.062 (default) and 0.26, 0.11, 0.21 (sliding)
+    # over repetitions 2–4, against no change at all when frozen.
+    cases = ((:normal, 1.0), (:sliding, 0.1))
+    frozen = map(cases) do (limiter, slip)
+        fixture = _idempotence_fixture(; limiter, slip, frozen = true)
+        println(
+            "idempotence limiter=$limiter ",
+            "fractional=$(fixture.fractional)/$(fixture.weighted) ",
+            "frozen changes=$(fixture.changes)",
+        )
+        @test fixture.fractional > 0
+        @test all(fixture.changes .<= 1.0e-10)
+        @test fixture.released_matches
+        @test fixture.released_differs
+        fixture
+    end
+    for (limiter, slip) in cases
+        released = _idempotence_fixture(; limiter, slip, frozen = false)
+        println("idempotence limiter=$limiter released changes=$(released.changes)")
+        # Measured 0.33/0.21/0.062 (default) and 0.26/0.11/0.21 (sliding); this
+        # bound separates them from the frozen change by a factor of at least 6.
+        @test all(released.changes .> 1.0e-2)
+    end
 
     # Reusing the same workspace and reconstruction with another limiter
     # must not inherit the previous limiter's frozen coefficients.
-    normal = CMDGFMProjectionSolver(interface; density)
+    sliding = last(frozen)
+    normal = CMDGFMProjectionSolver(sliding.interface; density = (10.0, 1.0))
     normal_rows = CJI._cmdgfm_limit_extrapolation!(
-        copy(stencils), data, initial_velocity(), interface, normal.jump_inference,
+        copy(sliding.stencils), sliding.data, sliding.initial_velocity(),
+        sliding.interface, normal.jump_inference,
     )
-    @test weights(normal_rows) != weights(predictor)
-    for (policy, rows) in ((normal, normal_rows), (solver, predictor))
+    @test _slope_weights(normal_rows) != _slope_weights(sliding.predictor)
+    for (policy, rows) in ((normal, normal_rows), (sliding.solver, sliding.predictor))
         @test project!(
-            initial_velocity(), CellField(mesh), policy, 1.0, workspace;
-            tolerance, max_iterations = 4000, warm_start = false,
+            sliding.initial_velocity(), CellField(sliding.mesh), policy, 1.0,
+            sliding.workspace;
+            tolerance = 1.0e-12, max_iterations = 4000, warm_start = false,
         ).converged
-        @test slopes(workspace) == weights(rows)
+        @test _frozen_slope_weights(sliding.workspace) == _slope_weights(rows)
     end
 end
 

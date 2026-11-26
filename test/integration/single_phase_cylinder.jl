@@ -23,39 +23,51 @@ using Test, TwoPhaseAMR
     # resolution 8 from 1.05059 to 1.34872. That shift is an accuracy gain,
     # not a drift: total drag at 4/8/16 cells per diameter is
     # 0.94591 / 1.34872 / 1.38064 (#110), so the 8->16 change is 2.4 %,
-    # against 17 % for 0.89447 / 1.05059 / 1.244 before it. The references
-    # belong to the wall-distance closure, so it is selected explicitly; the
-    # LS-STAG default is measured by the example and validation studies.
-    reference_drag = (0.94590674, 1.3487198)
-    studies = map(resolutions) do resolution
-        cylinder_flow(;
-            block_size = (14resolution, 8resolution),
-            base_level = 0, max_level = 0, geometry_level = 0,
-            final_time, transient_time = final_time,
-            perturbation = 0.0, keyframe_count = 2, preview_dt = final_time + 1,
-            closure = WallDistanceClosure(),
-        )
-    end
-    for (resolution, case, target) in zip(resolutions, studies, reference_drag)
-        println(
-            (;
-                resolution, steps = case.result.steps, drag = last(case.drag),
-                maximum_lift = maximum(abs, case.lift),
+    # against 17 % for 0.89447 / 1.05059 / 1.244 before it.
+    # The two embedded viscous closures have their own references: the legacy
+    # wall-distance closure (0.94590674/1.34871980, recorded in #110 and
+    # measured here as 0.94032/1.36610, inside the band) and the LS-STAG
+    # default (measured here as 1.09221/1.49066, 174 and 224 steps). Both are
+    # held to the same absolute 0.02 band. LS-STAG is otherwise measured only
+    # by the gallery example, the validation studies and the 10-step
+    # benchmark/oracle/baseline.toml case, none of which runs in Pkg.test.
+    references = (
+        WallDistanceClosure() => (0.94590674, 1.3487198),
+        LSStagClosure() => (1.09220649, 1.49065522),
+    )
+    for (closure, reference_drag) in references
+        studies = map(resolutions) do resolution
+            cylinder_flow(;
+                block_size = (14resolution, 8resolution),
+                base_level = 0, max_level = 0, geometry_level = 0,
+                final_time, transient_time = final_time,
+                perturbation = 0.0, keyframe_count = 2, preview_dt = final_time + 1,
+                closure,
             )
-        )
-        @test case.result.time == final_time
-        @test case.result.steps > 0
-        @test case.result.pressure.converged
-        @test all(isfinite, case.drag)
-        @test all(isfinite, case.pressure_drag)
-        @test all(isfinite, case.viscous_drag)
-        @test all(isfinite, case.lift)
-        @test last(case.drag) ≈ target atol = 0.02 rtol = 0
-        @test case.mean_drag ≈
-            case.mean_pressure_drag + case.mean_viscous_drag atol = 1.0e-12
-        # Reflection symmetry keeps lift near roundoff: observed maxima were
-        # 2.3e-14 and 5.9e-13; 1e-9 leaves room for platform/solver variation.
-        @test maximum(abs, case.lift) < 1.0e-9
+        end
+        for (resolution, case, target) in zip(resolutions, studies, reference_drag)
+            println(
+                (;
+                    closure = nameof(typeof(closure)), resolution,
+                    steps = case.result.steps, drag = last(case.drag),
+                    maximum_lift = maximum(abs, case.lift),
+                )
+            )
+            @test case.result.time == final_time
+            @test case.result.steps > 0
+            @test case.result.pressure.converged
+            @test all(isfinite, case.drag)
+            @test all(isfinite, case.pressure_drag)
+            @test all(isfinite, case.viscous_drag)
+            @test all(isfinite, case.lift)
+            @test last(case.drag) ≈ target atol = 0.02 rtol = 0
+            @test case.mean_drag ≈
+                case.mean_pressure_drag + case.mean_viscous_drag atol = 1.0e-12
+            # Reflection symmetry keeps lift near roundoff: observed maxima
+            # were 2.3e-14 and 5.9e-13; 1e-9 leaves room for
+            # platform/solver variation.
+            @test maximum(abs, case.lift) < 1.0e-9
+        end
     end
     # NUMERICS CONCERN: the former t=40 study measured pressure-drag order
     # -0.884 against the 1.75 gate; its lift maxima (2.9e-14, 5.5e-13,
