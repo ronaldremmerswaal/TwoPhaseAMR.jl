@@ -643,7 +643,7 @@ Tests in the order of \cref{tab:verif:benchmarks}:
 \testsym{test/integration/single_phase_cylinder.jl}{Re=100 cylinder short symmetric-start regression},
 \testsym{test/integration/two_phase_waves.jl}{Prosperetti standing waves on uniform and AMR meshes}
 (\srcsym{test/integration/two_phase_waves.jl}{wave_case}, reference
-\srcsym{examples/06_capillary_wave/prosperetti_amplitude.jl}{prosperetti_amplitude}),
+\srcsym{examples/07_capillary_wave/prosperetti_amplitude.jl}{prosperetti_amplitude}),
 \testsym{test/integration/two_phase_droplet.jl}{Floating droplet: equilibrium and Lamb frequency}
 (\srcsym{test/integration/two_phase_droplet.jl}{floating_droplet_case}),
 \testsym{test/integration/static_droplet_stability.jl}{Static-droplet stability},
@@ -697,15 +697,15 @@ baseline.
     \midrule
     01 Taylor--Green & kinetic energy at $t=5$ & exact decay, $6.61579$ & $6.28788$ (error $0.327914$)\\
     02 lid-driven cavity & divergence norm; kinetic energy at $t=15$ & none (Ghia et al.\ not compared) & $2.39154\times10^{-7}$; $0.0327184$\\
-    03 decaying turbulence & divergence norm; projected kinetic energy & none & $1.03542\times10^{-6}$; $715.044\to344.946$\\
-    04 cylinder, $\mathrm{Re}=200$ & mean pressure drag ($t=30$--$50$); Strouhal number & Qu et al.~\cite{qu2013}: $1.068$, $0.1958$ & $1.02563$ ($-4.0\,\%$); $0.2303$ ($+17.6\,\%$)\\
-    05 vortex reversal & volume change at $T=8$ & zero & $4.75607\times10^{-11}$\\
-    06 capillary wave & amplitude at $t=0.399142$; largest sampled error & Prosperetti~\cite{prosperetti1981}, $0.00614806$ & $0.00625680$; $1.32120\times10^{-4}$ (two velocities $1.31329\times10^{-4}$)\\
-    07 interfacial instability & amplitude at $t=2\operatorname{arcosh}2$; largest sampled error & linear theory, $0.02$ & $0.0196321$; $3.67921\times10^{-4}$\\
+    03 vortex reversal & volume change at $T=8$ & zero & $4.75607\times10^{-11}$\\
+    04 decaying turbulence & divergence norm; projected kinetic energy & none & $1.03542\times10^{-6}$; $715.044\to344.946$\\
+    06 cylinder, $\mathrm{Re}=200$ & mean pressure drag ($t=30$--$50$); Strouhal number & Qu et al.~\cite{qu2013}: $1.068$, $0.1958$ & $1.02563$ ($-4.0\,\%$); $0.2303$ ($+17.6\,\%$)\\
+    07 capillary wave & amplitude at $t=0.399142$; largest sampled error & Prosperetti~\cite{prosperetti1981}, $0.00614806$ & $0.00625680$; $1.32120\times10^{-4}$ (two velocities $1.31329\times10^{-4}$)\\
     08 sessile droplet & area change; final kinetic energy & zero; none & $-3.49632\times10^{-10}$; $3.39393\times10^{-5}$\\
     09 sloped sessile droplet & volume change; divergence norm & zero & $-1.46794\times10^{-11}$; $7.9249\times10^{-8}$\\
-    10 Stokes wave & interface after two periods versus initial profile (RMS; maximum) & third-order Stokes profile (not an exact solution) & $0.0401907$; $0.0768548$\\
-    11 LGPI & liquid volume change & zero & $-3.61\times10^{-9}$ of $0.182426$\\
+    13 interfacial instability & amplitude at $t=2\operatorname{arcosh}2$; largest sampled error & linear theory, $0.02$ & $0.0196321$; $3.67921\times10^{-4}$\\
+    15 Stokes wave & interface after two periods versus initial profile (RMS; maximum) & third-order Stokes profile (not an exact solution) & $0.0401907$; $0.0768548$\\
+    16 LGPI & liquid volume change & zero & $-3.61\times10^{-9}$ of $0.182426$\\
     \bottomrule
   \end{tabular}
 \end{table}

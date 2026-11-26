@@ -540,13 +540,13 @@ flow = FlowSimulation(
 )
 ```
 
-`examples/07_interfacial_instability/interfacial_instability.jl` uses this API for a combined
+`examples/13_interfacial_instability/interfacial_instability.jl` uses this API for a combined
 Kelvin--Helmholtz/Rayleigh--Taylor wave with surface tension. The example is
 parameterized by the liquid-to-gas density ratio, Weber number, and Bond
 number:
 
 ```julia
-include("examples/07_interfacial_instability/interfacial_instability.jl")
+include("examples/13_interfacial_instability/interfacial_instability.jl")
 run = run_example(
     density_ratio=1000.0,
     weber=0.25,

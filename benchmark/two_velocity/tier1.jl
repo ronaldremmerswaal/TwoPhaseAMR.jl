@@ -378,8 +378,8 @@ function manufactured_gradient(x, y, axis, phase)
     return outer + MANUFACTURED_SCALE * extra
 end
 
-"""Divergence-free liquid rotation of example 12 (tangential on the circle);
-the gas is at rest."""
+"""Divergence-free liquid rotation of the former gallery example 12 (tangential
+on the circle); the gas is at rest."""
 function manufactured_velocity(x, y, axis, phase)
     phase == 2 && return 0.0
     factor = cospi(2 * ((x - 0.5)^2 + (y - 0.5)^2))
@@ -387,7 +387,8 @@ function manufactured_velocity(x, y, axis, phase)
 end
 
 """Surface rms of the normal and tangential components of the exact scaled
-jump `[∇p/ρ]` on the circle; example 12 was designed with equal amplitudes."""
+jump `[∇p/ρ]` on the circle; the former gallery example 12 was designed with
+equal amplitudes."""
 function manufactured_jump_rms(density; samples = 4096)
     normal = tangential = 0.0
     for sample in 0:(samples - 1)

@@ -20,10 +20,10 @@ TwoPhaseAMR._PARALLEL_GRAIN[] = 1
 
 const EXAMPLES = joinpath(@__DIR__, "..", "examples")
 module Cylinder
-    include(joinpath(Main.EXAMPLES, "04_cylinder_flow", "cylinder_flow.jl"))
+    include(joinpath(Main.EXAMPLES, "06_cylinder_flow", "cylinder_flow.jl"))
 end
 module Stokes3
-    include(joinpath(Main.EXAMPLES, "10_stokes3_wave", "stokes3_wave.jl"))
+    include(joinpath(Main.EXAMPLES, "15_stokes3_wave", "stokes3_wave.jl"))
 end
 
 const CMDGFM = TwoVelocityModel(pressure_projection = CMDGFMProjection())

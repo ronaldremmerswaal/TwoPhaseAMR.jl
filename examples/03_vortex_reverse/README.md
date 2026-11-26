@@ -1,8 +1,10 @@
-# 05 – Vortex reversal
+# 03 – Vortex reversal
 
 A prescribed reversing vortex stretches a circular liquid patch and then returns it toward its initial shape.
 
-![Volume-fraction snapshots at the start, reversal and end of the calculation](assets/snapshots.png)
+![Liquid scalar during the reversing vortex flow](assets/scalar_reversal.gif)
+
+*Liquid scalar over the 81 keyframes of the run: the circle is stretched into a spiral until `T/2` and returns as the flow reverses, shown with the PLIC interface and AMR blocks.*
 
 ## At a glance
 
@@ -32,7 +34,7 @@ The velocity reverses at `T/2` and its integrated displacement over `T` vanishes
 From the repository root, in a Julia session started with `--project=examples`:
 
 ```julia
-include("examples/05_vortex_reverse/vortex_reverse.jl")
+include("examples/03_vortex_reverse/vortex_reverse.jl")
 run = run_example(max_level = 4, final_time = 8.0)
 @show run.result
 ```
@@ -40,8 +42,8 @@ run = run_example(max_level = 4, final_time = 8.0)
 Run the example headlessly or regenerate the Cairo assets:
 
 ```sh
-julia --project=examples examples/05_vortex_reverse/vortex_reverse.jl
-julia --project=examples -e 'include("examples/05_vortex_reverse/make_figures.jl"); make_figures()'
+julia --project=examples examples/03_vortex_reverse/vortex_reverse.jl
+julia --project=examples -e 'include("examples/03_vortex_reverse/make_figures.jl"); make_figures()'
 ```
 
 Append `--studio` to the example command to follow the run in a browser;
@@ -54,13 +56,13 @@ script. The recorder's `step_log` also identifies steps that changed the mesh.
 
 ## Results
 
-The hero shows liquid fraction and reconstructed interface at the initial state, near maximum stretching, and the final state. Keyframes are the nearest completed steps, so the printed times are the actual times.
+The snapshots show liquid fraction and reconstructed interface at the initial state, near maximum stretching, and the final state. Keyframes are the nearest completed steps, so the printed times are the actual times.
+
+![Volume-fraction snapshots at the start, reversal and end of the calculation](assets/snapshots.png)
 
 ![Initial and final interfaces and liquid-volume error at retained keyframes](assets/recovery.png)
 
 ![Liquid scalar snapshots with interface and AMR blocks](assets/scalar_snapshots.png)
-
-![Liquid scalar during the reversing vortex flow](assets/scalar_reversal.gif)
 
 The scalar GIF has 81 output frames, one per keyframe, on a uniform simulation-time grid with spacing `0.1` over the whole run; each keyframe is the completed step nearest its requested time. It also shows the PLIC interface and AMR blocks, so it covers the interface evolution as well: the circle is stretched into a spiral until `T/2` and returns as the flow reverses.
 

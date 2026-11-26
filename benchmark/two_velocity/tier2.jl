@@ -8,7 +8,7 @@
 # the MM study harnesses; the KH problem reuses its integration-test fixture.
 
 include(joinpath(@__DIR__, "..", "..", "test", "integration", "interfacial_instability_problem.jl"))
-include(joinpath(@__DIR__, "..", "..", "examples", "06_capillary_wave", "prosperetti_amplitude.jl"))
+include(joinpath(@__DIR__, "..", "..", "examples", "07_capillary_wave", "prosperetti_amplitude.jl"))
 
 phase_fields(velocity) = velocity isa FaceVelocity ? (velocity,) : velocity
 

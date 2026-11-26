@@ -16,13 +16,13 @@ recorder_options = (;
     clock = () -> 0.0,
 )
 if example == "capillary-wave"
-    include(joinpath(root, "examples", "06_capillary_wave", "capillary_wave.jl"))
+    include(joinpath(root, "examples", "07_capillary_wave", "capillary_wave.jl"))
     run = run_example(;
         max_level = 1, final_time = 0.002, dt = 0.0002,
         velocity_model = TwoVelocityModel(), recorder_options,
     )
 elseif example == "decaying-turbulence"
-    include(joinpath(root, "examples", "03_decaying_turbulence", "decaying_turbulence.jl"))
+    include(joinpath(root, "examples", "04_decaying_turbulence", "decaying_turbulence.jl"))
     run = run_example(; max_level = 2, final_time = 0.01, dt = 0.001, recorder_options)
 else
     error("Unknown example: $example")

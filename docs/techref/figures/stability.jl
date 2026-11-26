@@ -35,7 +35,7 @@ function stab_track!(flow)
     return flow
 end
 
-# Standing capillary wave of examples/06_capillary_wave (density ratio 1000,
+# Standing capillary wave of examples/07_capillary_wave (density ratio 1000,
 # Laplace number 3000, one wavelength, free-slip walls) on 32 x 96 level-0
 # cells whose interface band is refined once (smallest width 1/64).
 const STAB_WAVE = (; amplitude = 0.01, laplace = 3000.0, ratio = 1.0e3, level = 1)
@@ -66,7 +66,7 @@ function stab_capillary_wave(; velocity_model = OneVelocityModel())
     return (; name = :wave, flow, mesh, density, sigma = 1.0, gravity = 0.0, omega)
 end
 
-# Flow past a cylinder of examples/04_cylinder_flow at Reynolds number 100:
+# Flow past a cylinder of examples/06_cylinder_flow at Reynolds number 100:
 # unit inflow, 56 x 32 level-0 cells of width 1/4, the cut cells of the
 # cylinder refined once (width 1/8).
 function stab_cylinder(; solid = true)
@@ -106,7 +106,7 @@ end
 # on its coarsest mesh of 8 cells per wavelength, with frozen interface fluxes
 # and the CMDGFM projection. With `ratio = 3, weber = 0.5, bond = 0.75,
 # liquid_above = true` it is the combined Kelvin--Helmholtz/Rayleigh--Taylor
-# wave of examples/07_interfacial_instability. Standing wave (zero mean
+# wave of examples/13_interfacial_instability. Standing wave (zero mean
 # interface velocity) with the linear-theory initial velocities.
 const STAB_KH = (; amplitude = 0.01, weber = 5.0, cells = 8)
 

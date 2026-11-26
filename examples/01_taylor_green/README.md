@@ -4,6 +4,8 @@ A periodic vortex decays by viscosity on a fixed mixed-level mesh, with kinetic 
 
 ![Taylor–Green vorticity at three times, with leaf-block boundaries](assets/vorticity.png)
 
+*Vorticity at the initial, middle and final keyframes; titles use the actual nearest completed-step times, each panel has its own symmetric colour scale and gray lines mark leaf blocks.*
+
 ## At a glance
 
 | | |

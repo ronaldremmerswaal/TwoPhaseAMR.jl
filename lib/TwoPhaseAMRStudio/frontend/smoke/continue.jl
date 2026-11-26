@@ -9,7 +9,7 @@ using TwoPhaseAMRStudio
 
 root = normpath(joinpath(@__DIR__, "..", "..", "..", ".."))
 push!(LOAD_PATH, joinpath(root, "examples"))
-include(joinpath(root, "examples", "06_capillary_wave", "capillary_wave.jl"))
+include(joinpath(root, "examples", "07_capillary_wave", "capillary_wave.jl"))
 
 # Run the example's real Studio opt-in path. Pause at the initial state so the
 # browser can connect before the first run; the UI resumes it. Slow the recorder

@@ -1104,14 +1104,14 @@ resolved shear over the tilted interfaces of the jump-inference tests (slope
 0.06, `cos` amplitude 0.01) at most 0.028 (a continuous velocity, no sliding),
 viscous and density-ratio-1000 Kelvin–Helmholtz in the linear regime about
 97 % below 1/128, inviscid Kelvin–Helmholtz at density ratio 1 (`n = 32`) 66 %
-below 1/32, example 07 before roll-up (`t ≤ 0.5`) 89 % below 1/32; sweeping —
+below 1/32, example 13 before roll-up (`t ≤ 0.5`) 89 % below 1/32; sweeping —
 the translating drop and Rayleigh–Taylor at density ratio 3 (medians 0.58 and
-0.37) and example 07 rolling up (inviscid, density ratio 1.2, We 3, level 5,
+0.37) and example 13 rolling up (inviscid, density ratio 1.2, We 3, level 5,
 `t > 1.5`: median 0.12, 88 % above 1/32). `[1/32, 3/32]` puts `a` above the
 quasi-static rows and `b` below the median of the roll-up. Sensitivity
 (normal part alone): at `a = 1/48` the slope-0.06 shear test loses its
 third-order jump at `n = 128` (0.017 against 0.0076); at `[1/24, 3/24]` the
-straight part of the rolled-up example 07 interface is rough by 0.0083 h RMS
+straight part of the rolled-up example 13 interface is rough by 0.0083 h RMS
 at `t = 2.25` and at `[1/16, 3/16]` (#199) by 0.135 h with 15 % more steps
 (one-donor rule 0.0048 h, `[1/32, 3/32]` 0.0044 h): there most roll-up rows
 kept part of the extrapolation. The translating drop (density ratio 1000,

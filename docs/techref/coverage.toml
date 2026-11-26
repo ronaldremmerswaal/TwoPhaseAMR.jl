@@ -2226,7 +2226,7 @@ label = "tab:verif:benchmarks"
 sources = [
   { file = "test/navier_stokes/navier_stokes.jl", symbol = "_cavity_centerline" },
   { file = "test/integration/two_phase_waves.jl", symbol = "wave_case" },
-  { file = "examples/06_capillary_wave/prosperetti_amplitude.jl", symbol = "prosperetti_amplitude" },
+  { file = "examples/07_capillary_wave/prosperetti_amplitude.jl", symbol = "prosperetti_amplitude" },
   { file = "test/integration/two_phase_droplet.jl", symbol = "floating_droplet_case" },
   { file = "test/integration/two_phase_sessile_droplet.jl", symbol = "_sessile_profile" },
   { file = "test/integration/interfacial_instability_problem.jl", symbol = "instability_dispersion" },

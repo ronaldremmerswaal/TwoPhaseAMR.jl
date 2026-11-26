@@ -338,15 +338,15 @@ Tests: \testsym{test/navier_stokes/high_level_api.jl}{tiny final timestep is abs
 \begin{sloppypar}
 \Cref{tab:stab:cases} gives the bounds~\cref{eq:stab:flow-bound} of four
 flows at $\flowcfl=0.45$, computed by \code{case_bounds_check}: the standing
-capillary wave of \code{examples/06_capillary_wave} (density ratio $1000$,
+capillary wave of \code{examples/07_capillary_wave} (density ratio $1000$,
 Laplace number $3000$, one velocity) on $32\times96$ cells with its
 interface band refined once; the flow past the cylinder of
-\code{examples/04_cylinder_flow} at Reynolds number $100$ with unit inflow on
+\code{examples/06_cylinder_flow} at Reynolds number $100$ with unit inflow on
 $56\times32$ cells whose cut cells are refined once; the Kelvin--Helmholtz
 wave of the two-velocity tests (equal densities, Weber number $5$, frozen
 interface fluxes and the CMDGFM) on their coarsest mesh of $8$ cells per
 wavelength; and the combined Kelvin--Helmholtz--Rayleigh--Taylor wave of
-\code{examples/07_interfacial_instability} (density ratio $3$, Weber number
+\code{examples/13_interfacial_instability} (density ratio $3$, Weber number
 $0.5$, Bond number $0.75$) on $16$ cells per wavelength. For the first three,
 \apifun{simulate!} is advanced for twelve initial bounds; its proposals are
 replayed against the recorded bounds for each flow.

@@ -1,8 +1,10 @@
-# 14 – Rising bubble
+# 11 – Rising bubble
 
 A bubble rises through a heavier liquid in the two-dimensional benchmark of Hysing et al. (2009): in case 1 it settles into an ellipse, in case 2 (density ratio 1000) it grows a skirt whose filaments break into satellite bubbles. Circularity, centroid height and rise velocity are compared with the benchmark's three reference codes.
 
-![Case-2 bubble at t = 0.75, 1.5, 2.25 and 3: vorticity, PLIC interface and AMR blocks](assets/hero.png)
+![Case-2 vorticity, interface and AMR blocks while the bubble rises, with its rise velocity against TP2D's](assets/case2.gif)
+
+*The level-4 case-2 run: vorticity of the one-velocity field on a fixed `±8` range with the PLIC interface and AMR blocks, next to the rise velocity with TP2D's `1/h = 640` curve and a cursor at the shown time.*
 
 ## At a glance
 
@@ -44,7 +46,7 @@ See the [method reference](../../docs/src/method.md) for the interface transport
 From the repository root, in a Julia session started with `--project=examples`:
 
 ```julia
-include("examples/14_rising_bubble/rising_bubble.jl")
+include("examples/11_rising_bubble/rising_bubble.jl")
 run = run_example(case = 1, max_level = 3)
 @show minimum(diagnostic_history(run.flow, :circularity).values)
 @show maximum(diagnostic_history(run.flow, :rise_velocity).values)
@@ -54,9 +56,9 @@ run = run_example(case = 1, max_level = 3)
 Run the example headlessly or regenerate the Cairo figures:
 
 ```sh
-julia --project=examples examples/14_rising_bubble/rising_bubble.jl            # case 1
-julia --project=examples examples/14_rising_bubble/rising_bubble.jl --case=2
-julia --project=examples -e 'include("examples/14_rising_bubble/make_figures.jl"); make_figures()'
+julia --project=examples examples/11_rising_bubble/rising_bubble.jl            # case 1
+julia --project=examples examples/11_rising_bubble/rising_bubble.jl --case=2
+julia --project=examples -e 'include("examples/11_rising_bubble/make_figures.jl"); make_figures()'
 ```
 
 Append `--studio` to the example command to follow the run in a browser;
@@ -110,9 +112,9 @@ The same quantities for case 2. The codes' benchmark quantities "agree very well
 
 The first maximum falls from `0.2533` to `0.2508` under refinement, from above TP2D's value to between FreeLIFE's and MooNMD's. The level-3 second maximum is `0.0006` below the reference spread, and the level-4 and level-5 values are inside it. The level-5 second peak occurs at `t = 2.048`, between FreeLIFE's `1.984` and MooNMD's `2.060`. The one-velocity `y_c(3)` values lie `0.0020–0.0039` above TP2D's result, and the two-velocity values `0.0023–0.0047` above it; these late centroids are subject to the caveat above. `c_min` falls near `t = 3` and depends on the filaments, for which there is no agreed reference.
 
-![Case-2 vorticity, interface and AMR blocks while the bubble rises, with its rise velocity against TP2D's](assets/case2.gif)
+![Case-2 bubble at t = 0.75, 1.5, 2.25 and 3: vorticity, PLIC interface and AMR blocks](assets/hero.png)
 
-The level-4 case-2 run until `t = 3`: vorticity of the one-velocity field on a fixed `±8` range, the PLIC interface and the AMR blocks, next to the rise velocity with TP2D's `1/h = 640` curve and a cursor at the shown time. The GIF has 81 output frames, one per keyframe, on a uniform simulation-time grid with spacing `3/80 = 0.0375`; each keyframe is the completed step nearest its requested time. The range saturates on purpose inside the skirt so that the liquid wake stays visible; the hero at the top shows the same run at `t = 0.75`, `1.5`, `2.25` and `3`. The bubble flattens, its rim folds into a skirt, and the skirt's tips thin into filaments and shed satellites. Hysing et al. report breakup around `t = 2.2–2.4` for TP2D at `1/h = 160`.
+The lead animation is the level-4 case-2 run until `t = 3`: vorticity of the one-velocity field on a fixed `±8` range, the PLIC interface and the AMR blocks, next to the rise velocity with TP2D's `1/h = 640` curve and a cursor at the shown time. The GIF has 81 output frames, one per keyframe, on a uniform simulation-time grid with spacing `3/80 = 0.0375`; each keyframe is the completed step nearest its requested time. The range saturates on purpose inside the skirt so that the liquid wake stays visible; the snapshots above show the same run at `t = 0.75`, `1.5`, `2.25` and `3`. The bubble flattens, its rim folds into a skirt, and the skirt's tips thin into filaments and shed satellites. Hysing et al. report breakup around `t = 2.2–2.4` for TP2D at `1/h = 160`.
 
 ### Shapes at t = 3
 
