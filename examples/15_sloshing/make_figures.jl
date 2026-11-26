@@ -48,6 +48,9 @@ function antisymmetric_elevation(flow)
     return left.times, (left.values .- right.values) ./ 2
 end
 
+"""Figure size in pixels for the `scale` that `make_figures` derives from `size`."""
+figure_size(scale, width, height) = (round(Int, scale * width), round(Int, scale * height))
+
 function sloshing_case(label; options...)
     elapsed = @elapsed run = run_example(; options...)
     println(
@@ -59,8 +62,8 @@ function sloshing_case(label; options...)
     return run
 end
 
-function free_sloshing_figure(outdir, plain_modes, baffled_modes; level, amplitude = 0.01)
-    figure = Figure(size = (900, 500))
+function free_sloshing_figure(outdir, plain_modes, baffled_modes; level, amplitude = 0.01, scale = 1.0)
+    figure = Figure(size = figure_size(scale, 900, 500))
     for (row, (label, modes, baffle_height)) in enumerate(
             (("plain tank", plain_modes, 0.0), ("baffled tank", baffled_modes, BAFFLE_HEIGHT))
         )
@@ -96,17 +99,18 @@ end
 
 # Extrema (t, η) of the nonlinear numerical benchmark of Liu & Lin (2008) at
 # the left wall, read by eye from the plots reproduced by Yu, Xue & Zhu (2020),
-# Figs. 3 (plain tank) and 6 (baffled tank); reading accuracy about ±1 mm.
+# Figs. 3 (plain tank) and 6 (baffled tank) and quoted to the nearest
+# millimetre, which is also the reading accuracy.
 const LIU_LIN = (
     plain = [
-        (4.2, 0.026), (4.75, -0.03), (5.35, 0.0334), (5.95, -0.034), (6.55, 0.0434),
-        (7.15, -0.04), (7.7, 0.0529), (8.3, -0.0447), (8.9, 0.0618), (9.5, -0.0492),
+        (4.2, 0.026), (4.75, -0.03), (5.35, 0.033), (5.95, -0.034), (6.55, 0.043),
+        (7.15, -0.04), (7.7, 0.053), (8.3, -0.045), (8.9, 0.062), (9.5, -0.049),
     ],
     baffled = [
-        (0.57, 0.0021), (1.4, -0.0041), (1.95, 0.0056), (2.65, -0.0054),
-        (3.25, 0.0059), (3.95, -0.0045), (4.5, 0.0045), (5.05, -0.0024),
-        (5.7, 0.002), (6.15, -0.0022), (6.75, 0.002), (7.3, -0.0034),
-        (7.9, 0.0038), (8.55, -0.0041), (9.15, 0.0046), (9.8, -0.0038),
+        (0.57, 0.002), (1.4, -0.004), (1.95, 0.006), (2.65, -0.005),
+        (3.25, 0.006), (3.95, -0.005), (4.5, 0.005), (5.05, -0.002),
+        (5.7, 0.002), (6.15, -0.002), (6.75, 0.002), (7.3, -0.003),
+        (7.9, 0.004), (8.55, -0.004), (9.15, 0.005), (9.8, -0.004),
     ],
 )
 
@@ -116,8 +120,8 @@ function extremum_near(times, values, time, sign; half = 0.3)
     return values[indices[argmax(sign .* values[indices])]]
 end
 
-function forced_response_figure(outdir, plain_modes, baffled_modes; level)
-    figure = Figure(size = (900, 540))
+function forced_response_figure(outdir, plain_modes, baffled_modes; level, scale = 1.0)
+    figure = Figure(size = figure_size(scale, 900, 540))
     cases = (
         ("plain tank", plain_modes, 0.0, LIU_LIN.plain),
         ("baffled tank", baffled_modes, BAFFLE_HEIGHT, LIU_LIN.baffled),
@@ -169,7 +173,7 @@ end
 """Cumulative trapezoidal integral of a sampled history."""
 cumulative(times, values) = [0.0; cumsum((values[2:end] .+ values[1:(end - 1)]) .* diff(times) ./ 2)]
 
-function hero_figures(outdir; level = 3)
+function hero_figures(outdir; level = 3, scale = 1.0)
     run = sloshing_case(
         "strongly forced baffled, level $level"; max_level = level,
         baffle_height = BAFFLE_HEIGHT, HERO...,
@@ -194,7 +198,7 @@ function hero_figures(outdir; level = 3)
         "  input work %.3f J/m, energy change %.3f J/m, dissipated %.3f J/m at t = %.2f s\n",
         last(work), last(change), last(work) - last(change), last(energy.times),
     )
-    figure = Figure(size = (900, 540))
+    figure = Figure(size = figure_size(scale, 900, 540))
     axis = Axis(figure[1, 1]; ylabel = "wall elevation (m)")
     lines!(axis, left.times, left.values; linewidth = 1.2, label = "left wall")
     lines!(axis, right.times, right.values; linewidth = 1.2, label = "right wall")
@@ -214,7 +218,7 @@ function hero_figures(outdir; level = 3)
     store = snapshot_store(run.recorder)
     quarter = pi / (2 * HERO.forcing_frequency)
     times = [1.5, 3.5, left.times[strongest], left.times[strongest] + quarter]
-    hero_frames(outdir, store, min.(times, HERO.final_time))
+    hero_frames(outdir, store, min.(times, HERO.final_time); scale)
     return run
 end
 
@@ -226,8 +230,11 @@ const HERO_VIEW = (;
 )
 
 """Four stored frames in a 2 × 2 grid with the PLIC surface, baffle and AMR blocks."""
-function snapshot_figure(path, store, times; field, camera, label, options...)
-    figure = Figure(size = (1000, 720))
+function snapshot_figure(path, store, times; field, camera, label, scale = 1.0, options...)
+    # The finest level-3 cells are barely two pixels wide here, so the four
+    # panels are grainy and compress poorly: one pixel per unit at 840 × 605
+    # gives 144531 bytes, under the 150 kB gallery limit for this PNG.
+    figure = Figure(size = figure_size(scale, 840, 605))
     plot = nothing
     for (k, time) in enumerate(times)
         frame = frame_at(store, time)
@@ -239,24 +246,25 @@ function snapshot_figure(path, store, times; field, camera, label, options...)
     end
     Colorbar(figure[1:2, 3], plot; label)
     resize_to_layout!(figure)
-    save(path, figure)
+    save(path, figure; px_per_unit = 1)
     return path
 end
 
-function hero_frames(outdir, store, times)
+function hero_frames(outdir, store, times; scale = 1.0)
     snapshot_figure(
         joinpath(outdir, "snapshots.png"), store, times; HERO_VIEW...,
-        label = "vorticity (1/s)",
+        label = "vorticity (1/s)", scale,
     )
     export_animation(
         joinpath(outdir, "sloshing.gif"), store; HERO_VIEW..., fps = 12,
-        nframes = length(keyframes(store)), size = (800, 560),
+        nframes = length(keyframes(store)), size = figure_size(scale, 800, 560),
     )
     return nothing
 end
 
 function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     size in (:docs, :default) || throw(ArgumentError("size must be :docs or :default"))
+    scale = size === :docs ? 1.0 : 1.25
     mkpath(outdir)
     level = 2
     plain_modes = plain_tank_modes(sloshing_tank())
@@ -267,9 +275,9 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
         "linear first-mode frequencies: plain %.5f rad/s, baffled %.5f rad/s (%.1f s)\n",
         first(plain_modes).frequency, first(baffled_modes).frequency, seconds,
     )
-    free_sloshing_figure(outdir, plain_modes, baffled_modes; level)
-    forced_response_figure(outdir, plain_modes, baffled_modes; level)
-    hero_figures(outdir)
+    free_sloshing_figure(outdir, plain_modes, baffled_modes; level, scale)
+    forced_response_figure(outdir, plain_modes, baffled_modes; level, scale)
+    hero_figures(outdir; scale)
     return nothing
 end
 
