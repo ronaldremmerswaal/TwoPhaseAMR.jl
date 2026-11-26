@@ -1563,6 +1563,41 @@ function _geometric_diffusion_stiffness(
     )
 end
 
+# Whether the value of an unknown on a face with this open aperture and open
+# staggered volume is a fluid value of `closure`, and where the closure places it.
+_closure_fluid_value(::LSStagClosure, aperture, open_volume) =
+    _ls_stag_active(aperture, open_volume)
+_closure_fluid_value(::WallDistanceClosure, aperture, open_volume) =
+    aperture > zero(aperture) && open_volume > zero(open_volume)
+
+_closure_value_point(::WallDistanceClosure, geometry::GeometryField{T}, face, aperture) where {T} =
+    T.(face.center)
+
+function _closure_value_point(::LSStagClosure, geometry::GeometryField{T}, face, aperture) where {T}
+    _, _, open_lower, open_upper, _, _ = _ls_stag_open_part(geometry, face, aperture)
+    middle = (open_lower + open_upper) / 2
+    return face.axis == 1 ? (T(face.center[1]), middle) : (middle, T(face.center[2]))
+end
+
+# Value point and open volume (zero for a value that is not a fluid value) of
+# every unknown, for `value_points`.
+function _closure_value_points(closure, geometry::GeometryField{T}, local_to_global) where {T}
+    points = Vector{NTuple{2, T}}(undef, length(local_to_global))
+    open_volumes = zeros(T, length(local_to_global))
+    for (local_index, global_index) in pairs(local_to_global)
+        face = geometry.mesh.faces[global_index]
+        aperture = geometry.aperture[global_index]
+        open_volume = geometry.face_dual_volumes[global_index]
+        if _closure_fluid_value(closure, aperture, open_volume)
+            points[local_index] = _closure_value_point(closure, geometry, face, aperture)
+            open_volumes[local_index] = open_volume
+        else
+            points[local_index] = T.(face.center)
+        end
+    end
+    return points, open_volumes
+end
+
 function _cut_cell_diffusion_component(
         geometry::GeometryField{T}, ::Val{Axis}, boundary, aligned,
         closure::AbstractEmbeddedViscousClosure,
@@ -1667,9 +1702,10 @@ function _cut_cell_diffusion_component(
         end
     end
     laplacian = sparse(-spdiagm(0 => inv.(volumes)) * stiffness)
+    points, open_volumes = _closure_value_points(closure, geometry, local_to_global)
     return StaggeredDiffusionComponent{Axis, T}(
         stiffness, laplacian, volumes, local_to_global, dirichlet_faces, wall_connections,
-        wall_reactions,
+        wall_reactions, points, open_volumes,
         zeros(T, length(local_to_global)), zeros(T, length(local_to_global)),
         _maximum_absolute_row_sum(laplacian),
     )
@@ -1684,6 +1720,9 @@ end
 A cell field of dynamic viscosity selects the coupled stress operator.
 The conservative cut-cell stiffness is symmetric positive semidefinite.
 Embedded walls include surfaces aligned with cell faces as well as PLIC cuts.
+They are no-slip for `NoSlip()` and free-slip for `FreeSlip()`, which omits
+their tangential wall connections; with [`VelocityBoundaryConditions`](@ref)
+the solid takes its `embedded` condition, `NoSlip()` by default.
 For Cartesian wall segments the tangential closure uses the wall-normal distance
 and the portion of the segment owned by the dual face. A wall-aligned normal
 velocity is prescribed zero and removed from the diffusion unknowns.

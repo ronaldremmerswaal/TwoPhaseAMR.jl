@@ -1110,6 +1110,19 @@ end
     end
     @test TP._wy_fraction_in_bounds(1.000000000000035, 4.7e-4)
     @test TP._wy_fraction_in_bounds(1.000000000000035, Float32(4.7e-4))
+    # The failing drain has one clipped outgoing volume of about 0.0276
+    # full-cell volumes. Clipping contributes a full-cell absolute error scale
+    # in addition to the magnitudes of the old value and swept volume.
+    for T in (Float32, Float64)
+        old = T(0.027610116369732037)
+        residual = -T(139) * eps(T)
+        scale = one(T) + abs(old) + one(T) + abs(old)
+        @test !TP._wy_fraction_in_bounds(residual, one(T))
+        @test TP._wy_fraction_in_bounds(residual, one(T), scale)
+        @test !TP._wy_fraction_in_bounds(-T(0.01), one(T), scale)
+        @test !TP._wy_fraction_in_bounds(T(NaN), one(T), scale)
+        @test !TP._wy_fraction_in_bounds(T(Inf), one(T), T(Inf))
+    end
 end
 
 @testset "WY cut hanging donor counterexamples (#56)" begin

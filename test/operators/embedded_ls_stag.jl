@@ -52,28 +52,6 @@ function ls_stag_case(kind)
     )
 end
 
-"""Where `LSStagClosure` places each value: the midpoint of the open part of
-its face (the face centre for a closed face), and which faces are open."""
-function ls_stag_value_points(geometry, component)
-    mesh = geometry.mesh
-    points = NTuple{2, Float64}[]
-    open = Bool[]
-    for global_index in component.local_to_global
-        face = mesh.faces[global_index]
-        aperture = geometry.aperture[global_index]
-        is_open = aperture > 1.0e-10 && geometry.face_dual_volumes[global_index] > 0
-        push!(open, is_open)
-        if is_open
-            _, _, lower, upper, _, _ = TwoPhaseAMR._ls_stag_open_part(geometry, face, aperture)
-            middle = (lower + upper) / 2
-            push!(points, face.axis == 1 ? (face.center[1], middle) : (middle, face.center[2]))
-        else
-            push!(points, face.center)
-        end
-    end
-    return points, open
-end
-
 @testset "LS-STAG closure is second order at oblique walls (#110)" begin
     # The Helmholtz problem of the #110 tests, solved with `LSStagClosure`
     # and measured at the value points, over every face with a positive open
@@ -86,14 +64,16 @@ end
         operator = StaggeredDiffusionOperator(
             geometry; viscosity = 1.0, closure = LSStagClosure(),
         )
-        return map((operator.x, operator.y)) do component
-            points, open = ls_stag_value_points(geometry, component)
+        return map((1, 2)) do axis
+            component = axis == 1 ? operator.x : operator.y
+            nodes = value_points(operator, axis)
+            points, open = nodes.points, nodes.volumes .> 0
             values = [case.solution(point...) for point in points]
             exact = [open[i] ? values[i][1] : 0.0 for i in eachindex(points)]
             rhs = [open[i] ? values[i][1] - values[i][2] : 0.0 for i in eachindex(points)]
             numerical = (spdiagm(0 => ones(length(rhs))) - component.laplacian) \ rhs
             error = (numerical - exact)[open]
-            volume = geometry.face_dual_volumes[component.local_to_global][open]
+            volume = nodes.volumes[open]
             (
                 maximum(abs, error),
                 sqrt(sum(volume .* error .^ 2) / sum(volume)),
@@ -187,8 +167,9 @@ end
         operator = StaggeredDiffusionOperator(
             geometry; viscosity = 1.0, closure = LSStagClosure(),
         )
-        for component in (operator.x, operator.y)
-            points, open = ls_stag_value_points(geometry, component)
+        for (axis, component) in ((1, operator.x), (2, operator.y))
+            nodes = value_points(operator, axis)
+            points, open = nodes.points, nodes.volumes .> 0
             distance = [
                 open[i] ? case.levelset(points[i]...) / case.lipschitz : 0.0
                     for i in eachindex(points)
@@ -203,6 +184,74 @@ end
             magnitude = abs.(component.stiffness) * abs.(distance)
             @test maximum(abs.(residual[rows]) ./ magnitude[rows]) <= 1.0e-10
         end
+    end
+end
+
+@testset "value_points of the staggered diffusion operator" begin
+    for T in (Float32, Float64)
+        # The #110 circle (fluid outside) on a composite mesh.
+        mesh = BlockTreeMesh(;
+            base_mesh = (16, 16), block_size = (4, 4), origin = (zero(T), zero(T)),
+            extent = (T(LS_STAG_EXTENT), T(LS_STAG_EXTENT)), periodic = (false, false),
+            max_level = 1, refine = (key, origin, extent) -> key.level == 0 && key.i >= 2,
+        )
+        levelset = (x, y) -> hypot(x - 4, y - 4) - T(1.3)
+        geometry = GeometryField(mesh, levelset; lipschitz = one(T))
+        lsstag = StaggeredDiffusionOperator(geometry; closure = LSStagClosure())
+        wall = StaggeredDiffusionOperator(geometry; closure = WallDistanceClosure())
+        moved_into_fluid = 0
+        for axis in 1:2
+            nodes = value_points(lsstag, axis)
+            legacy = value_points(wall, axis)
+            component = axis == 1 ? lsstag.x : lsstag.y
+            @test nodes.faces == component.local_to_global == legacy.faces
+            @test nodes.faces !== component.local_to_global
+            @test eltype(nodes.points) == NTuple{2, T}
+            @test eltype(nodes.volumes) == T
+            centres = [T.(mesh.faces[index].center) for index in nodes.faces]
+            areas = [T(mesh.faces[index].area) for index in nodes.faces]
+            apertures = geometry.aperture[nodes.faces]
+            open_volumes = geometry.face_dual_volumes[nodes.faces]
+            fluid = findall((apertures .> T(1.0e-10)) .& (open_volumes .> 0))
+            others = setdiff(eachindex(nodes.faces), fluid)
+            # Wall distance: every value at its face centre.
+            @test legacy.points == centres
+            @test legacy.volumes == ifelse.(apertures .> 0, open_volumes, zero(T))
+            # LS-STAG: a fluid value carries the open volume of its face; any
+            # other value (covered faces among them) sits at its centre.
+            @test nodes.volumes[fluid] == open_volumes[fluid]
+            @test all(iszero, nodes.volumes[others])
+            @test nodes.points[others] == centres[others]
+            @test any(index -> iszero(apertures[index]), others)
+            # A fluid value lies on its face, at the midpoint of the open part,
+            # which touches one end of the face (a nearly full face, within
+            # 256 eps, is taken as full).
+            tangent = 3 - axis
+            @test all(index -> nodes.points[index][axis] == centres[index][axis], fluid)
+            offset = map(fluid) do index
+                lower = centres[index][tangent] - areas[index] / 2
+                upper = centres[index][tangent] + areas[index] / 2
+                half = apertures[index] * areas[index] / 2
+                position = nodes.points[index][tangent]
+                min(abs(position - lower - half), abs(upper - half - position)) / areas[index]
+            end
+            @test maximum(offset) <= 256eps(T)
+            # In the fluid: the PLIC wall deviates from the circle by about a
+            # tenth of a cell here, so the midpoint of an open part of at least
+            # a quarter of the face lies outside it.
+            @test all(index -> apertures[index] < T(0.25) || levelset(nodes.points[index]...) > 0, fluid)
+            moved_into_fluid += count(
+                index -> levelset(centres[index]...) < 0 < levelset(nodes.points[index]...), fluid,
+            )
+        end
+        # Cut faces whose centre lies in the solid carry fluid values.
+        @test moved_into_fluid > 0
+        @test_throws ArgumentError value_points(lsstag, 3)
+        # Without a solid every value sits at its face centre.
+        plain = StaggeredDiffusionOperator(mesh)
+        nodes = value_points(plain, 2)
+        @test nodes.points == [T.(mesh.faces[index].center) for index in nodes.faces]
+        @test nodes.volumes == plain.y.volumes
     end
 end
 
@@ -367,6 +416,70 @@ end
     )
     @test !isnothing(drag_face)
     @test no_tendency.interior[drag_face] < 0
+end
+
+@testset "Per-side walls carry their own embedded-solid condition" begin
+    mesh = BlockTreeMesh(;
+        base_mesh = (16, 16), block_size = (4, 4), max_level = 1,
+        periodic = (false, false),
+        refine = (key, origin, _) -> key.level == 0 && origin[1] >= 0.5,
+    )
+    geometry = GeometryField(mesh, (x, y) -> y - 0.25 - 0.5x; lipschitz = hypot(1.0, 0.5))
+    @test VelocityBoundaryConditions().embedded isa NoSlip
+    for embedded in (NoSlip((x, y, time, axis) -> 1.0), Outflow())
+        @test_throws ArgumentError VelocityBoundaryConditions(; embedded)
+        @test_throws ArgumentError VelocityBoundaryConditions(NoSlip(), NoSlip(), NoSlip(), NoSlip(), embedded)
+    end
+    sides = (left = FreeSlip(), right = NoSlip(), bottom = NoSlip(), top = FreeSlip())
+    free = (left = FreeSlip(), right = FreeSlip(), bottom = FreeSlip(), top = FreeSlip())
+    for closure in (LSStagClosure(), WallDistanceClosure())
+        function stiffness(boundary)
+            operator = StaggeredDiffusionOperator(geometry; viscosity = 0.3, boundary, closure)
+            return (operator.x.stiffness, operator.y.stiffness)
+        end
+        # The default solid is a stationary no-slip wall, as before; a solid
+        # and sides that all match a uniform condition reproduce it bitwise.
+        no_slip_solid = stiffness(VelocityBoundaryConditions(; sides...))
+        @test no_slip_solid == stiffness(VelocityBoundaryConditions(; sides..., embedded = NoSlip()))
+        @test no_slip_solid == stiffness(VelocityBoundaryConditions(values(sides)...))
+        @test stiffness(VelocityBoundaryConditions()) == stiffness(NoSlip())
+        @test stiffness(VelocityBoundaryConditions(; free..., embedded = FreeSlip())) ==
+            stiffness(FreeSlip())
+        # Releasing the solid at fixed sides removes dissipation only.
+        free_solid = stiffness(VelocityBoundaryConditions(; sides..., embedded = FreeSlip()))
+        @test free_solid == stiffness(VelocityBoundaryConditions(values(sides)..., FreeSlip()))
+        for (no, released) in zip(no_slip_solid, free_solid)
+            loss = no - released
+            @test any(!iszero, loss)
+            @test eigmin(Symmetric(Matrix(loss))) >= -1024eps() * maximum(abs, no)
+        end
+    end
+    # A constant velocity along a free-slip solid has no strain there under a
+    # no-slip lid; a no-slip solid damps it.
+    channel = BlockTreeMesh(
+        block_size = (16, 16), periodic = (true, false),
+        origin = (0.0, 0.0), extent = (1.0, 1.0),
+    )
+    floor = GeometryField(channel, (x, y) -> y - 0.25; lipschitz = 1.0)
+    velocity = FaceVelocity(channel, (x, y, time, axis) -> axis == 1 ? 1.0 : 0.0)
+    for index in eachindex(velocity.interior)
+        floor.face_dual_volumes[index] > 0 || (velocity.interior[index] = 0.0)
+    end
+    near_floor = [
+        index for (index, face) in pairs(channel.faces) if face.axis == 1 && face.center[2] < 0.5
+    ]
+    for embedded in (FreeSlip(), NoSlip())
+        operator = StaggeredDiffusionOperator(
+            floor; viscosity = 1.0, closure = LSStagClosure(),
+            boundary = VelocityBoundaryConditions(; top = NoSlip(), embedded),
+        )
+        velocity.interior[operator.x.dirichlet_faces] .= 0.0
+        tendency = FaceVelocity(channel)
+        diffusion!(tendency, velocity, operator)
+        damping = maximum(index -> abs(tendency.interior[index]), near_floor)
+        @test embedded isa FreeSlip ? damping <= 256eps() : damping > 1.0e-3
+        @test maximum(abs, tendency.interior) > 1.0e-3
+    end
 end
 
 @testset "LS-STAG wall traction of a linear shear" begin

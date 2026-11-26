@@ -1732,8 +1732,12 @@ end
 # Reconstruct the uncondensed trace Jacobian from the open edge geometry.
 # Box traces are shared by every Green row meeting a vertex, not independent
 # vertex squares. PLIC traces and box traces must therefore be eliminated
-# together in the weighted strain metric.
-function _check_ls_stag_free_trace_projection(mesh, geometry, no_slip, free_slip; tilted)
+# together in the weighted strain metric. Uniform `FreeSlip()` releases every
+# side and the solid; with per-side conditions a box trace is released by its
+# own side and the solid by the `embedded` condition.
+function _check_ls_stag_free_trace_projection(
+        mesh, geometry, no_slip, free_slip; tilted, boundary = FreeSlip(),
+    )
     construction = TwoPhaseAMR.VariableDiffusionConstructionCache(Float64)
     refs = TwoPhaseAMR._cached_cell_references!(construction.cell_references, mesh)
     measures = copy(no_slip.stress_measures[1:(2 * length(refs))])
@@ -1748,6 +1752,16 @@ function _check_ls_stag_free_trace_projection(mesh, geometry, no_slip, free_slip
     box = Dict{Int, Vector{Float64}}()
     plic = Vector{Vector{Float64}}()
     aligned_walls = 0
+    sides = boundary isa VelocityBoundaryConditions
+    embedded_free = (sides ? boundary.embedded : boundary) isa FreeSlip
+    function free_trace(vertex, axis)
+        sides || return true
+        wall_axis = 3 - axis
+        low = iszero(cache.keys[vertex][wall_axis])
+        side = wall_axis == 1 ? (low ? boundary.left : boundary.right) :
+            (low ? boundary.bottom : boundary.top)
+        return side isa FreeSlip
+    end
     for (c, ref) in pairs(refs)
         open = TwoPhaseAMR._get(geometry.open_fraction, ref)
         open > 0 || continue
@@ -1784,14 +1798,14 @@ function _check_ls_stag_free_trace_projection(mesh, geometry, no_slip, free_slip
         norm_n = hypot(n1, n2)
         sloped = !isone(open) && min(abs(n1), abs(n2)) > 64eps() * norm_n
         no_complete = remainder > 0
-        free_complete = no_complete && (!wall || sloped)
-        wall && !sloped && no_complete && (aligned_walls += 1)
+        free_complete = no_complete && (!embedded_free || !wall || sloped)
+        embedded_free && wall && !sloped && no_complete && (aligned_walls += 1)
         before = length(measures)
         free_before = length(free_measures)
         previous_vertices = count(!iszero, cache.vertex_rows)
         free_previous_vertices = count(!iszero, free_cache.vertex_rows)
         TwoPhaseAMR._ls_stress_cell!(cache, geometry, ref, c, measures, construction, NoSlip())
-        TwoPhaseAMR._ls_stress_cell!(free_cache, geometry, ref, c, free_measures, free_construction, FreeSlip())
+        TwoPhaseAMR._ls_stress_cell!(free_cache, geometry, ref, c, free_measures, free_construction, boundary)
         new_vertices = count(!iszero, cache.vertex_rows) - previous_vertices
         free_new_vertices = count(!iszero, free_cache.vertex_rows) - free_previous_vertices
         @test new_vertices == free_new_vertices
@@ -1813,8 +1827,8 @@ function _check_ls_stag_free_trace_projection(mesh, geometry, no_slip, free_slip
             area = scale * prod(lengths[pos]) / 4
             area > 0 || continue
             row = cache.vertex_rows[v]
-            for line in cache.lines[v]
-                (iszero(line.box_derivative) || iszero(line.columns[1])) && continue
+            for (axis, line) in pairs(cache.lines[v])
+                (iszero(line.box_derivative) || iszero(line.columns[1]) || !free_trace(v, axis)) && continue
                 column = get!(box, v) do
                     zeros(nrows)
                 end
@@ -1834,7 +1848,7 @@ function _check_ls_stag_free_trace_projection(mesh, geometry, no_slip, free_slip
                     face.reaches[j] || continue
                     v = face.vertices[j]
                     line = cache.lines[v][3 - face.axis]
-                    if !iszero(line.box_derivative) && !iszero(line.columns[1])
+                    if !iszero(line.box_derivative) && !iszero(line.columns[1]) && free_trace(v, 3 - face.axis)
                         column = get!(box, v) do
                             zeros(nrows)
                         end
@@ -1847,7 +1861,7 @@ function _check_ls_stag_free_trace_projection(mesh, geometry, no_slip, free_slip
                         tangent[3 - face.axis] * endpoint / 2
                 end
             end
-            if sloped
+            if sloped && embedded_free
                 column = zeros(nrows)
                 column[2c - 1] = tangent[1] * normal_flux[1] / volume
                 column[2c] = tangent[2] * normal_flux[2] / volume
@@ -1879,7 +1893,10 @@ function _check_ls_stag_free_trace_projection(mesh, geometry, no_slip, free_slip
     @test length(dropped_rows) == aligned_walls
     dropped = [Float64.(collect(1:nrows) .== row) for row in dropped_rows]
     @test !isempty(box)
-    if tilted
+    if !embedded_free
+        @test aligned_walls == 0
+        @test isempty(plic)
+    elseif tilted
         ncut = count(ref -> 0 < TwoPhaseAMR._get(geometry.open_fraction, ref) < 1, refs)
         @test ncut > 0
         @test length(plic) == ncut
@@ -1901,7 +1918,7 @@ function _check_ls_stag_free_trace_projection(mesh, geometry, no_slip, free_slip
     # Absolute 1024eps allows only accumulated Float64 round-off, not an
     # O(1) error in a wall coefficient or the shared-trace cross terms.
     @test maximum(abs, Matrix(no_slip.stiffness - free_slip.stiffness) - released) <= 1024eps()
-    if tilted
+    if tilted && embedded_free
         @test maximum(abs, hcat(collect(values(box))...)' * (no_slip.stress_weights .* hcat(plic...))) > 0
     end
     return nothing
@@ -2012,6 +2029,47 @@ end
         for component in (constant_free_slip.x, constant_free_slip.y)
             @test issymmetric(component.stiffness)
             @test minimum(eigvals(Symmetric(Matrix(component.stiffness)))) >= -1024eps()
+        end
+    end
+end
+
+@testset "Per-side free slip releases only the traces of its own sides" begin
+    # The released no-slip stiffness is the joint weighted elimination of
+    # the box traces on the free-slip sides alone, with the solid's tilted
+    # trace or aligned wall row when the solid is free-slip as well.
+    mesh = BlockTreeMesh(
+        block_size = (8, 8), periodic = (false, false),
+    )
+    fixtures = (
+        (
+            GeometryField(mesh, (x, y) -> y - 0.18 - 0.2x; lipschitz = hypot(1, 0.2)),
+            (x, y) -> hypot(x - 0.5, y - 0.45) - 0.2, true,
+        ),
+        (
+            GeometryField(mesh, (x, y) -> x - 0.5; lipschitz = 1),
+            (x, y) -> y - 0.43, false,
+        ),
+    )
+    for (geometry, phase, tilted) in fixtures
+        interface = InterfaceField(mesh, phase; geometry, lipschitz = 1)
+        no_slip = StaggeredDiffusionOperator(
+            interface; viscosity = (0.2, 0.03), boundary = NoSlip(),
+        )
+        for sides in (
+                VelocityBoundaryConditions(; left = FreeSlip(), top = FreeSlip()),
+                VelocityBoundaryConditions(; right = FreeSlip(), bottom = FreeSlip()),
+                VelocityBoundaryConditions(; left = FreeSlip(), top = FreeSlip(), embedded = FreeSlip()),
+                VelocityBoundaryConditions(; right = FreeSlip(), bottom = FreeSlip(), embedded = FreeSlip()),
+            )
+            mixed = StaggeredDiffusionOperator(
+                interface; viscosity = (0.2, 0.03), boundary = sides,
+            )
+            loss = Matrix(no_slip.stiffness - mixed.stiffness)
+            @test any(!iszero, loss)
+            @test minimum(eigvals(Symmetric(loss))) >= -1024eps()
+            _check_ls_stag_free_trace_projection(
+                mesh, geometry, no_slip, mixed; tilted, boundary = sides,
+            )
         end
     end
 end

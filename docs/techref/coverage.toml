@@ -1552,6 +1552,7 @@ tests = [
 label = "eq:projection:crossing-limiter"
 sources = [
   { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_crossing_slope" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_sliding_speed" },
   { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_limit_extrapolation!" },
   { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_CMDGFM_CROSSING_RAMP" },
   { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_release_crossing!" }
@@ -2250,7 +2251,6 @@ sources = [
 ]
 tests = [
   { file = "test/examples/basic_examples.jl", testset = "Adaptive vortex-reversal example" },
-  { file = "test/examples/basic_examples.jl", testset = "Manufactured Poisson example" },
   { file = "test/examples/basic_examples.jl", testset = "Adaptive decaying turbulence example" },
   { file = "test/examples/stokes3_example.jl", testset = "Stokes-wave refinement window" },
   { file = "test/examples/lgpi_example.jl", testset = "Adaptive LGPI example" },

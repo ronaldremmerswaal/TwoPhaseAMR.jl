@@ -13,6 +13,26 @@ function _staggered_diffusion_operator(
     )
 end
 
+# Wall conditions of the variable stress operator. A uniform `NoSlip()` or
+# `FreeSlip()` holds on every domain side and at an embedded solid. With
+# `VelocityBoundaryConditions` each side chooses and the solid has its
+# `embedded` condition, as in the single-phase operator.
+const _VariableStressWall = Union{FreeSlip, NoSlip{StationaryWall}}
+
+_variable_stress_wall(::_VariableStressWall) = true
+_variable_stress_wall(boundary::VelocityBoundaryConditions) = all(
+    wall -> wall isa _VariableStressWall,
+    (boundary.left, boundary.right, boundary.bottom, boundary.top, boundary.embedded),
+)
+_variable_stress_wall(boundary) = false
+
+@inline _variable_side_wall(boundary::Union{NoSlip, FreeSlip}, axis, side) = boundary
+@inline _variable_side_wall(boundary::VelocityBoundaryConditions, axis, side) =
+    _side_boundary(boundary, axis, side)
+
+@inline _variable_embedded_wall(boundary::Union{NoSlip, FreeSlip}) = boundary
+@inline _variable_embedded_wall(boundary::VelocityBoundaryConditions) = boundary.embedded
+
 function _variable_staggered_diffusion(
         mesh, viscosity::CellField, boundary, ::Type{T};
         cache = VariableDiffusionConstructionCache(T), reuse = nothing,
@@ -24,8 +44,12 @@ function _variable_staggered_diffusion(
     closure isa Union{WallDistanceClosure, LSStagClosure} || throw(
         ArgumentError("closure must be WallDistanceClosure() or LSStagClosure()"),
     )
-    boundary isa FreeSlip || (boundary isa NoSlip && boundary.velocity isa StationaryWall) ||
-        throw(ArgumentError("variable stress diffusion currently supports stationary NoSlip or FreeSlip walls"))
+    _variable_stress_wall(boundary) || throw(
+        ArgumentError(
+            "variable stress diffusion supports stationary NoSlip() or FreeSlip() walls, " *
+                "uniform or per side through VelocityBoundaryConditions",
+        ),
+    )
     all(c -> isfinite(c)&&c > 0, (v for b in eachindex(mesh.blocks) for v in interior(viscosity, b))) ||
         throw(ArgumentError("cell dynamic viscosity must be finite and strictly positive"))
     cache isa VariableDiffusionConstructionCache{T} || throw(
@@ -35,12 +59,6 @@ function _variable_staggered_diffusion(
         throw(ArgumentError("reused diffusion operator has the wrong type"))
     isnothing(geometry) || geometry.mesh === mesh || throw(
         ArgumentError("geometry and variable diffusion must share a mesh"),
-    )
-    !isnothing(geometry) &&
-        !(boundary isa Union{NoSlip, FreeSlip}) && throw(
-        ArgumentError(
-            "embedded variable diffusion requires NoSlip() or FreeSlip()",
-        ),
     )
     refs = _cached_cell_references!(cache.cell_references, mesh)
     nx, ny = mesh.block_size
@@ -124,7 +142,7 @@ function _variable_staggered_diffusion(
     if closure isa WallDistanceClosure && !isnothing(geometry)
         for (face_index, conductance, cell_index) in
             _embedded_variable_wall_stresses(
-                geometry; include_cut_wall = boundary isa NoSlip,
+                geometry; include_cut_wall = _variable_embedded_wall(boundary) isa NoSlip,
                 dirichlet_faces,
             )
             row = length(measures) + 1
@@ -137,7 +155,7 @@ function _variable_staggered_diffusion(
             push!(vals, one(T))
         end
     end
-    box_traces = ls_solid && boundary isa FreeSlip ? _ls_box_traces!(cache, length(measures)) : nothing
+    box_traces = ls_solid ? _ls_box_traces!(cache, length(measures)) : nothing
     if !isempty(dirichlet_faces)
         # Separate the original prescribed columns before adding algebraic
         # rows. Keeping their stress-row indices makes the wall reaction
@@ -401,6 +419,12 @@ phase-viscosity mixture rule, see [`HarmonicViscosityAveraging`](@ref).
 For a stationary embedded solid, `closure` selects the coupled open-face Green
 and vertex rows of [`LSStagClosure`](@ref), the default, or the legacy wall
 rows of [`WallDistanceClosure`](@ref).
+
+`boundary` is a stationary `NoSlip()` or `FreeSlip()`, which also applies to
+an embedded solid, or a [`VelocityBoundaryConditions`](@ref) whose four sides
+and `embedded` solid condition are each one of these two. At a box corner both
+velocity components are normal velocities of a side, so the corner velocity
+is zero whichever conditions meet there.
 """
 function StaggeredDiffusionOperator(
         field::InterfaceField; viscosity::NTuple{2}, boundary = NoSlip(),
