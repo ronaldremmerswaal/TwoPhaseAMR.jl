@@ -95,19 +95,18 @@ end
 """
     run_example(; case=1, max_level=4, far_field_level=max_level-2,
                 final_time=3.0, velocity_model=OneVelocityModel(),
-                boundary=FreeSlip(), start_studio=nothing,
-                recorder_options=(;), kwargs...)
+                boundary=VelocityBoundaryConditions(left=FreeSlip(), right=FreeSlip(),
+                                                    bottom=NoSlip(), top=NoSlip()),
+                start_studio=nothing, recorder_options=(;), kwargs...)
 
 Run test case `case` (1 or 2) of the rising-bubble benchmark of Hysing et al.
 (2009): a bubble of radius 0.25 starts at rest at `(0.5, 0.5)` in
 `[0,1] × [0,2]` under gravity `0.98`. Case 1 has density ratio 10 and
 viscosity ratio 10; case 2 has density ratio 1000 and viscosity ratio 100.
-The benchmark's side walls are free-slip and its top and bottom walls
-no-slip, `VelocityBoundaryConditions(left=FreeSlip(), right=FreeSlip(),
-bottom=NoSlip(), top=NoSlip())`. The two-phase viscous operator takes one
-condition for all four walls, so the default `boundary` is `FreeSlip()`
-everywhere (`NoSlip()` selects the other). The interface band is refined to
-`max_level`, `dx = 1/(8 * 2^max_level)`; the rest of the domain stays at
+By default the side walls are free-slip and the top and bottom walls are
+no-slip, as in the benchmark. Pass `FreeSlip()` or `NoSlip()` as `boundary`
+to use the same condition on all four walls. The interface band is refined
+to `max_level`, `dx = 1/(8 * 2^max_level)`; the rest of the domain stays at
 least at `far_field_level`, clamped to `0:max_level`. Pass
 `start_studio=studio` after loading TwoPhaseAMRStudio to follow the run live.
 `recorder_options` overrides the recording schedule; other keywords are
@@ -119,7 +118,9 @@ function run_example(;
         far_field_level = max_level - 2,
         final_time = 3.0,
         velocity_model = OneVelocityModel(),
-        boundary = FreeSlip(),
+        boundary = VelocityBoundaryConditions(;
+            left = FreeSlip(), right = FreeSlip(), bottom = NoSlip(), top = NoSlip(),
+        ),
         start_studio = nothing,
         recorder_options = (;),
         kwargs...,

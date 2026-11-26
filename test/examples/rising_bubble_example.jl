@@ -42,8 +42,8 @@ end
         @test first(centroid.values) ≈ 0.5 atol = 1.0e-12
         @test first(velocity.values) == 0
         # TP2D's finest grid gives V_c = 0.1963 and y_c - 0.5 = 0.0546 at
-        # t = 0.5 (Hysing et al. 2009). At 16 cells per diameter one velocity
-        # gives +1.0 % and -0.3 %, two velocities +1.7 % and +0.8 %.
+        # t = 0.5 (Hysing et al. 2009); the tolerances allow for the coarse
+        # interface resolution of both velocity models.
         rise = last(centroid.values) - first(centroid.values)
         @test last(velocity.values) ≈ 0.1963 rtol = 0.03
         @test rise ≈ 0.0546 rtol = 0.02
