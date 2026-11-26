@@ -2,7 +2,7 @@
 
 Water sloshes in a closed tank that is shaken horizontally, with and without a bottom-mounted baffle, against linear potential-flow theory and a published benchmark.
 
-![Strongly forced sloshing in the baffled tank: vorticity, PLIC surface in white and the baffle in gray](assets/sloshing.gif)
+![Strongly forced sloshing in the baffled tank: vorticity, PLIC surface in black and the baffle in gray](assets/sloshing.gif)
 
 ## At a glance
 
@@ -11,7 +11,7 @@ Water sloshes in a closed tank that is shaken horizontally, with and without a b
 | **Physics** | Two-dimensional water and air in a horizontally shaken closed tank, optionally with a fixed baffle |
 | **Algorithms** | One velocity, PLIC interface transport, adaptive mesh and monotonized-central momentum advection |
 | **Worth varying** | Forcing frequency and amplitude, baffle height, and refinement level |
-| **Validated against** | Linear free and forced sloshing, and Liu & Lin forced-response extrema read from published plots |
+| **Validated against** | Linear free and forced sloshing; Liu & Lin forced-response extrema read by eye from published plots (about ±1 mm) |
 | **Cost** | Level-2 default forced run: 975 steps, 49.8 s; level-3 hero: 7968 steps, 3403.9 s |
 
 Gallery timings: Julia 1.12.7, one Julia thread and one BLAS thread, AMD Ryzen 9 5950X; package loading is excluded, and timings may include compilation. The full figure run took 3914.2 s.
@@ -93,8 +93,10 @@ zero potential on the symmetry line above the baffle, condensed onto the
 surface nodes. The same modal formula then uses its eigenfrequencies, wall
 values and forcing coefficients; gas and surface tension enter through the
 plain-tank wavenumber of each mode (a 0.1% correction). Without a baffle it
-reproduces the cosine modes (first frequency to `2×10⁻⁶` at the default
-`2.5 mm` spacing). This is the problem of [Evans & McIver (1987)](https://doi.org/10.1017/S0022112087000399),
+reproduces the cosine modes: at the default `2.5 mm` spacing the first
+frequency is within a relative `1.9×10⁻⁶` of `cos(πx/L)`, and the error falls
+by about four on halving the spacing (`7.5×10⁻⁶` at `5 mm`, `4.7×10⁻⁷` at
+`1.25 mm`). This is the problem of [Evans & McIver (1987)](https://doi.org/10.1017/S0022112087000399),
 who found that a bottom-mounted baffle changes the sloshing frequencies
 noticeably only when its tip comes close to the surface.
 
@@ -145,17 +147,23 @@ At `A = 2 mm`, `ω = 5.29 rad/s`, the plain tank is near resonance, whereas
 the baffle shifts the natural frequency away from the forcing. Orange points
 are extrema read by eye from Liu & Lin's numerical results as reproduced in
 Figs. 3 and 6 of [Yu, Xue & Zhu (2020)](https://doi.org/10.3390/jmse8090671),
-not experimental measurements or digitized full time series. Reading uncertainty
-is about 1 mm; their wall-point values and this example's finite-width strip
-are not identical observables.
+not experimental measurements or digitized full time series. They are quoted
+to the nearest millimetre, about the accuracy of reading them off the plots,
+and each is compared with the largest simulated excursion of the same sign
+within `±0.3 s` of its time. Their wall-point values and this example's
+finite-width strip are not identical observables in any case, so the
+millimetre-scale differences quoted below do not separate the two effects.
 
-At level 2 the mean absolute differences from those extrema are 1.46 mm
-(plain) and 0.49 mm (baffled), versus 3.78 and 1.37 mm for linear theory.
-The respective maximum simulation differences are 4.44 and 0.98 mm.
+At level 2 the mean absolute differences from those extrema are 1.50 mm
+(plain) and 0.53 mm (baffled), versus 3.72 and 1.27 mm for linear theory;
+the largest simulation differences are 4.64 and 0.96 mm. The baffled mean is
+below the one-millimetre reading accuracy, so it confirms the phase and order
+of the response but not the amplitude; the plain-tank differences are of that
+same order.
 
 As a resolution comparison, the separate level-3 MC runs gave mean absolute
-differences from these extrema of 0.88 mm (plain) and 0.42 mm (baffled);
-the respective maximum differences were 3.55 and 0.92 mm. At level 3 the
+differences from these extrema of 0.93 mm (plain) and 0.47 mm (baffled);
+the respective maximum differences were 3.75 and 0.98 mm. At level 3 the
 free frequencies were 5.30894 and 4.30548 rad/s, versus 5.31037 and
 4.31897 rad/s from the same fit of linear theory. These comparisons are
 resolution-dependent, not a convergence claim.
@@ -165,7 +173,7 @@ resolution-dependent, not a convergence claim.
 ![Baffled-tank vorticity snapshots with AMR blocks](assets/snapshots.png)
 
 The animation and snapshots use `A = 1 cm`, `ω = 4.314 rad/s` and level 3.
-Colors show vorticity, the white line is the reconstructed interface, and the
+Colors show vorticity, the black line is the reconstructed interface, and the
 gray rectangle is the baffle. The four snapshots cover the build-up and the
 largest wall response. The next plot shows strip elevations and an energy
 accounting: forcing work is integrated in time, and its difference from the
